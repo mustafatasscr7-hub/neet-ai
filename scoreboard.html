@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Scoreboard — NEET-AI</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Inter', sans-serif; background: #0d0d0d; color: #ececec; min-height: 100vh; }
+    .header { padding: 14px 24px; border-bottom: 1px solid #1a1a1a; display: flex; align-items: center; justify-content: space-between; background: #0d0d0d; position: sticky; top: 0; z-index: 10; }
+    .header-title { font-size: 15px; font-weight: 700; color: #fff; }
+    .header-title span { color: #4f8ef7; }
+    .btn { padding: 8px 20px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600; font-family: 'Inter', sans-serif; transition: all 0.2s; border: none; }
+    .btn-primary { background: #4f8ef7; color: white; }
+    .btn-primary:hover { background: #3b7de8; }
+    .btn-outline { background: transparent; border: 1px solid #2a2a2a; color: #888; }
+    .btn-outline:hover { color: #ccc; border-color: #3a3a3a; }
+    .container { max-width: 900px; margin: 0 auto; padding: 32px 24px; }
+    .page-title { font-size: 22px; font-weight: 700; color: #fff; margin-bottom: 4px; }
+    .page-subtitle { font-size: 13px; color: #555; margin-bottom: 32px; }
+
+    .summary-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 32px; }
+    .summary-card { background: #111; border: 1px solid #1e1e1e; border-radius: 12px; padding: 20px; }
+    .summary-card-value { font-size: 28px; font-weight: 700; color: #4f8ef7; margin-bottom: 4px; }
+    .summary-card-label { font-size: 12px; color: #555; }
+
+    .tests-list { display: flex; flex-direction: column; gap: 12px; }
+    .test-card { background: #111; border: 1px solid #1e1e1e; border-radius: 12px; padding: 20px; display: flex; align-items: center; gap: 20px; cursor: pointer; transition: all 0.2s; }
+    .test-card:hover { border-color: #2a2a2a; background: #161616; }
+    .test-number { width: 40px; height: 40px; background: #1a1a1a; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; color: #666; flex-shrink: 0; }
+    .test-info { flex: 1; }
+    .test-date { font-size: 12px; color: #555; margin-bottom: 4px; }
+    .test-score { font-size: 20px; font-weight: 700; color: #ececec; margin-bottom: 6px; }
+    .test-stats { display: flex; gap: 16px; font-size: 12px; }
+    .test-stat-correct { color: #4ade80; }
+    .test-stat-wrong { color: #ef4444; }
+    .test-stat-skipped { color: #555; }
+    .test-subjects { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
+    .subject-pill { font-size: 11px; padding: 3px 10px; border-radius: 20px; font-weight: 500; }
+    .bio-pill { background: #4ade8015; color: #4ade80; border: 1px solid #4ade8030; }
+    .phy-pill { background: #4f8ef715; color: #4f8ef7; border: 1px solid #4f8ef730; }
+    .che-pill { background: #f9731615; color: #f97316; border: 1px solid #f9731630; }
+    .test-time { font-size: 11px; color: #444; margin-top: 4px; text-align: right; }
+
+    .score-bar-wrap { width: 80px; height: 80px; position: relative; flex-shrink: 0; }
+    .score-circle { transform: rotate(-90deg); }
+    .score-circle-bg { fill: none; stroke: #1a1a1a; stroke-width: 6; }
+    .score-circle-fill { fill: none; stroke: #4f8ef7; stroke-width: 6; stroke-linecap: round; transition: stroke-dashoffset 1s ease; }
+    .score-pct { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 13px; font-weight: 700; color: #ececec; }
+
+    .empty-state { text-align: center; padding: 60px 24px; color: #555; }
+    .empty-state h3 { font-size: 18px; color: #666; margin-bottom: 8px; }
+    .empty-state p { font-size: 13px; margin-bottom: 24px; }
+
+    .loading { text-align: center; padding: 60px; color: #555; }
+    .spinner { width: 32px; height: 32px; border: 3px solid #1e1e1e; border-top-color: #4f8ef7; border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 16px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <span class="header-title">NEET<span>-AI</span> Scoreboard</span>
+    <div style="display:flex;gap:10px;">
+      <button class="btn btn-outline" onclick="window.location.href='./mocktest.html'">Take New Test</button>
+      <button class="btn btn-primary" onclick="window.location.href='./index.html'">Back to NEET-AI</button>
+    </div>
+  </div>
+
+  <div class="container">
+    <div class="page-title">Your Test History</div>
+    <div class="page-subtitle">All mock tests taken so far</div>
+
+    <div class="summary-cards" id="summaryCards">
+      <div class="summary-card"><div class="summary-card-value" id="totalTests">-</div><div class="summary-card-label">Tests Taken</div></div>
+      <div class="summary-card"><div class="summary-card-value" id="bestScore">-</div><div class="summary-card-label">Best Score</div></div>
+      <div class="summary-card"><div class="summary-card-value" id="avgScore">-</div><div class="summary-card-label">Average Score</div></div>
+      <div class="summary-card"><div class="summary-card-value" id="improvement">-</div><div class="summary-card-label">Improvement</div></div>
+    </div>
+
+    <div id="testsList">
+      <div class="loading"><div class="spinner"></div>Loading your tests...</div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script>
+    const SUPABASE_URL = 'https://hvhnfttrfouajlyhvunq.supabase.co';
+    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh2aG5mdHRyZm91YWpseWh2dW5xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg5NDI1NTIsImV4cCI6MjA5NDUxODU1Mn0.8RaSu5yiTpQCEUGKrFO2y6oiRXSqdBehIz933j9Z7WA';
+    const { createClient } = supabase;
+    const client = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+    function formatTime(seconds) {
+      const h = Math.floor(seconds / 3600);
+      const m = Math.floor((seconds % 3600) / 60);
+      const s = seconds % 60;
+      return h > 0 ? `${h}h ${m}m` : `${m}m ${s}s`;
+    }
+
+    function formatDate(iso) {
+      return new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+    }
+
+    function getScoreColor(score) {
+      const pct = (score / 720) * 100;
+      if (pct >= 70) return '#4ade80';
+      if (pct >= 50) return '#4f8ef7';
+      if (pct >= 30) return '#f97316';
+      return '#ef4444';
+    }
+
+    async function loadScoreboard() {
+      const { data: { session } } = await client.auth.getSession();
+      if (!session) {
+        document.getElementById('testsList').innerHTML = '<div class="empty-state"><h3>Not logged in</h3><p>Please log in to see your test history.</p><button class="btn btn-primary" onclick="window.location.href=\'./login.html\'">Log In</button></div>';
+        return;
+      }
+
+      const { data: results, error } = await client.from('mock_results').select('*').eq('user_id', session.user.id).order('created_at', { ascending: false });
+
+      if (error || !results || results.length === 0) {
+        document.getElementById('testsList').innerHTML = '<div class="empty-state"><h3>No tests yet</h3><p>Take your first mock test to see your scores here.</p><button class="btn btn-primary" onclick="window.location.href=\'./mocktest.html\'">Start Mock Test</button></div>';
+        document.getElementById('totalTests').textContent = '0';
+        document.getElementById('bestScore').textContent = '-';
+        document.getElementById('avgScore').textContent = '-';
+        document.getElementById('improvement').textContent = '-';
+        return;
+      }
+
+      // Summary
+      const scores = results.map(r => r.score);
+      const best = Math.max(...scores);
+      const avg = Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
+      const improvement = results.length > 1 ? scores[0] - scores[scores.length - 1] : 0;
+
+      document.getElementById('totalTests').textContent = results.length;
+      document.getElementById('bestScore').textContent = best;
+      document.getElementById('avgScore').textContent = avg;
+      document.getElementById('improvement').textContent = (improvement >= 0 ? '+' : '') + improvement;
+
+      // Tests list
+      const list = document.getElementById('testsList');
+      list.innerHTML = '';
+      const container = document.createElement('div');
+      container.className = 'tests-list';
+
+      results.forEach((r, i) => {
+        const pct = Math.round((r.score / 720) * 100);
+        const circumference = 2 * Math.PI * 28;
+        const offset = circumference - (pct / 100) * circumference;
+        const color = getScoreColor(r.score);
+
+        const card = document.createElement('div');
+        card.className = 'test-card';
+        card.innerHTML = `
+          <div class="test-number">#${results.length - i}</div>
+          <div class="score-bar-wrap">
+            <svg class="score-circle" width="80" height="80" viewBox="0 0 80 80">
+              <circle class="score-circle-bg" cx="40" cy="40" r="28"/>
+              <circle class="score-circle-fill" cx="40" cy="40" r="28" stroke="${color}" stroke-dasharray="${circumference}" stroke-dashoffset="${offset}"/>
+            </svg>
+            <div class="score-pct">${pct}%</div>
+          </div>
+          <div class="test-info">
+            <div class="test-date">${formatDate(r.created_at)}</div>
+            <div class="test-score" style="color:${color};">${r.score} <span style="font-size:13px;color:#555;">/ 720</span></div>
+            <div class="test-stats">
+              <span class="test-stat-correct">✓ ${r.correct} correct</span>
+              <span class="test-stat-wrong">✗ ${r.wrong} wrong</span>
+              <span class="test-stat-skipped">− ${r.skipped} skipped</span>
+            </div>
+          </div>
+          <div class="test-subjects">
+            <div class="subject-pill bio-pill">Bio: ${r.subject_biology_score}/360</div>
+            <div class="subject-pill phy-pill">Phy: ${r.subject_physics_score}/180</div>
+            <div class="subject-pill che-pill">Chem: ${r.subject_chemistry_score}/180</div>
+            <div class="test-time">⏱ ${formatTime(r.time_taken)}</div>
+          </div>
+        `;
+        container.appendChild(card);
+      });
+
+      list.appendChild(container);
+    }
+
+    loadScoreboard();
+  </script>
+</body>
+</html>

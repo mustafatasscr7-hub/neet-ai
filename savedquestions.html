@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Saved Questions — NEET-AI</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Inter', sans-serif; background: #0d0d0d; color: #ececec; min-height: 100vh; }
+    .header { padding: 14px 24px; border-bottom: 1px solid #1a1a1a; display: flex; align-items: center; justify-content: space-between; background: #0d0d0d; position: sticky; top: 0; z-index: 10; }
+    .header-title { font-size: 15px; font-weight: 700; color: #fff; }
+    .header-title span { color: #4f8ef7; }
+    .btn { padding: 8px 20px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600; font-family: 'Inter', sans-serif; transition: all 0.2s; border: none; }
+    .btn-primary { background: #4f8ef7; color: white; }
+    .btn-primary:hover { background: #3b7de8; }
+    .container { max-width: 900px; margin: 0 auto; padding: 32px 24px; }
+    .page-title { font-size: 22px; font-weight: 700; color: #fff; margin-bottom: 4px; }
+    .page-subtitle { font-size: 13px; color: #555; margin-bottom: 24px; }
+
+    .filter-tabs { display: flex; gap: 8px; margin-bottom: 24px; flex-wrap: wrap; }
+    .filter-tab { padding: 6px 14px; border-radius: 6px; border: 1px solid #2a2a2a; background: transparent; color: #666; font-size: 12px; font-family: 'Inter', sans-serif; cursor: pointer; transition: all 0.2s; }
+    .filter-tab.active { background: #4f8ef720; border-color: #4f8ef7; color: #4f8ef7; }
+
+    .question-card { background: #111; border: 1px solid #1e1e1e; border-radius: 12px; padding: 20px; margin-bottom: 12px; }
+    .q-meta { font-size: 11px; color: #555; margin-bottom: 10px; display: flex; gap: 12px; flex-wrap: wrap; }
+    .q-year { color: #4f8ef7; font-weight: 600; }
+    .q-source { color: #f97316; }
+    .q-saved-at { color: #444; }
+    .q-text { font-size: 14px; color: #ececec; line-height: 1.7; margin-bottom: 16px; }
+    .q-options { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
+    .q-option { padding: 10px 14px; border-radius: 8px; font-size: 13px; background: #1a1a1a; color: #888; border: 1px solid #2a2a2a; display: flex; gap: 10px; }
+    .q-option.correct { background: #4ade8020; border-color: #4ade80; color: #4ade80; }
+    .q-actions { display: flex; gap: 8px; }
+    .sol-btn { background: transparent; border: 1px solid #a78bfa; color: #a78bfa; padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 12px; font-family: 'Inter', sans-serif; transition: all 0.2s; }
+    .sol-btn:hover { background: #a78bfa20; }
+    .del-btn { background: transparent; border: 1px solid #ef4444; color: #ef4444; padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 12px; font-family: 'Inter', sans-serif; transition: all 0.2s; }
+    .del-btn:hover { background: #ef444420; }
+    .sol-div { display: none; margin-top: 12px; padding: 12px; background: #1a1a2e; border-radius: 6px; border: 1px solid #3a3a5e; color: #c4c4c4; line-height: 1.7; font-size: 13px; }
+
+    .loading { text-align: center; padding: 60px; color: #555; }
+    .spinner { width: 32px; height: 32px; border: 3px solid #1e1e1e; border-top-color: #4f8ef7; border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 16px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .empty { text-align: center; padding: 60px; color: #555; font-size: 14px; }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <span class="header-title">NEET<span>-AI</span> Saved Questions</span>
+    <button class="btn btn-primary" onclick="window.location.href='./index.html'">Back to NEET-AI</button>
+  </div>
+
+  <div class="container">
+    <div class="page-title">Saved Questions</div>
+    <div class="page-subtitle">Questions you bookmarked from PYQ Bank and Mock Tests</div>
+
+    <div class="filter-tabs">
+      <button class="filter-tab active" onclick="filterBy('all', this)">All</button>
+      <button class="filter-tab" onclick="filterBy('Biology', this)">🔬 Biology</button>
+      <button class="filter-tab" onclick="filterBy('Physics', this)">⚡ Physics</button>
+      <button class="filter-tab" onclick="filterBy('Chemistry', this)">⚗️ Chemistry</button>
+      <button class="filter-tab" onclick="filterBy('PYQ Bank', this)">📚 From PYQ Bank</button>
+      <button class="filter-tab" onclick="filterBy('Mock Test', this)">📝 From Mock Test</button>
+    </div>
+
+    <div id="questionsList">
+      <div class="loading"><div class="spinner"></div>Loading saved questions...</div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script>
+    const SUPABASE_URL = 'https://hvhnfttrfouajlyhvunq.supabase.co';
+    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh2aG5mdHRyZm91YWpseWh2dW5xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg5NDI1NTIsImV4cCI6MjA5NDUxODU1Mn0.8RaSu5yiTpQCEUGKrFO2y6oiRXSqdBehIz933j9Z7WA';
+    const { createClient } = supabase;
+    const client = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+    let allQuestions = [];
+    let currentFilter = 'all';
+
+    function parseWithMath(text) {
+      if (!text) return '';
+      let html = text;
+      html = html.replace(/\$\$([^$]+)\$\$/g, function(_, math) {
+        try { return '<div style="text-align:center;margin:8px 0;">' + katex.renderToString(math.trim(), { displayMode: true, throwOnError: false }) + '</div>'; } catch(e) { return _; }
+      });
+      html = html.replace(/\$([^$\n]+)\$/g, function(_, math) {
+        try { return katex.renderToString(math.trim(), { displayMode: false, throwOnError: false }); } catch(e) { return _; }
+      });
+      return marked.parse(html);
+    }
+
+    function formatDate(iso) {
+      return new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+    }
+
+    function renderQuestions(questions) {
+      const container = document.getElementById('questionsList');
+      if (!questions || questions.length === 0) {
+        container.innerHTML = '<div class="empty">No saved questions found.<br><br>Save questions from PYQ Bank or Mock Test to see them here.</div>';
+        return;
+      }
+
+      container.innerHTML = questions.map(q => {
+        const correctAns = q.correct_answer ? q.correct_answer.toLowerCase().trim() : null;
+        const opts = ['a','b','c','d'].map(opt => {
+          if (!q['option_' + opt]) return '';
+          const isCorrect = opt === correctAns;
+          return `<div class="q-option ${isCorrect ? 'correct' : ''}"><strong>${opt.toUpperCase()})</strong> ${q['option_' + opt]}</div>`;
+        }).join('');
+
+        return `
+          <div class="question-card" id="qcard-${q.id}">
+            <div class="q-meta">
+              <span class="q-year">${q.year || ''}</span>
+              <span>${q.subject || ''}</span>
+              ${q.chapter ? `<span>${q.chapter}</span>` : ''}
+              <span class="q-source">📌 ${q.source || 'PYQ Bank'}</span>
+              <span class="q-saved-at">🕐 ${formatDate(q.saved_at)}</span>
+            </div>
+            <div class="q-text">${q.question}</div>
+            <div class="q-options">${opts}</div>
+            <div class="q-actions">
+              <button class="sol-btn" onclick="toggleSolution(this, '${q.id}', ${JSON.stringify(q).replace(/"/g, '&quot;')})">💡 Show Solution</button>
+              <button class="del-btn" onclick="deleteQuestion('${q.id}')">🗑 Remove</button>
+            </div>
+            <div class="sol-div" id="sol-${q.id}"></div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function filterBy(filter, btn) {
+      currentFilter = filter;
+      document.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
+      btn.classList.add('active');
+      if (filter === 'all') { renderQuestions(allQuestions); return; }
+      const filtered = allQuestions.filter(q => q.subject === filter || q.source === filter);
+      renderQuestions(filtered);
+    }
+
+    async function deleteQuestion(id) {
+      if (!confirm('Remove this question from saved?')) return;
+      const { error } = await client.from('saved_questions').delete().eq('id', id);
+      if (error) { alert('Failed to remove.'); return; }
+      allQuestions = allQuestions.filter(q => q.id !== id);
+      document.getElementById('qcard-' + id)?.remove();
+    }
+
+    async function toggleSolution(btn, id, q) {
+      const solDiv = document.getElementById('sol-' + id);
+      if (solDiv.style.display === 'block') {
+        solDiv.style.display = 'none';
+        btn.textContent = '💡 Show Solution';
+        return;
+      }
+      if (solDiv.innerHTML) {
+        solDiv.style.display = 'block';
+        btn.textContent = '🔼 Hide Solution';
+        return;
+      }
+      btn.textContent = '⏳ Generating...';
+      btn.disabled = true;
+      solDiv.style.display = 'block';
+      solDiv.innerHTML = '<span style="color:#888;">AI is solving this...</span>';
+      try {
+        const res = await fetch('http://127.0.0.1:8000/solve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ question: q.question, option_a: q.option_a, option_b: q.option_b, option_c: q.option_c, option_d: q.option_d, correct_answer: q.correct_answer })
+        });
+        const data = await res.json();
+        solDiv.innerHTML = parseWithMath(data.solution);
+        btn.textContent = '🔼 Hide Solution';
+        btn.disabled = false;
+      } catch(e) {
+        solDiv.innerHTML = '<span style="color:#ef4444;">Failed to generate solution.</span>';
+        btn.textContent = '💡 Show Solution';
+        btn.disabled = false;
+      }
+    }
+
+    async function loadSavedQuestions() {
+      const { data: { session } } = await client.auth.getSession();
+      if (!session) {
+        document.getElementById('questionsList').innerHTML = '<div class="empty">Please <a href="./login.html" style="color:#4f8ef7;">log in</a> to see your saved questions.</div>';
+        return;
+      }
+      const { data, error } = await client.from('saved_questions').select('*').eq('user_id', session.user.id).order('saved_at', { ascending: false });
+      if (error || !data) {
+        document.getElementById('questionsList').innerHTML = '<div class="empty">Failed to load saved questions.</div>';
+        return;
+      }
+      allQuestions = data;
+      renderQuestions(allQuestions);
+    }
+
+    loadSavedQuestions();
+  </script>
+</body>
+</html>

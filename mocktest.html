@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Mock Test — NEET-AI</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Inter', sans-serif; background: #0d0d0d; color: #ececec; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+
+    .header { padding: 14px 24px; border-bottom: 1px solid #1a1a1a; display: flex; align-items: center; justify-content: space-between; background: #0d0d0d; flex-shrink: 0; }
+    .header-left { display: flex; align-items: center; gap: 12px; }
+    .header-title { font-size: 15px; font-weight: 700; color: #fff; }
+    .header-title span { color: #4f8ef7; }
+    .timer { font-size: 20px; font-weight: 700; color: #4f8ef7; font-variant-numeric: tabular-nums; background: #4f8ef710; padding: 6px 16px; border-radius: 8px; border: 1px solid #4f8ef730; }
+    .timer.warning { color: #f97316; background: #f9731610; border-color: #f9731630; }
+    .timer.danger { color: #ef4444; background: #ef444410; border-color: #ef444430; }
+    .submit-btn { background: #4f8ef7; border: none; color: white; padding: 8px 20px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600; font-family: 'Inter', sans-serif; transition: all 0.2s; }
+    .submit-btn:hover { background: #3b7de8; }
+
+    .body { display: flex; flex: 1; overflow: hidden; }
+
+    .question-area { flex: 1; overflow-y: auto; padding: 32px; }
+    .question-area::-webkit-scrollbar { width: 4px; }
+    .question-area::-webkit-scrollbar-thumb { background: #2a2a2a; border-radius: 4px; }
+
+    .question-meta { font-size: 12px; color: #4f8ef7; margin-bottom: 8px; font-weight: 500; }
+    .question-number { font-size: 13px; color: #666; margin-bottom: 12px; }
+    .question-text { font-size: 16px; color: #ececec; line-height: 1.7; margin-bottom: 28px; font-weight: 500; }
+
+    .options { display: flex; flex-direction: column; gap: 10px; margin-bottom: 28px; }
+    .option { padding: 14px 18px; border-radius: 10px; border: 1px solid #2a2a2a; background: #111; cursor: pointer; font-size: 14px; color: #ccc; transition: all 0.2s; display: flex; align-items: center; gap: 12px; }
+    .option:hover { border-color: #4f8ef750; background: #4f8ef710; color: #ececec; }
+    .option.selected { border-color: #4f8ef7; background: #4f8ef720; color: #fff; }
+    .option-label { width: 28px; height: 28px; border-radius: 50%; border: 1px solid #3a3a3a; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; flex-shrink: 0; }
+    .option.selected .option-label { background: #4f8ef7; border-color: #4f8ef7; color: white; }
+
+    .question-actions { display: flex; gap: 10px; }
+    .mark-btn { background: transparent; border: 1px solid #f97316; color: #f97316; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 13px; font-family: 'Inter', sans-serif; transition: all 0.2s; }
+    .mark-btn:hover { background: #f9731620; }
+    .mark-btn.marked { background: #f9731620; }
+    .clear-btn { background: transparent; border: 1px solid #3a3a3a; color: #888; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 13px; font-family: 'Inter', sans-serif; transition: all 0.2s; }
+    .clear-btn:hover { background: #1a1a1a; color: #ccc; }
+    .nav-btns { display: flex; gap: 10px; margin-left: auto; }
+    .prev-btn, .next-btn { background: #1a1a1a; border: 1px solid #2a2a2a; color: #ccc; padding: 8px 20px; border-radius: 8px; cursor: pointer; font-size: 13px; font-family: 'Inter', sans-serif; transition: all 0.2s; }
+    .prev-btn:hover, .next-btn:hover { background: #222; border-color: #3a3a3a; }
+    .next-btn { background: #4f8ef7; border-color: #4f8ef7; color: white; }
+    .next-btn:hover { background: #3b7de8; }
+
+    .sidebar { width: 280px; background: #111; border-left: 1px solid #1e1e1e; display: flex; flex-direction: column; flex-shrink: 0; overflow: hidden; }
+    .sidebar-header { padding: 16px; border-bottom: 1px solid #1e1e1e; }
+    .sidebar-header h3 { font-size: 13px; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 0.05em; }
+    .subject-tabs { display: flex; gap: 4px; margin-top: 10px; }
+    .subject-tab { flex: 1; padding: 6px 4px; border-radius: 6px; border: 1px solid #2a2a2a; background: transparent; color: #666; font-size: 11px; font-family: 'Inter', sans-serif; cursor: pointer; transition: all 0.2s; text-align: center; }
+    .subject-tab.active { background: #4f8ef720; border-color: #4f8ef7; color: #4f8ef7; }
+
+    .question-grid { padding: 12px; overflow-y: auto; flex: 1; }
+    .question-grid::-webkit-scrollbar { width: 3px; }
+    .question-grid::-webkit-scrollbar-thumb { background: #2a2a2a; }
+    .grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
+    .grid-btn { width: 100%; aspect-ratio: 1; border-radius: 6px; border: 1px solid #2a2a2a; background: #1a1a1a; color: #666; font-size: 11px; font-weight: 600; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; justify-content: center; }
+    .grid-btn:hover { border-color: #4f8ef750; color: #ccc; }
+    .grid-btn.current { border-color: #4f8ef7; background: #4f8ef720; color: #4f8ef7; }
+    .grid-btn.answered { background: #4f8ef7; border-color: #4f8ef7; color: white; }
+    .grid-btn.marked { background: #f9731620; border-color: #f97316; color: #f97316; }
+    .grid-btn.answered.marked { background: #a855f7; border-color: #a855f7; color: white; }
+
+    .legend { padding: 12px 16px; border-top: 1px solid #1e1e1e; display: flex; flex-wrap: wrap; gap: 8px; }
+    .legend-item { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #666; }
+    .legend-dot { width: 12px; height: 12px; border-radius: 3px; }
+
+    .loading { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 16px; }
+    .loading-text { color: #666; font-size: 14px; }
+    .spinner { width: 40px; height: 40px; border: 3px solid #1e1e1e; border-top-color: #4f8ef7; border-radius: 50%; animation: spin 0.8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .stats-bar { display: flex; gap: 16px; padding: 10px 16px; border-top: 1px solid #1e1e1e; background: #0d0d0d; }
+    .stat { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+    .stat-dot { width: 8px; height: 8px; border-radius: 50%; }
+    .stat-count { font-weight: 600; color: #ececec; }
+    .stat-label { color: #555; }
+  </style>
+</head>
+<body>
+
+  <!-- Start Screen -->
+  <div id="startScreen" style="position:fixed;top:0;left:0;width:100%;height:100%;background:#0d0d0d;display:flex;align-items:center;justify-content:center;z-index:999;">
+    <div style="text-align:center;max-width:500px;padding:40px;">
+     <div style="position:fixed;top:16px;left:16px;">
+        <button onclick="window.location.href='./index.html'" style="background:transparent;border:1px solid #2a2a2a;color:#888;padding:8px 16px;border-radius:8px;cursor:pointer;font-size:13px;font-family:Inter,sans-serif;transition:all 0.2s;" onmouseover="this.style.color='#ccc'" onmouseout="this.style.color='#888'">← Back to NEET-AI</button>
+      </div>
+      <div style="font-size:48px;margin-bottom:16px;">📝</div>
+      <h1 style="font-size:28px;font-weight:700;color:#fff;margin-bottom:8px;">NEET Mock Test</h1>
+      <p style="color:#666;font-size:14px;margin-bottom:32px;">Full syllabus test as per NEET 2025 pattern</p>
+      <div style="background:#111;border:1px solid #1e1e1e;border-radius:12px;padding:24px;margin-bottom:32px;text-align:left;">
+        <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #1e1e1e;font-size:13px;"><span style="color:#666;">Total Questions</span><span style="color:#ececec;font-weight:600;">180</span></div>
+        <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #1e1e1e;font-size:13px;"><span style="color:#666;">Duration</span><span style="color:#ececec;font-weight:600;">3 Hours 20 Minutes</span></div>
+        <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #1e1e1e;font-size:13px;"><span style="color:#666;">Correct Answer</span><span style="color:#4ade80;font-weight:600;">+4 marks</span></div>
+        <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #1e1e1e;font-size:13px;"><span style="color:#666;">Wrong Answer</span><span style="color:#ef4444;font-weight:600;">-1 mark</span></div>
+        <div style="display:flex;justify-content:space-between;padding:8px 0;font-size:13px;"><span style="color:#666;">Maximum Marks</span><span style="color:#ececec;font-weight:600;">720</span></div>
+      </div>
+      <button onclick="startTest()" style="width:100%;background:#4f8ef7;border:none;color:white;padding:14px;border-radius:10px;cursor:pointer;font-size:15px;font-weight:700;font-family:Inter,sans-serif;transition:all 0.2s;">Start Test →</button>
+      <p style="color:#333;font-size:12px;margin-top:16px;">Once started, the timer cannot be paused.</p>
+    </div>
+  </div>
+
+  <div class="header">
+    <div class="header-left">
+      <button onclick="confirmExit()" style="background:transparent;border:1px solid #2a2a2a;color:#888;padding:6px 14px;border-radius:8px;cursor:pointer;font-size:13px;font-family:Inter,sans-serif;margin-right:12px;">← Exit</button>
+      <span class="header-title">NEET<span>-AI</span> Mock Test</span>
+    </div>
+    <div class="timer" id="timer">3:20:00</div>
+    <button class="submit-btn" onclick="confirmSubmit()">Submit Test</button>
+  </div>
+
+  <div class="body">
+    <div class="question-area" id="questionArea">
+      <div class="loading">
+        <div class="spinner"></div>
+        <div class="loading-text">Loading questions...</div>
+      </div>
+    </div>
+
+    <div class="sidebar">
+      <div class="sidebar-header">
+        <h3>Questions</h3>
+        <div class="subject-tabs">
+          <button class="subject-tab active" onclick="filterSubject('all')">All</button>
+          <button class="subject-tab" onclick="filterSubject('Biology')">Bio</button>
+          <button class="subject-tab" onclick="filterSubject('Physics')">Phy</button>
+          <button class="subject-tab" onclick="filterSubject('Chemistry')">Chem</button>
+        </div>
+      </div>
+      <div class="question-grid">
+        <div class="grid" id="questionGrid"></div>
+      </div>
+      <div class="legend">
+        <div class="legend-item"><div class="legend-dot" style="background:#4f8ef7;"></div> Answered</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#f97316;border:1px solid #f97316;"></div> Marked</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#a855f7;"></div> Marked+Ans</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#1a1a1a;border:1px solid #2a2a2a;"></div> Not visited</div>
+      </div>
+      <div class="stats-bar">
+        <div class="stat"><div class="stat-dot" style="background:#4f8ef7;"></div><span class="stat-count" id="answeredCount">0</span><span class="stat-label">Answered</span></div>
+        <div class="stat"><div class="stat-dot" style="background:#f97316;"></div><span class="stat-count" id="markedCount">0</span><span class="stat-label">Marked</span></div>
+        <div class="stat"><div class="stat-dot" style="background:#555;"></div><span class="stat-count" id="skippedCount">0</span><span class="stat-label">Skipped</span></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script>
+    let questions = [];
+    let currentIndex = 0;
+    let answers = {};
+    let marked = {};
+    let timerInterval = null;
+    let totalSeconds = 12000; // 3h 20min
+    let currentFilter = 'all';
+   let startTime = Date.now();
+    let savedQuestions = new Set();
+
+    // Load questions
+   async function loadQuestions() {
+      try {
+        const res = await fetch('http://127.0.0.1:8000/mock-test-questions');
+        const data = await res.json();
+        questions = data.questions;
+        renderQuestion(0);
+        renderGrid();
+        startTimer();
+      } catch(e) {
+        document.getElementById('startScreen').innerHTML = `
+          <div style="text-align:center;">
+            <div style="font-size:48px;margin-bottom:16px;">❌</div>
+            <h2 style="font-size:20px;color:#ef4444;margin-bottom:8px;">Failed to load questions</h2>
+            <p style="color:#555;font-size:13px;margin-bottom:24px;">Make sure the backend server is running.</p>
+            <button onclick="window.location.reload()" style="background:#4f8ef7;border:none;color:white;padding:10px 24px;border-radius:8px;cursor:pointer;font-size:14px;">Try Again</button>
+          </div>
+        `;
+        document.getElementById('startScreen').style.display = 'flex';
+      }
+    }
+    
+    // Timer
+    function startTimer() {
+      timerInterval = setInterval(() => {
+        totalSeconds--;
+        const h = Math.floor(totalSeconds / 3600);
+        const m = Math.floor((totalSeconds % 3600) / 60);
+        const s = totalSeconds % 60;
+        const timerEl = document.getElementById('timer');
+        timerEl.textContent = h + ':' + String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
+        if (totalSeconds <= 600) { timerEl.className = 'timer danger'; }
+        else if (totalSeconds <= 1800) { timerEl.className = 'timer warning'; }
+        if (totalSeconds <= 0) { clearInterval(timerInterval); submitTest(); }
+      }, 1000);
+    }
+
+    // Render question
+    function renderQuestion(index) {
+      currentIndex = index;
+      const q = questions[index];
+      if (!q) return;
+
+      const isMarked = marked[index];
+      const selectedAnswer = answers[index];
+
+      document.getElementById('questionArea').innerHTML = `
+        <div class="question-meta">${q.subject || ''} • ${q.year || ''}</div>
+        <div class="question-number">Question ${index + 1} of ${questions.length}</div>
+        <div class="question-text">${q.question}</div>
+        <div class="options" id="optionsContainer">
+       ${['a','b','c','d'].map(opt => q['option_' + opt] ? `
+            <div class="option ${selectedAnswer === opt ? 'selected' : ''}" onclick="selectAnswer('${opt}')">
+              <div class="option-label">${opt.toUpperCase()}</div>
+              <div>${q['option_' + opt]}</div>
+            </div>
+          ` : '').join('')}
+        </div>
+        <div class="question-actions">
+          <button class="mark-btn ${isMarked ? 'marked' : ''}" onclick="toggleMark()">${isMarked ? '🔖 Marked' : '🔖 Mark for Review'}</button>
+          <button class="clear-btn" onclick="clearAnswer()">Clear</button>
+       <button class="clear-btn" id="saveBtn-${index}" style="border-color:${savedQuestions.has(index) ? '#4ade80' : '#f97316'};color:${savedQuestions.has(index) ? '#4ade80' : '#f97316'};" onclick="saveQuestionFromMock(${index})" ${savedQuestions.has(index) ? 'disabled' : ''}>${savedQuestions.has(index) ? '✅ Saved' : '🔖 Save'}</button>
+          <div class="nav-btns">
+           <button class="prev-btn" onclick="goTo(${index - 1}, -1)" ${index === 0 ? 'disabled style="opacity:0.4;cursor:not-allowed;"' : ''}>← Prev</button>
+            <button class="next-btn" onclick="goTo(${index + 1}, 1)" ${index === questions.length - 1 ? 'disabled style="opacity:0.4;cursor:not-allowed;"' : ''}>Next →</button>
+          </div>
+        </div>
+      `;
+      renderGrid();
+      updateStats();
+    }
+
+    function selectAnswer(opt) {
+      answers[currentIndex] = opt;
+      renderQuestion(currentIndex);
+    }
+
+    function clearAnswer() {
+      delete answers[currentIndex];
+      renderQuestion(currentIndex);
+    }
+
+    function toggleMark() {
+      if (marked[currentIndex]) { delete marked[currentIndex]; }
+      else { marked[currentIndex] = true; }
+      renderQuestion(currentIndex);
+    }
+
+    function goTo(index, direction) {
+      if (index < 0 || index >= questions.length) return;
+      if (currentFilter !== 'all' && direction) {
+        let next = index;
+        while (next >= 0 && next < questions.length) {
+          if (questions[next].subject === currentFilter) break;
+          next += direction;
+        }
+        if (next < 0 || next >= questions.length) return;
+        index = next;
+      }
+      renderQuestion(index);
+    }
+
+    // Question grid
+    function renderGrid() {
+      const grid = document.getElementById('questionGrid');
+      let filteredIndices = [];
+
+      if (currentFilter === 'all') {
+        filteredIndices = questions.map((_, i) => i);
+      } else {
+        filteredIndices = questions.map((q, i) => q.subject === currentFilter ? i : null).filter(i => i !== null);
+      }
+
+      grid.innerHTML = filteredIndices.map(i => {
+        let cls = 'grid-btn';
+        if (i === currentIndex) cls += ' current';
+        else if (answers[i] && marked[i]) cls += ' answered marked';
+        else if (answers[i]) cls += ' answered';
+        else if (marked[i]) cls += ' marked';
+        return `<button class="${cls}" onclick="goTo(${i})">${i + 1}</button>`;
+      }).join('');
+    }
+
+    function filterSubject(subject) {
+      currentFilter = subject;
+      document.querySelectorAll('.subject-tab').forEach(t => t.classList.remove('active'));
+      event.target.classList.add('active');
+      renderGrid();
+    }
+
+    function updateStats() {
+      document.getElementById('answeredCount').textContent = Object.keys(answers).length;
+      document.getElementById('markedCount').textContent = Object.keys(marked).length;
+      document.getElementById('skippedCount').textContent = questions.length - Object.keys(answers).length;
+    }
+  
+async function saveQuestionFromMock(index) {
+      const q = questions[index];
+      const SUPABASE_URL = 'https://hvhnfttrfouajlyhvunq.supabase.co';
+      const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh2aG5mdHRyZm91YWpseWh2dW5xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg5NDI1NTIsImV4cCI6MjA5NDUxODU1Mn0.8RaSu5yiTpQCEUGKrFO2y6oiRXSqdBehIz933j9Z7WA';
+      const { createClient } = supabase;
+      const client = createClient(SUPABASE_URL, SUPABASE_KEY);
+      const { data: { session } } = await client.auth.getSession();
+      if (!session) { alert('Please log in to save questions.'); return; }
+      const { error } = await client.from('saved_questions').insert({
+        user_id: session.user.id,
+        question_id: q.id,
+        question: q.question,
+        option_a: q.option_a,
+        option_b: q.option_b,
+        option_c: q.option_c,
+        option_d: q.option_d,
+        correct_answer: q.correct_answer,
+        subject: q.subject,
+        chapter: q.chapter,
+        year: q.year,
+        source: 'Mock Test'
+      });
+    if (error) { alert('Failed to save.'); return; }
+      savedQuestions.add(index);
+      const saveBtn = document.getElementById('saveBtn-' + index);
+      if (saveBtn) {
+        saveBtn.textContent = '✅ Saved';
+        saveBtn.style.borderColor = '#4ade80';
+        saveBtn.style.color = '#4ade80';
+        saveBtn.disabled = true;
+      }
+    }
+
+    function confirmExit() {
+      if (confirm('Are you sure you want to exit? Your progress will be lost.')) {
+        clearInterval(timerInterval);
+        window.location.href = './index.html';
+      }
+    }
+    function confirmSubmit() {
+      const answered = Object.keys(answers).length;
+      const skipped = questions.length - answered;
+      if (confirm(`You have answered ${answered} questions and skipped ${skipped}.\n\nSubmit the test?`)) {
+        submitTest();
+      }
+    }
+
+    function submitTest() {
+      clearInterval(timerInterval);
+      const timeTaken = Math.floor((Date.now() - startTime) / 1000);
+
+      let correct = 0, wrong = 0, skipped = 0;
+      const results = questions.map((q, i) => {
+        const userAnswer = answers[i];
+        const correctAnswer = q.correct_answer ? q.correct_answer.toLowerCase() : null;
+        let status = 'skipped';
+        if (!userAnswer) { skipped++; status = 'skipped'; }
+        else if (userAnswer === correctAnswer) { correct++; status = 'correct'; }
+        else { wrong++; status = 'wrong'; }
+        return { ...q, userAnswer, status };
+      });
+
+      const score = (correct * 4) - (wrong * 1);
+
+      // Store results in sessionStorage for results page
+      sessionStorage.setItem('mockTestResults', JSON.stringify({
+        score, correct, wrong, skipped,
+        total: questions.length,
+        timeTaken,
+        results,
+        date: new Date().toISOString()
+      }));
+
+      window.location.href = './mockresults.html';
+    }
+
+   function startTest() {
+      document.getElementById('startScreen').innerHTML = `
+        <div style="text-align:center;">
+          <div style="font-size:48px;margin-bottom:24px;">⏳</div>
+          <h2 style="font-size:24px;font-weight:700;color:#fff;margin-bottom:8px;">Preparing your test...</h2>
+          <p style="color:#555;font-size:14px;margin-bottom:32px;">Loading 180 questions</p>
+          <div style="width:200px;height:4px;background:#1a1a1a;border-radius:4px;margin:0 auto;overflow:hidden;">
+            <div id="loadBar" style="height:100%;width:0%;background:#4f8ef7;border-radius:4px;transition:width 2.5s ease;"></div>
+          </div>
+          <p style="color:#333;font-size:12px;margin-top:16px;" id="loadingDots">Please wait</p>
+        </div>
+      `;
+      setTimeout(() => { document.getElementById('loadBar').style.width = '100%'; }, 100);
+      let dots = 0;
+      const dotsInterval = setInterval(() => {
+        dots = (dots + 1) % 4;
+        const el = document.getElementById('loadingDots');
+        if (el) el.textContent = 'Please wait' + '.'.repeat(dots);
+      }, 500);
+      loadQuestions().then(() => {
+        clearInterval(dotsInterval);
+        setTimeout(() => {
+          document.getElementById('startScreen').style.display = 'none';
+        }, 500);
+      });
+    }
+  </script>
+</body>
+</html>

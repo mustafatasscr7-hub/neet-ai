@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>NEET-AI | Login</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: #0d0d0d;
+      color: #ececec;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .login-box {
+      background: #111111;
+      border: 1px solid #1e1e1e;
+      border-radius: 16px;
+      padding: 48px 40px;
+      width: 100%;
+      max-width: 400px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      margin-bottom: 4px;
+    }
+
+    .logo-icon {
+      width: 36px;
+      height: 36px;
+      background: linear-gradient(135deg, #4f8ef7, #7c3aed);
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .logo-text { font-size: 20px; font-weight: 700; color: #ffffff; }
+    .logo-text span { color: #4f8ef7; }
+
+    .title { font-size: 22px; font-weight: 700; color: #ffffff; text-align: center; }
+    .subtitle { font-size: 14px; color: #555; text-align: center; line-height: 1.6; }
+
+    .google-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      background: #ffffff;
+      color: #111;
+      border: none;
+      padding: 13px 24px;
+      border-radius: 10px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 600;
+      font-family: 'Inter', sans-serif;
+      transition: all 0.2s;
+      width: 100%;
+    }
+
+    .google-btn:hover { background: #f0f0f0; }
+    .google-btn img { width: 18px; height: 18px; }
+
+    .divider {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      color: #333;
+      font-size: 12px;
+    }
+
+    .divider::before, .divider::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: #1e1e1e;
+    }
+
+    .input-field {
+      width: 100%;
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      color: #ececec;
+      padding: 12px 16px;
+      border-radius: 10px;
+      font-size: 14px;
+      font-family: 'Inter', sans-serif;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .input-field:focus { border-color: #4f8ef750; }
+    .input-field::placeholder { color: #444; }
+
+    .submit-btn {
+      width: 100%;
+      background: #4f8ef7;
+      color: white;
+      border: none;
+      padding: 13px 24px;
+      border-radius: 10px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 600;
+      font-family: 'Inter', sans-serif;
+      transition: all 0.2s;
+    }
+
+    .submit-btn:hover { background: #3b7de8; }
+
+    .toggle-text {
+      font-size: 13px;
+      color: #555;
+      text-align: center;
+    }
+
+    .toggle-text span {
+      color: #4f8ef7;
+      cursor: pointer;
+      font-weight: 500;
+    }
+
+    .toggle-text span:hover { text-decoration: underline; }
+
+    .error-msg { color: #ef4444; font-size: 13px; text-align: center; display: none; }
+    .success-msg { color: #10b981; font-size: 13px; text-align: center; display: none; }
+
+    .footer { font-size: 11px; color: #333; text-align: center; }
+  </style>
+</head>
+<body>
+
+  <div class="login-box">
+    <div class="logo">
+      <div class="logo-icon">
+        <svg viewBox="0 0 32 32" fill="none" width="20" height="20">
+          <circle cx="16" cy="16" r="6" stroke="white" stroke-width="2"/>
+          <circle cx="16" cy="16" r="2" fill="white"/>
+          <line x1="16" y1="4" x2="16" y2="10" stroke="white" stroke-width="2" stroke-linecap="round"/>
+          <line x1="16" y1="22" x2="16" y2="28" stroke="white" stroke-width="2" stroke-linecap="round"/>
+          <line x1="4" y1="16" x2="10" y2="16" stroke="white" stroke-width="2" stroke-linecap="round"/>
+          <line x1="22" y1="16" x2="28" y2="16" stroke="white" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <div class="logo-text">NEET<span>-AI</span></div>
+    </div>
+
+    <div>
+      <div class="title" id="formTitle">Welcome back</div>
+      <div class="subtitle" style="margin-top:6px" id="formSubtitle">Sign in to continue your NEET preparation.</div>
+    </div>
+
+    <button class="google-btn" id="googleBtn">
+      <img src="https://www.google.com/favicon.ico" alt="Google"/>
+      Continue with Google
+    </button>
+
+    <div class="divider">or</div>
+
+    <input type="email" class="input-field" id="emailInput" placeholder="Email address" />
+    <input type="password" class="input-field" id="passwordInput" placeholder="Password" />
+
+    <div class="error-msg" id="errorMsg"></div>
+    <div class="success-msg" id="successMsg"></div>
+
+    <button class="submit-btn" id="submitBtn">Sign In</button>
+
+    <div class="toggle-text">
+      Don't have an account? <span id="toggleLink">Sign Up</span>
+    </div>
+
+    <div class="footer">
+      By signing in you agree to our Terms of Service.<br/>
+      Answers sourced from NCERT Class 11 & 12.
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script>
+    const SUPABASE_URL = 'https://hvhnfttrfouajlyhvunq.supabase.co'
+    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh2aG5mdHRyZm91YWpseWh2dW5xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg5NDI1NTIsImV4cCI6MjA5NDUxODU1Mn0.8RaSu5yiTpQCEUGKrFO2y6oiRXSqdBehIz933j9Z7WA'
+    const { createClient } = supabase
+    const client = createClient(SUPABASE_URL, SUPABASE_KEY)
+
+    let isSignUp = false
+
+    // Check if already logged in
+    client.auth.getSession().then(({ data: { session } }) => {
+      if (session) window.location.href = './index.html'
+    })
+
+    // Toggle Sign In / Sign Up
+    document.getElementById('toggleLink').addEventListener('click', () => {
+      isSignUp = !isSignUp
+      document.getElementById('formTitle').textContent = isSignUp ? 'Create account' : 'Welcome back'
+      document.getElementById('formSubtitle').textContent = isSignUp ? 'Join NEET-AI and start preparing smarter.' : 'Sign in to continue your NEET preparation.'
+      document.getElementById('submitBtn').textContent = isSignUp ? 'Sign Up' : 'Sign In'
+      document.getElementById('toggleLink').textContent = isSignUp ? 'Sign In' : 'Sign Up'
+      document.querySelector('.toggle-text').childNodes[0].textContent = isSignUp ? 'Already have an account? ' : "Don't have an account? "
+      hideMessages()
+    })
+
+    // Google login
+    document.getElementById('googleBtn').addEventListener('click', async () => {
+      const { error } = await client.auth.signInWithOAuth({
+        provider: 'google',
+        options: { redirectTo: 'http://127.0.0.1:5500/index.html' }
+      })
+      if (error) showError(error.message)
+    })
+
+    // Email/password submit
+    document.getElementById('submitBtn').addEventListener('click', async () => {
+      const email = document.getElementById('emailInput').value.trim()
+      const password = document.getElementById('passwordInput').value.trim()
+
+      if (!email || !password) { showError('Please enter email and password.'); return }
+
+      if (isSignUp) {
+        const { error } = await client.auth.signUp({ email, password })
+        if (error) { showError(error.message) }
+        else { showSuccess('Account created! Please check your email to verify.') }
+      } else {
+        const { error } = await client.auth.signInWithPassword({ email, password })
+        if (error) { showError('Invalid email or password.') }
+        else { window.location.href = './index.html' }
+      }
+    })
+
+    // Enter key
+    document.getElementById('passwordInput').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') document.getElementById('submitBtn').click()
+    })
+
+    function showError(msg) {
+      const el = document.getElementById('errorMsg')
+      el.textContent = msg
+      el.style.display = 'block'
+      document.getElementById('successMsg').style.display = 'none'
+    }
+
+    function showSuccess(msg) {
+      const el = document.getElementById('successMsg')
+      el.textContent = msg
+      el.style.display = 'block'
+      document.getElementById('errorMsg').style.display = 'none'
+    }
+
+    function hideMessages() {
+      document.getElementById('errorMsg').style.display = 'none'
+      document.getElementById('successMsg').style.display = 'none'
+    }
+  </script>
+
+</body>
+</html>

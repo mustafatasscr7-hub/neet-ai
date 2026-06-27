@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Pricing — NEET-AI</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Inter', sans-serif; background: #0d0d0d; color: #ececec; min-height: 100vh; }
+    .header { padding: 14px 24px; border-bottom: 1px solid #1a1a1a; display: flex; align-items: center; justify-content: space-between; background: #0d0d0d; position: sticky; top: 0; z-index: 10; }
+    .header-title { font-size: 15px; font-weight: 700; color: #fff; }
+    .header-title span { color: #4f8ef7; }
+    .container { max-width: 860px; margin: 0 auto; padding: 60px 24px; }
+    .page-title { font-size: 30px; font-weight: 700; color: #fff; text-align: center; margin-bottom: 8px; }
+    .page-subtitle { font-size: 14px; color: #555; text-align: center; margin-bottom: 48px; }
+
+    .toggle-wrap { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 40px; }
+    .toggle-label { font-size: 13px; color: #555; cursor: pointer; transition: color 0.2s; }
+    .toggle-label.active { color: #ececec; font-weight: 600; }
+    .toggle-btn { width: 40px; height: 22px; background: #4f8ef7; border-radius: 11px; cursor: pointer; position: relative; transition: all 0.2s; flex-shrink: 0; }
+    .toggle-btn::after { content: ''; position: absolute; width: 16px; height: 16px; background: white; border-radius: 50%; top: 3px; left: 3px; transition: all 0.2s; }
+    .toggle-btn.yearly::after { left: 21px; }
+    .save-tag { background: #4ade8015; color: #4ade80; border: 1px solid #4ade8030; padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 600; }
+
+    .plans { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 48px; }
+    .plan { background: #111; border: 1px solid #1e1e1e; border-radius: 16px; padding: 28px; position: relative; }
+    .plan.pro { border-color: #2a2a2a; }
+    .plan-icon { font-size: 28px; margin-bottom: 16px; }
+    .plan-name { font-size: 18px; font-weight: 700; color: #fff; margin-bottom: 4px; }
+    .plan-tagline { font-size: 13px; color: #555; margin-bottom: 20px; }
+    .plan-price { font-size: 38px; font-weight: 700; color: #fff; margin-bottom: 4px; line-height: 1; }
+    .plan-price-sub { font-size: 12px; color: #555; margin-bottom: 24px; }
+    .plan-btn { width: 100%; padding: 12px; border-radius: 10px; cursor: pointer; font-size: 14px; font-weight: 600; font-family: 'Inter', sans-serif; transition: all 0.2s; margin-bottom: 24px; }
+    .plan-btn.free-btn { background: transparent; border: 1px solid #2a2a2a; color: #888; }
+    .plan-btn.free-btn:hover { border-color: #3a3a3a; color: #ccc; }
+    .plan-btn.pro-btn { background: #fff; border: none; color: #0d0d0d; }
+    .plan-btn.pro-btn:hover { background: #e8e8e8; }
+    .divider { height: 1px; background: #1e1e1e; margin-bottom: 20px; }
+    .features-label { font-size: 12px; color: #555; margin-bottom: 12px; }
+    .features { display: flex; flex-direction: column; gap: 10px; }
+    .feature { display: flex; align-items: flex-start; gap: 10px; font-size: 13px; color: #888; }
+    .feature.yes { color: #ccc; }
+    .feature-check { color: #4f8ef7; font-size: 13px; flex-shrink: 0; margin-top: 1px; }
+    .feature-cross { color: #333; font-size: 13px; flex-shrink: 0; margin-top: 1px; }
+
+    .footer-note { text-align: center; font-size: 12px; color: #333; margin-top: 32px; }
+    .footer-note a { color: #4f8ef7; text-decoration: none; }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <div style="display:flex;align-items:center;gap:16px;">
+      <button onclick="window.location.href='./index.html'" style="background:transparent;border:none;color:#555;cursor:pointer;font-size:13px;font-family:Inter,sans-serif;padding:0;" onmouseover="this.style.color='#4f8ef7'" onmouseout="this.style.color='#555'">← Back</button>
+      <span class="header-title">NEET<span>-AI</span></span>
+    </div>
+  </div>
+
+  <div class="container">
+    <div class="page-title">Simple, transparent pricing</div>
+    <div class="page-subtitle">Start free. Upgrade when you need more.</div>
+
+    <div class="toggle-wrap">
+      <span class="toggle-label active" id="monthlyLabel">Monthly</span>
+      <div class="toggle-btn" id="billingToggle" onclick="toggleBilling()"></div>
+      <span class="toggle-label" id="yearlyLabel">Yearly</span>
+      <span class="save-tag">Save 20%</span>
+    </div>
+
+    <div class="plans">
+      <!-- Free Plan -->
+      <div class="plan">
+        <div class="plan-icon">🌱</div>
+        <div class="plan-name">Free</div>
+        <div class="plan-tagline">Get started with NEET-AI</div>
+        <div class="plan-price">₹0</div>
+        <div class="plan-price-sub">forever free</div>
+        <button class="plan-btn free-btn" onclick="window.location.href='./index.html'">Get started free</button>
+        <div class="divider"></div>
+        <div class="features-label">What's included:</div>
+        <div class="features">
+          <div class="feature yes"><span class="feature-check">✓</span> 5 AI questions per day</div>
+          <div class="feature yes"><span class="feature-check">✓</span> NCERT-based answers</div>
+          <div class="feature yes"><span class="feature-check">✓</span> Biology PYQ Bank</div>
+          <div class="feature yes"><span class="feature-check">✓</span> 3 Mock Tests per month</div>
+          <div class="feature yes"><span class="feature-check">✓</span> Save up to 10 questions</div>
+          <div class="feature"><span class="feature-cross">✕</span> Physics & Chemistry PYQ</div>
+          <div class="feature"><span class="feature-cross">✕</span> Unlimited mock tests</div>
+          <div class="feature"><span class="feature-cross">✕</span> Weak topic detector</div>
+          <div class="feature"><span class="feature-cross">✕</span> Image question solving</div>
+          <div class="feature"><span class="feature-cross">✕</span> Formula sheets</div>
+        </div>
+      </div>
+
+      <!-- Pro Plan -->
+      <div class="plan pro">
+        <div class="plan-icon">⚡</div>
+        <div class="plan-name">Pro</div>
+        <div class="plan-tagline">Everything you need to crack NEET</div>
+        <div class="plan-price" id="proPrice">₹299</div>
+        <div class="plan-price-sub" id="priceSub">per month · cancel anytime</div>
+        <button class="plan-btn pro-btn" onclick="alert('Payments coming soon! We\'ll notify you.')">Get Pro plan</button>
+        <div class="divider"></div>
+        <div class="features-label">Everything in Free, plus:</div>
+        <div class="features">
+          <div class="feature yes"><span class="feature-check">✓</span> Unlimited AI questions</div>
+          <div class="feature yes"><span class="feature-check">✓</span> Physics & Chemistry PYQ Bank</div>
+          <div class="feature yes"><span class="feature-check">✓</span> Unlimited mock tests</div>
+          <div class="feature yes"><span class="feature-check">✓</span> Weak topic detector</div>
+          <div class="feature yes"><span class="feature-check">✓</span> Image & diagram questions</div>
+          <div class="feature yes"><span class="feature-check">✓</span> Formula sheets</div>
+          <div class="feature yes"><span class="feature-check">✓</span> Unlimited saved questions</div>
+          <div class="feature yes"><span class="feature-check">✓</span> Performance analytics</div>
+          <div class="feature yes"><span class="feature-check">✓</span> Priority support</div>
+          <div class="feature yes"><span class="feature-check">✓</span> Early access to new features</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer-note">
+      *Prices in INR. NRI students see <a href="#">international pricing</a>. No commitment — cancel anytime.
+    </div>
+  </div>
+
+  <script>
+    let isYearly = false;
+
+    function toggleBilling() {
+      isYearly = !isYearly;
+      const toggle = document.getElementById('billingToggle');
+      const monthlyLabel = document.getElementById('monthlyLabel');
+      const yearlyLabel = document.getElementById('yearlyLabel');
+      const proPrice = document.getElementById('proPrice');
+      const priceSub = document.getElementById('priceSub');
+
+      if (isYearly) {
+        toggle.classList.add('yearly');
+        monthlyLabel.classList.remove('active');
+        yearlyLabel.classList.add('active');
+        proPrice.textContent = '₹239';
+        priceSub.textContent = 'per month · billed ₹2,868/year';
+      } else {
+        toggle.classList.remove('yearly');
+        monthlyLabel.classList.add('active');
+        yearlyLabel.classList.remove('active');
+        proPrice.textContent = '₹299';
+        priceSub.textContent = 'per month · cancel anytime';
+      }
+    }
+  </script>
+</body>
+</html>

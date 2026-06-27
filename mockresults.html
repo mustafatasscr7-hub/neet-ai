@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Results — NEET-AI</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Inter', sans-serif; background: #0d0d0d; color: #ececec; min-height: 100vh; }
+    .header { padding: 14px 24px; border-bottom: 1px solid #1a1a1a; display: flex; align-items: center; justify-content: space-between; background: #0d0d0d; position: sticky; top: 0; z-index: 10; }
+    .header-title { font-size: 15px; font-weight: 700; color: #fff; }
+    .header-title span { color: #4f8ef7; }
+    .btn { padding: 8px 20px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600; font-family: 'Inter', sans-serif; transition: all 0.2s; border: none; }
+    .btn-primary { background: #4f8ef7; color: white; }
+    .btn-primary:hover { background: #3b7de8; }
+    .btn-outline { background: transparent; border: 1px solid #2a2a2a; color: #888; }
+    .btn-outline:hover { color: #ccc; border-color: #3a3a3a; }
+
+    .container { max-width: 900px; margin: 0 auto; padding: 32px 24px; }
+
+    .score-card { background: #111; border: 1px solid #1e1e1e; border-radius: 16px; padding: 32px; text-align: center; margin-bottom: 24px; }
+    .score-label { font-size: 13px; color: #666; margin-bottom: 8px; }
+    .score-value { font-size: 64px; font-weight: 700; color: #4f8ef7; line-height: 1; margin-bottom: 4px; }
+    .score-total { font-size: 20px; color: #444; margin-bottom: 24px; }
+    .score-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+    .stat-box { background: #0d0d0d; border-radius: 10px; padding: 16px; }
+    .stat-box-value { font-size: 28px; font-weight: 700; margin-bottom: 4px; }
+    .stat-box-label { font-size: 12px; color: #555; }
+
+    .subject-breakdown { background: #111; border: 1px solid #1e1e1e; border-radius: 16px; padding: 24px; margin-bottom: 24px; }
+    .section-title { font-size: 14px; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 16px; }
+    .subject-row { display: flex; align-items: center; gap: 16px; padding: 12px 0; border-bottom: 1px solid #1a1a1a; }
+    .subject-row:last-child { border-bottom: none; }
+    .subject-name { width: 100px; font-size: 14px; color: #ececec; font-weight: 500; }
+    .subject-bar-wrap { flex: 1; height: 8px; background: #1a1a1a; border-radius: 4px; overflow: hidden; }
+    .subject-bar { height: 100%; border-radius: 4px; transition: width 1s ease; }
+    .subject-score { font-size: 13px; font-weight: 600; color: #ececec; width: 60px; text-align: right; }
+    .subject-detail { font-size: 11px; color: #555; width: 120px; text-align: right; }
+
+    .review-section { background: #111; border: 1px solid #1e1e1e; border-radius: 16px; padding: 24px; margin-bottom: 24px; }
+    .filter-tabs { display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
+    .filter-tab { padding: 6px 14px; border-radius: 6px; border: 1px solid #2a2a2a; background: transparent; color: #666; font-size: 12px; font-family: 'Inter', sans-serif; cursor: pointer; transition: all 0.2s; }
+    .filter-tab.active { background: #4f8ef720; border-color: #4f8ef7; color: #4f8ef7; }
+
+    .question-card { background: #0d0d0d; border: 1px solid #1e1e1e; border-radius: 10px; padding: 16px; margin-bottom: 12px; }
+    .question-card.correct { border-left: 3px solid #4ade80; }
+    .question-card.wrong { border-left: 3px solid #ef4444; }
+    .question-card.skipped { border-left: 3px solid #555; }
+    .q-meta { font-size: 11px; color: #555; margin-bottom: 8px; display: flex; gap: 12px; }
+    .q-text { font-size: 13px; color: #ccc; line-height: 1.6; margin-bottom: 12px; }
+    .q-options { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 8px; }
+    .q-option { padding: 6px 10px; border-radius: 6px; font-size: 12px; background: #1a1a1a; color: #888; border: 1px solid #2a2a2a; }
+    .q-option.correct-ans { background: #4ade8020; border-color: #4ade80; color: #4ade80; }
+    .q-option.wrong-ans { background: #ef444420; border-color: #ef4444; color: #ef4444; }
+    .q-status { font-size: 11px; font-weight: 600; }
+    .q-status.correct { color: #4ade80; }
+    .q-status.wrong { color: #ef4444; }
+    .q-status.skipped { color: #555; }
+
+    .no-results { text-align: center; padding: 40px; color: #555; font-size: 14px; }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <span class="header-title">NEET<span>-AI</span> Results</span>
+    <div style="display:flex;gap:10px;">
+     <button class="btn btn-outline" onclick="window.location.href='./mocktest.html'">Take Another Test</button>
+      <button class="btn btn-outline" onclick="window.location.href='./scoreboard.html'">📊 Scoreboard</button>
+      <button class="btn btn-outline" onclick="generateScorecard()">📤 Share Scorecard</button>
+      <button class="btn btn-primary" onclick="window.location.href='./index.html'">Back to NEET-AI</button>
+    </div>
+  </div>
+
+  <div class="container">
+    <div class="score-card">
+      <div class="score-label">Your Score</div>
+      <div class="score-value" id="scoreValue">0</div>
+      <div class="score-total">out of 720</div>
+      <div class="score-stats">
+        <div class="stat-box">
+          <div class="stat-box-value" style="color:#4ade80;" id="correctCount">0</div>
+          <div class="stat-box-label">Correct</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-box-value" style="color:#ef4444;" id="wrongCount">0</div>
+          <div class="stat-box-label">Wrong</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-box-value" style="color:#555;" id="skippedCount">0</div>
+          <div class="stat-box-label">Skipped</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="subject-breakdown">
+      <div class="section-title">Subject-wise Performance</div>
+      <div id="subjectBreakdown"></div>
+    </div>
+
+    <div class="review-section">
+      <div class="section-title">Question Review</div>
+      <div class="filter-tabs">
+        <button class="filter-tab active" onclick="filterQuestions('all', this)">All</button>
+        <button class="filter-tab" onclick="filterQuestions('correct', this)">✅ Correct</button>
+        <button class="filter-tab" onclick="filterQuestions('wrong', this)">❌ Wrong</button>
+        <button class="filter-tab" onclick="filterQuestions('skipped', this)">⬜ Skipped</button>
+        <button class="filter-tab" onclick="filterQuestions('Biology', this)">Biology</button>
+        <button class="filter-tab" onclick="filterQuestions('Physics', this)">Physics</button>
+        <button class="filter-tab" onclick="filterQuestions('Chemistry', this)">Chemistry</button>
+      </div>
+      <div id="questionReview"></div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script>
+    const SUPABASE_URL = 'https://hvhnfttrfouajlyhvunq.supabase.co';
+    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh2aG5mdHRyZm91YWpseWh2dW5xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg5NDI1NTIsImV4cCI6MjA5NDUxODU1Mn0.8RaSu5yiTpQCEUGKrFO2y6oiRXSqdBehIz933j9Z7WA';
+
+    const data = JSON.parse(sessionStorage.getItem('mockTestResults') || 'null');
+
+    async function saveResultToSupabase(data, subjectData) {
+      const { createClient } = supabase;
+      const client = createClient(SUPABASE_URL, SUPABASE_KEY);
+      const { data: { session } } = await client.auth.getSession();
+      if (!session) return;
+      await client.from('mock_results').insert({
+        user_id: session.user.id,
+        score: Math.max(0, data.score),
+        correct: data.correct,
+        wrong: data.wrong,
+        skipped: data.skipped,
+        total: data.total,
+        time_taken: data.timeTaken,
+        subject_biology_score: Math.max(0, (subjectData.Biology.correct * 4) - subjectData.Biology.wrong),
+        subject_physics_score: Math.max(0, (subjectData.Physics.correct * 4) - subjectData.Physics.wrong),
+        subject_chemistry_score: Math.max(0, (subjectData.Chemistry.correct * 4) - subjectData.Chemistry.wrong),
+      });
+    }
+
+    if (!data) {
+      document.querySelector('.container').innerHTML = '<div class="no-results">No test results found. <a href="./mocktest.html" style="color:#4f8ef7;">Take a mock test</a></div>';
+    } else {
+      // Score
+      document.getElementById('scoreValue').textContent = Math.max(0, data.score);
+      document.getElementById('correctCount').textContent = data.correct;
+      document.getElementById('wrongCount').textContent = data.wrong;
+      document.getElementById('skippedCount').textContent = data.skipped;
+
+      // Subject breakdown
+      const subjects = ['Biology', 'Physics', 'Chemistry'];
+      const subjectColors = { Biology: '#4ade80', Physics: '#4f8ef7', Chemistry: '#f97316' };
+      const subjectMax = { Biology: 360, Physics: 180, Chemistry: 180 };
+      const subjectData = {};
+
+      subjects.forEach(s => { subjectData[s] = { correct: 0, wrong: 0, skipped: 0, total: 0 }; });
+
+      data.results.forEach(q => {
+        const s = q.subject;
+        if (!subjectData[s]) return;
+        subjectData[s].total++;
+        if (q.status === 'correct') subjectData[s].correct++;
+        else if (q.status === 'wrong') subjectData[s].wrong++;
+        else subjectData[s].skipped++;
+      });
+
+      saveResultToSupabase(data, subjectData);
+      const breakdown = document.getElementById('subjectBreakdown');
+      subjects.forEach(s => {
+        const sd = subjectData[s];
+        const score = Math.max(0, (sd.correct * 4) - sd.wrong);
+        const max = subjectMax[s];
+        const pct = max > 0 ? (score / max) * 100 : 0;
+        breakdown.innerHTML += `
+          <div class="subject-row">
+            <div class="subject-name">${s}</div>
+            <div class="subject-bar-wrap"><div class="subject-bar" style="width:${pct}%;background:${subjectColors[s]};"></div></div>
+            <div class="subject-score">${score}/${max}</div>
+            <div class="subject-detail">${sd.correct}✓ ${sd.wrong}✗ ${sd.skipped}−</div>
+          </div>
+        `;
+      });
+
+      // Question review
+      renderQuestions('all');
+    }
+
+    async function saveFromResults(i) {
+      const q = data.results[i];
+      const { createClient } = supabase;
+      const client = createClient('https://hvhnfttrfouajlyhvunq.supabase.co', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh2aG5mdHRyZm91YWpseWh2dW5xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg5NDI1NTIsImV4cCI6MjA5NDUxODU1Mn0.8RaSu5yiTpQCEUGKrFO2y6oiRXSqdBehIz933j9Z7WA');
+      const { data: { session } } = await client.auth.getSession();
+      if (!session) { alert('Please log in to save questions.'); return; }
+      const { error } = await client.from('saved_questions').insert({
+        user_id: session.user.id,
+        question_id: q.id,
+        question: q.question,
+        option_a: q.option_a,
+        option_b: q.option_b,
+        option_c: q.option_c,
+        option_d: q.option_d,
+        correct_answer: q.correct_answer,
+        subject: q.subject,
+        chapter: q.chapter,
+        year: q.year,
+        source: 'Mock Test Results'
+      });
+      if (error) { alert('Failed to save.'); return; }
+      const btn = document.getElementById('save-' + i);
+      if (btn) { btn.textContent = '✅ Saved'; btn.style.borderColor = '#4ade80'; btn.style.color = '#4ade80'; btn.disabled = true; }
+    }
+
+function generateScorecard() {
+      const canvas = document.createElement('canvas');
+      canvas.width = 1080;
+      canvas.height = 1080;
+      const ctx = canvas.getContext('2d');
+
+      // Background
+      ctx.fillStyle = '#0d0d0d';
+      ctx.fillRect(0, 0, 1080, 1080);
+
+      // Gradient accent top
+      const grad = ctx.createLinearGradient(0, 0, 1080, 0);
+      grad.addColorStop(0, '#4f8ef7');
+      grad.addColorStop(1, '#7c3aed');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, 1080, 8);
+
+      // NEET-AI branding
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 36px Arial';
+      ctx.fillText('NEET', 80, 100);
+      ctx.fillStyle = '#4f8ef7';
+      ctx.fillText('-AI', 160, 100);
+      ctx.fillStyle = '#555';
+      ctx.font = '24px Arial';
+      ctx.fillText('Mock Test Result', 80, 140);
+
+      // Score circle
+      ctx.beginPath();
+      ctx.arc(540, 360, 200, 0, Math.PI * 2);
+      ctx.strokeStyle = '#1e1e1e';
+      ctx.lineWidth = 20;
+      ctx.stroke();
+
+      const score = Math.max(0, data.score);
+      const pct = score / 720;
+      ctx.beginPath();
+      ctx.arc(540, 360, 200, -Math.PI/2, -Math.PI/2 + (pct * Math.PI * 2));
+      ctx.strokeStyle = score >= 500 ? '#4ade80' : score >= 300 ? '#4f8ef7' : '#f97316';
+      ctx.lineWidth = 20;
+      ctx.stroke();
+
+      // Score text
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 96px Arial';
+      ctx.textAlign = 'center';
+      ctx.fillText(score, 540, 395);
+      ctx.fillStyle = '#555';
+      ctx.font = '28px Arial';
+      ctx.fillText('out of 720', 540, 440);
+
+      // Stats row
+      const stats = [
+        { label: 'Correct', value: data.correct, color: '#4ade80' },
+        { label: 'Wrong', value: data.wrong, color: '#ef4444' },
+        { label: 'Skipped', value: data.skipped, color: '#555' }
+      ];
+      stats.forEach((s, i) => {
+        const x = 180 + i * 360;
+        ctx.fillStyle = '#111';
+        ctx.beginPath();
+        ctx.roundRect(x - 100, 620, 200, 120, 12);
+        ctx.fill();
+        ctx.fillStyle = s.color;
+        ctx.font = 'bold 48px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText(s.value, x, 690);
+        ctx.fillStyle = '#666';
+        ctx.font = '22px Arial';
+        ctx.fillText(s.label, x, 720);
+      });
+
+      // Subject breakdown
+      const subjects = [
+        { name: 'Biology', score: document.getElementById('subjectBreakdown')?.children[0]?.querySelector('.subject-score')?.textContent || '0/360', color: '#4ade80' },
+        { name: 'Physics', score: '0/180', color: '#4f8ef7' },
+        { name: 'Chemistry', score: '0/180', color: '#f97316' }
+      ];
+
+      ctx.textAlign = 'left';
+      subjects.forEach((s, i) => {
+        const y = 800 + i * 60;
+        ctx.fillStyle = s.color;
+        ctx.font = 'bold 24px Arial';
+        ctx.fillText(s.name, 80, y);
+        ctx.fillStyle = '#888';
+        ctx.font = '24px Arial';
+        ctx.fillText(s.score, 300, y);
+      });
+
+      // Footer
+      ctx.fillStyle = '#333';
+      ctx.font = '20px Arial';
+      ctx.textAlign = 'center';
+      ctx.fillText('neet-ai.in • AI-Powered NEET Preparation', 540, 1020);
+
+      // Download
+      const link = document.createElement('a');
+      link.download = 'NEET-AI-Scorecard.png';
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    }
+
+    function filterQuestions(filter, btn) {
+      document.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
+      btn.classList.add('active');
+      renderQuestions(filter);
+    }
+
+    function renderQuestions(filter) {
+      const container = document.getElementById('questionReview');
+      container.innerHTML = '';
+      const filtered = data.results.filter(q => {
+        if (filter === 'all') return true;
+        if (filter === 'correct' || filter === 'wrong' || filter === 'skipped') return q.status === filter;
+        return q.subject === filter;
+      });
+
+      if (filtered.length === 0) {
+        container.innerHTML = '<div class="no-results">No questions in this category.</div>';
+        return;
+      }
+
+      filtered.forEach((q, i) => {
+        const card = document.createElement('div');
+        card.className = `question-card ${q.status}`;
+       const correctAns = q.correct_answer ? q.correct_answer.toLowerCase().trim() : null;
+        const userAns = q.userAnswer ? q.userAnswer.toLowerCase().trim() : null;
+        const opts = ['a','b','c','d'].map(opt => {
+          if (!q['option_' + opt]) return '';
+          let cls = 'q-option';
+          if (opt === correctAns) cls += ' correct-ans';
+          if (opt === userAns && opt !== correctAns) cls += ' wrong-ans';
+          return `<div class="${cls}">${opt.toUpperCase()}) ${q['option_' + opt]}</div>`;
+        }).join('');
+
+        const statusText = q.status === 'correct' ? '✅ Correct (+4)' : q.status === 'wrong' ? '❌ Wrong (-1)' : '⬜ Skipped (0)';
+
+       card.innerHTML = `
+          <div class="q-meta">
+            <span>${q.subject || ''}</span>
+            <span>${q.year || ''}</span>
+            <span class="q-status ${q.status}">${statusText}</span>
+          </div>
+          <div class="q-text">${q.question}</div>
+          <div class="q-options">${opts}</div>
+          ${q.userAnswer ? `<div style="font-size:11px;color:#555;margin-bottom:8px;">Your answer: ${q.userAnswer?.toUpperCase()}</div>` : ''}
+          <button id="save-${i}" onclick="saveFromResults(${i})" style="background:transparent;border:1px solid #f97316;color:#f97316;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:11px;font-family:Inter,sans-serif;margin-top:4px;">🔖 Save Question</button>
+        `;
+        container.appendChild(card);
+      });
+    }
+  </script>
+</body>
+</html>
