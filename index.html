@@ -9,8 +9,23 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
   <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
+* { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: 'Inter', sans-serif; background: #0d0d0d; color: #ececec; height: 100vh; display: flex; overflow: hidden; }
+    body.light-mode { background: #f5f5f5 !important; color: #0d0d0d !important; }
+    body.light-mode .sidebar { background: #ebebeb !important; border-color: #e0e0e0 !important; }
+    body.light-mode .main { background: #f5f5f5 !important; }
+    body.light-mode .header { background: #ffffff !important; border-color: #e0e0e0 !important; }
+    body.light-mode .chat-window { background: #f5f5f5 !important; }
+    body.light-mode .input-wrapper { background: #ffffff !important; border-color: #e0e0e0 !important; }
+    body.light-mode .message-bubble.user { background: #e8e8f0 !important; border-color: #d0d0e0 !important; color: #0d0d0d !important; }
+    body.light-mode .message-bubble.ai { color: #1a1a1a !important; }
+    body.light-mode .history-item { color: #444 !important; }
+    body.light-mode .history-item:hover { background: #e0e0e0 !important; }
+    body.light-mode .nav-item { color: #555 !important; }
+    body.light-mode .nav-item:hover { background: #e0e0e0 !important; }
+    body.light-mode .new-chat-btn { background: #e8e8e8 !important; border-color: #d0d0d0 !important; color: #0d0d0d !important; }
+    body.light-mode textarea { color: #0d0d0d !important; }
+    body.light-mode textarea::placeholder { color: #999 !important; }
 
   .sidebar { width: 260px; background: #111111; display: flex; flex-direction: column; padding: 12px 8px; gap: 4px; border-right: 1px solid #1e1e1e; flex-shrink: 0; transition: width 0.2s; overflow: hidden; }
 .sidebar.collapsed { width: 56px; }
@@ -230,13 +245,13 @@
 
     <div class="sidebar-bottom">
       <div class="profile-menu" id="profileMenu" style="display:none">
-        <div class="profile-menu-item" id="myPlanBtn">📋 My Plan</div>
-        <div class="profile-menu-item" id="settingsBtn">⚙️ Settings</div>
+        <div class="profile-menu-item" onclick="alert('Coming soon!')">📋 My Plan</div>
+        <div class="profile-menu-item" onclick="document.getElementById('profileMenu').style.display='none';openSettings();">⚙️ Settings</div>
         <div class="profile-menu-divider"></div>
         <div class="profile-menu-item logout" id="logoutBtn">↩ Log out</div>
       </div>
 
-      <div class="profile-btn" id="profileSection" style="display:none">
+      <div class="profile-btn" id="profileSection" style="display:none" onclick="event.stopPropagation(); const m=document.getElementById('profileMenu'); m.style.display=(m.style.display==='none'||m.style.display==='')?'block':'none';">
         <div class="profile-avatar">S</div>
         <div class="profile-info">
           <div class="profile-name">Student</div>
@@ -245,7 +260,7 @@
         <svg viewBox="0 0 24 24" class="profile-more" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>
         </svg>
-      </div>
+     </div>
 
       <div class="login-nudge" id="loginNudge" style="display:none">
         <div class="nudge-text">
@@ -1159,7 +1174,9 @@ function copyMessage(btn) {
         streamController = new AbortController();
        const requestBody = {
           text: text || 'Describe this image and answer any NEET related content in it.',
-          history: currentConversation.slice(0, -1)
+          history: currentConversation.slice(0, -1),
+          answer_style: localStorage.getItem('answerStyle') || 'detailed',
+          student_name: document.querySelector('.profile-name')?.textContent || ''
         };
 
         if (selectedImage) {
@@ -1268,7 +1285,7 @@ function copyMessage(btn) {
         const name = user.user_metadata.full_name || user.email;
         const initial = name[0].toUpperCase();
         document.querySelector('.profile-name').textContent = name;
-        document.querySelector('.profile-plan').textContent = user.email;
+       document.querySelector('.profile-plan').textContent = 'Free';
         document.querySelector('.profile-avatar').textContent = initial;
         document.getElementById('loginNudge').style.display = 'none';
         document.getElementById('profileSection').style.display = 'flex';
@@ -1312,16 +1329,365 @@ function copyMessage(btn) {
         sendMessage();
       }
     });
+  
+function openSettings() {
+      const existing = document.getElementById('settingsModal');
+      if (existing) existing.remove();
+
+      const modal = document.createElement('div');
+      modal.id = 'settingsModal';
+      modal.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.7);z-index:1000;display:flex;align-items:center;justify-content:center;';
+
+      modal.innerHTML = `
+        <div style="background:#1a1a1a;border:1px solid #2a2a2a;border-radius:16px;width:800px;height:580px;display:flex;overflow:hidden;position:relative;">
+          
+          <!-- Close button -->
+          <button onclick="document.getElementById('settingsModal').remove()" style="position:absolute;top:16px;right:16px;background:transparent;border:none;color:#666;cursor:pointer;font-size:20px;z-index:10;">✕</button>
+
+          <!-- Left sidebar -->
+          <div style="width:200px;background:#111;padding:16px 8px;display:flex;flex-direction:column;gap:2px;border-right:1px solid #1e1e1e;flex-shrink:0;">
+            <div style="font-size:11px;color:#444;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;padding:8px 12px;margin-bottom:4px;">Settings</div>
+           <div class="settings-nav-item active" onclick="showSettingsSection('general', this)" style="padding:9px 14px;border-radius:8px;cursor:pointer;font-size:13px;color:#ececec;background:#2a2a2a;display:flex;align-items:center;gap:10px;">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+              General
+            </div>
+            <div class="settings-nav-item" onclick="showSettingsSection('account', this)" style="padding:9px 14px;border-radius:8px;cursor:pointer;font-size:13px;color:#666;display:flex;align-items:center;gap:10px;">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+              Account
+            </div>
+            <div class="settings-nav-item" onclick="showSettingsSection('study', this)" style="padding:9px 14px;border-radius:8px;cursor:pointer;font-size:13px;color:#666;display:flex;align-items:center;gap:10px;">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+              Study
+            </div>
+            <div class="settings-nav-item" onclick="showSettingsSection('plan', this)" style="padding:9px 14px;border-radius:8px;cursor:pointer;font-size:13px;color:#666;display:flex;align-items:center;gap:10px;">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+              Plan
+            </div>
+            <div class="settings-nav-item" onclick="showSettingsSection('privacy', this)" style="padding:9px 14px;border-radius:8px;cursor:pointer;font-size:13px;color:#666;display:flex;align-items:center;gap:10px;">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+              Privacy
+            </div>
+          </div>
+
+          <!-- Right content -->
+          <div style="flex:1;padding:32px;overflow-y:auto;" id="settingsContent">
+          </div>
+        </div>
+      `;
+
+      document.body.appendChild(modal);
+      modal.addEventListener('click', function(e) { if (e.target === modal) modal.remove(); });
+      showSettingsSection('general', document.querySelector('.settings-nav-item.active'));
+    }
+
+    async function showSettingsSection(section, clickedEl) {
+      document.querySelectorAll('.settings-nav-item').forEach(el => {
+        el.style.background = 'transparent';
+        el.style.color = '#666';
+      });
+      if (clickedEl) {
+        clickedEl.style.background = '#2a2a2a';
+        clickedEl.style.color = '#ececec';
+      }
+
+      const content = document.getElementById('settingsContent');
+      
+      if (section === 'general') {
+        content.innerHTML = `
+          <h2 style="font-size:18px;font-weight:700;color:#fff;margin-bottom:24px;">General</h2>
+          
+          <div style="margin-bottom:32px;">
+            <h3 style="font-size:13px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:16px;">Appearance</h3>
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid #1e1e1e;">
+              <div>
+                <div style="font-size:14px;color:#ececec;margin-bottom:2px;">Theme</div>
+                <div style="font-size:12px;color:#555;">Choose your preferred look</div>
+              </div>
+              <div style="display:flex;gap:8px;">
+                <button onclick="setTheme('dark')" id="darkBtn" style="padding:6px 14px;border-radius:8px;border:1px solid #4f8ef7;background:#4f8ef720;color:#4f8ef7;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;">🌙 Dark</button>
+                <button onclick="setTheme('light')" id="lightBtn" style="padding:6px 14px;border-radius:8px;border:1px solid #2a2a2a;background:transparent;color:#666;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;">☀️ Light</button>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid #1e1e1e;">
+              <div>
+                <div style="font-size:14px;color:#ececec;margin-bottom:2px;">Font Size</div>
+                <div style="font-size:12px;color:#555;">Adjust text size across the app</div>
+              </div>
+              <div style="display:flex;gap:8px;">
+                <button onclick="setFontSize('small')" style="padding:6px 14px;border-radius:8px;border:1px solid #2a2a2a;background:transparent;color:#666;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;">Small</button>
+                <button onclick="setFontSize('medium')" style="padding:6px 14px;border-radius:8px;border:1px solid #4f8ef7;background:#4f8ef720;color:#4f8ef7;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;">Medium</button>
+                <button onclick="setFontSize('large')" style="padding:6px 14px;border-radius:8px;border:1px solid #2a2a2a;background:transparent;color:#666;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;">Large</button>
+              </div>
+            </div>
+          </div>
+
+         <div style="margin-bottom:32px;">
+            <h3 style="font-size:13px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:16px;">AI Behaviour</h3>
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid #1e1e1e;">
+              <div>
+                <div style="font-size:14px;color:#ececec;margin-bottom:2px;">Answer Style</div>
+                <div style="font-size:12px;color:#555;">How detailed should AI responses be</div>
+              </div>
+              <div style="display:flex;gap:8px;">
+                <button onclick="setAnswerStyle('concise')" id="conciseBtn" style="padding:6px 14px;border-radius:8px;border:1px solid #2a2a2a;background:transparent;color:#666;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;">Concise</button>
+                <button onclick="setAnswerStyle('detailed')" id="detailedBtn" style="padding:6px 14px;border-radius:8px;border:1px solid #4f8ef7;background:#4f8ef720;color:#4f8ef7;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;">Detailed</button>
+              </div>
+            </div>
+          </div>
+
+          <div style="margin-bottom:32px;">
+            <h3 style="font-size:13px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:16px;">Language</h3>
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid #1e1e1e;">
+              <div>
+                <div style="font-size:14px;color:#ececec;margin-bottom:2px;">App Language</div>
+                <div style="font-size:12px;color:#555;">Hindi support coming soon</div>
+              </div>
+              <div style="padding:6px 14px;border-radius:8px;border:1px solid #2a2a2a;background:transparent;color:#555;font-size:12px;">English only</div>
+            </div>
+          </div>
+        `;
+        setTimeout(() => {
+          const savedStyle = localStorage.getItem('answerStyle') || 'detailed';
+          setAnswerStyle(savedStyle);
+          const savedTheme = localStorage.getItem('theme') || 'dark';
+          const darkBtn = document.getElementById('darkBtn');
+          const lightBtn = document.getElementById('lightBtn');
+          if (darkBtn && lightBtn) {
+            if (savedTheme === 'light') {
+              lightBtn.style.cssText = 'padding:6px 14px;border-radius:8px;border:1px solid #4f8ef7;background:#4f8ef720;color:#4f8ef7;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;';
+              darkBtn.style.cssText = 'padding:6px 14px;border-radius:8px;border:1px solid #2a2a2a;background:transparent;color:#666;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;';
+            }
+          }
+        }, 50);
+      } else if (section === 'account') {
+        content.innerHTML = `
+          <h2 style="font-size:18px;font-weight:700;color:#fff;margin-bottom:24px;">Account</h2>
+          <div style="margin-bottom:32px;">
+            <h3 style="font-size:13px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:16px;">Profile</h3>
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid #1e1e1e;">
+              <div style="font-size:14px;color:#ececec;">Display Name</div>
+              <div style="display:flex;gap:8px;align-items:center;">
+                <input id="displayNameInput" type="text" value="${document.querySelector('.profile-name')?.textContent || ''}" style="background:#0d0d0d;border:1px solid #2a2a2a;border-radius:8px;padding:6px 12px;color:#ececec;font-size:13px;font-family:Inter,sans-serif;outline:none;width:200px;" />
+                <button onclick="saveDisplayName()" style="padding:6px 14px;border-radius:8px;background:#4f8ef7;border:none;color:white;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;">Save</button>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid #1e1e1e;">
+              <div style="font-size:14px;color:#ececec;">Email</div>
+              <div style="font-size:13px;color:#555;">${document.querySelector('.profile-plan')?.textContent || 'Not logged in'}</div>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid #1e1e1e;">
+              <div style="font-size:14px;color:#ececec;">Password</div>
+              <button onclick="resetPassword()" style="padding:6px 14px;border-radius:8px;border:1px solid #2a2a2a;background:transparent;color:#888;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;">Send Reset Email</button>
+            </div>
+          </div>
+        `;
+      } else if (section === 'study') {
+        const savedTarget = localStorage.getItem('targetScore') || '600';
+        const savedGoal = localStorage.getItem('dailyGoal') || '10';
+        
+        const today = new Date().toISOString().split('T')[0];
+        let todayCount = 0, weekCount = 0, totalCount = 0;
+        try {
+          const { data: { session } } = await client.auth.getSession();
+          if (session) {
+            const { data: td } = await client.from('usage_limits').select('message_count').eq('user_id', session.user.id).eq('reset_date', today).single();
+            todayCount = td ? td.message_count : 0;
+            const weekAgo = new Date(Date.now() - 7*24*60*60*1000).toISOString().split('T')[0];
+            const { data: wd } = await client.from('usage_limits').select('message_count').eq('user_id', session.user.id).gte('reset_date', weekAgo);
+            weekCount = wd ? wd.reduce((s,r) => s + r.message_count, 0) : 0;
+            const { data: totd } = await client.from('usage_limits').select('message_count').eq('user_id', session.user.id);
+            totalCount = totd ? totd.reduce((s,r) => s + r.message_count, 0) : 0;
+          }
+        } catch(e) {}
+
+        content.innerHTML = `
+          <h2 style="font-size:18px;font-weight:700;color:#fff;margin-bottom:24px;">Study</h2>
+          <div style="margin-bottom:32px;">
+            <h3 style="font-size:13px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:16px;">Usage Stats</h3>
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px;">
+              <div style="background:#0d0d0d;border:1px solid #1e1e1e;border-radius:10px;padding:16px;text-align:center;">
+                <div style="font-size:28px;font-weight:700;color:#4f8ef7;">${todayCount}</div>
+                <div style="font-size:11px;color:#555;margin-top:4px;">Today</div>
+              </div>
+              <div style="background:#0d0d0d;border:1px solid #1e1e1e;border-radius:10px;padding:16px;text-align:center;">
+                <div style="font-size:28px;font-weight:700;color:#4f8ef7;">${weekCount}</div>
+                <div style="font-size:11px;color:#555;margin-top:4px;">This Week</div>
+              </div>
+              <div style="background:#0d0d0d;border:1px solid #1e1e1e;border-radius:10px;padding:16px;text-align:center;">
+                <div style="font-size:28px;font-weight:700;color:#4f8ef7;">${totalCount}</div>
+                <div style="font-size:11px;color:#555;margin-top:4px;">Total</div>
+              </div>
+            </div>
+          </div>
+          
+          <div style="margin-bottom:32px;">
+            <h3 style="font-size:13px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:16px;">Goals</h3>
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid #1e1e1e;">
+              <div>
+                <div style="font-size:14px;color:#ececec;margin-bottom:2px;">Target NEET Score</div>
+                <div style="font-size:12px;color:#555;">Out of 720</div>
+              </div>
+              <div style="display:flex;gap:8px;align-items:center;">
+                <input id="targetScoreInput" type="number" min="0" max="720" value="${savedTarget}" style="background:#0d0d0d;border:1px solid #2a2a2a;border-radius:8px;padding:6px 12px;color:#ececec;font-size:13px;font-family:Inter,sans-serif;outline:none;width:100px;" />
+                <button onclick="saveStudyPrefs()" style="padding:6px 14px;border-radius:8px;background:#4f8ef7;border:none;color:white;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;">Save</button>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid #1e1e1e;">
+              <div>
+                <div style="font-size:14px;color:#ececec;margin-bottom:2px;">Daily Question Goal</div>
+                <div style="font-size:12px;color:#555;">Questions per day</div>
+              </div>
+              <div style="display:flex;gap:8px;align-items:center;">
+                <input id="dailyGoalInput" type="number" min="1" max="100" value="${savedGoal}" style="background:#0d0d0d;border:1px solid #2a2a2a;border-radius:8px;padding:6px 12px;color:#ececec;font-size:13px;font-family:Inter,sans-serif;outline:none;width:100px;" />
+                <button onclick="saveStudyPrefs()" style="padding:6px 14px;border-radius:8px;background:#4f8ef7;border:none;color:white;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;">Save</button>
+              </div>
+            </div>
+          </div>
+          <div>
+            <h3 style="font-size:13px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:16px;">Notifications</h3>
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid #1e1e1e;">
+              <div>
+                <div style="font-size:14px;color:#ececec;margin-bottom:2px;">Study Reminders</div>
+                <div style="font-size:12px;color:#555;">Coming soon after deployment</div>
+              </div>
+              <div style="font-size:12px;color:#333;padding:6px 14px;border:1px solid #1e1e1e;border-radius:8px;">Coming Soon</div>
+            </div>
+          </div>
+        `;
+      } else if (section === 'plan') {
+        content.innerHTML = `
+          <h2 style="font-size:18px;font-weight:700;color:#fff;margin-bottom:24px;">Plan</h2>
+          <div style="background:#111;border:1px solid #1e1e1e;border-radius:12px;padding:24px;margin-bottom:16px;">
+            <div style="font-size:13px;color:#555;margin-bottom:4px;">Current Plan</div>
+            <div style="font-size:22px;font-weight:700;color:#fff;margin-bottom:8px;">Free</div>
+            <div style="font-size:13px;color:#666;margin-bottom:20px;">5 questions per day · Basic access</div>
+            <button onclick="window.open('./pricing.html','_blank')" style="background:#4f8ef7;border:none;color:white;padding:10px 24px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;font-family:Inter,sans-serif;">⭐ Upgrade to Pro — ₹299/month</button>
+          </div>
+          <div style="font-size:12px;color:#333;text-align:center;">Payments powered by Razorpay · Launching soon</div>
+        `;
+      } else if (section === 'privacy') {
+        content.innerHTML = `
+          <h2 style="font-size:18px;font-weight:700;color:#fff;margin-bottom:24px;">Privacy</h2>
+          <div style="margin-bottom:32px;">
+            <h3 style="font-size:13px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:16px;">Data</h3>
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid #1e1e1e;">
+              <div>
+                <div style="font-size:14px;color:#ececec;margin-bottom:2px;">Chat History</div>
+                <div style="font-size:12px;color:#555;">All your chats are saved securely</div>
+              </div>
+              <div style="font-size:12px;color:#4ade80;">Protected</div>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid #1e1e1e;">
+              <div>
+                <div style="font-size:14px;color:#ececec;margin-bottom:2px;">Delete Account</div>
+                <div style="font-size:12px;color:#555;">Permanently delete your account and data</div>
+              </div>
+              <button onclick="deleteAccount()" style="padding:6px 14px;border-radius:8px;border:1px solid #ef4444;background:transparent;color:#ef4444;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;">Delete Account</button>
+            </div>
+          </div>
+        `;
+      }
+    }
+
+    function setTheme(theme) {
+      localStorage.setItem('theme', theme);
+      const root = document.documentElement;
+      if (theme === 'light') {
+        root.style.setProperty('--bg', '#f5f5f5');
+        root.style.setProperty('--bg2', '#ffffff');
+        root.style.setProperty('--text', '#0d0d0d');
+        root.style.setProperty('--border', '#e0e0e0');
+        root.style.setProperty('--sidebar', '#ebebeb');
+        document.body.classList.add('light-mode');
+        document.body.classList.remove('dark-mode');
+      } else {
+        root.style.setProperty('--bg', '#0d0d0d');
+        root.style.setProperty('--bg2', '#111111');
+        root.style.setProperty('--text', '#ececec');
+        root.style.setProperty('--border', '#1e1e1e');
+        root.style.setProperty('--sidebar', '#111111');
+        document.body.classList.add('dark-mode');
+        document.body.classList.remove('light-mode');
+      }
+      // Update buttons if in settings
+      const darkBtn = document.getElementById('darkBtn');
+      const lightBtn = document.getElementById('lightBtn');
+      if (darkBtn && lightBtn) {
+        if (theme === 'light') {
+          lightBtn.style.cssText = 'padding:6px 14px;border-radius:8px;border:1px solid #4f8ef7;background:#4f8ef720;color:#4f8ef7;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;';
+          darkBtn.style.cssText = 'padding:6px 14px;border-radius:8px;border:1px solid #2a2a2a;background:transparent;color:#666;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;';
+        } else {
+          darkBtn.style.cssText = 'padding:6px 14px;border-radius:8px;border:1px solid #4f8ef7;background:#4f8ef720;color:#4f8ef7;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;';
+          lightBtn.style.cssText = 'padding:6px 14px;border-radius:8px;border:1px solid #2a2a2a;background:transparent;color:#666;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;';
+        }
+      }
+    }
+      
+
+    function setAnswerStyle(style) {
+      localStorage.setItem('answerStyle', style);
+      const conciseBtn = document.getElementById('conciseBtn');
+      const detailedBtn = document.getElementById('detailedBtn');
+      if (!conciseBtn || !detailedBtn) return;
+      if (style === 'concise') {
+        conciseBtn.style.cssText = 'padding:6px 14px;border-radius:8px;border:1px solid #4f8ef7;background:#4f8ef720;color:#4f8ef7;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;';
+        detailedBtn.style.cssText = 'padding:6px 14px;border-radius:8px;border:1px solid #2a2a2a;background:transparent;color:#666;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;';
+      } else {
+        detailedBtn.style.cssText = 'padding:6px 14px;border-radius:8px;border:1px solid #4f8ef7;background:#4f8ef720;color:#4f8ef7;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;';
+        conciseBtn.style.cssText = 'padding:6px 14px;border-radius:8px;border:1px solid #2a2a2a;background:transparent;color:#666;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;';
+      }
+    }
+    function setFontSize(size) {
+      const sizes = { small: '13px', medium: '14px', large: '16px' };
+      document.body.style.fontSize = sizes[size];
+      localStorage.setItem('fontSize', size);
+    }
+
+    function saveDisplayName() {
+      const name = document.getElementById('displayNameInput').value.trim();
+      if (!name) return;
+      document.querySelector('.profile-name').textContent = name;
+      document.querySelector('.profile-avatar').textContent = name[0].toUpperCase();
+      alert('Display name updated!');
+    }
+
+    async function resetPassword() {
+      const { data: { session } } = await client.auth.getSession();
+      if (!session) { alert('Please log in first.'); return; }
+      const { error } = await client.auth.resetPasswordForEmail(session.user.email);
+      if (error) { alert('Error: ' + error.message); return; }
+      alert('Password reset email sent!');
+    }
+
+    function saveStudyPrefs() {
+      const target = document.getElementById('targetScoreInput').value;
+      const goal = document.getElementById('dailyGoalInput').value;
+      localStorage.setItem('targetScore', target);
+      localStorage.setItem('dailyGoal', goal);
+      alert('Study preferences saved!');
+    }
+
+    async function deleteAccount() {
+      if (!confirm('Are you sure? This will permanently delete your account and all data.')) return;
+      alert('Account deletion coming soon. Contact support for now.');
+    }
+
+    // Apply all saved settings on load
+    function applyAllSettings() {
+      const savedTheme = localStorage.getItem('theme');
+      const savedFontSize = localStorage.getItem('fontSize');
+      const savedAnswerStyle = localStorage.getItem('answerStyle');
+      if (savedTheme === 'light') setTheme('light');
+      if (savedFontSize) setFontSize(savedFontSize);
+      if (savedAnswerStyle) setAnswerStyle(savedAnswerStyle);
+    }
+    applyAllSettings();
 
     input.addEventListener('keydown', function(e) {
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
     });
 
-    document.getElementById('profileSection').addEventListener('click', function(e) {
-      e.stopPropagation();
-      const menu = document.getElementById('profileMenu');
-      menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
-    });
+    
 
     document.addEventListener('click', function() {
       document.getElementById('profileMenu').style.display = 'none';
@@ -1333,8 +1699,8 @@ function copyMessage(btn) {
       window.location.href = './login.html';
     });
 
-    document.getElementById('myPlanBtn').addEventListener('click', () => { alert('Subscription plans coming soon!'); });
-    document.getElementById('settingsBtn').addEventListener('click', () => { alert('Settings coming soon!'); });
+   
+   
 
   </script>
 </body>

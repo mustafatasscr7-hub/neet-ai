@@ -16,8 +16,8 @@ app.add_middleware(
     expose_headers=["*"],
 )
 
-ANTHROPIC_KEY = "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"
-OPENAI_KEY = "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"
+ANTHROPIC_KEY =  "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"
+OPENAI_KEY =    "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"
 SUPABASE_URL = "https://hvhnfttrfouajlyhvunq.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh2aG5mdHRyZm91YWpseWh2dW5xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg5NDI1NTIsImV4cCI6MjA5NDUxODU1Mn0.8RaSu5yiTpQCEUGKrFO2y6oiRXSqdBehIz933j9Z7WA"
 
@@ -80,6 +80,8 @@ Rules:
 
 class Message(BaseModel):
     text: str
+    answer_style: str = "detailed"
+    student_name: str = ""
     history: list = []
     image: str = None
     image_type: str = None
@@ -140,7 +142,7 @@ def search_pyq(query: str, limit: int = 5):
         return response.json()
     return []
 
-def stream_response(text: str, history: list = [], image: str = None, image_type: str = None, pdf: str = None):
+def stream_response(text: str, history: list = [], image: str = None, image_type: str = None, pdf: str = None, answer_style: str = "detailed", student_name: str = ""):
     print(f"stream_response called - text: {text[:50]}, image: {bool(image)}")
     results = search_ncert(text)
 
@@ -206,10 +208,12 @@ def stream_response(text: str, history: list = [], image: str = None, image_type
         import sys
         print(f"MODEL SELECTED: {selected_model}", flush=True)
         sys.stdout.flush()
+        name_context = f"\n\nThe student name is {student_name}. Use their name naturally and occasionally in responses to make it personal." if student_name else ""
+        style_context = "\n\nIMPORTANT: The student has selected CONCISE mode. Give a very short answer — maximum 3 sentences only. No bullet points, no key points section, no memory tricks. Just the core answer." if answer_style == "concise" else ""
         with client.messages.stream(
             model=selected_model,
             max_tokens=1024,
-            system=SYSTEM_PROMPT,
+            system=SYSTEM_PROMPT + name_context + style_context,
             messages=messages
         ) as stream:
             for text_chunk in stream.text_stream:
@@ -258,7 +262,7 @@ Rules:
 @app.post("/chat")
 async def chat(message: Message):
     return StreamingResponse(
-        stream_response(message.text, message.history, message.image, message.image_type, message.pdf),
+       stream_response(message.text, message.history, message.image, message.image_type, message.pdf, message.answer_style, message.student_name),
         media_type="text/plain"
     )
 
