@@ -65,6 +65,7 @@
       <button class="filter-tab" onclick="filterBy('Chemistry', this)">⚗️ Chemistry</button>
       <button class="filter-tab" onclick="filterBy('PYQ Bank', this)">📚 From PYQ Bank</button>
       <button class="filter-tab" onclick="filterBy('Mock Test', this)">📝 From Mock Test</button>
+      <button class="filter-tab" onclick="filterBy('Mistake Journal', this)">🚨 Mistake Journal</button>
     </div>
 
     <div id="questionsList">
@@ -135,6 +136,7 @@
     }
 
     function filterBy(filter, btn) {
+      console.log('Filter:', filter, 'Total questions:', allQuestions.length, 'Matching:', allQuestions.filter(q => q.source === filter).length);
       currentFilter = filter;
       document.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
       btn.classList.add('active');

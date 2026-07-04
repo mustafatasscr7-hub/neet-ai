@@ -363,6 +363,24 @@
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh2aG5mdHRyZm91YWpseWh2dW5xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg5NDI1NTIsImV4cCI6MjA5NDUxODU1Mn0.8RaSu5yiTpQCEUGKrFO2y6oiRXSqdBehIz933j9Z7WA'
     const { createClient } = supabase
     const client = createClient(SUPABASE_URL, SUPABASE_KEY)
+    async function updateStreak() {
+  const { data: { session } } = await client.auth.getSession();
+  if (!session) return;
+  const userId = session.user.id;
+  const today = new Date().toISOString().split('T')[0];
+  const { data: streak } = await client.from('user_streaks').select('*').eq('user_id', userId).single();
+  if (!streak) {
+    await client.from('user_streaks').insert({ user_id: userId, last_activity_date: today, current_streak: 1, longest_streak: 1 });
+    return;
+  }
+  if (streak.last_activity_date === today) return;
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  const yesterdayStr = yesterday.toISOString().split('T')[0];
+  const newStreak = streak.last_activity_date === yesterdayStr ? streak.current_streak + 1 : 1;
+  const longest = Math.max(newStreak, streak.longest_streak);
+  await client.from('user_streaks').update({ last_activity_date: today, current_streak: newStreak, longest_streak: longest }).eq('user_id', userId);
+}
 
     const input = document.getElementById('userInput');
     const chatWindow = document.getElementById('chatWindow');
@@ -1188,8 +1206,7 @@ function copyMessage(btn) {
         if (selectedPDF) {
           requestBody.pdf = selectedPDF.split(',')[1];
         }
-
-        const response = await fetch('http://127.0.0.1:8000/chat', {
+                const response = await fetch('http://127.0.0.1:8000/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(requestBody),
@@ -1285,6 +1302,14 @@ function copyMessage(btn) {
         const name = user.user_metadata.full_name || user.email;
         const initial = name[0].toUpperCase();
         document.querySelector('.profile-name').textContent = name;
+        updateStreak().then(() => {
+  client.from('user_streaks').select('current_streak').eq('user_id', user.id).single().then(({ data }) => {
+    if (data && data.current_streak > 0) {
+      const streakEl = document.querySelector('.profile-plan');
+      if (streakEl) streakEl.textContent = `🔥 ${data.current_streak} day streak`;
+    }
+  });
+});
        document.querySelector('.profile-plan').textContent = 'Free';
         document.querySelector('.profile-avatar').textContent = initial;
         document.getElementById('loginNudge').style.display = 'none';
@@ -1700,7 +1725,9 @@ function openSettings() {
     });
 
    
-   
+   setInterval(() => {
+  fetch('http://127.0.0.1:8000/health').catch(() => {});
+}, 300000);
 
   </script>
 </body>

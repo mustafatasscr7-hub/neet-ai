@@ -5,6 +5,9 @@ from pydantic import BaseModel
 import anthropic
 import requests
 import openai
+from dotenv import load_dotenv
+import os
+load_dotenv()
 
 app = FastAPI()
 
@@ -16,10 +19,10 @@ app.add_middleware(
     expose_headers=["*"],
 )
 
-ANTHROPIC_KEY =  "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"
-OPENAI_KEY =    "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"
-SUPABASE_URL = "https://hvhnfttrfouajlyhvunq.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh2aG5mdHRyZm91YWpseWh2dW5xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg5NDI1NTIsImV4cCI6MjA5NDUxODU1Mn0.8RaSu5yiTpQCEUGKrFO2y6oiRXSqdBehIz933j9Z7WA"
+ANTHROPIC_KEY = os.getenv("ANTHROPIC_KEY")
+OPENAI_KEY = os.getenv("OPENAI_KEY")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 openai_client = openai.OpenAI(api_key=OPENAI_KEY)
 import requests as http_requests
@@ -95,14 +98,38 @@ class SolveRequest(BaseModel):
     option_d: str = ""
     correct_answer: str = ""
 
+import hashlib
+
 def get_embedding(text: str):
+    question_hash = hashlib.sha256(text.encode()).hexdigest()
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}"
+    }
+
+    cached = http_requests.get(
+        f"{SUPABASE_URL}/rest/v1/embedding_cache?question_hash=eq.{question_hash}&select=embedding",
+        headers=headers
+    ).json()
+
+    if cached:
+        return cached[0]["embedding"]
+
     response = openai_client.embeddings.create(
         model="text-embedding-3-small",
         input=text
     )
-    return response.data[0].embedding
+    embedding = response.data[0].embedding
 
-def search_ncert(query: str, limit: int = 5):
+    http_requests.post(
+        f"{SUPABASE_URL}/rest/v1/embedding_cache",
+        headers={**headers, "Content-Type": "application/json"},
+        json={"question_hash": question_hash, "embedding": embedding}
+    )
+
+    return embedding
+
+def search_ncert(query: str, limit: int = 3):
     embedding = get_embedding(query)
     headers = {
         "apikey": SUPABASE_KEY,
@@ -144,6 +171,20 @@ def search_pyq(query: str, limit: int = 5):
 
 def stream_response(text: str, history: list = [], image: str = None, image_type: str = None, pdf: str = None, answer_style: str = "detailed", student_name: str = ""):
     print(f"stream_response called - text: {text[:50]}, image: {bool(image)}")
+    import hashlib
+    if not image and not pdf:
+        answer_hash = hashlib.sha256(text.strip().lower().encode()).hexdigest()
+        headers = {
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}"
+        }
+        cached = http_requests.get(
+            f"{SUPABASE_URL}/rest/v1/answer_cache?question_hash=eq.{answer_hash}&select=answer",
+            headers=headers
+        ).json()
+        if cached:
+            yield cached[0]["answer"]
+            return
     results = search_ncert(text)
 
     if results:
@@ -216,8 +257,16 @@ def stream_response(text: str, history: list = [], image: str = None, image_type
             system=SYSTEM_PROMPT + name_context + style_context,
             messages=messages
         ) as stream:
+            full_answer = ""
             for text_chunk in stream.text_stream:
+                full_answer += text_chunk
                 yield text_chunk
+            if not image and not pdf:
+                http_requests.post(
+                    f"{SUPABASE_URL}/rest/v1/answer_cache",
+                    headers={**headers, "Content-Type": "application/json"},
+                    json={"question_hash": answer_hash, "answer": full_answer}
+                )
     except Exception as e:
         print(f"STREAMING ERROR: {e}")
         yield f"Error: {str(e)}"
@@ -270,7 +319,7 @@ async def chat(message: Message):
 async def generate_title(message: Message):
     client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
     response = client.messages.create(
-        model="claude-haiku-4-5-20251001",
+     model="claude-haiku-4-5",
         max_tokens=15,
         system="Generate a short 3-5 word title for this NEET question. Return ONLY the title. No punctuation. No extra words.",
         messages=[{"role": "user", "content": message.text}]
@@ -299,3 +348,12 @@ async def get_mock_test_questions():
         return {"questions": questions, "total": len(questions)}
     except Exception as e:
         return {"error": str(e)}
+
+    python -m uvicorn server:app --reload@app.get("/health")
+def health():
+       return {"status": "ok"}
+       if __name__ == "__main__":
+    import uvicorn
+    import os
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)

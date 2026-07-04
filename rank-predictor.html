@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>NEET Rank Predictor 2027 — NEET-AI</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Inter', sans-serif; background: #0a0a0f; color: #ececec; min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px; }
+    .card { background: #111118; border: 1px solid #1e1e26; border-radius: 20px; padding: 36px; width: 100%; max-width: 520px; }
+    .badge { background: #7c5cff20; color: #a78bff; border: 1px solid #7c5cff30; padding: 4px 12px; border-radius: 20px; font-size: 11px; font-weight: 600; display: inline-block; margin-bottom: 16px; }
+    .title { font-size: 26px; font-weight: 700; color: #fff; margin-bottom: 6px; letter-spacing: -0.3px; }
+    .subtitle { font-size: 13px; color: #555; margin-bottom: 32px; }
+    label { font-size: 12px; font-weight: 600; color: #777; text-transform: uppercase; letter-spacing: 0.05em; display: block; margin-bottom: 8px; }
+    input[type="number"] { width: 100%; background: #0d0d12; border: 1px solid #2a2a35; border-radius: 10px; padding: 14px 16px; font-size: 18px; font-weight: 600; color: #fff; font-family: 'Inter', sans-serif; outline: none; transition: border-color 0.2s; margin-bottom: 8px; }
+    input[type="number"]:focus { border-color: #7c5cff; }
+    .score-hint { font-size: 11px; color: #444; margin-bottom: 24px; }
+    select { width: 100%; background: #0d0d12; border: 1px solid #2a2a35; border-radius: 10px; padding: 14px 16px; font-size: 14px; color: #ececec; font-family: 'Inter', sans-serif; outline: none; margin-bottom: 24px; cursor: pointer; }
+    .predict-btn { width: 100%; padding: 14px; background: linear-gradient(135deg, #7c5cff, #4f8ef7); border: none; border-radius: 10px; color: #fff; font-size: 15px; font-weight: 700; font-family: 'Inter', sans-serif; cursor: pointer; transition: all 0.2s; }
+    .predict-btn:hover { filter: brightness(1.1); transform: scale(1.01); }
+    .result { margin-top: 28px; background: #0d0d12; border: 1px solid #2a2a35; border-radius: 14px; padding: 24px; display: none; }
+    .result-rank { font-size: 42px; font-weight: 700; background: linear-gradient(135deg, #fff, #c9bfff); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; line-height: 1; margin-bottom: 4px; }
+    .result-label { font-size: 12px; color: #555; margin-bottom: 20px; }
+    .result-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 20px; }
+    .result-item { background: #111118; border: 1px solid #1e1e26; border-radius: 10px; padding: 14px; }
+    .result-item-label { font-size: 11px; color: #555; margin-bottom: 4px; }
+    .result-item-value { font-size: 15px; font-weight: 600; color: #ececec; }
+    .disclaimer { font-size: 11px; color: #333; line-height: 1.6; border-top: 1px solid #1e1e26; padding-top: 16px; }
+    .cta { margin-top: 20px; background: linear-gradient(135deg, #7c5cff15, #4f8ef715); border: 1px solid #7c5cff30; border-radius: 10px; padding: 16px; text-align: center; }
+    .cta p { font-size: 13px; color: #888; margin-bottom: 10px; }
+    .cta button { background: linear-gradient(135deg, #7c5cff, #4f8ef7); border: none; border-radius: 8px; color: #fff; padding: 10px 24px; font-size: 13px; font-weight: 600; font-family: 'Inter', sans-serif; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="badge">NEET 2027 Tool</div>
+    <div class="title">Rank Predictor</div>
+    <div class="subtitle">Estimate your All India Rank based on previous year data</div>
+
+    <label>Your Expected Score (out of 720)</label>
+    <input type="number" id="score" min="0" max="720" placeholder="e.g. 550" oninput="this.value = Math.min(720, Math.max(0, this.value))"/>
+    <div class="score-hint">Enter marks after applying +4 / -1 marking scheme</div>
+
+    <label>Category</label>
+    <select id="category">
+      <option value="general">General (UR)</option>
+      <option value="obc">OBC</option>
+      <option value="sc">SC</option>
+      <option value="st">ST</option>
+      <option value="ews">EWS</option>
+      <option value="pwd">PwD</option>
+    </select>
+
+    <button class="predict-btn" onclick="predict()">Predict My Rank →</button>
+
+    <div class="result" id="result">
+      <div class="result-rank" id="rankDisplay"></div>
+      <div class="result-label">Estimated All India Rank</div>
+      <div class="result-grid">
+        <div class="result-item">
+          <div class="result-item-label">Score Range</div>
+          <div class="result-item-value" id="scoreRange"></div>
+        </div>
+        <div class="result-item">
+          <div class="result-item-label">Percentile</div>
+          <div class="result-item-value" id="percentile"></div>
+        </div>
+        <div class="result-item">
+          <div class="result-item-label">MBBS Chances</div>
+          <div class="result-item-value" id="mbbs"></div>
+        </div>
+        <div class="result-item">
+          <div class="result-item-label">Govt College</div>
+          <div class="result-item-value" id="govt"></div>
+        </div>
+      </div>
+      <div class="disclaimer">⚠️ This prediction is based on official NEET 2025 data and is approximate.Actual rank depends on number of candidates, paper difficulty, and cutoff that year. Use as a rough guide only.</div>
+      <div class="cta">
+        <p>Practice more to improve your score 🎯</p>
+        <button onclick="window.location.href='./index.html'">Start Practicing on NEET-AI →</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+
+
+window.addEventListener('load', function() {
+  const params = new URLSearchParams(window.location.search);
+  const score = params.get('score');
+  if (score) {
+    document.getElementById('score').value = score;
+    predict();
+  }
+});
+
+    function predict() {
+      const score = parseInt(document.getElementById('score').value);
+      const category = document.getElementById('category').value;
+      if (!score || score < 0 || score > 720) {
+        alert('Please enter a valid score between 0 and 720');
+        return;
+      }
+
+      // Based on NEET 2024 data patterns
+      let rank, percentile, mbbs, govt;
+
+     if (score >= 680) { rank = [1, 50]; percentile = 99.99; }
+else if (score >= 660) { rank = [51, 300]; percentile = 99.97; }
+else if (score >= 640) { rank = [301, 800]; percentile = 99.93; }
+else if (score >= 620) { rank = [801, 2000]; percentile = 99.85; }
+else if (score >= 600) { rank = [2001, 5000]; percentile = 99.60; }
+else if (score >= 580) { rank = [5001, 10000]; percentile = 99.20; }
+else if (score >= 560) { rank = [10001, 20000]; percentile = 98.60; }
+else if (score >= 540) { rank = [20001, 35000]; percentile = 97.70; }
+else if (score >= 520) { rank = [35001, 55000]; percentile = 96.40; }
+else if (score >= 500) { rank = [55001, 78000]; percentile = 94.70; }
+else if (score >= 480) { rank = [78001, 105000]; percentile = 92.60; }
+else if (score >= 460) { rank = [105001, 140000]; percentile = 89.90; }
+else if (score >= 440) { rank = [140001, 180000]; percentile = 86.80; }
+else if (score >= 420) { rank = [180001, 225000]; percentile = 83.20; }
+else if (score >= 400) { rank = [225001, 280000]; percentile = 78.80; }
+else if (score >= 380) { rank = [280001, 345000]; percentile = 73.50; }
+else if (score >= 360) { rank = [345001, 420000]; percentile = 67.40; }
+else if (score >= 340) { rank = [420001, 510000]; percentile = 60.30; }
+else if (score >= 300) { rank = [510001, 700000]; percentile = 49.00; }
+else { rank = [700001, 2200000]; percentile = 28.00; }
+
+      // Category cutoff adjustments
+      const cutoffs = {
+        general: 720, obc: 680, sc: 600, st: 560, ews: 680, pwd: 400
+      };
+
+      if (score >= 550) { mbbs = '✅ High'; govt = score >= 620 ? '✅ Likely' : '⚠️ Possible'; }
+      else if (score >= 450) { mbbs = '⚠️ Moderate'; govt = '❌ Unlikely'; }
+      else { mbbs = '❌ Low'; govt = '❌ Unlikely'; }
+
+      if (category !== 'general') {
+        if (score >= 400) mbbs = '⚠️ Possible';
+        if (score >= 350) mbbs = mbbs === '❌ Low' ? '⚠️ Check cutoff' : mbbs;
+      }
+
+      document.getElementById('rankDisplay').textContent = `${rank[0].toLocaleString()} – ${rank[1].toLocaleString()}`;
+      document.getElementById('scoreRange').textContent = `${score} / 720`;
+      document.getElementById('percentile').textContent = `~${percentile}%`;
+      document.getElementById('mbbs').textContent = mbbs;
+      document.getElementById('govt').textContent = govt;
+      document.getElementById('result').style.display = 'block';
+      document.getElementById('result').scrollIntoView({ behavior: 'smooth' });
+    }
+  </script>
+</body>
+</html>

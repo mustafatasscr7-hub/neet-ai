@@ -77,12 +77,18 @@
     <div class="score-card">
       <div class="score-label">Your Score</div>
       <div class="score-value" id="scoreValue">0</div>
-      <div class="score-total">out of 720</div>
+      <div class="score-total">out of 720
+      </div>
+      <div style="text-align:center;margin:16px 0;">
+        <a id="rankPredictorBtn" href="./rank-predictor.html" style="display:inline-block;padding:10px 24px;background:linear-gradient(135deg,#7c5cff,#4f8ef7);color:#fff;border-radius:8px;font-size:13px;font-weight:600;text-decoration:none;font-family:Inter,sans-serif;">🎯 Predict My NEET Rank →</a>
+      </div>
       <div class="score-stats">
         <div class="stat-box">
           <div class="stat-box-value" style="color:#4ade80;" id="correctCount">0</div>
           <div class="stat-box-label">Correct</div>
+
         </div>
+
         <div class="stat-box">
           <div class="stat-box-value" style="color:#ef4444;" id="wrongCount">0</div>
           <div class="stat-box-label">Wrong</div>
@@ -148,6 +154,8 @@
       document.getElementById('correctCount').textContent = data.correct;
       document.getElementById('wrongCount').textContent = data.wrong;
       document.getElementById('skippedCount').textContent = data.skipped;
+      const rankBtn = document.getElementById('rankPredictorBtn');
+if (rankBtn) rankBtn.href = `./rank-predictor.html?score=${Math.max(0, data.score)}`;
 
       // Subject breakdown
       const subjects = ['Biology', 'Physics', 'Chemistry'];

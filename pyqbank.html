@@ -60,8 +60,10 @@
     .q-year { color: #4f8ef7; font-weight: 600; }
     .q-text { font-size: 14px; color: #ececec; line-height: 1.7; margin-bottom: 16px; }
     .q-options { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
-    .q-option { padding: 10px 14px; border-radius: 8px; font-size: 13px; background: #1a1a1a; color: #888; border: 1px solid #2a2a2a; display: flex; gap: 10px; }
+    .q-option { padding: 10px 14px; border-radius: 8px; font-size: 13px; background: #1a1a1a; color: #888; border: 1px solid #2a2a2a; display: flex; gap: 10px; cursor: pointer; transition: all 0.15s ease; }
+    .q-option:hover { background: #222; border-color: #3a3a3a; color: #ccc; transform: translateX(2px); }
     .q-option.correct { background: #4ade8020; border-color: #4ade80; color: #4ade80; }
+    .q-option.wrong { border-color: #ef4444; background: #ef444415; color: #ef4444; }
     .q-actions { display: flex; gap: 8px; }
     .sol-btn { background: transparent; border: 1px solid #a78bfa; color: #a78bfa; padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 12px; font-family: 'Inter', sans-serif; transition: all 0.2s; }
     .sol-btn:hover { background: #a78bfa20; }
@@ -78,9 +80,9 @@
 <body>
 
  <div class="header">
-    <div style="display:flex;flex-direction:column;gap:6px;">
+    <div style="display:flex;align-items:center;gap:16px;">
+      <button onclick="handleBack()" style="background:transparent;border:none;color:#555;cursor:pointer;font-size:13px;font-family:Inter,sans-serif;padding:0;" onmouseover="this.style.color='#4f8ef7'" onmouseout="this.style.color='#555'">← Back</button>
       <span class="header-title">NEET<span>-AI</span> PYQ Bank</span>
-      <button onclick="handleBack()" style="background:transparent;border:none;color:#555;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;padding:0;text-align:left;width:fit-content;" onmouseover="this.style.color='#4f8ef7'" onmouseout="this.style.color='#555'">← Back</button>
     </div>
     <button class="btn btn-primary" onclick="window.location.href='./index.html'">Back to NEET-AI</button>
   </div>
@@ -98,6 +100,8 @@
     let selectedSubject = null;
     let selectedClass = null;
     let selectedChapter = null;
+    let currentChapterQuestions = [];
+    let currentQuestionIndex = 0;
 
     const subjectConfig = {
       'Biology': { icon: '🔬', color: '#4ade80' },
@@ -115,8 +119,8 @@
         12: ['Electric Charges and Fields', 'Electrostatic Potential and Capacitance', 'Current Electricity', 'Moving Charges and Magnetism', 'Magnetism and Matter', 'Electromagnetic Induction', 'Alternating Current', 'Electromagnetic Waves', 'Ray Optics and Optical Instruments', 'Wave Optics', 'Dual Nature of Radiation and Matter', 'Atoms', 'Nuclei', 'Semiconductor Electronics']
       },
       Chemistry: {
-        11: ['Some Basic Concepts of Chemistry', 'Structure of Atom', 'Classification of Elements and Periodicity', 'Chemical Bonding and Molecular Structure', 'States of Matter', 'Thermodynamics', 'Equilibrium', 'Redox Reactions', 'Hydrogen', 'The s-Block Elements', 'The p-Block Elements', 'Organic Chemistry: Basic Principles', 'Hydrocarbons', 'Environmental Chemistry'],
-        12: ['The Solid State', 'Solutions', 'Electrochemistry', 'Chemical Kinetics', 'Surface Chemistry', 'General Principles of Isolation of Elements', 'The p-Block Elements', 'The d and f Block Elements', 'Coordination Compounds', 'Haloalkanes and Haloarenes', 'Alcohols, Phenols and Ethers', 'Aldehydes, Ketones and Carboxylic Acids', 'Amines', 'Biomolecules', 'Polymers', 'Chemistry in Everyday Life']
+        11: ['Some Basic Concepts of Chemistry', 'Structure of Atom', 'Classification of Elements and Periodicity in Properties of Elements', 'Chemical Bonding and Molecular Structure', 'States of Matter: Gases and Liquids', 'Thermodynamics', 'Equilibrium', 'Redox Reactions', 'Hydrogen', 'The s-Block Elements (Alkali and Alkaline Earth Metals)', 'The p-Block Elements', 'Organic Chemistry: Some Basic Principles and Techniques', 'Hydrocarbons', 'Environmental Chemistry'],
+        12: ['The Solid State', 'Solutions', 'Electrochemistry', 'Chemical Kinetics', 'Surface Chemistry', 'General Principles and Processes of Isolation of Elements', 'The p-Block Elements', 'The d and f Block Elements', 'Coordination Compounds', 'Haloalkanes and Haloarenes', 'Alcohols, Phenols and Ethers', 'Aldehydes, Ketones and Carboxylic Acids', 'Amines', 'Biomolecules', 'Polymers', 'Chemistry in Everyday Life']
       }
     };
 
@@ -197,7 +201,7 @@ function handleBack() {
    
 
     // SCREEN 4 — Questions
-    async function showQuestions(subject, classNum, chapter) {
+    async function showQuestions(subject, classNum, chapter, yearFilter = null) {
       selectedChapter = chapter;
       document.getElementById('mainContent').innerHTML = `
         <div class="breadcrumb">
@@ -212,7 +216,9 @@ function handleBack() {
         <div class="loading"><div class="spinner"></div>Loading questions...</div>
       `;
 
-      const { data, error } = await client.from('pyq').select('*').eq('subject', subject).eq('class', classNum).eq('chapter', chapter);
+      let query = client.from('pyq').select('*').eq('subject', subject).eq('class', classNum).eq('chapter', chapter).eq('is_active', true);
+if (yearFilter) query = query.eq('year', yearFilter);
+const { data, error } = await query;
 
       if (error || !data || data.length === 0) {
         document.getElementById('mainContent').innerHTML = `
@@ -221,39 +227,120 @@ function handleBack() {
         return;
       }
 
-      const questionsHTML = data.map((q, i) => {
-        const correctAns = q.correct_answer ? q.correct_answer.toLowerCase().trim() : null;
-        const opts = ['a','b','c','d'].map(opt => {
-          if (!q['option_' + opt]) return '';
-          const isCorrect = opt === correctAns;
-          return `<div class="q-option ${isCorrect ? 'correct' : ''}"><strong>${opt.toUpperCase()})</strong> ${q['option_' + opt]}</div>`;
-        }).join('');
+      currentChapterQuestions = data;
+      currentQuestionIndex = 0;
+      renderSingleQuestion(subject, classNum, chapter);
+    }
 
-        return `
-          <div class="question-card">
-            <div class="q-meta">
-              <span class="q-year">${q.year || ''}</span>
-              <span>${q.subject || ''}</span>
-              ${q.chapter ? `<span>${q.chapter}</span>` : ''}
-            </div>
-            <div class="q-text">${q.question}</div>
-            <div class="q-options">${opts}</div>
-            <div class="q-actions">
-              <button class="sol-btn" onclick="toggleSolution(this, '${q.id}', ${JSON.stringify(q).replace(/"/g, '&quot;')})">💡 Show Solution</button>
-              <button class="sol-btn" style="border-color:#f97316;color:#f97316;" onclick="saveQuestion(${JSON.stringify(q).replace(/"/g, '&quot;')}, 'PYQ Bank')">🔖 Save</button>
-            </div>
-            <div class="sol-div" id="sol-${q.id}"></div>
-          </div>
-        `;
-      }).join('');
+    function renderSingleQuestion(subject, classNum, chapter) {
+      const data = currentChapterQuestions;
+      const i = currentQuestionIndex;
+      const q = data[i];
 
-    document.getElementById('mainContent').innerHTML = `
-       
+     const opts = ['a','b','c','d'].map(opt => {
+        if (!q['option_' + opt]) return '';
+        return `<div class="q-option" id="opt-${opt}" onclick="selectPyqOption('${opt}', '${q.correct_answer.toLowerCase().trim()}')"><strong>${opt.toUpperCase()})</strong> ${q['option_' + opt]}</div>`;
+      }).join(''); 
+
+     
+
+     const years = [...new Set(currentChapterQuestions.map(q => q.year).filter(Boolean))].sort((a,b) => b-a);
+const yearOptions = `<option value="">All Years</option>` + years.map(y => `<option value="${y}">${y}</option>`).join('');
+
+document.getElementById('mainContent').innerHTML = `
         <div class="page-title">${chapter}</div>
-        <div class="page-subtitle">${data.length} questions</div>
-        ${questionsHTML}
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+          <div class="page-subtitle">Question ${i + 1} of ${data.length}</div>
+          <select onchange="filterByYear(this.value, '${subject}', ${classNum}, '${chapter}')" style="background:#0d0d12;border:1px solid #2a2a35;border-radius:8px;padding:6px 12px;color:#ececec;font-size:13px;font-family:Inter,sans-serif;cursor:pointer;">
+            ${yearOptions}
+          </select>
+        </div>
+        <div class="question-card">
+          <div class="q-meta">
+            <span class="q-year">${q.year || ''}</span>
+            <span>${q.subject || ''}</span>
+            ${q.chapter ? `<span>${q.chapter}</span>` : ''}
+          </div>
+         <div class="q-text">${q.question}</div>
+${q.diagram_url ? `<img src="${q.diagram_url}" style="max-width:100%;border-radius:8px;margin:12px 0;border:1px solid #2a2a2a;">` : ''}
+          <div class="q-options">${opts}</div>
+          <div class="q-actions">
+            <button class="sol-btn" onclick="toggleSolution(this, '${q.id}', ${JSON.stringify(q).replace(/"/g, '&quot;')})">💡 Show Solution</button>
+            <button class="sol-btn" style="border-color:#f97316;color:#f97316;" onclick="saveQuestion(${JSON.stringify(q).replace(/"/g, '&quot;')}, 'PYQ Bank')">🔖 Save</button>
+          </div>
+          <div class="sol-div" id="sol-${q.id}"></div>
+          <div style="display:flex;justify-content:space-between;margin-top:20px;">
+            <button class="sol-btn" ${i === 0 ? 'disabled style="opacity:0.4;"' : ''} onclick="prevQuestion('${subject}', ${classNum}, '${chapter}')">← Prev</button>
+            <button class="sol-btn" ${i === data.length - 1 ? 'disabled style="opacity:0.4;"' : ''} onclick="nextQuestion('${subject}', ${classNum}, '${chapter}')">Next →</button>
+          </div>
+        </div>
       `;
     }
+
+    function nextQuestion(subject, classNum, chapter) {
+      if (currentQuestionIndex < currentChapterQuestions.length - 1) {
+        currentQuestionIndex++;
+        renderSingleQuestion(subject, classNum, chapter);
+      }
+    }
+
+    function prevQuestion(subject, classNum, chapter) {
+      if (currentQuestionIndex > 0) {
+        currentQuestionIndex--;
+        renderSingleQuestion(subject, classNum, chapter);
+      }
+    }
+     
+    function selectPyqOption(selectedOpt, correctOpt) {
+      ['a','b','c','d'].forEach(opt => {
+        const el = document.getElementById('opt-' + opt);
+        if (!el) return;
+        el.onclick = null;
+        if (opt === correctOpt) {
+          el.classList.add('correct');
+        } else if (opt === selectedOpt) {
+          el.classList.add('wrong');
+        }
+      });
+      if (selectedOpt !== correctOpt) {
+        const q = currentChapterQuestions[currentQuestionIndex];
+        autoSaveMistake(q);
+      }
+    }
+
+    async function autoSaveMistake(q) {
+      const { data: { session } } = await client.auth.getSession();
+      if (!session) return;
+      await client.from('saved_questions').upsert({
+        user_id: session.user.id,
+        question_id: q.id,
+        question: q.question,
+        option_a: q.option_a,
+        option_b: q.option_b,
+        option_c: q.option_c,
+        option_d: q.option_d,
+        correct_answer: q.correct_answer,
+        subject: q.subject,
+        chapter: q.chapter,
+        year: q.year,
+        source: 'Mistake Journal'
+      }, { onConflict: 'user_id,question_id' });
+    }
+
+
+      
+
+     async function filterByYear(year, subject, classNum, chapter) {
+  let query = client.from('pyq').select('*').eq('subject', subject).eq('class', classNum).eq('chapter', chapter).eq('is_active', true);
+  if (year) query = query.eq('year', parseInt(year));
+  const { data } = await query;
+  if (data && data.length > 0) {
+    currentChapterQuestions = data;
+    currentQuestionIndex = 0;
+    renderSingleQuestion(subject, classNum, chapter);
+  }
+}
+
 
     async function toggleSolution(btn, id, q) {
       const solDiv = document.getElementById('sol-' + id);
@@ -278,6 +365,8 @@ function handleBack() {
           body: JSON.stringify({ question: q.question, option_a: q.option_a, option_b: q.option_b, option_c: q.option_c, option_d: q.option_d, correct_answer: q.correct_answer })
         });
         const data = await res.json();
+        const correctOpt = document.getElementById('opt-' + q.correct_answer.toLowerCase().trim());
+        if (correctOpt) correctOpt.classList.add('correct');
         solDiv.innerHTML = parseWithMath(data.solution);
         btn.textContent = '🔼 Hide Solution';
         btn.disabled = false;
@@ -310,6 +399,46 @@ function handleBack() {
     }
 
     showSubjects();
+
+    async function updateStreak() {
+  const { data: { session } } = await client.auth.getSession();
+  if (!session) return;
+
+  const userId = session.user.id;
+  const today = new Date().toISOString().split('T')[0];
+
+  const { data: streak } = await client
+    .from('user_streaks')
+    .select('*')
+    .eq('user_id', userId)
+    .single();
+
+  if (!streak) {
+    await client.from('user_streaks').insert({
+      user_id: userId,
+      last_activity_date: today,
+      current_streak: 1,
+      longest_streak: 1
+    });
+    return;
+  }
+
+  if (streak.last_activity_date === today) return;
+
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  const yesterdayStr = yesterday.toISOString().split('T')[0];
+
+  const newStreak = streak.last_activity_date === yesterdayStr ? streak.current_streak + 1 : 1;
+  const longest = Math.max(newStreak, streak.longest_streak);
+
+  await client.from('user_streaks').update({
+    last_activity_date: today,
+    current_streak: newStreak,
+    longest_streak: longest
+  }).eq('user_id', userId);
+}
+
   </script>
 </body>
 </html>
