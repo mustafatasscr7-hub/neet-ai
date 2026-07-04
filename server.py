@@ -349,7 +349,9 @@ async def get_mock_test_questions():
     except Exception as e:
         return {"error": str(e)}
 
-    python -m uvicorn server:app --reload@app.get("/health")
+@app.get("/health")
+def health():
+    return {"status": "ok"}
 def health():
        return {"status": "ok"}
        if __name__ == "__main__":
