@@ -354,7 +354,7 @@ def health():
     return {"status": "ok"}
 def health():
        return {"status": "ok"}
-       if __name__ == "__main__":
+    if __name__ == "__main__":
     import uvicorn
     import os
     port = int(os.environ.get("PORT", 8000))
