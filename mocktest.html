@@ -164,7 +164,7 @@
     // Load questions
    async function loadQuestions() {
       try {
-        const res = await fetch('http://127.0.0.1:8000/mock-test-questions');
+        const res = await fetch('https://neet-ai-production.up.railway.app/mock-test-questions');
         const data = await res.json();
         questions = data.questions;
         renderQuestion(0);

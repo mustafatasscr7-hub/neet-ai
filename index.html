@@ -754,7 +754,7 @@ let selectedImage = null;
               solDiv.style.display = 'block';
               solDiv.innerHTML = '<span style="color:#888;">AI is solving this question...</span>';
               try {
-                const res = await fetch('http://127.0.0.1:8000/solve', {
+                const res = await fetch('https://neet-ai-production.up.railway.app/solve', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ question: q.question, option_a: q.option_a, option_b: q.option_b, option_c: q.option_c, option_d: q.option_d, correct_answer: q.correct_answer })
@@ -839,7 +839,7 @@ let selectedImage = null;
             pyqBtn.disabled = true;
             pyqBtn.innerHTML = '⏳ Searching PYQs...';
             try {
-              const res = await fetch('http://127.0.0.1:8000/pyq', {
+              const res = await fetch('https://neet-ai-production.up.railway.app/pyq', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ text: userQuestion })
@@ -1026,7 +1026,7 @@ function copyMessage(btn) {
 
       let title = firstMessage.substring(0, 35) + '...';
       try {
-        const res = await fetch('http://127.0.0.1:8000/title', {
+        const res = await fetch('https://neet-ai-production.up.railway.app/title', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text: firstMessage })
@@ -1206,7 +1206,7 @@ function copyMessage(btn) {
         if (selectedPDF) {
           requestBody.pdf = selectedPDF.split(',')[1];
         }
-                const response = await fetch('http://127.0.0.1:8000/chat', {
+                const response = await fetch('https://neet-ai-production.up.railway.app/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(requestBody),
@@ -1249,7 +1249,7 @@ function copyMessage(btn) {
           pyqBtn.disabled = true;
           pyqBtn.innerHTML = '⏳ Searching PYQs...';
           try {
-            const res = await fetch('http://127.0.0.1:8000/pyq', {
+            const res = await fetch('https://neet-ai-production.up.railway.app/pyq', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ text: currentQuestion })
@@ -1726,7 +1726,7 @@ function openSettings() {
 
    
    setInterval(() => {
-  fetch('http://127.0.0.1:8000/health').catch(() => {});
+  fetch('https://neet-ai-production.up.railway.app/health').catch(() => {});
 }, 300000);
 
   </script>
