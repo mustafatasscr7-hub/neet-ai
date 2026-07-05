@@ -218,7 +218,7 @@
     document.getElementById('googleBtn').addEventListener('click', async () => {
       const { error } = await client.auth.signInWithOAuth({
         provider: 'google',
-        options: { redirectTo: 'http://127.0.0.1:5500/index.html' }
+       options: { redirectTo: 'https://neet-ai-jet.vercel.app/index.html' }
       })
       if (error) showError(error.message)
     })
