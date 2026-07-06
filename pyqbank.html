@@ -84,7 +84,7 @@
       <button onclick="handleBack()" style="background:transparent;border:none;color:#555;cursor:pointer;font-size:13px;font-family:Inter,sans-serif;padding:0;" onmouseover="this.style.color='#4f8ef7'" onmouseout="this.style.color='#555'">← Back</button>
       <span class="header-title">NEET<span>-AI</span> PYQ Bank</span>
     </div>
-    <button class="btn btn-primary" onclick="window.location.href='./index.html'">Back to NEET-AI</button>
+    <button class="btn btn-primary" onclick="window.location.href='./chat.html'">Back to NEET-AI</button>
   </div>
   <div class="container">
     <div id="mainContent"></div>
@@ -139,7 +139,7 @@
 function handleBack() {
       if (selectedChapter) { selectedChapter = null; showClasses(selectedSubject); }
       else if (selectedSubject) { showSubjects(); }
-      else { window.location.href = './index.html'; }
+      else { window.location.href = './chat.html'; }
     }
 
     // SCREEN 1 — Subject Selection
