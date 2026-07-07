@@ -1,0 +1,1054 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Personalised Test — NEET-AI</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Inter', sans-serif; background: #0d0d0d; color: #ececec; overflow-x: hidden; }
+    a { color: inherit; }
+
+    /* ===== SETUP SCREEN (catalog) ===== */
+    #setupScreen { min-height: 100vh; padding: 96px 24px 60px; position: relative; }
+    .back-fixed { position: fixed; top: 16px; left: 16px; }
+    .back-fixed button { background: transparent; border: 1px solid #2a2a2a; color: #888; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 13px; font-family: 'Inter', sans-serif; transition: all 0.2s; }
+    .back-fixed button:hover { color: #ccc; }
+
+    .catalog-wrap { max-width: 1000px; margin: 0 auto; width: 100%; }
+    .catalog-header { margin-bottom: 28px; }
+    .setup-icon { font-size: 40px; margin-bottom: 12px; }
+    .setup-title { font-size: 26px; font-weight: 700; color: #fff; margin-bottom: 6px; letter-spacing: -0.3px; }
+    .setup-subtitle { font-size: 13px; color: #666; line-height: 1.6; }
+
+    .setup-notice { font-size: 12px; color: #f97316; background: #f9731610; border: 1px solid #f9731630; border-radius: 8px; padding: 10px 14px; margin-bottom: 16px; display: none; }
+    .setup-error { font-size: 12px; color: #ef4444; background: #ef444410; border: 1px solid #ef444430; border-radius: 8px; padding: 10px 14px; margin-bottom: 16px; display: none; }
+
+    .tab-bar { display: flex; gap: 8px; margin-bottom: 28px; flex-wrap: wrap; }
+    .tab-btn { background: #0d0d12; border: 1px solid #2a2a35; color: #888; padding: 10px 20px; border-radius: 100px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; transition: all 0.2s; }
+    .tab-btn:hover { border-color: #4f8ef750; color: #ccc; }
+    .tab-btn.active { background: #4f8ef7; border-color: #4f8ef7; color: #fff; }
+
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    .subject-pills { display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
+    .subject-pill { display: flex; align-items: center; gap: 8px; background: #0d0d12; border: 1px solid #2a2a35; color: #888; padding: 8px 16px; border-radius: 100px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; transition: all 0.2s; }
+    .subject-pill:hover { border-color: #3a3a45; color: #ccc; }
+    .subject-pill.active { border-color: var(--dot-color); color: #fff; background: #ffffff10; }
+    .subject-pill .pill-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dot-color); flex-shrink: 0; }
+
+    .catalog-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; }
+    .catalog-card { position: relative; background: #111; border: 1px solid #1e1e1e; border-radius: 14px; overflow: hidden; cursor: pointer; transition: all 0.2s; }
+    .catalog-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 4px; background: var(--accent-color, #4f8ef7); }
+    .catalog-card:hover { transform: translateY(-3px); border-color: #2a2a2a; }
+    .catalog-card.disabled { opacity: 0.45; cursor: not-allowed; }
+    .catalog-card.disabled:hover { transform: none; border-color: #1e1e1e; }
+    .catalog-card-body { padding: 20px; }
+    .catalog-badge { display: inline-block; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; padding: 4px 10px; border-radius: 100px; border: 1px solid; margin-bottom: 12px; }
+    .catalog-card-title { font-size: 16px; font-weight: 700; color: #fff; margin-bottom: 6px; }
+    .catalog-card-desc { font-size: 12.5px; color: #777; line-height: 1.5; margin-bottom: 14px; }
+    .catalog-card-meta { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: #999; margin-bottom: 14px; }
+    .catalog-card-footer { font-size: 11px; color: #555; border-top: 1px solid #1a1a1a; padding-top: 12px; }
+
+    .custom-panel { max-width: 640px; margin: 0 auto; background: #111; border: 1px solid #1e1e1e; border-radius: 16px; padding: 32px; }
+    .setup-step { margin-bottom: 28px; }
+    .setup-step-label { font-size: 12px; font-weight: 600; color: #777; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; }
+    .setup-step-label .hint { text-transform: none; font-weight: 400; color: #444; letter-spacing: normal; }
+
+    .subject-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+    .subject-card { background: #0d0d12; border: 1px solid #2a2a35; border-radius: 10px; padding: 16px 10px; text-align: center; cursor: pointer; transition: all 0.2s; color: #888; font-size: 13px; font-weight: 600; }
+    .subject-card .subject-emoji { font-size: 22px; display: block; margin-bottom: 6px; }
+    .subject-card:hover { border-color: #4f8ef750; color: #ccc; }
+    .subject-card.selected { border-color: #4f8ef7; background: #4f8ef715; color: #4f8ef7; }
+
+    .chapter-list-actions { display: flex; gap: 12px; }
+    .chapter-list-actions button { background: transparent; border: none; color: #4f8ef7; font-size: 11px; font-family: 'Inter', sans-serif; cursor: pointer; padding: 0; }
+    .chapter-list-actions button:hover { text-decoration: underline; }
+
+    .chapter-list { max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; background: #0d0d12; border: 1px solid #2a2a35; border-radius: 10px; padding: 10px; }
+    .chapter-list::-webkit-scrollbar { width: 4px; }
+    .chapter-list::-webkit-scrollbar-thumb { background: #2a2a2a; border-radius: 4px; }
+    .chapter-check { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 6px; cursor: pointer; font-size: 13px; color: #ccc; transition: background 0.15s; }
+    .chapter-check:hover { background: #ffffff08; }
+    .chapter-check input { accent-color: #4f8ef7; width: 15px; height: 15px; flex-shrink: 0; }
+    .chapter-placeholder, .chapter-empty, .chapter-loading { font-size: 13px; color: #555; padding: 10px 4px; grid-column: 1 / -1; }
+
+    .count-grid { display: flex; gap: 10px; flex-wrap: wrap; }
+    .count-btn { background: #0d0d12; border: 1px solid #2a2a35; border-radius: 10px; padding: 12px 20px; color: #888; font-size: 14px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; transition: all 0.2s; }
+    .count-btn:hover { border-color: #4f8ef750; color: #ccc; }
+    .count-btn.selected { border-color: #4f8ef7; background: #4f8ef715; color: #4f8ef7; }
+    #customCountWrap { margin-top: 10px; display: none; }
+    #customCountInput { width: 120px; background: #0d0d12; border: 1px solid #2a2a35; border-radius: 8px; padding: 10px 14px; font-size: 14px; color: #fff; font-family: 'Inter', sans-serif; outline: none; }
+    #customCountInput:focus { border-color: #4f8ef7; }
+
+    .generate-btn { width: 100%; background: #4f8ef7; border: none; color: white; padding: 14px; border-radius: 10px; cursor: pointer; font-size: 15px; font-weight: 700; font-family: 'Inter', sans-serif; transition: all 0.2s; }
+    .generate-btn:hover:not(:disabled) { background: #3b7de8; }
+    .generate-btn:disabled { background: #2a2a2a; color: #666; cursor: not-allowed; }
+
+    @media (max-width: 640px) {
+      #setupScreen { padding: 88px 16px 40px; }
+    }
+
+    /* ===== TEST SCREEN (adapted from mocktest.html) ===== */
+    #testScreen { display: none; height: 100vh; flex-direction: column; overflow: hidden; }
+    .header { padding: 14px 24px; border-bottom: 1px solid #1a1a1a; display: flex; align-items: center; justify-content: space-between; background: #0d0d0d; flex-shrink: 0; }
+    .header-left { display: flex; align-items: center; gap: 12px; }
+    .header-title { font-size: 15px; font-weight: 700; color: #fff; }
+    .header-title span { color: #4f8ef7; }
+    .timer { font-size: 20px; font-weight: 700; color: #4f8ef7; font-variant-numeric: tabular-nums; background: #4f8ef710; padding: 6px 16px; border-radius: 8px; border: 1px solid #4f8ef730; }
+    .timer.warning { color: #f97316; background: #f9731610; border-color: #f9731630; }
+    .timer.danger { color: #ef4444; background: #ef444410; border-color: #ef444430; }
+    .submit-btn { background: #4f8ef7; border: none; color: white; padding: 8px 20px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600; font-family: 'Inter', sans-serif; transition: all 0.2s; }
+    .submit-btn:hover { background: #3b7de8; }
+
+    .body { display: flex; flex: 1; overflow: hidden; }
+    .question-area { flex: 1; overflow-y: auto; padding: 32px; }
+    .question-area::-webkit-scrollbar { width: 4px; }
+    .question-area::-webkit-scrollbar-thumb { background: #2a2a2a; border-radius: 4px; }
+
+    .question-meta { font-size: 12px; color: #4f8ef7; margin-bottom: 8px; font-weight: 500; }
+    .question-number { font-size: 13px; color: #666; margin-bottom: 12px; }
+    .question-text { font-size: 16px; color: #ececec; line-height: 1.7; margin-bottom: 28px; font-weight: 500; }
+
+    .options { display: flex; flex-direction: column; gap: 10px; margin-bottom: 28px; }
+    .option { padding: 14px 18px; border-radius: 10px; border: 1px solid #2a2a2a; background: #111; cursor: pointer; font-size: 14px; color: #ccc; transition: all 0.2s; display: flex; align-items: center; gap: 12px; }
+    .option:hover { border-color: #4f8ef750; background: #4f8ef710; color: #ececec; }
+    .option.selected { border-color: #4f8ef7; background: #4f8ef720; color: #fff; }
+    .option-label { width: 28px; height: 28px; border-radius: 50%; border: 1px solid #3a3a3a; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; flex-shrink: 0; }
+    .option.selected .option-label { background: #4f8ef7; border-color: #4f8ef7; color: white; }
+
+    .question-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+    .mark-btn { background: transparent; border: 1px solid #f97316; color: #f97316; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 13px; font-family: 'Inter', sans-serif; transition: all 0.2s; }
+    .mark-btn:hover { background: #f9731620; }
+    .mark-btn.marked { background: #f9731620; }
+    .clear-btn { background: transparent; border: 1px solid #3a3a3a; color: #888; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 13px; font-family: 'Inter', sans-serif; transition: all 0.2s; }
+    .clear-btn:hover { background: #1a1a1a; color: #ccc; }
+    .nav-btns { display: flex; gap: 10px; margin-left: auto; }
+    .prev-btn, .next-btn { background: #1a1a1a; border: 1px solid #2a2a2a; color: #ccc; padding: 8px 20px; border-radius: 8px; cursor: pointer; font-size: 13px; font-family: 'Inter', sans-serif; transition: all 0.2s; }
+    .prev-btn:hover, .next-btn:hover { background: #222; border-color: #3a3a3a; }
+    .next-btn { background: #4f8ef7; border-color: #4f8ef7; color: white; }
+    .next-btn:hover { background: #3b7de8; }
+
+    .sidebar { width: 280px; background: #111; border-left: 1px solid #1e1e1e; display: flex; flex-direction: column; flex-shrink: 0; overflow: hidden; }
+    .sidebar-header { padding: 16px; border-bottom: 1px solid #1e1e1e; }
+    .sidebar-header h3 { font-size: 13px; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 0.05em; }
+    .sidebar-header .sidebar-sub { font-size: 12px; color: #4f8ef7; margin-top: 6px; }
+
+    .question-grid { padding: 12px; overflow-y: auto; flex: 1; }
+    .question-grid::-webkit-scrollbar { width: 3px; }
+    .question-grid::-webkit-scrollbar-thumb { background: #2a2a2a; }
+    .grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
+    .grid-btn { width: 100%; aspect-ratio: 1; border-radius: 6px; border: 1px solid #2a2a2a; background: #1a1a1a; color: #666; font-size: 11px; font-weight: 600; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; justify-content: center; }
+    .grid-btn:hover { border-color: #4f8ef750; color: #ccc; }
+    .grid-btn.current { border-color: #4f8ef7; background: #4f8ef720; color: #4f8ef7; }
+    .grid-btn.answered { background: #4f8ef7; border-color: #4f8ef7; color: white; }
+    .grid-btn.marked { background: #f9731620; border-color: #f97316; color: #f97316; }
+    .grid-btn.answered.marked { background: #a855f7; border-color: #a855f7; color: white; }
+
+    .legend { padding: 12px 16px; border-top: 1px solid #1e1e1e; display: flex; flex-wrap: wrap; gap: 8px; }
+    .legend-item { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #666; }
+    .legend-dot { width: 12px; height: 12px; border-radius: 3px; }
+
+    .stats-bar { display: flex; gap: 16px; padding: 10px 16px; border-top: 1px solid #1e1e1e; background: #0d0d0d; }
+    .stat { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+    .stat-dot { width: 8px; height: 8px; border-radius: 50%; }
+    .stat-count { font-weight: 600; color: #ececec; }
+    .stat-label { color: #555; }
+
+    /* ===== RESULTS SCREEN (adapted from mockresults.html) ===== */
+    #resultsScreen { display: none; min-height: 100vh; }
+    .container { max-width: 900px; margin: 0 auto; padding: 32px 24px; }
+    .btn { padding: 8px 20px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600; font-family: 'Inter', sans-serif; transition: all 0.2s; border: none; }
+    .btn-primary { background: #4f8ef7; color: white; }
+    .btn-primary:hover { background: #3b7de8; }
+    .btn-outline { background: transparent; border: 1px solid #2a2a2a; color: #888; }
+    .btn-outline:hover { color: #ccc; border-color: #3a3a3a; }
+
+    .score-card { background: #111; border: 1px solid #1e1e1e; border-radius: 16px; padding: 32px; text-align: center; margin-bottom: 24px; }
+    .score-label { font-size: 13px; color: #666; margin-bottom: 8px; }
+    .score-value { font-size: 64px; font-weight: 700; color: #4f8ef7; line-height: 1; margin-bottom: 4px; }
+    .score-total { font-size: 20px; color: #444; margin-bottom: 24px; }
+    .score-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+    .stat-box { background: #0d0d0d; border-radius: 10px; padding: 16px; }
+    .stat-box-value { font-size: 28px; font-weight: 700; margin-bottom: 4px; }
+    .stat-box-label { font-size: 12px; color: #555; }
+
+    .subject-breakdown { background: #111; border: 1px solid #1e1e1e; border-radius: 16px; padding: 24px; margin-bottom: 24px; }
+    .section-title { font-size: 14px; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 16px; }
+    .subject-row { display: flex; align-items: center; gap: 16px; padding: 12px 0; border-bottom: 1px solid #1a1a1a; }
+    .subject-row:last-child { border-bottom: none; }
+    .subject-name { width: 160px; font-size: 13px; color: #ececec; font-weight: 500; flex-shrink: 0; }
+    .subject-bar-wrap { flex: 1; height: 8px; background: #1a1a1a; border-radius: 4px; overflow: hidden; }
+    .subject-bar { height: 100%; border-radius: 4px; transition: width 1s ease; background: #4f8ef7; }
+    .subject-score { font-size: 13px; font-weight: 600; color: #ececec; width: 60px; text-align: right; flex-shrink: 0; }
+    .subject-detail { font-size: 11px; color: #555; width: 120px; text-align: right; flex-shrink: 0; }
+
+    .review-section { background: #111; border: 1px solid #1e1e1e; border-radius: 16px; padding: 24px; margin-bottom: 24px; }
+    .filter-tabs { display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
+    .filter-tab { padding: 6px 14px; border-radius: 6px; border: 1px solid #2a2a2a; background: transparent; color: #666; font-size: 12px; font-family: 'Inter', sans-serif; cursor: pointer; transition: all 0.2s; }
+    .filter-tab.active { background: #4f8ef720; border-color: #4f8ef7; color: #4f8ef7; }
+
+    .question-card { background: #0d0d0d; border: 1px solid #1e1e1e; border-radius: 10px; padding: 16px; margin-bottom: 12px; }
+    .question-card.correct { border-left: 3px solid #4ade80; }
+    .question-card.wrong { border-left: 3px solid #ef4444; }
+    .question-card.skipped { border-left: 3px solid #555; }
+    .q-meta { font-size: 11px; color: #555; margin-bottom: 8px; display: flex; gap: 12px; flex-wrap: wrap; }
+    .q-text { font-size: 13px; color: #ccc; line-height: 1.6; margin-bottom: 12px; }
+    .q-options { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 8px; }
+    .q-option { padding: 6px 10px; border-radius: 6px; font-size: 12px; background: #1a1a1a; color: #888; border: 1px solid #2a2a2a; }
+    .q-option.correct-ans { background: #4ade8020; border-color: #4ade80; color: #4ade80; }
+    .q-option.wrong-ans { background: #ef444420; border-color: #ef4444; color: #ef4444; }
+    .q-status { font-size: 11px; font-weight: 600; }
+    .q-status.correct { color: #4ade80; }
+    .q-status.wrong { color: #ef4444; }
+    .q-status.skipped { color: #555; }
+    .no-results { text-align: center; padding: 40px; color: #555; font-size: 14px; }
+
+    .loading { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 16px; }
+    .loading-text { color: #666; font-size: 14px; }
+    .spinner { width: 40px; height: 40px; border: 3px solid #1e1e1e; border-top-color: #4f8ef7; border-radius: 50%; animation: spin 0.8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    @media (max-width: 640px) {
+      .subject-grid { grid-template-columns: 1fr; }
+      .sidebar { display: none; }
+      .custom-panel { padding: 24px; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ===== SETUP SCREEN (catalog) ===== -->
+  <div id="setupScreen">
+    <div class="back-fixed"><button onclick="window.location.href='./chat.html'">← Back to NEET-AI</button></div>
+    <div class="catalog-wrap">
+      <div class="catalog-header">
+        <div class="setup-icon">🎯</div>
+        <div class="setup-title">Personalised Test</div>
+        <div class="setup-subtitle">Pick a ready-made test or build your own. Questions are drawn at random from NEET-AI's active question bank.</div>
+      </div>
+
+      <div id="setupNotice" class="setup-notice"></div>
+      <div id="setupError" class="setup-error"></div>
+
+      <div class="tab-bar">
+        <button class="tab-btn" onclick="switchTab('fullmock', this)">Full Mock</button>
+        <button class="tab-btn active" onclick="switchTab('subject', this)">Subject</button>
+        <button class="tab-btn" onclick="switchTab('chapter', this)">Chapter</button>
+        <button class="tab-btn" onclick="switchTab('custom', this)">Custom</button>
+      </div>
+
+      <!-- FULL MOCK -->
+      <div class="tab-panel" id="panel-fullmock">
+        <div class="catalog-grid">
+          <div class="catalog-card" style="--accent-color:#4f8ef7" onclick="window.location.href='./mocktest.html'">
+            <div class="catalog-card-body">
+              <span class="catalog-badge" style="color:#4f8ef7;background:#4f8ef718;border-color:#4f8ef740;">Full Mock</span>
+              <div class="catalog-card-title">📝 Full NEET Mock Test</div>
+              <div class="catalog-card-desc">All 3 subjects together, exact NEET pattern and timing.</div>
+              <div class="catalog-card-meta"><span>📖 180 Questions</span><span>🕐 3h 20m</span></div>
+              <div class="catalog-card-footer">+4 correct · -1 wrong · Max 720 marks</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- SUBJECT -->
+      <div class="tab-panel active" id="panel-subject">
+        <div class="subject-pills">
+          <button class="subject-pill active" style="--dot-color:#4ade80" onclick="selectSubjectTabSubject('Biology', this)"><span class="pill-dot"></span>Biology</button>
+          <button class="subject-pill" style="--dot-color:#4f8ef7" onclick="selectSubjectTabSubject('Physics', this)"><span class="pill-dot"></span>Physics</button>
+          <button class="subject-pill" style="--dot-color:#f97316" onclick="selectSubjectTabSubject('Chemistry', this)"><span class="pill-dot"></span>Chemistry</button>
+        </div>
+        <div class="catalog-grid" id="subjectCardsGrid">
+          <div class="chapter-loading">Loading tests…</div>
+        </div>
+      </div>
+
+      <!-- CHAPTER -->
+      <div class="tab-panel" id="panel-chapter">
+        <div class="subject-pills">
+          <button class="subject-pill active" style="--dot-color:#4ade80" onclick="selectChapterTabSubject('Biology', this)"><span class="pill-dot"></span>Biology</button>
+          <button class="subject-pill" style="--dot-color:#4f8ef7" onclick="selectChapterTabSubject('Physics', this)"><span class="pill-dot"></span>Physics</button>
+          <button class="subject-pill" style="--dot-color:#f97316" onclick="selectChapterTabSubject('Chemistry', this)"><span class="pill-dot"></span>Chemistry</button>
+        </div>
+        <div class="catalog-grid" id="chapterCardsGrid">
+          <div class="chapter-loading">Loading chapters…</div>
+        </div>
+      </div>
+
+      <!-- CUSTOM -->
+      <div class="tab-panel" id="panel-custom">
+        <div class="custom-panel">
+          <div class="setup-step">
+            <div class="setup-step-label">Subject</div>
+            <div class="subject-grid">
+              <div class="subject-card" onclick="selectSubject('Biology', this)"><span class="subject-emoji">🧬</span>Biology</div>
+              <div class="subject-card" onclick="selectSubject('Physics', this)"><span class="subject-emoji">⚛️</span>Physics</div>
+              <div class="subject-card" onclick="selectSubject('Chemistry', this)"><span class="subject-emoji">🧪</span>Chemistry</div>
+            </div>
+          </div>
+
+          <div class="setup-step">
+            <div class="setup-step-label">
+              <span>Chapters <span class="hint">(optional — leave empty for all)</span></span>
+              <span class="chapter-list-actions">
+                <button type="button" onclick="selectAllChapters()">Select all</button>
+                <button type="button" onclick="clearAllChapters()">Clear</button>
+              </span>
+            </div>
+            <div class="chapter-list" id="chapterList">
+              <div class="chapter-placeholder">Select a subject first.</div>
+            </div>
+          </div>
+
+          <div class="setup-step">
+            <div class="setup-step-label">Number of Questions</div>
+            <div class="count-grid">
+              <button type="button" class="count-btn selected" onclick="selectCount(10, this)">10</button>
+              <button type="button" class="count-btn" onclick="selectCount(25, this)">25</button>
+              <button type="button" class="count-btn" onclick="selectCount(50, this)">50</button>
+              <button type="button" class="count-btn" onclick="selectCustomCount(this)">Custom</button>
+            </div>
+            <div id="customCountWrap">
+              <input type="number" id="customCountInput" min="1" max="200" placeholder="e.g. 30" oninput="onCustomCountInput(this)"/>
+            </div>
+          </div>
+
+          <button class="generate-btn" id="generateBtn" onclick="generateTest()" disabled>Select a subject to continue</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== TEST SCREEN ===== -->
+  <div id="testScreen">
+    <div class="header">
+      <div class="header-left">
+        <button onclick="confirmExit()" style="background:transparent;border:1px solid #2a2a2a;color:#888;padding:6px 14px;border-radius:8px;cursor:pointer;font-size:13px;font-family:Inter,sans-serif;margin-right:12px;">← Exit</button>
+        <span class="header-title">NEET<span>-AI</span> Personalised Test</span>
+      </div>
+      <div class="timer" id="timer">00:00</div>
+      <button class="submit-btn" onclick="confirmSubmit()">Submit Test</button>
+    </div>
+
+    <div class="body">
+      <div class="question-area" id="questionArea">
+        <div class="loading">
+          <div class="spinner"></div>
+          <div class="loading-text">Loading questions...</div>
+        </div>
+      </div>
+
+      <div class="sidebar">
+        <div class="sidebar-header">
+          <h3>Questions</h3>
+          <div class="sidebar-sub" id="sidebarSubject"></div>
+        </div>
+        <div class="question-grid">
+          <div class="grid" id="questionGrid"></div>
+        </div>
+        <div class="legend">
+          <div class="legend-item"><div class="legend-dot" style="background:#4f8ef7;"></div> Answered</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#f97316;border:1px solid #f97316;"></div> Marked</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#a855f7;"></div> Marked+Ans</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#1a1a1a;border:1px solid #2a2a2a;"></div> Not visited</div>
+        </div>
+        <div class="stats-bar">
+          <div class="stat"><div class="stat-dot" style="background:#4f8ef7;"></div><span class="stat-count" id="answeredCount">0</span><span class="stat-label">Answered</span></div>
+          <div class="stat"><div class="stat-dot" style="background:#f97316;"></div><span class="stat-count" id="markedCount">0</span><span class="stat-label">Marked</span></div>
+          <div class="stat"><div class="stat-dot" style="background:#555;"></div><span class="stat-count" id="skippedCount">0</span><span class="stat-label">Skipped</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== RESULTS SCREEN ===== -->
+  <div id="resultsScreen">
+    <div class="header">
+      <span class="header-title">NEET<span>-AI</span> Results</span>
+      <div style="display:flex;gap:10px;">
+        <button class="btn btn-outline" onclick="window.location.reload()">Take Another Test</button>
+        <button class="btn btn-outline" onclick="window.location.href='./scoreboard.html'">📊 Scoreboard</button>
+        <button class="btn btn-primary" onclick="window.location.href='./chat.html'">Back to NEET-AI</button>
+      </div>
+    </div>
+
+    <div class="container">
+      <div class="score-card">
+        <div class="score-label">Your Score</div>
+        <div class="score-value" id="scoreValue">0</div>
+        <div class="score-total" id="scoreTotal">out of 0</div>
+        <div class="score-stats">
+          <div class="stat-box"><div class="stat-box-value" style="color:#4ade80;" id="correctCount">0</div><div class="stat-box-label">Correct</div></div>
+          <div class="stat-box"><div class="stat-box-value" style="color:#ef4444;" id="wrongCount">0</div><div class="stat-box-label">Wrong</div></div>
+          <div class="stat-box"><div class="stat-box-value" style="color:#555;" id="skippedCount2">0</div><div class="stat-box-label">Skipped</div></div>
+        </div>
+      </div>
+
+      <div class="subject-breakdown">
+        <div class="section-title">Chapter-wise Performance</div>
+        <div id="chapterBreakdown"></div>
+      </div>
+
+      <div class="review-section">
+        <div class="section-title">Question Review</div>
+        <div class="filter-tabs" id="filterTabs">
+          <button class="filter-tab active" onclick="filterQuestions('all', this)">All</button>
+          <button class="filter-tab" onclick="filterQuestions('correct', this)">✅ Correct</button>
+          <button class="filter-tab" onclick="filterQuestions('wrong', this)">❌ Wrong</button>
+          <button class="filter-tab" onclick="filterQuestions('skipped', this)">⬜ Skipped</button>
+        </div>
+        <div id="questionReview"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script>
+    const API_BASE = 'https://neet-ai-production.up.railway.app';
+    const SUPABASE_URL = 'https://hvhnfttrfouajlyhvunq.supabase.co';
+    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh2aG5mdHRyZm91YWpseWh2dW5xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg5NDI1NTIsImV4cCI6MjA5NDUxODU1Mn0.8RaSu5yiTpQCEUGKrFO2y6oiRXSqdBehIz933j9Z7WA';
+    const { createClient } = supabase;
+    const client = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+    // ---------- Setup state ----------
+    let selectedSubject = null;
+    let selectedChapters = new Set();
+    let selectedCount = 10;
+    let subjectTabSubject = 'Biology';
+    let chapterTabSubject = 'Biology';
+
+    const SUBJECT_META = {
+      Biology:   { color: '#4ade80' },
+      Physics:   { color: '#4f8ef7' },
+      Chemistry: { color: '#f97316' }
+    };
+
+    function escapeHtml(str) {
+      return String(str).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+    }
+
+    // ---------- Tab switching ----------
+    function switchTab(tab, btn) {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+      document.getElementById('panel-' + tab).classList.add('active');
+      if (tab === 'subject') loadSubjectCatalog(subjectTabSubject);
+      if (tab === 'chapter') loadChapterCards(chapterTabSubject);
+    }
+
+    function startFromCard(subject, chapters, count) {
+      if (!count || count <= 0) return;
+      selectedSubject = subject;
+      selectedChapters = new Set(chapters);
+      selectedCount = count;
+      generateTest();
+    }
+
+    // ---------- Subject tab ----------
+    function selectSubjectTabSubject(subject, btn) {
+      subjectTabSubject = subject;
+      document.querySelectorAll('#panel-subject .subject-pill').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+      loadSubjectCatalog(subject);
+    }
+
+    async function loadSubjectCatalog(subject) {
+      const grid = document.getElementById('subjectCardsGrid');
+      grid.innerHTML = '<div class="chapter-loading">Loading tests…</div>';
+      try {
+        const res = await fetch(`${API_BASE}/personalised-catalog?subject=${encodeURIComponent(subject)}`);
+        const data = await res.json();
+        const tests = data.tests || [];
+        if (tests.length === 0) {
+          grid.innerHTML = '<div class="chapter-empty">No practice tests available yet for this subject — try the Custom tab instead.</div>';
+          return;
+        }
+        const color = SUBJECT_META[subject].color;
+        grid.innerHTML = tests.map(t => `
+          <div class="catalog-card" data-subject="${escapeHtml(subject)}" data-test-number="${t.test_number}" style="--accent-color:${color}">
+            <div class="catalog-card-body">
+              <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+                <span class="catalog-badge" style="color:${color};background:${color}18;border-color:${color}40;">Subject Test</span>
+                <span class="catalog-badge" style="color:#4ade80;background:#4ade8018;border-color:#4ade8040;">⚡ Free</span>
+              </div>
+              <div class="catalog-card-title">${escapeHtml(t.title)}</div>
+              <div class="catalog-card-desc">${escapeHtml(t.description || '')}</div>
+              <div class="catalog-card-meta"><span>📖 ${t.question_count} Questions</span></div>
+              <div class="catalog-card-footer">+4 correct · -1 wrong · Max ${t.question_count * 4} marks</div>
+            </div>
+          </div>
+        `).join('');
+        grid.querySelectorAll('.catalog-card').forEach(card => {
+          card.addEventListener('click', () => startFromCatalog(card.dataset.subject, parseInt(card.dataset.testNumber, 10)));
+        });
+      } catch (e) {
+        grid.innerHTML = '<div class="chapter-empty">Could not load tests. Make sure the backend is running.</div>';
+      }
+    }
+
+    async function startFromCatalog(subject, testNumber) {
+      document.getElementById('setupError').style.display = 'none';
+      showSetupNotice('Preparing your test…');
+      try {
+        const res = await fetch(`${API_BASE}/personalised-catalog-start`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ subject, test_number: testNumber })
+        });
+        const data = await res.json();
+        if (data.error || !data.questions || data.questions.length === 0) {
+          hideSetupNotice();
+          showSetupError('Could not load this test. Try another one.');
+          return;
+        }
+        questions = data.questions;
+        selectedSubject = subject;
+        selectedChapters = new Set();
+        hideSetupNotice();
+        startTest();
+      } catch (e) {
+        hideSetupNotice();
+        showSetupError('Could not reach the server. Make sure the backend is running.');
+      }
+    }
+
+    // ---------- Chapter tab ----------
+    function selectChapterTabSubject(subject, btn) {
+      chapterTabSubject = subject;
+      document.querySelectorAll('.subject-pill').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+      loadChapterCards(subject);
+    }
+
+    async function loadChapterCards(subject) {
+      const grid = document.getElementById('chapterCardsGrid');
+      grid.innerHTML = '<div class="chapter-loading">Loading chapters…</div>';
+      try {
+        const res = await fetch(`${API_BASE}/pyq-chapters?subject=${encodeURIComponent(subject)}`);
+        const data = await res.json();
+        const chapters = data.chapters || [];
+        if (chapters.length === 0) {
+          grid.innerHTML = '<div class="chapter-empty">No chapter-tagged questions for this subject yet. Try the Subject or Custom tab instead.</div>';
+          return;
+        }
+        const color = SUBJECT_META[subject].color;
+        grid.innerHTML = chapters.map(ch => `
+          <div class="catalog-card" data-subject="${escapeHtml(subject)}" data-chapter="${escapeHtml(ch.name)}" data-count="${ch.count}" style="--accent-color:${color}">
+            <div class="catalog-card-body">
+              <span class="catalog-badge" style="color:${color};background:${color}18;border-color:${color}40;">Chapter Test</span>
+              <div class="catalog-card-title">${escapeHtml(ch.name)}</div>
+              <div class="catalog-card-meta"><span>📖 ${ch.count} Question${ch.count === 1 ? '' : 's'} available</span></div>
+              <div class="catalog-card-footer">+4 correct · -1 wrong · Max ${ch.count * 4} marks</div>
+            </div>
+          </div>
+        `).join('');
+        grid.querySelectorAll('.catalog-card').forEach(card => {
+          card.addEventListener('click', () => startFromCard(card.dataset.subject, [card.dataset.chapter], parseInt(card.dataset.count, 10)));
+        });
+      } catch (e) {
+        grid.innerHTML = '<div class="chapter-empty">Could not load chapters.</div>';
+      }
+    }
+
+    // ---------- Custom tab (subject/chapter/count wizard) ----------
+    async function selectSubject(subject, btn) {
+      selectedSubject = subject;
+      document.querySelectorAll('#panel-custom .subject-card').forEach(b => b.classList.remove('selected'));
+      btn.classList.add('selected');
+      selectedChapters = new Set();
+
+      const generateBtn = document.getElementById('generateBtn');
+      generateBtn.disabled = false;
+      generateBtn.textContent = 'Generate My Test →';
+
+      const chapterList = document.getElementById('chapterList');
+      chapterList.innerHTML = '<div class="chapter-loading">Loading chapters…</div>';
+
+      try {
+        const res = await fetch(`${API_BASE}/pyq-chapters?subject=${encodeURIComponent(subject)}`);
+        const data = await res.json();
+        const chapters = data.chapters || [];
+        if (chapters.length === 0) {
+          chapterList.innerHTML = '<div class="chapter-empty">No chapter tags available for this subject yet — your test will draw from all active questions.</div>';
+          return;
+        }
+        chapterList.innerHTML = chapters.map(c => `
+          <label class="chapter-check">
+            <input type="checkbox" value="${escapeHtml(c.name)}" onchange="toggleChapter(this)"/>
+            <span>${escapeHtml(c.name)} <span style="color:#444;">(${c.count})</span></span>
+          </label>
+        `).join('');
+      } catch (e) {
+        chapterList.innerHTML = '<div class="chapter-empty">Could not load chapters. You can still generate a test using all chapters.</div>';
+      }
+    }
+
+    function toggleChapter(checkbox) {
+      if (checkbox.checked) selectedChapters.add(checkbox.value);
+      else selectedChapters.delete(checkbox.value);
+    }
+
+    function selectAllChapters() {
+      document.querySelectorAll('#chapterList input[type="checkbox"]').forEach(cb => {
+        cb.checked = true;
+        selectedChapters.add(cb.value);
+      });
+    }
+
+    function clearAllChapters() {
+      document.querySelectorAll('#chapterList input[type="checkbox"]').forEach(cb => cb.checked = false);
+      selectedChapters.clear();
+    }
+
+    function selectCount(n, btn) {
+      document.querySelectorAll('.count-btn').forEach(b => b.classList.remove('selected'));
+      btn.classList.add('selected');
+      document.getElementById('customCountWrap').style.display = 'none';
+      selectedCount = n;
+    }
+
+    function selectCustomCount(btn) {
+      document.querySelectorAll('.count-btn').forEach(b => b.classList.remove('selected'));
+      btn.classList.add('selected');
+      const wrap = document.getElementById('customCountWrap');
+      wrap.style.display = 'block';
+      document.getElementById('customCountInput').focus();
+    }
+
+    function onCustomCountInput(el) {
+      const v = Math.max(1, Math.min(200, parseInt(el.value) || 1));
+      selectedCount = v;
+    }
+
+    function showSetupError(msg) {
+      const el = document.getElementById('setupError');
+      el.textContent = msg;
+      el.style.display = 'block';
+    }
+
+    function showSetupNotice(msg) {
+      const el = document.getElementById('setupNotice');
+      el.textContent = msg;
+      el.style.display = 'block';
+    }
+
+    function hideSetupNotice() {
+      document.getElementById('setupNotice').style.display = 'none';
+    }
+
+    async function generateTest() {
+      if (!selectedSubject) return;
+      const btn = document.getElementById('generateBtn');
+      btn.disabled = true;
+      btn.textContent = 'Preparing your test...';
+      document.getElementById('setupError').style.display = 'none';
+      showSetupNotice('Preparing your test…');
+
+      try {
+        const res = await fetch(`${API_BASE}/personalised-test-questions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            subject: selectedSubject,
+            chapters: Array.from(selectedChapters),
+            count: selectedCount
+          })
+        });
+        const data = await res.json();
+
+        if (data.error || !data.questions || data.questions.length === 0) {
+          hideSetupNotice();
+          showSetupError('No active questions matched your selection. Try a different chapter or subject.');
+          btn.disabled = false;
+          btn.textContent = 'Generate My Test →';
+          return;
+        }
+
+        questions = data.questions;
+
+        if (data.available < data.requested) {
+          showSetupNotice(`Only ${data.available} question${data.available === 1 ? '' : 's'} matched your filters — starting a ${data.available}-question test.`);
+          setTimeout(startTest, 1400);
+        } else {
+          hideSetupNotice();
+          startTest();
+        }
+      } catch (e) {
+        hideSetupNotice();
+        showSetupError('Could not reach the server. Make sure the backend is running.');
+        btn.disabled = false;
+        btn.textContent = 'Generate My Test →';
+      }
+    }
+
+    loadSubjectCatalog(subjectTabSubject);
+
+    // ---------- Test-taking state (adapted from mocktest.html) ----------
+    let questions = [];
+    let currentIndex = 0;
+    let answers = {};
+    let marked = {};
+    let timerInterval = null;
+    let totalSeconds = 0;
+    let dangerAt = 0, warningAt = 0;
+    let startTime = null;
+    let savedQuestions = new Set();
+
+    function startTest() {
+      document.getElementById('setupScreen').style.display = 'none';
+      document.getElementById('testScreen').style.display = 'flex';
+      document.getElementById('sidebarSubject').textContent = selectedSubject +
+        (selectedChapters.size ? ` • ${selectedChapters.size} chapter${selectedChapters.size === 1 ? '' : 's'}` : ' • All chapters');
+
+      totalSeconds = Math.max(300, questions.length * 70);
+      dangerAt = Math.floor(totalSeconds * 0.15);
+      warningAt = Math.floor(totalSeconds * 0.35);
+      startTime = Date.now();
+
+      renderQuestion(0);
+      renderGrid();
+      startTimer();
+    }
+
+    function startTimer() {
+      timerInterval = setInterval(() => {
+        totalSeconds--;
+        const h = Math.floor(totalSeconds / 3600);
+        const m = Math.floor((totalSeconds % 3600) / 60);
+        const s = totalSeconds % 60;
+        const timerEl = document.getElementById('timer');
+        timerEl.textContent = (h > 0 ? h + ':' : '') + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+        if (totalSeconds <= dangerAt) { timerEl.className = 'timer danger'; }
+        else if (totalSeconds <= warningAt) { timerEl.className = 'timer warning'; }
+        if (totalSeconds <= 0) { clearInterval(timerInterval); submitTest(); }
+      }, 1000);
+    }
+
+    function formatQuestionText(text) {
+      if (!text) return '';
+      let formatted = text
+        .replace(/\n/g, '<br>')
+        .replace(/(\s)(\([A-E]\)\s)/g, '<br>$2');
+      return formatted;
+    }
+
+    function renderQuestion(index) {
+      currentIndex = index;
+      const q = questions[index];
+      if (!q) return;
+
+      const isMarked = marked[index];
+      const selectedAnswer = answers[index];
+
+      document.getElementById('questionArea').innerHTML = `
+        <div class="question-meta">${q.subject || ''}${q.chapter ? ' • ' + escapeHtml(q.chapter) : ''}</div>
+        <div class="question-number">Question ${index + 1} of ${questions.length}</div>
+        <div class="question-text">${formatQuestionText(q.question)}</div>
+        ${q.diagram_url ? `<img src="${q.diagram_url}" style="max-width:100%;border-radius:8px;margin:12px 0;border:1px solid #2a2a2a;">` : ''}
+        <div class="options" id="optionsContainer">
+          ${['a','b','c','d'].map(opt => q['option_' + opt] ? `
+            <div class="option ${selectedAnswer === opt ? 'selected' : ''}" onclick="selectAnswer('${opt}')">
+              <div class="option-label">${opt.toUpperCase()}</div>
+              <div>${q['option_' + opt]}</div>
+            </div>
+          ` : '').join('')}
+        </div>
+        <div class="question-actions">
+          <button class="mark-btn ${isMarked ? 'marked' : ''}" onclick="toggleMark()">${isMarked ? '🔖 Marked' : '🔖 Mark for Review'}</button>
+          <button class="clear-btn" onclick="clearAnswer()">Clear</button>
+          <button class="clear-btn" id="saveBtn-${index}" style="border-color:${savedQuestions.has(index) ? '#4ade80' : '#f97316'};color:${savedQuestions.has(index) ? '#4ade80' : '#f97316'};" onclick="saveQuestionFromTest(${index})" ${savedQuestions.has(index) ? 'disabled' : ''}>${savedQuestions.has(index) ? '✅ Saved' : '🔖 Save'}</button>
+          <div class="nav-btns">
+            <button class="prev-btn" onclick="goTo(${index - 1})" ${index === 0 ? 'disabled style="opacity:0.4;cursor:not-allowed;"' : ''}>← Prev</button>
+            <button class="next-btn" onclick="goTo(${index + 1})" ${index === questions.length - 1 ? 'disabled style="opacity:0.4;cursor:not-allowed;"' : ''}>Next →</button>
+          </div>
+        </div>
+      `;
+      renderGrid();
+      updateStats();
+    }
+
+    function selectAnswer(opt) {
+      answers[currentIndex] = opt;
+      renderQuestion(currentIndex);
+    }
+
+    function clearAnswer() {
+      delete answers[currentIndex];
+      renderQuestion(currentIndex);
+    }
+
+    function toggleMark() {
+      if (marked[currentIndex]) { delete marked[currentIndex]; }
+      else { marked[currentIndex] = true; }
+      renderQuestion(currentIndex);
+    }
+
+    function goTo(index) {
+      if (index < 0 || index >= questions.length) return;
+      renderQuestion(index);
+    }
+
+    function renderGrid() {
+      const grid = document.getElementById('questionGrid');
+      grid.innerHTML = questions.map((_, i) => {
+        let cls = 'grid-btn';
+        if (i === currentIndex) cls += ' current';
+        else if (answers[i] && marked[i]) cls += ' answered marked';
+        else if (answers[i]) cls += ' answered';
+        else if (marked[i]) cls += ' marked';
+        return `<button class="${cls}" onclick="goTo(${i})">${i + 1}</button>`;
+      }).join('');
+    }
+
+    function updateStats() {
+      document.getElementById('answeredCount').textContent = Object.keys(answers).length;
+      document.getElementById('markedCount').textContent = Object.keys(marked).length;
+      document.getElementById('skippedCount').textContent = questions.length - Object.keys(answers).length;
+    }
+
+    async function saveQuestionFromTest(index) {
+      const q = questions[index];
+      const { data: { session } } = await client.auth.getSession();
+      if (!session) { alert('Please log in to save questions.'); return; }
+      const { error } = await client.from('saved_questions').insert({
+        user_id: session.user.id,
+        question_id: q.id,
+        question: q.question,
+        option_a: q.option_a,
+        option_b: q.option_b,
+        option_c: q.option_c,
+        option_d: q.option_d,
+        correct_answer: q.correct_answer,
+        subject: q.subject,
+        chapter: q.chapter,
+        year: q.year,
+        source: 'Personalised Test'
+      });
+      if (error) { alert('Failed to save.'); return; }
+      savedQuestions.add(index);
+      const saveBtn = document.getElementById('saveBtn-' + index);
+      if (saveBtn) {
+        saveBtn.textContent = '✅ Saved';
+        saveBtn.style.borderColor = '#4ade80';
+        saveBtn.style.color = '#4ade80';
+        saveBtn.disabled = true;
+      }
+    }
+
+    function confirmExit() {
+      if (confirm('Are you sure you want to exit? Your progress will be lost.')) {
+        clearInterval(timerInterval);
+        window.location.href = './chat.html';
+      }
+    }
+
+    function confirmSubmit() {
+      const answered = Object.keys(answers).length;
+      const skipped = questions.length - answered;
+      if (confirm(`You have answered ${answered} questions and skipped ${skipped}.\n\nSubmit the test?`)) {
+        submitTest();
+      }
+    }
+
+    async function submitTest() {
+      clearInterval(timerInterval);
+      const timeTaken = Math.floor((Date.now() - startTime) / 1000);
+
+      let correct = 0, wrong = 0, skipped = 0;
+      const results = questions.map((q, i) => {
+        const userAnswer = answers[i];
+        const correctAnswer = q.correct_answer ? q.correct_answer.toLowerCase().trim() : null;
+        let status = 'skipped';
+        if (!userAnswer) { skipped++; status = 'skipped'; }
+        else if (userAnswer === correctAnswer) { correct++; status = 'correct'; }
+        else { wrong++; status = 'wrong'; }
+        return { ...q, userAnswer, status };
+      });
+
+      const score = (correct * 4) - (wrong * 1);
+      const resultData = {
+        score, correct, wrong, skipped,
+        total: questions.length,
+        timeTaken,
+        results,
+        date: new Date().toISOString()
+      };
+
+      await autoSaveMistakes(results);
+      await saveResultToSupabase(resultData);
+      showResults(resultData);
+    }
+
+    async function autoSaveMistakes(results) {
+      try {
+        const { data: { session } } = await client.auth.getSession();
+        if (!session) return;
+        const wrongQuestions = results.filter(q => q.status === 'wrong');
+        for (const q of wrongQuestions) {
+          await client.from('saved_questions').upsert({
+            user_id: session.user.id,
+            question_id: q.id,
+            question: q.question,
+            option_a: q.option_a,
+            option_b: q.option_b,
+            option_c: q.option_c,
+            option_d: q.option_d,
+            correct_answer: q.correct_answer,
+            subject: q.subject,
+            chapter: q.chapter,
+            year: q.year,
+            source: 'Mistake Journal'
+          }, { onConflict: 'user_id,question_id' });
+        }
+      } catch (e) {
+        console.log('Mistake save error:', e);
+      }
+    }
+
+    async function saveResultToSupabase(data) {
+      try {
+        const { data: { session } } = await client.auth.getSession();
+        if (!session) return;
+        const subjectScore = { Biology: 0, Physics: 0, Chemistry: 0 };
+        subjectScore[selectedSubject] = Math.max(0, data.score);
+        await client.from('mock_results').insert({
+          user_id: session.user.id,
+          score: Math.max(0, data.score),
+          correct: data.correct,
+          wrong: data.wrong,
+          skipped: data.skipped,
+          total: data.total,
+          time_taken: data.timeTaken,
+          subject_biology_score: subjectScore.Biology,
+          subject_physics_score: subjectScore.Physics,
+          subject_chemistry_score: subjectScore.Chemistry,
+          source: 'personalised'
+        });
+      } catch (e) {
+        console.log('Result save error:', e);
+      }
+    }
+
+    // ---------- Results screen (adapted from mockresults.html) ----------
+    let resultsData = null;
+
+    function showResults(data) {
+      resultsData = data;
+      document.getElementById('testScreen').style.display = 'none';
+      document.getElementById('resultsScreen').style.display = 'block';
+
+      const maxScore = data.total * 4;
+      document.getElementById('scoreValue').textContent = Math.max(0, data.score);
+      document.getElementById('scoreTotal').textContent = `out of ${maxScore}`;
+      document.getElementById('correctCount').textContent = data.correct;
+      document.getElementById('wrongCount').textContent = data.wrong;
+      document.getElementById('skippedCount2').textContent = data.skipped;
+
+      // Chapter-wise breakdown
+      const chapterData = {};
+      data.results.forEach(q => {
+        const ch = q.chapter && q.chapter.trim() ? q.chapter.trim() : 'Uncategorised';
+        if (!chapterData[ch]) chapterData[ch] = { correct: 0, wrong: 0, skipped: 0, total: 0 };
+        chapterData[ch].total++;
+        if (q.status === 'correct') chapterData[ch].correct++;
+        else if (q.status === 'wrong') chapterData[ch].wrong++;
+        else chapterData[ch].skipped++;
+      });
+
+      const breakdown = document.getElementById('chapterBreakdown');
+      breakdown.innerHTML = '';
+      Object.keys(chapterData).sort().forEach(ch => {
+        const cd = chapterData[ch];
+        const score = Math.max(0, (cd.correct * 4) - cd.wrong);
+        const max = cd.total * 4;
+        const pct = max > 0 ? (score / max) * 100 : 0;
+        breakdown.innerHTML += `
+          <div class="subject-row">
+            <div class="subject-name">${escapeHtml(ch)}</div>
+            <div class="subject-bar-wrap"><div class="subject-bar" style="width:${pct}%;"></div></div>
+            <div class="subject-score">${score}/${max}</div>
+            <div class="subject-detail">${cd.correct}✓ ${cd.wrong}✗ ${cd.skipped}−</div>
+          </div>
+        `;
+      });
+
+      renderQuestionReview('all');
+    }
+
+    function filterQuestions(filter, btn) {
+      document.querySelectorAll('#filterTabs .filter-tab').forEach(t => t.classList.remove('active'));
+      btn.classList.add('active');
+      renderQuestionReview(filter);
+    }
+
+    function renderQuestionReview(filter) {
+      const container = document.getElementById('questionReview');
+      container.innerHTML = '';
+      const filtered = resultsData.results.filter(q => filter === 'all' ? true : q.status === filter);
+
+      if (filtered.length === 0) {
+        container.innerHTML = '<div class="no-results">No questions in this category.</div>';
+        return;
+      }
+
+      filtered.forEach((q, i) => {
+        const card = document.createElement('div');
+        card.className = `question-card ${q.status}`;
+        const correctAns = q.correct_answer ? q.correct_answer.toLowerCase().trim() : null;
+        const userAns = q.userAnswer ? q.userAnswer.toLowerCase().trim() : null;
+        const opts = ['a','b','c','d'].map(opt => {
+          if (!q['option_' + opt]) return '';
+          let cls = 'q-option';
+          if (opt === correctAns) cls += ' correct-ans';
+          if (opt === userAns && opt !== correctAns) cls += ' wrong-ans';
+          return `<div class="${cls}">${opt.toUpperCase()}) ${q['option_' + opt]}</div>`;
+        }).join('');
+
+        const statusText = q.status === 'correct' ? '✅ Correct (+4)' : q.status === 'wrong' ? '❌ Wrong (-1)' : '⬜ Skipped (0)';
+
+        card.innerHTML = `
+          <div class="q-meta">
+            <span>${q.subject || ''}</span>
+            <span>${q.chapter ? escapeHtml(q.chapter) : 'Uncategorised'}</span>
+            <span class="q-status ${q.status}">${statusText}</span>
+          </div>
+          <div class="q-text">${q.question}</div>
+          <div class="q-options">${opts}</div>
+          ${q.userAnswer ? `<div style="font-size:11px;color:#555;margin-bottom:8px;">Your answer: ${q.userAnswer?.toUpperCase()}</div>` : ''}
+          <button id="review-save-${i}" onclick="saveFromReview(${i}, '${filter}')" style="background:transparent;border:1px solid #f97316;color:#f97316;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:11px;font-family:Inter,sans-serif;margin-top:4px;">🔖 Save Question</button>
+        `;
+        container.appendChild(card);
+      });
+    }
+
+    async function saveFromReview(i, filter) {
+      const filtered = resultsData.results.filter(q => filter === 'all' ? true : q.status === filter);
+      const q = filtered[i];
+      const { data: { session } } = await client.auth.getSession();
+      if (!session) { alert('Please log in to save questions.'); return; }
+      const { error } = await client.from('saved_questions').insert({
+        user_id: session.user.id,
+        question_id: q.id,
+        question: q.question,
+        option_a: q.option_a,
+        option_b: q.option_b,
+        option_c: q.option_c,
+        option_d: q.option_d,
+        correct_answer: q.correct_answer,
+        subject: q.subject,
+        chapter: q.chapter,
+        year: q.year,
+        source: 'Personalised Test Results'
+      });
+      if (error) { alert('Failed to save.'); return; }
+      const btn = document.getElementById('review-save-' + i);
+      if (btn) { btn.textContent = '✅ Saved'; btn.style.borderColor = '#4ade80'; btn.style.color = '#4ade80'; btn.disabled = true; }
+    }
+  </script>
+</body>
+</html>

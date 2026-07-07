@@ -200,7 +200,7 @@
 
     // Check if already logged in
     client.auth.getSession().then(({ data: { session } }) => {
-      if (session) window.location.href = './index.html'
+      if (session) window.location.href = './chat.html'
     })
 
     // Toggle Sign In / Sign Up
@@ -218,7 +218,7 @@
     document.getElementById('googleBtn').addEventListener('click', async () => {
       const { error } = await client.auth.signInWithOAuth({
         provider: 'google',
-       options: { redirectTo: 'https://neet-ai-jet.vercel.app/index.html' }
+       options: { redirectTo: 'https://neet-ai-jet.vercel.app/chat.html' }
       })
       if (error) showError(error.message)
     })
@@ -237,7 +237,7 @@
       } else {
         const { error } = await client.auth.signInWithPassword({ email, password })
         if (error) { showError('Invalid email or password.') }
-        else { window.location.href = './index.html' }
+        else { window.location.href = './chat.html' }
       }
     })
 

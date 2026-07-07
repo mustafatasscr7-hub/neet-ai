@@ -98,6 +98,15 @@ class SolveRequest(BaseModel):
     option_d: str = ""
     correct_answer: str = ""
 
+class PersonalisedTestRequest(BaseModel):
+    subject: str
+    chapters: list = []
+    count: int = 10
+
+class PersonalisedCatalogStartRequest(BaseModel):
+    subject: str
+    test_number: int
+
 import hashlib
 
 def get_embedding(text: str):
@@ -346,6 +355,130 @@ async def get_mock_test_questions():
         che_q = random.sample(che, min(45, len(che)))
         questions = bio_q + phy_q + che_q
         return {"questions": questions, "total": len(questions)}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/pyq-chapters")
+async def get_pyq_chapters(subject: str):
+    if subject not in ("Biology", "Physics", "Chemistry"):
+        return {"error": "Invalid subject"}
+    try:
+        headers = {
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}"
+        }
+        response = http_requests.get(
+            f"{SUPABASE_URL}/rest/v1/pyq",
+            headers=headers,
+            params={
+                "subject": f"eq.{subject}",
+                "is_active": "eq.true",
+                "chapter": "not.is.null",
+                "select": "chapter",
+                "limit": 2000
+            }
+        )
+        rows = response.json()
+        counts = {}
+        for r in rows:
+            ch = r.get("chapter")
+            if ch and ch.strip():
+                ch = ch.strip()
+                counts[ch] = counts.get(ch, 0) + 1
+        chapters = [{"name": ch, "count": counts[ch]} for ch in sorted(counts.keys())]
+        return {"chapters": chapters}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.post("/personalised-test-questions")
+async def get_personalised_test_questions(req: PersonalisedTestRequest):
+    if req.subject not in ("Biology", "Physics", "Chemistry"):
+        return {"error": "Invalid subject"}
+    try:
+        import random
+        count = max(1, min(int(req.count), 200))
+        headers = {
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}"
+        }
+        params = {
+            "subject": f"eq.{req.subject}",
+            "is_active": "eq.true",
+            "select": "*",
+            "limit": 1000
+        }
+        chapters = [c.strip() for c in req.chapters if c and c.strip()]
+        if chapters:
+            params["chapter"] = "in.(" + ",".join(chapters) + ")"
+        response = http_requests.get(
+            f"{SUPABASE_URL}/rest/v1/pyq",
+            headers=headers,
+            params=params
+        )
+        pool = response.json()
+        available = len(pool)
+        selected = random.sample(pool, min(count, available)) if available else []
+        return {"questions": selected, "requested": count, "available": available}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/personalised-catalog")
+async def get_personalised_catalog(subject: str):
+    if subject not in ("Biology", "Physics", "Chemistry"):
+        return {"error": "Invalid subject"}
+    try:
+        headers = {
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}"
+        }
+        response = http_requests.get(
+            f"{SUPABASE_URL}/rest/v1/personalised_test_sets",
+            headers=headers,
+            params={
+                "subject": f"eq.{subject}",
+                "select": "test_number,title,description,question_count",
+                "order": "test_number.asc"
+            }
+        )
+        return {"tests": response.json()}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.post("/personalised-catalog-start")
+async def start_personalised_catalog_test(req: PersonalisedCatalogStartRequest):
+    if req.subject not in ("Biology", "Physics", "Chemistry"):
+        return {"error": "Invalid subject"}
+    try:
+        headers = {
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}"
+        }
+        set_response = http_requests.get(
+            f"{SUPABASE_URL}/rest/v1/personalised_test_sets",
+            headers=headers,
+            params={
+                "subject": f"eq.{req.subject}",
+                "test_number": f"eq.{req.test_number}",
+                "select": "question_ids,title",
+                "limit": 1
+            }
+        )
+        rows = set_response.json()
+        if not rows:
+            return {"error": "Test not found"}
+        question_ids = rows[0]["question_ids"]
+        id_list = ",".join(str(i) for i in question_ids)
+        questions_response = http_requests.get(
+            f"{SUPABASE_URL}/rest/v1/pyq",
+            headers=headers,
+            params={
+                "id": f"in.({id_list})",
+                "is_active": "eq.true",
+                "select": "*"
+            }
+        )
+        questions = questions_response.json()
+        return {"questions": questions, "title": rows[0]["title"]}
     except Exception as e:
         return {"error": str(e)}
 
