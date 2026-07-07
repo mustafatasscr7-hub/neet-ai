@@ -56,6 +56,41 @@
     .loading { text-align: center; padding: 60px; color: #555; }
     .spinner { width: 32px; height: 32px; border: 3px solid #1e1e1e; border-top-color: #4f8ef7; border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 16px; }
     @keyframes spin { to { transform: rotate(360deg); } }
+
+    body.light-mode { background: #f5f5f5 !important; color: #0d0d0d !important; }
+    body.light-mode .header { background: #ffffff !important; border-color: #e3e3ea !important; }
+    body.light-mode .header-title { color: #0d0d0d !important; }
+    body.light-mode .btn-outline { border-color: #d5d5dd !important; color: #55555f !important; }
+    body.light-mode .btn-outline:hover { color: #222228 !important; border-color: #c8c8d0 !important; }
+    body.light-mode .lang-toggle { background: #ffffff !important; border-color: #d5d5dd !important; color: #55555f !important; }
+
+    body.light-mode .page-title { color: #0d0d0d !important; }
+    body.light-mode .page-subtitle { color: #7a7a85 !important; }
+
+    body.light-mode .summary-card { background: #ffffff !important; border-color: #e3e3ea !important; box-shadow: 0 1px 3px rgba(0,0,0,0.04) !important; }
+    body.light-mode .summary-card-label { color: #7a7a85 !important; }
+
+    body.light-mode .test-card { background: #ffffff !important; border-color: #e3e3ea !important; box-shadow: 0 1px 3px rgba(0,0,0,0.04) !important; }
+    body.light-mode .test-card:hover { border-color: #d5d5dd !important; background: #f7f7fa !important; }
+    body.light-mode .test-number { background: #e4e4ea !important; color: #55555f !important; }
+    body.light-mode .test-date { color: #7a7a85 !important; }
+    body.light-mode .test-score { color: #0d0d0d !important; }
+    body.light-mode .test-score span { color: #9a9aa5 !important; }
+    body.light-mode .test-stat-skipped { color: #9a9aa5 !important; }
+    body.light-mode .test-time { color: #9a9aa5 !important; }
+
+    body.light-mode .bio-pill { background: #4ade8015 !important; color: #2f9d5e !important; border-color: #4ade8040 !important; }
+    body.light-mode .phy-pill { background: #4f8ef715 !important; color: #3b7de8 !important; border-color: #4f8ef740 !important; }
+    body.light-mode .che-pill { background: #f9731615 !important; color: #c85f13 !important; border-color: #f9731640 !important; }
+
+    body.light-mode .score-circle-bg { stroke: #e4e4ea !important; }
+    body.light-mode .score-pct { color: #0d0d0d !important; }
+
+    body.light-mode .empty-state { color: #7a7a85 !important; }
+    body.light-mode .empty-state h3 { color: #55555f !important; }
+
+    body.light-mode .loading { color: #7a7a85 !important; }
+    body.light-mode .spinner { border-color: #e3e3ea !important; border-top-color: #4f8ef7 !important; }
   </style>
 </head>
 <body>
@@ -86,6 +121,7 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="./theme.js"></script>
   <script src="./i18n.js"></script>
   <script>
     const SUPABASE_URL = 'https://hvhnfttrfouajlyhvunq.supabase.co';

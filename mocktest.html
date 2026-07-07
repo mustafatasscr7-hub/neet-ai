@@ -80,6 +80,73 @@
     .stat-dot { width: 8px; height: 8px; border-radius: 50%; }
     .stat-count { font-weight: 600; color: #ececec; }
     .stat-label { color: #555; }
+
+    /* ===== LIGHT MODE ===== */
+    body.light-mode { background: #f5f5f5 !important; color: #0d0d0d !important; }
+
+    body.light-mode .header { background: #ffffff !important; border-color: #e3e3ea !important; }
+    body.light-mode .header-title { color: #0d0d0d !important; }
+    body.light-mode .header button[onclick="confirmExit()"] { background: #ffffff !important; border-color: #d5d5dd !important; color: #55555f !important; }
+    body.light-mode #startScreen { background: #f5f5f5 !important; }
+    body.light-mode #startScreen h1 { color: #0d0d0d !important; }
+    body.light-mode #startScreen button[onclick*="chat.html"],
+    body.light-mode #startScreen .lang-toggle { background: #ffffff !important; border-color: #d5d5dd !important; color: #55555f !important; }
+    body.light-mode #startScreen h2[style*="color:#fff"],
+    body.light-mode #startScreen h2[style*="color: #fff"] { color: #0d0d0d !important; }
+    body.light-mode #startScreen h2[style*="color:#ef4444"] { color: #ef4444 !important; }
+    body.light-mode #startScreen p[style*="color:#555"] { color: #7a7a85 !important; }
+    body.light-mode #startScreen p[style*="color:#333"] { color: #9a9aa5 !important; }
+    body.light-mode #startScreen div[style*="background:#1a1a1a"] { background: #e3e3ea !important; }
+
+    body.light-mode .timer { background: #4f8ef714 !important; border-color: #4f8ef740 !important; }
+    body.light-mode .timer.warning { background: #f9731614 !important; border-color: #f9731640 !important; }
+    body.light-mode .timer.danger { background: #ef444414 !important; border-color: #ef444440 !important; }
+
+    body.light-mode .question-area::-webkit-scrollbar-thumb { background: #d0d0d5 !important; }
+    body.light-mode .question-number { color: #55555f !important; }
+    body.light-mode .question-text { color: #0d0d0d !important; }
+
+    body.light-mode .option { border-color: #d5d5dd !important; background: #ffffff !important; color: #333338 !important; }
+    body.light-mode .option:hover { border-color: #4f8ef750 !important; background: #4f8ef70d !important; color: #0d0d0d !important; }
+    body.light-mode .option.selected { border-color: #4f8ef7 !important; background: #4f8ef71a !important; color: #0d0d0d !important; }
+    body.light-mode .option-label { border-color: #c8c8d2 !important; }
+    body.light-mode .option.selected .option-label { background: #4f8ef7 !important; border-color: #4f8ef7 !important; color: #ffffff !important; }
+
+    body.light-mode .mark-btn:hover { background: #f9731618 !important; }
+    body.light-mode .mark-btn.marked { background: #f9731618 !important; }
+    body.light-mode .clear-btn { border-color: #d5d5dd !important; color: #55555f !important; }
+    body.light-mode .clear-btn:hover { background: #f0f0f3 !important; color: #0d0d0d !important; }
+    body.light-mode .prev-btn, body.light-mode .next-btn { background: #ffffff !important; border-color: #d5d5dd !important; color: #333338 !important; }
+    body.light-mode .prev-btn:hover, body.light-mode .next-btn:hover { background: #f0f0f3 !important; border-color: #c8c8d2 !important; }
+    body.light-mode .next-btn { background: #4f8ef7 !important; border-color: #4f8ef7 !important; color: #ffffff !important; }
+    body.light-mode .next-btn:hover { background: #3b7de8 !important; }
+
+    body.light-mode .sidebar { background: #ffffff !important; border-color: #e3e3ea !important; }
+    body.light-mode .sidebar-header { border-color: #e3e3ea !important; }
+    body.light-mode .sidebar-header h3 { color: #55555f !important; }
+    body.light-mode .subject-tab { border-color: #d5d5dd !important; color: #55555f !important; }
+    body.light-mode .subject-tab:hover { border-color: #4f8ef750 !important; color: #0d0d0d !important; }
+    body.light-mode .subject-tab.active { background: #4f8ef71a !important; border-color: #4f8ef7 !important; color: #4f8ef7 !important; }
+
+    body.light-mode .question-grid::-webkit-scrollbar-thumb { background: #d0d0d5 !important; }
+    body.light-mode .grid-btn { background: #f0f0f3 !important; border-color: #d5d5dd !important; color: #55555f !important; }
+    body.light-mode .grid-btn:hover { border-color: #4f8ef750 !important; color: #0d0d0d !important; }
+    body.light-mode .grid-btn.current { border-color: #4f8ef7 !important; background: #4f8ef71a !important; color: #4f8ef7 !important; }
+    body.light-mode .grid-btn.answered { background: #4f8ef7 !important; border-color: #4f8ef7 !important; color: #ffffff !important; }
+    body.light-mode .grid-btn.marked { background: #f9731618 !important; border-color: #f97316 !important; color: #f97316 !important; }
+    body.light-mode .grid-btn.answered.marked { background: #a855f7 !important; border-color: #a855f7 !important; color: #ffffff !important; }
+
+    body.light-mode .legend { border-color: #e3e3ea !important; }
+    body.light-mode .legend-item { color: #55555f !important; }
+    body.light-mode .legend-item .legend-dot[style*="background:#1a1a1a"] { background: #f0f0f3 !important; border-color: #d5d5dd !important; }
+
+    body.light-mode .loading-text { color: #55555f !important; }
+    body.light-mode .spinner { border-color: #e3e3ea !important; border-top-color: #4f8ef7 !important; }
+
+    body.light-mode .stats-bar { background: #ffffff !important; border-color: #e3e3ea !important; }
+    body.light-mode .stat-count { color: #0d0d0d !important; }
+    body.light-mode .stat-label { color: #7a7a85 !important; }
+    body.light-mode .stat-dot[style*="background:#555"] { background: #9a9aa5 !important; }
   </style>
 </head>
 <body>
@@ -152,6 +219,7 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="./theme.js"></script>
   <script src="./i18n.js"></script>
   <script>
     let questions = [];

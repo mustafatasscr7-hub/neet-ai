@@ -22,6 +22,29 @@
     html { scroll-behavior: smooth; }
     body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); overflow-x: hidden; }
 
+    body.light-mode {
+      --bg: #f7f7fa;
+      --bg2: #ffffff;
+      --border: #e3e3ea;
+      --text: #14141a;
+      --muted: #6b6b7d;
+      --accent2: #5d3fd3;
+    }
+    body.light-mode nav { background: rgba(255,255,255,0.85) !important; }
+    body.light-mode .nav-logo,
+    body.light-mode .hero h1,
+    body.light-mode .stat-num,
+    body.light-mode .section-title,
+    body.light-mode .feature-title,
+    body.light-mode .plan-name,
+    body.light-mode .plan-price,
+    body.light-mode .footer-brand .footer-logo,
+    body.light-mode .footer-col .footer-heading { color: #0d0d0d !important; }
+    body.light-mode .pricing-card.pro .plan-price { background: linear-gradient(135deg, #0d0d0d, var(--accent2)) !important; -webkit-background-clip: text !important; background-clip: text !important; -webkit-text-fill-color: transparent !important; }
+    body.light-mode .plan-features li.yes { color: #222228 !important; }
+    body.light-mode .plan-btn.free { color: #55555f !important; }
+    body.light-mode .chat-bubble.user-bubble { background: #f0f0f5 !important; }
+
     /* NAV */
     nav { position: fixed; top: 0; left: 0; right: 0; z-index: 100; padding: 18px 48px; display: flex; align-items: center; justify-content: space-between; background: rgba(8,8,16,0.8); backdrop-filter: blur(20px); border-bottom: 1px solid var(--border); }
     .nav-logo { font-family: 'Syne', sans-serif; font-size: 20px; font-weight: 800; letter-spacing: -0.5px; color: #fff; }
@@ -399,6 +422,7 @@
   </div>
 </footer>
 
-<script src="./i18n.js"></script>
+<script src="./theme.js"></script>
+  <script src="./i18n.js"></script>
 </body>
 </html>

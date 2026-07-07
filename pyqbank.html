@@ -75,13 +75,75 @@
     .empty { text-align: center; padding: 60px; color: #555; font-size: 14px; }
     .page-title { font-size: 22px; font-weight: 700; color: #fff; margin-bottom: 4px; }
     .page-subtitle { font-size: 13px; color: #555; margin-bottom: 32px; }
+
+    /* Classes added to JS-rendered inline-styled elements so light-mode can target them */
+    .class-section-heading { font-size: 13px; font-weight: 700; color: #4f8ef7; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 16px; padding: 8px 0; border-bottom: 1px solid #1e1e1e; }
+    .chapter-index-num { font-size: 10px; color: #555; font-weight: 600; }
+    .year-filter-select { background: #0d0d12; border: 1px solid #2a2a35; border-radius: 8px; padding: 6px 12px; color: #ececec; font-size: 13px; font-family: 'Inter', sans-serif; cursor: pointer; }
+    .q-diagram-img { max-width: 100%; border-radius: 8px; margin: 12px 0; border: 1px solid #2a2a2a; }
+    .sol-loading-text { color: #888; }
+    .sol-error-text { color: #ef4444; }
+
+    body.light-mode { background: #f5f5f5 !important; color: #0d0d0d !important; }
+    body.light-mode .header { background: #ffffff !important; border-color: #e3e3ea !important; }
+    body.light-mode .header-title { color: #0d0d0d !important; }
+    body.light-mode .btn-outline { border-color: #d5d5dd !important; color: #55555f !important; }
+    body.light-mode .btn-outline:hover { color: #222228 !important; border-color: #c8c8d0 !important; }
+    body.light-mode .lang-toggle { background: #ffffff !important; border-color: #d5d5dd !important; color: #55555f !important; }
+    body.light-mode button[onclick="handleBack()"] { color: #55555f !important; }
+    body.light-mode button[onclick="handleBack()"]:hover { color: #4f8ef7 !important; }
+
+    body.light-mode .page-title { color: #0d0d0d !important; }
+    body.light-mode .page-subtitle { color: #7a7a85 !important; }
+
+    body.light-mode .subject-card { background: #ffffff !important; border-color: #e3e3ea !important; box-shadow: 0 1px 3px rgba(0,0,0,0.04) !important; }
+    body.light-mode .subject-card.active { background: #f5f5f7 !important; }
+    body.light-mode .subject-name { color: #0d0d0d !important; }
+    body.light-mode .subject-count { color: #7a7a85 !important; }
+
+    body.light-mode .breadcrumb { color: #7a7a85 !important; }
+    body.light-mode .breadcrumb-item.active { color: #0d0d0d !important; }
+    body.light-mode .breadcrumb-sep { color: #b0b0ba !important; }
+
+    body.light-mode .class-card { background: #ffffff !important; border-color: #e3e3ea !important; box-shadow: 0 1px 3px rgba(0,0,0,0.04) !important; }
+    body.light-mode .class-card:hover { border-color: #4f8ef750 !important; }
+    body.light-mode .class-card.active { background: #f5f5f7 !important; border-color: #4f8ef7 !important; }
+    body.light-mode .class-label { color: #55555f !important; }
+
+    body.light-mode .class-section-heading { border-color: #e3e3ea !important; }
+    body.light-mode .chapter-index-num { color: #9a9aa5 !important; }
+
+    body.light-mode .chapter-item { background: #ffffff !important; border-color: #e3e3ea !important; box-shadow: 0 1px 3px rgba(0,0,0,0.04) !important; }
+    body.light-mode .chapter-item:hover { border-color: #4f8ef750 !important; background: #f7f7fa !important; }
+    body.light-mode .chapter-name { color: #0d0d0d !important; }
+    body.light-mode .chapter-count { color: #7a7a85 !important; }
+    body.light-mode .chapter-arrow { color: #b0b0ba !important; }
+
+    body.light-mode .question-card { background: #ffffff !important; border-color: #e3e3ea !important; box-shadow: 0 1px 3px rgba(0,0,0,0.04) !important; }
+    body.light-mode .q-meta { color: #7a7a85 !important; }
+    body.light-mode .q-text { color: #16161d !important; }
+    body.light-mode .q-diagram-img { border-color: #e3e3ea !important; }
+    body.light-mode .q-option { background: #f5f5f7 !important; color: #55555f !important; border-color: #d5d5dd !important; }
+    body.light-mode .q-option:hover { background: #eeeef1 !important; border-color: #c8c8d0 !important; color: #222228 !important; }
+    body.light-mode .q-option.correct { background: #4ade8018 !important; border-color: #4ade80 !important; color: #2f9d5e !important; }
+    body.light-mode .q-option.wrong { background: #ef444418 !important; border-color: #ef4444 !important; color: #d13a3a !important; }
+
+    body.light-mode .sol-btn:hover { background: #a78bfa20 !important; }
+    body.light-mode .sol-div { background: #f5f5f7 !important; border-color: #d5d5dd !important; color: #333338 !important; }
+    body.light-mode .sol-loading-text { color: #7a7a85 !important; }
+
+    body.light-mode .year-filter-select { background: #ffffff !important; border-color: #d5d5dd !important; color: #0d0d0d !important; }
+
+    body.light-mode .loading { color: #7a7a85 !important; }
+    body.light-mode .spinner { border-color: #e3e3ea !important; border-top-color: #4f8ef7 !important; }
+    body.light-mode .empty { color: #7a7a85 !important; }
   </style>
 </head>
 <body>
 
  <div class="header">
     <div style="display:flex;align-items:center;gap:16px;">
-      <button onclick="handleBack()" style="background:transparent;border:none;color:#555;cursor:pointer;font-size:13px;font-family:Inter,sans-serif;padding:0;" onmouseover="this.style.color='#4f8ef7'" onmouseout="this.style.color='#555'" data-i18n="common.back">← Back</button>
+      <button onclick="handleBack()" style="background:transparent;border:none;color:#555;cursor:pointer;font-size:13px;font-family:Inter,sans-serif;padding:0;" onmouseover="this.style.color='#4f8ef7'" onmouseout="this.style.color=(typeof getTheme==='function'&&getTheme()==='light')?'#55555f':'#555'" data-i18n="common.back">← Back</button>
       <span class="header-title">NEET<span>-AI</span> <span data-i18n="pyqbank.headerTitle">PYQ Bank</span></span>
     </div>
     <div style="display:flex;gap:10px;">
@@ -94,6 +156,7 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="./theme.js"></script>
   <script src="./i18n.js"></script>
   <script>
     const SUPABASE_URL = 'https://hvhnfttrfouajlyhvunq.supabase.co';
@@ -177,7 +240,7 @@ function handleBack() {
         return `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;">
           ${chapters.map((name, i) => `
             <div class="chapter-item" style="flex-direction:column;align-items:flex-start;gap:4px;" onclick="showQuestions('${subject}', ${classNum}, '${name.replace(/'/g, "\\'")}')">
-              <div style="font-size:10px;color:#555;font-weight:600;">${localizeNum(i + 1)}</div>
+              <div class="chapter-index-num">${localizeNum(i + 1)}</div>
               <div class="chapter-name" style="font-size:13px;">${chapterName(name)}</div>
               <div class="chapter-count">${counts[name] ? localizeNum(counts[name]) + ' ' + t('pyqbank','qsSuffix') : t('pyqbank','comingSoon')}</div>
             </div>
@@ -189,12 +252,12 @@ function handleBack() {
 
        <div class="page-title" style="margin-bottom:24px;">${subjectName(subject)}</div>
         <div style="margin-bottom:32px;">
-          <div style="font-size:13px;font-weight:700;color:#4f8ef7;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:16px;padding:8px 0;border-bottom:1px solid #1e1e1e;">${t('pyqbank','classWord')} ${localizeNum(11)}</div>
+          <div class="class-section-heading">${t('pyqbank','classWord')} ${localizeNum(11)}</div>
           ${renderChapters(neetSyllabus[subject][11], 11)}
         </div>
 
         <div style="margin-bottom:32px;">
-          <div style="font-size:13px;font-weight:700;color:#4f8ef7;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:16px;padding:8px 0;border-bottom:1px solid #1e1e1e;">${t('pyqbank','classWord')} ${localizeNum(12)}</div>
+          <div class="class-section-heading">${t('pyqbank','classWord')} ${localizeNum(12)}</div>
           ${renderChapters(neetSyllabus[subject][12], 12)}
         </div>
       `;
@@ -255,7 +318,7 @@ document.getElementById('mainContent').innerHTML = `
         <div class="page-title">${chapterName(chapter)}</div>
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
           <div class="page-subtitle">${t('pyqbank','questionOf').replace('{i}', localizeNum(i + 1)).replace('{n}', localizeNum(data.length))}</div>
-          <select onchange="filterByYear(this.value, '${subject}', ${classNum}, '${chapter}')" style="background:#0d0d12;border:1px solid #2a2a35;border-radius:8px;padding:6px 12px;color:#ececec;font-size:13px;font-family:Inter,sans-serif;cursor:pointer;">
+          <select class="year-filter-select" onchange="filterByYear(this.value, '${subject}', ${classNum}, '${chapter}')">
             ${yearOptions}
           </select>
         </div>
@@ -266,7 +329,7 @@ document.getElementById('mainContent').innerHTML = `
             ${q.chapter ? `<span>${chapterName(q.chapter)}</span>` : ''}
           </div>
          <div class="q-text">${q.question}</div>
-${q.diagram_url ? `<img src="${q.diagram_url}" style="max-width:100%;border-radius:8px;margin:12px 0;border:1px solid #2a2a2a;">` : ''}
+${q.diagram_url ? `<img class="q-diagram-img" src="${q.diagram_url}">` : ''}
           <div class="q-options">${opts}</div>
           <div class="q-actions">
             <button class="sol-btn" onclick="toggleSolution(this, '${q.id}', ${JSON.stringify(q).replace(/"/g, '&quot;')})">${t('pyqbank','showSolution')}</button>
@@ -361,7 +424,7 @@ ${q.diagram_url ? `<img src="${q.diagram_url}" style="max-width:100%;border-radi
       btn.textContent = t('pyqbank','generatingSolution');
       btn.disabled = true;
       solDiv.style.display = 'block';
-      solDiv.innerHTML = `<span style="color:#888;">${t('pyqbank','aiSolving')}</span>`;
+      solDiv.innerHTML = `<span class="sol-loading-text">${t('pyqbank','aiSolving')}</span>`;
       try {
         const res = await fetch('https://neet-ai-production.up.railway.app/solve', {
           method: 'POST',
@@ -375,7 +438,7 @@ ${q.diagram_url ? `<img src="${q.diagram_url}" style="max-width:100%;border-radi
         btn.textContent = t('pyqbank','hideSolution');
         btn.disabled = false;
       } catch(e) {
-        solDiv.innerHTML = `<span style="color:#ef4444;">${t('pyqbank','failedSolution')}</span>`;
+        solDiv.innerHTML = `<span class="sol-error-text">${t('pyqbank','failedSolution')}</span>`;
         btn.textContent = t('pyqbank','showSolution');
         btn.disabled = false;
       }

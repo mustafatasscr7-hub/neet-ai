@@ -16,16 +16,97 @@
     body.light-mode .main { background: #f5f5f5 !important; }
     body.light-mode .header { background: #ffffff !important; border-color: #e0e0e0 !important; }
     body.light-mode .chat-window { background: #f5f5f5 !important; }
+    body.light-mode .chat-window::-webkit-scrollbar-thumb { background: #d0d0d5 !important; }
+    body.light-mode .input-area { background: #f5f5f5 !important; }
     body.light-mode .input-wrapper { background: #ffffff !important; border-color: #e0e0e0 !important; }
     body.light-mode .message-bubble.user { background: #e8e8f0 !important; border-color: #d0d0e0 !important; color: #0d0d0d !important; }
     body.light-mode .message-bubble.ai { color: #1a1a1a !important; }
-    body.light-mode .history-item { color: #444 !important; }
-    body.light-mode .history-item:hover { background: #e0e0e0 !important; }
-    body.light-mode .nav-item { color: #555 !important; }
-    body.light-mode .nav-item:hover { background: #e0e0e0 !important; }
-    body.light-mode .new-chat-btn { background: #e8e8e8 !important; border-color: #d0d0d0 !important; color: #0d0d0d !important; }
+    body.light-mode .message-bubble.ai h1, body.light-mode .message-bubble.ai h2, body.light-mode .message-bubble.ai h3 { color: #0d0d0d !important; }
+    body.light-mode .message-bubble.ai strong { color: #0d0d0d !important; }
+    body.light-mode .message-bubble.ai li { color: #333333 !important; }
+    body.light-mode .message-bubble.ai code { background: #e8e8e8 !important; }
+    body.light-mode .avatar.user { background: #e4e4ea !important; border-color: #d5d5dd !important; }
+    body.light-mode .message-time { color: rgba(0,0,0,0.35) !important; }
+    body.light-mode .logo-brand { color: #0d0d0d !important; }
+
+    body.light-mode .new-chat-btn { background: #ffffff !important; border-color: #d5d5dd !important; color: #0d0d0d !important; }
+    body.light-mode .new-chat-btn:hover { background: #f0f0f3 !important; border-color: #c8c8d0 !important; }
+    body.light-mode .sidebar-label { color: #9a9aa5 !important; }
+
+    body.light-mode .history-item { color: #55555f !important; }
+    body.light-mode .history-item:hover { background: #e4e4ea !important; color: #222228 !important; }
+    body.light-mode .history-item.active { background: #e4e4ea !important; color: #0d0d0d !important; }
+    body.light-mode .item-menu-btn { color: #8a8a94 !important; }
+    body.light-mode .item-menu-btn:hover { background: #d5d5dd !important; color: #222228 !important; }
+    body.light-mode .item-menu { background: #ffffff !important; border-color: #e0e0e5 !important; box-shadow: 0 8px 24px rgba(0,0,0,0.12) !important; }
+    body.light-mode .item-menu-option { color: #333338 !important; }
+    body.light-mode .item-menu-option:hover { background: #f0f0f3 !important; }
+    body.light-mode .item-menu-option.delete { color: #ef4444 !important; }
+    body.light-mode .item-menu-divider { background: #e5e5ea !important; }
+
+    body.light-mode .nav-item { color: #55555f !important; }
+    body.light-mode .nav-item:hover { background: #e4e4ea !important; color: #222228 !important; }
+    body.light-mode .nav-item.active { background: #e4e4ea !important; color: #0d0d0d !important; }
+    body.light-mode .sidebar-divider { background: #e0e0e5 !important; }
+    body.light-mode .sidebar-bottom { border-color: #e0e0e5 !important; }
+
+    body.light-mode .profile-btn:hover { background: #e4e4ea !important; }
+    body.light-mode .profile-name { color: #0d0d0d !important; }
+    body.light-mode .profile-plan { color: #7a7a85 !important; }
+    body.light-mode .profile-menu { background: #ffffff !important; border-color: #e0e0e5 !important; box-shadow: 0 -4px 20px rgba(0,0,0,0.1) !important; }
+    body.light-mode .profile-menu-item { color: #333338 !important; }
+    body.light-mode .profile-menu-item:hover { background: #f0f0f3 !important; }
+    body.light-mode .profile-menu-item.logout { color: #ef4444 !important; }
+    body.light-mode .profile-menu-divider { background: #e5e5ea !important; }
+
+    body.light-mode .login-nudge { background: #ffffff !important; border-color: #e0e0e5 !important; }
+    body.light-mode .nudge-text strong { color: #0d0d0d !important; }
+    body.light-mode .nudge-text span { color: #7a7a85 !important; }
+    body.light-mode .nudge-login-btn { border-color: #d5d5dd !important; color: #0d0d0d !important; }
+    body.light-mode .nudge-login-btn:hover { background: #f0f0f3 !important; }
+
+    body.light-mode .welcome h2 { color: #0d0d0d !important; }
+    body.light-mode .welcome-search { background: #ffffff !important; border-color: #d5d5dd !important; }
+    body.light-mode .welcome-search input { color: #0d0d0d !important; }
+    body.light-mode .welcome-search input::placeholder { color: #9a9aa5 !important; }
+    body.light-mode .suggestion { background: #ffffff !important; border-color: #e0e0e5 !important; color: #55555f !important; }
+    body.light-mode .suggestion:hover { background: #f7f7fa !important; border-color: #4f8ef750 !important; color: #222228 !important; }
+
     body.light-mode textarea { color: #0d0d0d !important; }
-    body.light-mode textarea::placeholder { color: #999 !important; }
+    body.light-mode textarea::placeholder { color: #9a9aa5 !important; }
+    body.light-mode .input-hint { color: #b0b0ba !important; }
+
+    body.light-mode .pyq-results { border-color: #e5e5ea !important; }
+    body.light-mode .pyq-item { border-color: #ececf0 !important; color: #55555f !important; }
+    body.light-mode .action-btn { color: #8a8a94 !important; }
+    body.light-mode .action-btn:hover { background: #ececf0 !important; color: #222228 !important; }
+    body.light-mode .muted-text { color: #7a7a85 !important; }
+
+    /* PYQ modal (opened from chat via "Previous Year Questions") */
+    body.light-mode .pyq-modal-box { background: #ffffff !important; color: #0d0d0d !important; box-shadow: 0 12px 40px rgba(0,0,0,0.15) !important; }
+    body.light-mode .pyq-modal-close { color: #8a8a94 !important; }
+    body.light-mode .pyq-q-card { background: #f5f5f7 !important; }
+    body.light-mode .pyq-q-text { color: #16161d !important; }
+    body.light-mode .pyq-opt { color: #333338 !important; background: #ffffff !important; border-color: #d5d5dd !important; }
+
+    /* Settings modal — heavily inline-styled, matched by its literal style values */
+    body.light-mode #settingsModal [style*="background:#1a1a1a"] { background: #ffffff !important; }
+    body.light-mode #settingsModal [style*="background:#111"] { background: #f5f5f5 !important; }
+    body.light-mode #settingsModal [style*="background:#0d0d0d"] { background: #ffffff !important; }
+    body.light-mode #settingsModal [style*="background:#2a2a2a"] { background: #e4e4ea !important; }
+    body.light-mode #settingsModal [style*="border:1px solid #1e1e1e"] { border-color: #e5e5ea !important; }
+    body.light-mode #settingsModal [style*="border-bottom:1px solid #1e1e1e"] { border-bottom-color: #e5e5ea !important; }
+    body.light-mode #settingsModal [style*="border-right:1px solid #1e1e1e"] { border-right-color: #e5e5ea !important; }
+    body.light-mode #settingsModal [style*="border:1px solid #2a2a2a"] { border-color: #d5d5dd !important; }
+    body.light-mode #settingsModal [style*="color:#fff;"] { color: #0d0d0d !important; }
+    body.light-mode #settingsModal [style*="color:#888;"] { color: #6b6b76 !important; }
+    body.light-mode #settingsModal [style*="color:#ececec;"] { color: #16161d !important; }
+    body.light-mode #settingsModal [style*="color:#555;"] { color: #7a7a85 !important; }
+    body.light-mode #settingsModal [style*="color:#666;"] { color: #55555f !important; }
+    body.light-mode #settingsModal [style*="color:#333;"] { color: #b0b0ba !important; }
+    body.light-mode #settingsModal .settings-nav-item { color: #55555f !important; }
+    body.light-mode #settingsModal .settings-nav-item:hover { background: #f0f0f3 !important; }
+    body.light-mode #settingsModal .settings-nav-item.active { color: #0d0d0d !important; background: #e4e4ea !important; }
 
   .sidebar { width: 260px; background: #111111; display: flex; flex-direction: column; padding: 12px 8px; gap: 4px; border-right: 1px solid #1e1e1e; flex-shrink: 0; transition: width 0.2s; overflow: hidden; }
 .sidebar.collapsed { width: 56px; }
@@ -276,7 +357,7 @@
   <div class="header">
       <div style="display:flex;align-items:center;gap:12px;">
        
-        <span style="font-size:15px;font-weight:700;color:#fff;">NEET<span style="color:#4f8ef7;">-AI</span></span>
+        <span class="logo-brand" style="font-size:15px;font-weight:700;color:#fff;">NEET<span style="color:#4f8ef7;">-AI</span></span>
       </div>
     <div style="display:flex;align-items:center;gap:10px;">
 <div style="position:relative;" id="countdownWrapper">
@@ -358,6 +439,7 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="./theme.js"></script>
   <script src="./i18n.js"></script>
   <script>
     const SUPABASE_URL = 'https://hvhnfttrfouajlyhvunq.supabase.co'
@@ -651,6 +733,7 @@ let selectedImage = null;
       modal.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.7);z-index:1000;display:flex;align-items:center;justify-content:center;';
 
     const box = document.createElement('div');
+      box.className = 'pyq-modal-box';
       box.style.cssText = 'background:#1e1e2e;border-radius:12px;padding:24px;max-width:700px;width:90%;max-height:80vh;overflow-y:auto;overflow-x:hidden;color:#fff;';
 
       // Detect dominant subject from questions
@@ -665,6 +748,7 @@ let selectedImage = null;
 
       const closeBtn2 = document.createElement('button');
       closeBtn2.textContent = '✕';
+      closeBtn2.className = 'pyq-modal-close';
       closeBtn2.style.cssText = 'background:none;border:none;color:#888;font-size:20px;cursor:pointer;';
       closeBtn2.onclick = () => modal.remove();
       header.appendChild(closeBtn2);
@@ -679,26 +763,29 @@ let selectedImage = null;
       function renderPYQQuestions(subject) {
         activeSubject = subject;
         // Update tab styles
+        const isLight = getTheme() === 'light';
         tabsDiv.querySelectorAll('button').forEach(btn => {
           const isActive = btn.dataset.subject === subject;
           btn.style.background = isActive ? subjectColors[subject] + '20' : 'transparent';
-          btn.style.borderColor = isActive ? subjectColors[subject] : '#2a2a2a';
-          btn.style.color = isActive ? subjectColors[subject] : '#666';
+          btn.style.borderColor = isActive ? subjectColors[subject] : (isLight ? '#d5d5dd' : '#2a2a2a');
+          btn.style.color = isActive ? subjectColors[subject] : (isLight ? '#55555f' : '#666');
         });
         // Clear and render questions
         questionsDiv.innerHTML = '';
         const filtered = questions.filter(q => q.subject === subject);
         if (filtered.length === 0) {
-          questionsDiv.innerHTML = '<p style="color:#555;text-align:center;padding:24px;">No ' + subject + ' questions found.</p>';
+          questionsDiv.innerHTML = '<p class="muted-text" style="text-align:center;padding:24px;">No ' + subject + ' questions found.</p>';
           return;
         }
         filtered.forEach(function(q) {
           const card = document.createElement('div');
+          card.className = 'pyq-q-card';
           card.style.cssText = 'background:#2a2a3e;border-radius:8px;padding:16px;margin-bottom:12px;border-left:3px solid ' + (subjectColors[subject] || '#a78bfa') + ';overflow:hidden;';
           const meta = document.createElement('div');
           meta.style.cssText = 'color:' + (subjectColors[subject] || '#a78bfa') + ';font-size:12px;margin-bottom:8px;';
           meta.textContent = 'NEET ' + localizeNum(q.year || '') + ' • ' + (subjectName(q.subject) || '');
           const question = document.createElement('div');
+          question.className = 'pyq-q-text';
           question.style.cssText = 'line-height:1.6;margin-bottom:12px;color:#e2e8f0;font-size:14px;';
           question.textContent = q.question;
           const optionsDiv = document.createElement('div');
@@ -707,6 +794,7 @@ let selectedImage = null;
             ['a','b','c','d'].forEach(function(opt) {
               if (q['option_' + opt]) {
                 const optEl = document.createElement('div');
+                optEl.className = 'pyq-opt';
                 optEl.style.cssText = 'padding:6px 10px;margin:4px 0;border-radius:6px;font-size:13px;color:#c4c4c4;background:#1a1a2e;border:1px solid #3a3a5e;';
                 const isCorrect = q.correct_answer && (q.correct_answer.toLowerCase() === opt || q.correct_answer === String(['a','b','c','d'].indexOf(opt)+1));
                 if (isCorrect) optEl.style.cssText += 'border-color:#4ade80;color:#4ade80;';
@@ -745,6 +833,7 @@ let selectedImage = null;
             saveBtn.disabled = true;
           };
           const solDiv = document.createElement('div');
+          solDiv.className = 'pyq-sol-box';
           solDiv.style.cssText = 'display:none;margin-top:12px;padding:12px;background:#1a1a2e;border-radius:6px;border:1px solid #3a3a5e;color:#c4c4c4;line-height:1.7;font-size:13px;overflow-x:auto;word-wrap:break-word;';
           let solved = false;
           let visible = false;
@@ -753,7 +842,7 @@ let selectedImage = null;
               solBtn.textContent = '⏳ Generating solution...';
               solBtn.disabled = true;
               solDiv.style.display = 'block';
-              solDiv.innerHTML = '<span style="color:#888;">AI is solving this question...</span>';
+              solDiv.innerHTML = '<span class="muted-text">AI is solving this question...</span>';
               try {
                 const res = await fetch('https://neet-ai-production.up.railway.app/solve', {
                   method: 'POST',
@@ -791,7 +880,8 @@ let selectedImage = null;
         const tab = document.createElement('button');
         tab.textContent = subjectName(subject);
         tab.dataset.subject = subject;
-        tab.style.cssText = 'padding:6px 16px;border-radius:8px;border:1px solid #2a2a2a;background:transparent;color:#666;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;transition:all 0.2s;';
+        tab.className = 'pyq-subject-tab';
+        tab.style.cssText = 'padding:6px 16px;border-radius:8px;border:1px solid ' + (getTheme() === 'light' ? '#d5d5dd' : '#2a2a2a') + ';background:transparent;color:' + (getTheme() === 'light' ? '#55555f' : '#666') + ';cursor:pointer;font-size:12px;font-family:Inter,sans-serif;transition:all 0.2s;';
         tab.onclick = () => renderPYQQuestions(subject);
         tabsDiv.appendChild(tab);
       });
@@ -1668,13 +1758,17 @@ function openSettings() {
       // Update buttons if in settings
       const darkBtn = document.getElementById('darkBtn');
       const lightBtn = document.getElementById('lightBtn');
+      const activeBtnStyle = 'padding:6px 14px;border-radius:8px;border:1px solid #4f8ef7;background:#4f8ef720;color:#4f8ef7;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;';
+      const inactiveBtnStyle = theme === 'light'
+        ? 'padding:6px 14px;border-radius:8px;border:1px solid #d5d5dd;background:transparent;color:#55555f;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;'
+        : 'padding:6px 14px;border-radius:8px;border:1px solid #2a2a2a;background:transparent;color:#666;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;';
       if (darkBtn && lightBtn) {
         if (theme === 'light') {
-          lightBtn.style.cssText = 'padding:6px 14px;border-radius:8px;border:1px solid #4f8ef7;background:#4f8ef720;color:#4f8ef7;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;';
-          darkBtn.style.cssText = 'padding:6px 14px;border-radius:8px;border:1px solid #2a2a2a;background:transparent;color:#666;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;';
+          lightBtn.style.cssText = activeBtnStyle;
+          darkBtn.style.cssText = inactiveBtnStyle;
         } else {
-          darkBtn.style.cssText = 'padding:6px 14px;border-radius:8px;border:1px solid #4f8ef7;background:#4f8ef720;color:#4f8ef7;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;';
-          lightBtn.style.cssText = 'padding:6px 14px;border-radius:8px;border:1px solid #2a2a2a;background:transparent;color:#666;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;';
+          darkBtn.style.cssText = activeBtnStyle;
+          lightBtn.style.cssText = inactiveBtnStyle;
         }
       }
     }

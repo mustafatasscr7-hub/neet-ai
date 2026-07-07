@@ -140,6 +140,33 @@
     .success-msg { color: #10b981; font-size: 13px; text-align: center; display: none; }
 
     .footer { font-size: 11px; color: #333; text-align: center; }
+
+    body.light-mode { background: #f5f5f5 !important; color: #0d0d0d !important; }
+    body.light-mode .login-box { background: #ffffff !important; border-color: #e3e3ea !important; box-shadow: 0 4px 24px rgba(0,0,0,0.06) !important; }
+    body.light-mode .lang-toggle { background: #ffffff !important; border-color: #d5d5dd !important; color: #55555f !important; }
+    body.light-mode .lang-toggle:hover { background: #f0f0f3 !important; }
+
+    body.light-mode .logo-text { color: #0d0d0d !important; }
+    body.light-mode .title { color: #0d0d0d !important; }
+    body.light-mode .subtitle { color: #7a7a85 !important; }
+
+    body.light-mode .google-btn { background: #ffffff !important; color: #111111 !important; border: 1px solid #d5d5dd !important; }
+    body.light-mode .google-btn:hover { background: #f0f0f3 !important; }
+
+    body.light-mode .divider { color: #9a9aa5 !important; }
+    body.light-mode .divider::before, body.light-mode .divider::after { background: #e3e3ea !important; }
+
+    body.light-mode .input-field { background: #f5f5f7 !important; border-color: #d5d5dd !important; color: #0d0d0d !important; }
+    body.light-mode .input-field::placeholder { color: #9a9aa5 !important; }
+    body.light-mode .input-field:focus { border-color: #4f8ef7 !important; }
+
+    body.light-mode .submit-btn { background: #4f8ef7 !important; color: #ffffff !important; }
+    body.light-mode .submit-btn:hover { background: #3b7de8 !important; }
+
+    body.light-mode .toggle-text { color: #7a7a85 !important; }
+    body.light-mode .toggle-text span { color: #4f8ef7 !important; }
+
+    body.light-mode .footer { color: #9a9aa5 !important; }
   </style>
 </head>
 <body>
@@ -194,6 +221,7 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="./theme.js"></script>
   <script src="./i18n.js"></script>
   <script>
     const SUPABASE_URL = 'https://hvhnfttrfouajlyhvunq.supabase.co'
