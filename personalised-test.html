@@ -40,6 +40,8 @@
     .subject-pill .pill-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dot-color); flex-shrink: 0; }
 
     .catalog-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; }
+    .chapter-group { margin-bottom: 28px; }
+    .chapter-group:last-child { margin-bottom: 0; }
     .catalog-card { position: relative; background: #111; border: 1px solid #1e1e1e; border-radius: 14px; overflow: hidden; cursor: pointer; transition: all 0.2s; }
     .catalog-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 4px; background: var(--accent-color, #4f8ef7); }
     .catalog-card:hover { transform: translateY(-3px); border-color: #2a2a2a; }
@@ -222,22 +224,25 @@
 
   <!-- ===== SETUP SCREEN (catalog) ===== -->
   <div id="setupScreen">
-    <div class="back-fixed"><button onclick="window.location.href='./chat.html'">← Back to NEET-AI</button></div>
+    <div class="back-fixed" style="display:flex;gap:8px;">
+      <button onclick="window.location.href='./chat.html'" data-i18n="personalisedTest.backToNeetAi">← Back to NEET-AI</button>
+      <button class="lang-toggle" onclick="toggleLang()">हिं</button>
+    </div>
     <div class="catalog-wrap">
       <div class="catalog-header">
         <div class="setup-icon">🎯</div>
-        <div class="setup-title">Personalised Test</div>
-        <div class="setup-subtitle">Pick a ready-made test or build your own. Questions are drawn at random from NEET-AI's active question bank.</div>
+        <div class="setup-title" data-i18n="personalisedTest.title">Personalised Test</div>
+        <div class="setup-subtitle" data-i18n="personalisedTest.subtitle">Pick a ready-made test or build your own. Questions are drawn at random from NEET-AI's active question bank.</div>
       </div>
 
       <div id="setupNotice" class="setup-notice"></div>
       <div id="setupError" class="setup-error"></div>
 
       <div class="tab-bar">
-        <button class="tab-btn" onclick="switchTab('fullmock', this)">Full Mock</button>
-        <button class="tab-btn active" onclick="switchTab('subject', this)">Subject</button>
-        <button class="tab-btn" onclick="switchTab('chapter', this)">Chapter</button>
-        <button class="tab-btn" onclick="switchTab('custom', this)">Custom</button>
+        <button class="tab-btn" onclick="switchTab('fullmock', this)" data-i18n="personalisedTest.tabFullMock">Full Mock</button>
+        <button class="tab-btn active" onclick="switchTab('subject', this)" data-i18n="personalisedTest.tabSubject">Subject</button>
+        <button class="tab-btn" onclick="switchTab('chapter', this)" data-i18n="personalisedTest.tabChapter">Chapter</button>
+        <button class="tab-btn" onclick="switchTab('custom', this)" data-i18n="personalisedTest.tabCustom">Custom</button>
       </div>
 
       <!-- FULL MOCK -->
@@ -245,11 +250,11 @@
         <div class="catalog-grid">
           <div class="catalog-card" style="--accent-color:#4f8ef7" onclick="window.location.href='./mocktest.html'">
             <div class="catalog-card-body">
-              <span class="catalog-badge" style="color:#4f8ef7;background:#4f8ef718;border-color:#4f8ef740;">Full Mock</span>
-              <div class="catalog-card-title">📝 Full NEET Mock Test</div>
-              <div class="catalog-card-desc">All 3 subjects together, exact NEET pattern and timing.</div>
-              <div class="catalog-card-meta"><span>📖 180 Questions</span><span>🕐 3h 20m</span></div>
-              <div class="catalog-card-footer">+4 correct · -1 wrong · Max 720 marks</div>
+              <span class="catalog-badge" style="color:#4f8ef7;background:#4f8ef718;border-color:#4f8ef740;" data-i18n="personalisedTest.tabFullMock">Full Mock</span>
+              <div class="catalog-card-title" data-i18n="personalisedTest.fullMockTitle">📝 Full NEET Mock Test</div>
+              <div class="catalog-card-desc" data-i18n="personalisedTest.fullMockDesc">All 3 subjects together, exact NEET pattern and timing.</div>
+              <div class="catalog-card-meta"><span data-i18n="personalisedTest.fullMockQCount">📖 180 Questions</span><span data-i18n="personalisedTest.fullMockTime">🕐 3h 20m</span></div>
+              <div class="catalog-card-footer" data-i18n="personalisedTest.fullMockMarking">+4 correct · -1 wrong · Max 720 marks</div>
             </div>
           </div>
         </div>
@@ -258,9 +263,9 @@
       <!-- SUBJECT -->
       <div class="tab-panel active" id="panel-subject">
         <div class="subject-pills">
-          <button class="subject-pill active" style="--dot-color:#4ade80" onclick="selectSubjectTabSubject('Biology', this)"><span class="pill-dot"></span>Biology</button>
-          <button class="subject-pill" style="--dot-color:#4f8ef7" onclick="selectSubjectTabSubject('Physics', this)"><span class="pill-dot"></span>Physics</button>
-          <button class="subject-pill" style="--dot-color:#f97316" onclick="selectSubjectTabSubject('Chemistry', this)"><span class="pill-dot"></span>Chemistry</button>
+          <button class="subject-pill active" style="--dot-color:#4ade80" onclick="selectSubjectTabSubject('Biology', this)"><span class="pill-dot"></span><span data-i18n="common.biology">Biology</span></button>
+          <button class="subject-pill" style="--dot-color:#4f8ef7" onclick="selectSubjectTabSubject('Physics', this)"><span class="pill-dot"></span><span data-i18n="common.physics">Physics</span></button>
+          <button class="subject-pill" style="--dot-color:#f97316" onclick="selectSubjectTabSubject('Chemistry', this)"><span class="pill-dot"></span><span data-i18n="common.chemistry">Chemistry</span></button>
         </div>
         <div class="catalog-grid" id="subjectCardsGrid">
           <div class="chapter-loading">Loading tests…</div>
@@ -270,11 +275,11 @@
       <!-- CHAPTER -->
       <div class="tab-panel" id="panel-chapter">
         <div class="subject-pills">
-          <button class="subject-pill active" style="--dot-color:#4ade80" onclick="selectChapterTabSubject('Biology', this)"><span class="pill-dot"></span>Biology</button>
-          <button class="subject-pill" style="--dot-color:#4f8ef7" onclick="selectChapterTabSubject('Physics', this)"><span class="pill-dot"></span>Physics</button>
-          <button class="subject-pill" style="--dot-color:#f97316" onclick="selectChapterTabSubject('Chemistry', this)"><span class="pill-dot"></span>Chemistry</button>
+          <button class="subject-pill active" style="--dot-color:#4ade80" onclick="selectChapterTabSubject('Biology', this)"><span class="pill-dot"></span><span data-i18n="common.biology">Biology</span></button>
+          <button class="subject-pill" style="--dot-color:#4f8ef7" onclick="selectChapterTabSubject('Physics', this)"><span class="pill-dot"></span><span data-i18n="common.physics">Physics</span></button>
+          <button class="subject-pill" style="--dot-color:#f97316" onclick="selectChapterTabSubject('Chemistry', this)"><span class="pill-dot"></span><span data-i18n="common.chemistry">Chemistry</span></button>
         </div>
-        <div class="catalog-grid" id="chapterCardsGrid">
+        <div id="chapterCardsGrid">
           <div class="chapter-loading">Loading chapters…</div>
         </div>
       </div>
@@ -283,20 +288,20 @@
       <div class="tab-panel" id="panel-custom">
         <div class="custom-panel">
           <div class="setup-step">
-            <div class="setup-step-label">Subject</div>
+            <div class="setup-step-label" data-i18n="personalisedTest.subjectLabel">Subject</div>
             <div class="subject-grid">
-              <div class="subject-card" onclick="selectSubject('Biology', this)"><span class="subject-emoji">🧬</span>Biology</div>
-              <div class="subject-card" onclick="selectSubject('Physics', this)"><span class="subject-emoji">⚛️</span>Physics</div>
-              <div class="subject-card" onclick="selectSubject('Chemistry', this)"><span class="subject-emoji">🧪</span>Chemistry</div>
+              <div class="subject-card" onclick="selectSubject('Biology', this)"><span class="subject-emoji">🧬</span><span data-i18n="common.biology">Biology</span></div>
+              <div class="subject-card" onclick="selectSubject('Physics', this)"><span class="subject-emoji">⚛️</span><span data-i18n="common.physics">Physics</span></div>
+              <div class="subject-card" onclick="selectSubject('Chemistry', this)"><span class="subject-emoji">🧪</span><span data-i18n="common.chemistry">Chemistry</span></div>
             </div>
           </div>
 
           <div class="setup-step">
             <div class="setup-step-label">
-              <span>Chapters <span class="hint">(optional — leave empty for all)</span></span>
+              <span><span data-i18n="personalisedTest.chaptersLabel">Chapters</span> <span class="hint" data-i18n="personalisedTest.chaptersHint">(optional — leave empty for all)</span></span>
               <span class="chapter-list-actions">
-                <button type="button" onclick="selectAllChapters()">Select all</button>
-                <button type="button" onclick="clearAllChapters()">Clear</button>
+                <button type="button" onclick="selectAllChapters()" data-i18n="personalisedTest.selectAll">Select all</button>
+                <button type="button" onclick="clearAllChapters()" data-i18n="personalisedTest.clearAll">Clear</button>
               </span>
             </div>
             <div class="chapter-list" id="chapterList">
@@ -305,19 +310,19 @@
           </div>
 
           <div class="setup-step">
-            <div class="setup-step-label">Number of Questions</div>
+            <div class="setup-step-label" data-i18n="personalisedTest.numQuestionsLabel">Number of Questions</div>
             <div class="count-grid">
-              <button type="button" class="count-btn selected" onclick="selectCount(10, this)">10</button>
-              <button type="button" class="count-btn" onclick="selectCount(25, this)">25</button>
-              <button type="button" class="count-btn" onclick="selectCount(50, this)">50</button>
-              <button type="button" class="count-btn" onclick="selectCustomCount(this)">Custom</button>
+              <button type="button" class="count-btn selected" onclick="selectCount(10, this)" data-i18n-num>10</button>
+              <button type="button" class="count-btn" onclick="selectCount(25, this)" data-i18n-num>25</button>
+              <button type="button" class="count-btn" onclick="selectCount(50, this)" data-i18n-num>50</button>
+              <button type="button" class="count-btn" onclick="selectCustomCount(this)" data-i18n="personalisedTest.custom">Custom</button>
             </div>
             <div id="customCountWrap">
               <input type="number" id="customCountInput" min="1" max="200" placeholder="e.g. 30" oninput="onCustomCountInput(this)"/>
             </div>
           </div>
 
-          <button class="generate-btn" id="generateBtn" onclick="generateTest()" disabled>Select a subject to continue</button>
+          <button class="generate-btn" id="generateBtn" onclick="generateTest()" disabled data-i18n="personalisedTest.selectSubjectFirst">Select a subject to continue</button>
         </div>
       </div>
     </div>
@@ -327,11 +332,11 @@
   <div id="testScreen">
     <div class="header">
       <div class="header-left">
-        <button onclick="confirmExit()" style="background:transparent;border:1px solid #2a2a2a;color:#888;padding:6px 14px;border-radius:8px;cursor:pointer;font-size:13px;font-family:Inter,sans-serif;margin-right:12px;">← Exit</button>
+        <button onclick="confirmExit()" style="background:transparent;border:1px solid #2a2a2a;color:#888;padding:6px 14px;border-radius:8px;cursor:pointer;font-size:13px;font-family:Inter,sans-serif;margin-right:12px;" data-i18n="personalisedTest.exit">← Exit</button>
         <span class="header-title">NEET<span>-AI</span> Personalised Test</span>
       </div>
       <div class="timer" id="timer">00:00</div>
-      <button class="submit-btn" onclick="confirmSubmit()">Submit Test</button>
+      <button class="submit-btn" onclick="confirmSubmit()" data-i18n="personalisedTest.submitTest">Submit Test</button>
     </div>
 
     <div class="body">
@@ -344,22 +349,22 @@
 
       <div class="sidebar">
         <div class="sidebar-header">
-          <h3>Questions</h3>
+          <h3 data-i18n="mocktest.questions">Questions</h3>
           <div class="sidebar-sub" id="sidebarSubject"></div>
         </div>
         <div class="question-grid">
           <div class="grid" id="questionGrid"></div>
         </div>
         <div class="legend">
-          <div class="legend-item"><div class="legend-dot" style="background:#4f8ef7;"></div> Answered</div>
-          <div class="legend-item"><div class="legend-dot" style="background:#f97316;border:1px solid #f97316;"></div> Marked</div>
-          <div class="legend-item"><div class="legend-dot" style="background:#a855f7;"></div> Marked+Ans</div>
-          <div class="legend-item"><div class="legend-dot" style="background:#1a1a1a;border:1px solid #2a2a2a;"></div> Not visited</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#4f8ef7;"></div> <span data-i18n="mocktest.answered">Answered</span></div>
+          <div class="legend-item"><div class="legend-dot" style="background:#f97316;border:1px solid #f97316;"></div> <span data-i18n="mocktest.marked">Marked</span></div>
+          <div class="legend-item"><div class="legend-dot" style="background:#a855f7;"></div> <span data-i18n="mocktest.markedAns">Marked+Ans</span></div>
+          <div class="legend-item"><div class="legend-dot" style="background:#1a1a1a;border:1px solid #2a2a2a;"></div> <span data-i18n="mocktest.notVisited">Not visited</span></div>
         </div>
         <div class="stats-bar">
-          <div class="stat"><div class="stat-dot" style="background:#4f8ef7;"></div><span class="stat-count" id="answeredCount">0</span><span class="stat-label">Answered</span></div>
-          <div class="stat"><div class="stat-dot" style="background:#f97316;"></div><span class="stat-count" id="markedCount">0</span><span class="stat-label">Marked</span></div>
-          <div class="stat"><div class="stat-dot" style="background:#555;"></div><span class="stat-count" id="skippedCount">0</span><span class="stat-label">Skipped</span></div>
+          <div class="stat"><div class="stat-dot" style="background:#4f8ef7;"></div><span class="stat-count" id="answeredCount">0</span><span class="stat-label" data-i18n="mocktest.answered">Answered</span></div>
+          <div class="stat"><div class="stat-dot" style="background:#f97316;"></div><span class="stat-count" id="markedCount">0</span><span class="stat-label" data-i18n="mocktest.marked">Marked</span></div>
+          <div class="stat"><div class="stat-dot" style="background:#555;"></div><span class="stat-count" id="skippedCount">0</span><span class="stat-label" data-i18n="mocktest.skipped">Skipped</span></div>
         </div>
       </div>
     </div>
@@ -370,36 +375,36 @@
     <div class="header">
       <span class="header-title">NEET<span>-AI</span> Results</span>
       <div style="display:flex;gap:10px;">
-        <button class="btn btn-outline" onclick="window.location.reload()">Take Another Test</button>
+        <button class="btn btn-outline" onclick="window.location.reload()" data-i18n="personalisedTest.takeAnotherTest">Take Another Test</button>
         <button class="btn btn-outline" onclick="window.location.href='./scoreboard.html'">📊 Scoreboard</button>
-        <button class="btn btn-primary" onclick="window.location.href='./chat.html'">Back to NEET-AI</button>
+        <button class="btn btn-primary" onclick="window.location.href='./chat.html'" data-i18n="personalisedTest.backToNeetAiBtn">Back to NEET-AI</button>
       </div>
     </div>
 
     <div class="container">
       <div class="score-card">
-        <div class="score-label">Your Score</div>
+        <div class="score-label" data-i18n="personalisedTest.yourScore">Your Score</div>
         <div class="score-value" id="scoreValue">0</div>
         <div class="score-total" id="scoreTotal">out of 0</div>
         <div class="score-stats">
-          <div class="stat-box"><div class="stat-box-value" style="color:#4ade80;" id="correctCount">0</div><div class="stat-box-label">Correct</div></div>
-          <div class="stat-box"><div class="stat-box-value" style="color:#ef4444;" id="wrongCount">0</div><div class="stat-box-label">Wrong</div></div>
-          <div class="stat-box"><div class="stat-box-value" style="color:#555;" id="skippedCount2">0</div><div class="stat-box-label">Skipped</div></div>
+          <div class="stat-box"><div class="stat-box-value" style="color:#4ade80;" id="correctCount">0</div><div class="stat-box-label" data-i18n="personalisedTest.correct">Correct</div></div>
+          <div class="stat-box"><div class="stat-box-value" style="color:#ef4444;" id="wrongCount">0</div><div class="stat-box-label" data-i18n="personalisedTest.wrong">Wrong</div></div>
+          <div class="stat-box"><div class="stat-box-value" style="color:#555;" id="skippedCount2">0</div><div class="stat-box-label" data-i18n="personalisedTest.skippedLabel">Skipped</div></div>
         </div>
       </div>
 
       <div class="subject-breakdown">
-        <div class="section-title">Chapter-wise Performance</div>
+        <div class="section-title" data-i18n="personalisedTest.chapterWisePerformance">Chapter-wise Performance</div>
         <div id="chapterBreakdown"></div>
       </div>
 
       <div class="review-section">
-        <div class="section-title">Question Review</div>
+        <div class="section-title" data-i18n="personalisedTest.questionReview">Question Review</div>
         <div class="filter-tabs" id="filterTabs">
-          <button class="filter-tab active" onclick="filterQuestions('all', this)">All</button>
-          <button class="filter-tab" onclick="filterQuestions('correct', this)">✅ Correct</button>
-          <button class="filter-tab" onclick="filterQuestions('wrong', this)">❌ Wrong</button>
-          <button class="filter-tab" onclick="filterQuestions('skipped', this)">⬜ Skipped</button>
+          <button class="filter-tab active" onclick="filterQuestions('all', this)" data-i18n="personalisedTest.all">All</button>
+          <button class="filter-tab" onclick="filterQuestions('correct', this)" data-i18n="personalisedTest.correctFilter">✅ Correct</button>
+          <button class="filter-tab" onclick="filterQuestions('wrong', this)" data-i18n="personalisedTest.wrongFilter">❌ Wrong</button>
+          <button class="filter-tab" onclick="filterQuestions('skipped', this)" data-i18n="personalisedTest.skippedFilter">⬜ Skipped</button>
         </div>
         <div id="questionReview"></div>
       </div>
@@ -407,6 +412,7 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="./i18n.js"></script>
   <script>
     const API_BASE = 'https://neet-ai-production.up.railway.app';
     const SUPABASE_URL = 'https://hvhnfttrfouajlyhvunq.supabase.co';
@@ -469,17 +475,17 @@
           return;
         }
         const color = SUBJECT_META[subject].color;
-        grid.innerHTML = tests.map(t => `
-          <div class="catalog-card" data-subject="${escapeHtml(subject)}" data-test-number="${t.test_number}" style="--accent-color:${color}">
+        grid.innerHTML = tests.map(test => `
+          <div class="catalog-card" data-subject="${escapeHtml(subject)}" data-test-number="${test.test_number}" style="--accent-color:${color}">
             <div class="catalog-card-body">
               <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
-                <span class="catalog-badge" style="color:${color};background:${color}18;border-color:${color}40;">Subject Test</span>
-                <span class="catalog-badge" style="color:#4ade80;background:#4ade8018;border-color:#4ade8040;">⚡ Free</span>
+                <span class="catalog-badge" style="color:${color};background:${color}18;border-color:${color}40;">${t('personalisedTest','subjectTestBadge')}</span>
+                <span class="catalog-badge" style="color:#4ade80;background:#4ade8018;border-color:#4ade8040;">${t('personalisedTest','freeBadge')}</span>
               </div>
-              <div class="catalog-card-title">${escapeHtml(t.title)}</div>
-              <div class="catalog-card-desc">${escapeHtml(t.description || '')}</div>
-              <div class="catalog-card-meta"><span>📖 ${t.question_count} Questions</span></div>
-              <div class="catalog-card-footer">+4 correct · -1 wrong · Max ${t.question_count * 4} marks</div>
+              <div class="catalog-card-title">${escapeHtml(test.title)}</div>
+              <div class="catalog-card-desc">${escapeHtml(test.description || '')}</div>
+              <div class="catalog-card-meta"><span>📖 ${localizeNum(test.question_count)} ${t('personalisedTest','questionsWord')}</span></div>
+              <div class="catalog-card-footer">${t('personalisedTest','markingScheme').replace('{n}', localizeNum(test.question_count * 4))}</div>
             </div>
           </div>
         `).join('');
@@ -518,6 +524,99 @@
     }
 
     // ---------- Chapter tab ----------
+    // Per-subject category groupings, each chapter list already in NCERT textbook order
+    // (Class 11 then Class 12) rather than alphabetical.
+    const SUBJECT_CATEGORIES = {
+      Biology: {
+        Botany: [
+          'The Living World', 'Biological Classification', 'Plant Kingdom',
+          'Morphology of Flowering Plants', 'Anatomy of Flowering Plants',
+          'Cell: The Unit of Life', 'Biomolecules', 'Cell Cycle and Cell Division',
+          'Transport in Plants', 'Mineral Nutrition', 'Photosynthesis in Higher Plants', 'Respiration in Plants', 'Plant Growth and Development',
+          'Sexual Reproduction in Flowering Plants',
+          'Principles of Inheritance and Variation', 'Molecular Basis of Inheritance',
+          'Strategies for Enhancement in Food Production', 'Microbes in Human Welfare',
+          'Biotechnology: Principles and Processes', 'Biotechnology and its Applications',
+          'Organisms and Populations', 'Ecosystem', 'Biodiversity and Conservation', 'Environmental Issues'
+        ],
+        Zoology: [
+          'Animal Kingdom', 'Structural Organisation in Animals',
+          'Digestion and Absorption', 'Breathing and Exchange of Gases', 'Body Fluids and Circulation',
+          'Excretory Products and their Elimination', 'Locomotion and Movement', 'Neural Control and Coordination', 'Chemical Coordination and Integration',
+          'Reproduction in Organisms', 'Human Reproduction', 'Reproductive Health',
+          'Evolution', 'Human Health and Disease'
+        ]
+      },
+      Chemistry: {
+        Physical: [
+          'Some Basic Concepts of Chemistry', 'Structure of Atom', 'States of Matter',
+          'Chemical Thermodynamics', 'Equilibrium', 'Redox Reactions', 'Solutions',
+          'Electrochemistry', 'Chemical Kinetics', 'Surface Chemistry'
+        ],
+        Inorganic: [
+          'Classification of Elements and Periodicity in Properties', 'Chemical Bonding and Molecular Structure',
+          'Hydrogen', 's-Block Elements', 'p-Block Elements', 'd- and f-Block Elements',
+          'Coordination Compounds', 'General Principles and Processes of Isolation of Elements'
+        ],
+        Organic: [
+          'Organic Chemistry – Some Basic Principles and Techniques', 'Hydrocarbons', 'Haloalkanes and Haloarenes',
+          'Alcohols, Phenols and Ethers', 'Aldehydes, Ketones and Carboxylic Acids', 'Amines',
+          'Biomolecules', 'Polymers', 'Chemistry in Everyday Life'
+        ]
+      },
+      Physics: {
+        Mechanics: [
+          'Units & Measurements', 'Motion in a Straight Line', 'Motion in a Plane', 'Laws of Motion',
+          'Work Energy & Power', 'System of Particles & Rotational Motion', 'Gravitation'
+        ],
+        'Properties of Matter': [
+          'Mechanical Properties of Solids', 'Mechanical Properties of Fluids', 'Thermal Properties of Matter'
+        ],
+        'Thermodynamics & Kinetic Theory': [
+          'Thermodynamics', 'Kinetic Theory of Gases'
+        ],
+        'Oscillations & Waves': [
+          'Oscillations', 'Waves'
+        ],
+        'Electrostatics & Current': [
+          'Electrostatics', 'Current Electricity'
+        ],
+        Magnetism: [
+          'Moving Charges & Magnetism', 'Magnetism & Matter'
+        ],
+        'Electromagnetic Induction & AC': [
+          'Electromagnetic Induction', 'Alternating Current'
+        ],
+        Optics: [
+          'Ray Optics & Optical Instruments', 'Wave Optics'
+        ],
+        'Modern Physics': [
+          'Dual Nature of Radiation & Matter', 'Atoms', 'Nuclei', 'Semiconductor Electronics'
+        ],
+        'EM Waves': [
+          'Electromagnetic Waves'
+        ]
+      }
+    };
+
+    function groupChaptersByCategory(chapters, categoryOrder) {
+      const chaptersByName = new Map(chapters.map(c => [c.name, c]));
+      const groupNames = Object.keys(categoryOrder);
+      const groups = {};
+      groupNames.forEach(g => { groups[g] = []; });
+      groups.Other = [];
+      groupNames.forEach(group => {
+        categoryOrder[group].forEach(name => {
+          if (chaptersByName.has(name)) {
+            groups[group].push(chaptersByName.get(name));
+            chaptersByName.delete(name);
+          }
+        });
+      });
+      chaptersByName.forEach(ch => groups.Other.push(ch));
+      return { groups, order: [...groupNames, 'Other'] };
+    }
+
     function selectChapterTabSubject(subject, btn) {
       chapterTabSubject = subject;
       document.querySelectorAll('.subject-pill').forEach(p => p.classList.remove('active'));
@@ -537,16 +636,29 @@
           return;
         }
         const color = SUBJECT_META[subject].color;
-        grid.innerHTML = chapters.map(ch => `
+        const cardHtml = ch => `
           <div class="catalog-card" data-subject="${escapeHtml(subject)}" data-chapter="${escapeHtml(ch.name)}" data-count="${ch.count}" style="--accent-color:${color}">
             <div class="catalog-card-body">
-              <span class="catalog-badge" style="color:${color};background:${color}18;border-color:${color}40;">Chapter Test</span>
-              <div class="catalog-card-title">${escapeHtml(ch.name)}</div>
-              <div class="catalog-card-meta"><span>📖 ${ch.count} Question${ch.count === 1 ? '' : 's'} available</span></div>
-              <div class="catalog-card-footer">+4 correct · -1 wrong · Max ${ch.count * 4} marks</div>
+              <span class="catalog-badge" style="color:${color};background:${color}18;border-color:${color}40;">${t('personalisedTest','chapterTestBadge')}</span>
+              <div class="catalog-card-title">${escapeHtml(chapterName(ch.name))}</div>
+              <div class="catalog-card-meta"><span>📖 ${localizeNum(ch.count)} ${t('personalisedTest','questionsAvailable')}</span></div>
+              <div class="catalog-card-footer">${t('personalisedTest','markingScheme').replace('{n}', localizeNum(ch.count * 4))}</div>
             </div>
           </div>
-        `).join('');
+        `;
+
+        if (SUBJECT_CATEGORIES[subject]) {
+          const { groups, order } = groupChaptersByCategory(chapters, SUBJECT_CATEGORIES[subject]);
+          grid.innerHTML = order.filter(g => groups[g].length).map(g => `
+            <div class="chapter-group">
+              <div class="section-title">${g}</div>
+              <div class="catalog-grid">${groups[g].map(cardHtml).join('')}</div>
+            </div>
+          `).join('');
+        } else {
+          grid.innerHTML = `<div class="catalog-grid">${chapters.map(cardHtml).join('')}</div>`;
+        }
+
         grid.querySelectorAll('.catalog-card').forEach(card => {
           card.addEventListener('click', () => startFromCard(card.dataset.subject, [card.dataset.chapter], parseInt(card.dataset.count, 10)));
         });
@@ -564,7 +676,7 @@
 
       const generateBtn = document.getElementById('generateBtn');
       generateBtn.disabled = false;
-      generateBtn.textContent = 'Generate My Test →';
+      generateBtn.textContent = t('personalisedTest','generateBtn');
 
       const chapterList = document.getElementById('chapterList');
       chapterList.innerHTML = '<div class="chapter-loading">Loading chapters…</div>';
@@ -580,7 +692,7 @@
         chapterList.innerHTML = chapters.map(c => `
           <label class="chapter-check">
             <input type="checkbox" value="${escapeHtml(c.name)}" onchange="toggleChapter(this)"/>
-            <span>${escapeHtml(c.name)} <span style="color:#444;">(${c.count})</span></span>
+            <span>${escapeHtml(chapterName(c.name))} <span style="color:#444;">(${localizeNum(c.count)})</span></span>
           </label>
         `).join('');
       } catch (e) {
@@ -702,8 +814,8 @@
     function startTest() {
       document.getElementById('setupScreen').style.display = 'none';
       document.getElementById('testScreen').style.display = 'flex';
-      document.getElementById('sidebarSubject').textContent = selectedSubject +
-        (selectedChapters.size ? ` • ${selectedChapters.size} chapter${selectedChapters.size === 1 ? '' : 's'}` : ' • All chapters');
+      document.getElementById('sidebarSubject').textContent = subjectName(selectedSubject) +
+        (selectedChapters.size ? ` • ${localizeNum(selectedChapters.size)} chapter${selectedChapters.size === 1 ? '' : 's'}` : ' • All chapters');
 
       totalSeconds = Math.max(300, questions.length * 70);
       dangerAt = Math.floor(totalSeconds * 0.15);
@@ -722,7 +834,7 @@
         const m = Math.floor((totalSeconds % 3600) / 60);
         const s = totalSeconds % 60;
         const timerEl = document.getElementById('timer');
-        timerEl.textContent = (h > 0 ? h + ':' : '') + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+        timerEl.textContent = localizeNum((h > 0 ? h + ':' : '') + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0'));
         if (totalSeconds <= dangerAt) { timerEl.className = 'timer danger'; }
         else if (totalSeconds <= warningAt) { timerEl.className = 'timer warning'; }
         if (totalSeconds <= 0) { clearInterval(timerInterval); submitTest(); }
@@ -746,8 +858,8 @@
       const selectedAnswer = answers[index];
 
       document.getElementById('questionArea').innerHTML = `
-        <div class="question-meta">${q.subject || ''}${q.chapter ? ' • ' + escapeHtml(q.chapter) : ''}</div>
-        <div class="question-number">Question ${index + 1} of ${questions.length}</div>
+        <div class="question-meta">${subjectName(q.subject) || ''}${q.chapter ? ' • ' + escapeHtml(chapterName(q.chapter)) : ''}</div>
+        <div class="question-number">${t('mocktest','questionOf').replace('{i}', localizeNum(index + 1)).replace('{n}', localizeNum(questions.length))}</div>
         <div class="question-text">${formatQuestionText(q.question)}</div>
         ${q.diagram_url ? `<img src="${q.diagram_url}" style="max-width:100%;border-radius:8px;margin:12px 0;border:1px solid #2a2a2a;">` : ''}
         <div class="options" id="optionsContainer">
@@ -759,12 +871,12 @@
           ` : '').join('')}
         </div>
         <div class="question-actions">
-          <button class="mark-btn ${isMarked ? 'marked' : ''}" onclick="toggleMark()">${isMarked ? '🔖 Marked' : '🔖 Mark for Review'}</button>
-          <button class="clear-btn" onclick="clearAnswer()">Clear</button>
-          <button class="clear-btn" id="saveBtn-${index}" style="border-color:${savedQuestions.has(index) ? '#4ade80' : '#f97316'};color:${savedQuestions.has(index) ? '#4ade80' : '#f97316'};" onclick="saveQuestionFromTest(${index})" ${savedQuestions.has(index) ? 'disabled' : ''}>${savedQuestions.has(index) ? '✅ Saved' : '🔖 Save'}</button>
+          <button class="mark-btn ${isMarked ? 'marked' : ''}" onclick="toggleMark()">${isMarked ? t('mocktest','marked2') : t('mocktest','markForReview')}</button>
+          <button class="clear-btn" onclick="clearAnswer()">${t('mocktest','clear')}</button>
+          <button class="clear-btn" id="saveBtn-${index}" style="border-color:${savedQuestions.has(index) ? '#4ade80' : '#f97316'};color:${savedQuestions.has(index) ? '#4ade80' : '#f97316'};" onclick="saveQuestionFromTest(${index})" ${savedQuestions.has(index) ? 'disabled' : ''}>${savedQuestions.has(index) ? t('mocktest','saved') : t('mocktest','save')}</button>
           <div class="nav-btns">
-            <button class="prev-btn" onclick="goTo(${index - 1})" ${index === 0 ? 'disabled style="opacity:0.4;cursor:not-allowed;"' : ''}>← Prev</button>
-            <button class="next-btn" onclick="goTo(${index + 1})" ${index === questions.length - 1 ? 'disabled style="opacity:0.4;cursor:not-allowed;"' : ''}>Next →</button>
+            <button class="prev-btn" onclick="goTo(${index - 1})" ${index === 0 ? 'disabled style="opacity:0.4;cursor:not-allowed;"' : ''}>${t('mocktest','prev')}</button>
+            <button class="next-btn" onclick="goTo(${index + 1})" ${index === questions.length - 1 ? 'disabled style="opacity:0.4;cursor:not-allowed;"' : ''}>${t('mocktest','next')}</button>
           </div>
         </div>
       `;
@@ -801,14 +913,14 @@
         else if (answers[i] && marked[i]) cls += ' answered marked';
         else if (answers[i]) cls += ' answered';
         else if (marked[i]) cls += ' marked';
-        return `<button class="${cls}" onclick="goTo(${i})">${i + 1}</button>`;
+        return `<button class="${cls}" onclick="goTo(${i})">${localizeNum(i + 1)}</button>`;
       }).join('');
     }
 
     function updateStats() {
-      document.getElementById('answeredCount').textContent = Object.keys(answers).length;
-      document.getElementById('markedCount').textContent = Object.keys(marked).length;
-      document.getElementById('skippedCount').textContent = questions.length - Object.keys(answers).length;
+      document.getElementById('answeredCount').textContent = localizeNum(Object.keys(answers).length);
+      document.getElementById('markedCount').textContent = localizeNum(Object.keys(marked).length);
+      document.getElementById('skippedCount').textContent = localizeNum(questions.length - Object.keys(answers).length);
     }
 
     async function saveQuestionFromTest(index) {
@@ -943,16 +1055,16 @@
       document.getElementById('resultsScreen').style.display = 'block';
 
       const maxScore = data.total * 4;
-      document.getElementById('scoreValue').textContent = Math.max(0, data.score);
-      document.getElementById('scoreTotal').textContent = `out of ${maxScore}`;
-      document.getElementById('correctCount').textContent = data.correct;
-      document.getElementById('wrongCount').textContent = data.wrong;
-      document.getElementById('skippedCount2').textContent = data.skipped;
+      document.getElementById('scoreValue').textContent = localizeNum(Math.max(0, data.score));
+      document.getElementById('scoreTotal').textContent = t('personalisedTest','outOfN').replace('{n}', localizeNum(maxScore));
+      document.getElementById('correctCount').textContent = localizeNum(data.correct);
+      document.getElementById('wrongCount').textContent = localizeNum(data.wrong);
+      document.getElementById('skippedCount2').textContent = localizeNum(data.skipped);
 
       // Chapter-wise breakdown
       const chapterData = {};
       data.results.forEach(q => {
-        const ch = q.chapter && q.chapter.trim() ? q.chapter.trim() : 'Uncategorised';
+        const ch = q.chapter && q.chapter.trim() ? q.chapter.trim() : '__uncategorised__';
         if (!chapterData[ch]) chapterData[ch] = { correct: 0, wrong: 0, skipped: 0, total: 0 };
         chapterData[ch].total++;
         if (q.status === 'correct') chapterData[ch].correct++;
@@ -967,12 +1079,13 @@
         const score = Math.max(0, (cd.correct * 4) - cd.wrong);
         const max = cd.total * 4;
         const pct = max > 0 ? (score / max) * 100 : 0;
+        const label = ch === '__uncategorised__' ? t('personalisedTest','uncategorised') : chapterName(ch);
         breakdown.innerHTML += `
           <div class="subject-row">
-            <div class="subject-name">${escapeHtml(ch)}</div>
+            <div class="subject-name">${escapeHtml(label)}</div>
             <div class="subject-bar-wrap"><div class="subject-bar" style="width:${pct}%;"></div></div>
-            <div class="subject-score">${score}/${max}</div>
-            <div class="subject-detail">${cd.correct}✓ ${cd.wrong}✗ ${cd.skipped}−</div>
+            <div class="subject-score">${localizeNum(score)}/${localizeNum(max)}</div>
+            <div class="subject-detail">${localizeNum(cd.correct)}✓ ${localizeNum(cd.wrong)}✗ ${localizeNum(cd.skipped)}−</div>
           </div>
         `;
       });
@@ -1009,18 +1122,18 @@
           return `<div class="${cls}">${opt.toUpperCase()}) ${q['option_' + opt]}</div>`;
         }).join('');
 
-        const statusText = q.status === 'correct' ? '✅ Correct (+4)' : q.status === 'wrong' ? '❌ Wrong (-1)' : '⬜ Skipped (0)';
+        const statusText = q.status === 'correct' ? t('mockresults','statusCorrect') : q.status === 'wrong' ? t('mockresults','statusWrong') : t('mockresults','statusSkipped');
 
         card.innerHTML = `
           <div class="q-meta">
-            <span>${q.subject || ''}</span>
-            <span>${q.chapter ? escapeHtml(q.chapter) : 'Uncategorised'}</span>
+            <span>${subjectName(q.subject) || ''}</span>
+            <span>${q.chapter ? escapeHtml(chapterName(q.chapter)) : t('personalisedTest','uncategorised')}</span>
             <span class="q-status ${q.status}">${statusText}</span>
           </div>
           <div class="q-text">${q.question}</div>
           <div class="q-options">${opts}</div>
-          ${q.userAnswer ? `<div style="font-size:11px;color:#555;margin-bottom:8px;">Your answer: ${q.userAnswer?.toUpperCase()}</div>` : ''}
-          <button id="review-save-${i}" onclick="saveFromReview(${i}, '${filter}')" style="background:transparent;border:1px solid #f97316;color:#f97316;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:11px;font-family:Inter,sans-serif;margin-top:4px;">🔖 Save Question</button>
+          ${q.userAnswer ? `<div style="font-size:11px;color:#555;margin-bottom:8px;">${t('mockresults','yourAnswer')} ${q.userAnswer?.toUpperCase()}</div>` : ''}
+          <button id="review-save-${i}" onclick="saveFromReview(${i}, '${filter}')" style="background:transparent;border:1px solid #f97316;color:#f97316;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:11px;font-family:Inter,sans-serif;margin-top:4px;">${t('mockresults','saveQuestion')}</button>
         `;
         container.appendChild(card);
       });

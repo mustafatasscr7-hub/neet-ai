@@ -144,6 +144,10 @@
 </head>
 <body>
 
+  <div style="position:fixed;top:16px;right:16px;">
+    <button class="lang-toggle" onclick="toggleLang()" style="background:transparent;border:1px solid #2a2a2a;color:#888;padding:8px 14px;border-radius:100px;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;">हिं</button>
+  </div>
+
   <div class="login-box">
     <div class="logo">
       <div class="logo-icon">
@@ -166,13 +170,13 @@
 
     <button class="google-btn" id="googleBtn">
       <img src="https://www.google.com/favicon.ico" alt="Google"/>
-      Continue with Google
+      <span data-i18n="login.continueWithGoogle">Continue with Google</span>
     </button>
 
-    <div class="divider">or</div>
+    <div class="divider" data-i18n="login.or">or</div>
 
-    <input type="email" class="input-field" id="emailInput" placeholder="Email address" />
-    <input type="password" class="input-field" id="passwordInput" placeholder="Password" />
+    <input type="email" class="input-field" id="emailInput" placeholder="Email address" data-i18n-placeholder="login.emailPlaceholder" />
+    <input type="password" class="input-field" id="passwordInput" placeholder="Password" data-i18n-placeholder="login.passwordPlaceholder" />
 
     <div class="error-msg" id="errorMsg"></div>
     <div class="success-msg" id="successMsg"></div>
@@ -180,16 +184,17 @@
     <button class="submit-btn" id="submitBtn">Sign In</button>
 
     <div class="toggle-text">
-      Don't have an account? <span id="toggleLink">Sign Up</span>
+      <span id="toggleTextLabel">Don't have an account? </span><span id="toggleLink">Sign Up</span>
     </div>
 
     <div class="footer">
-      By signing in you agree to our Terms of Service.<br/>
-      Answers sourced from NCERT Class 11 & 12.
+      <span data-i18n="login.footerTerms">By signing in you agree to our Terms of Service.</span><br/>
+      <span data-i18n="login.footerSource">Answers sourced from NCERT Class 11 & 12.</span>
     </div>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="./i18n.js"></script>
   <script>
     const SUPABASE_URL = 'https://hvhnfttrfouajlyhvunq.supabase.co'
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh2aG5mdHRyZm91YWpseWh2dW5xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg5NDI1NTIsImV4cCI6MjA5NDUxODU1Mn0.8RaSu5yiTpQCEUGKrFO2y6oiRXSqdBehIz933j9Z7WA'
@@ -203,14 +208,20 @@
       if (session) window.location.href = './chat.html'
     })
 
+    function updateFormText() {
+      document.getElementById('formTitle').textContent = isSignUp ? t('login','createAccount') : t('login','welcomeBack')
+      document.getElementById('formSubtitle').textContent = isSignUp ? t('login','signUpSubtitle') : t('login','signInSubtitle')
+      document.getElementById('submitBtn').textContent = isSignUp ? t('login','signUp') : t('login','signIn')
+      document.getElementById('toggleLink').textContent = isSignUp ? t('login','signIn') : t('login','signUp')
+      document.getElementById('toggleTextLabel').textContent = isSignUp ? t('login','haveAccount') : t('login','noAccount')
+    }
+    updateFormText()
+    document.addEventListener('langchange', updateFormText)
+
     // Toggle Sign In / Sign Up
     document.getElementById('toggleLink').addEventListener('click', () => {
       isSignUp = !isSignUp
-      document.getElementById('formTitle').textContent = isSignUp ? 'Create account' : 'Welcome back'
-      document.getElementById('formSubtitle').textContent = isSignUp ? 'Join NEET-AI and start preparing smarter.' : 'Sign in to continue your NEET preparation.'
-      document.getElementById('submitBtn').textContent = isSignUp ? 'Sign Up' : 'Sign In'
-      document.getElementById('toggleLink').textContent = isSignUp ? 'Sign In' : 'Sign Up'
-      document.querySelector('.toggle-text').childNodes[0].textContent = isSignUp ? 'Already have an account? ' : "Don't have an account? "
+      updateFormText()
       hideMessages()
     })
 
@@ -228,15 +239,15 @@
       const email = document.getElementById('emailInput').value.trim()
       const password = document.getElementById('passwordInput').value.trim()
 
-      if (!email || !password) { showError('Please enter email and password.'); return }
+      if (!email || !password) { showError(t('login','enterEmailPassword')); return }
 
       if (isSignUp) {
         const { error } = await client.auth.signUp({ email, password })
         if (error) { showError(error.message) }
-        else { showSuccess('Account created! Please check your email to verify.') }
+        else { showSuccess(t('login','accountCreated')) }
       } else {
         const { error } = await client.auth.signInWithPassword({ email, password })
-        if (error) { showError('Invalid email or password.') }
+        if (error) { showError(t('login','invalidCredentials')) }
         else { window.location.href = './chat.html' }
       }
     })

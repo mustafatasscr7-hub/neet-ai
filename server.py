@@ -89,6 +89,7 @@ class Message(BaseModel):
     image: str = None
     image_type: str = None
     pdf: str = None
+    language: str = "en"
 
 class SolveRequest(BaseModel):
     question: str
@@ -97,6 +98,7 @@ class SolveRequest(BaseModel):
     option_c: str = ""
     option_d: str = ""
     correct_answer: str = ""
+    language: str = "en"
 
 class PersonalisedTestRequest(BaseModel):
     subject: str
@@ -178,11 +180,11 @@ def search_pyq(query: str, limit: int = 5):
         return response.json()
     return []
 
-def stream_response(text: str, history: list = [], image: str = None, image_type: str = None, pdf: str = None, answer_style: str = "detailed", student_name: str = ""):
+def stream_response(text: str, history: list = [], image: str = None, image_type: str = None, pdf: str = None, answer_style: str = "detailed", student_name: str = "", language: str = "en"):
     print(f"stream_response called - text: {text[:50]}, image: {bool(image)}")
     import hashlib
     if not image and not pdf:
-        answer_hash = hashlib.sha256(text.strip().lower().encode()).hexdigest()
+        answer_hash = hashlib.sha256(f"{language}:{text.strip().lower()}".encode()).hexdigest()
         headers = {
             "apikey": SUPABASE_KEY,
             "Authorization": f"Bearer {SUPABASE_KEY}"
@@ -260,10 +262,11 @@ def stream_response(text: str, history: list = [], image: str = None, image_type
         sys.stdout.flush()
         name_context = f"\n\nThe student name is {student_name}. Use their name naturally and occasionally in responses to make it personal." if student_name else ""
         style_context = "\n\nIMPORTANT: The student has selected CONCISE mode. Give a very short answer — maximum 3 sentences only. No bullet points, no key points section, no memory tricks. Just the core answer." if answer_style == "concise" else ""
+        lang_context = "\n\nIMPORTANT: Respond ONLY in Hindi (Devanagari script). Every word — headings, key points, explanations, memory tricks — must be in Hindi. Do not mix in English words or Hinglish, even for common scientific terms (e.g. write \"गुणसूत्र\" not \"chromosome\"). The ONLY exceptions are: LaTeX/KaTeX math notation, chemical formulas/symbols (e.g. $H_2O$), units (e.g. m/s, kg), and proper nouns like NEET or NCERT — keep those exactly as-is, do not translate or romanize them." if language == "hi" else ""
         with client.messages.stream(
             model=selected_model,
             max_tokens=1024,
-            system=SYSTEM_PROMPT + name_context + style_context,
+            system=SYSTEM_PROMPT + name_context + style_context + lang_context,
             messages=messages
         ) as stream:
             full_answer = ""
@@ -283,10 +286,11 @@ def stream_response(text: str, history: list = [], image: str = None, image_type
 @app.post("/solve")
 async def solve_question(req: SolveRequest):
     client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
+    lang_instruction = "\n5. Respond ONLY in Hindi (Devanagari script) — every word in Hindi, no English words or Hinglish mixing. The ONLY exceptions are LaTeX/KaTeX math notation, chemical formulas/symbols, and units, which stay exactly as-is." if req.language == "hi" else ""
     message = client.messages.create(
         model="claude-sonnet-4-5",
         max_tokens=1024,
-        system="""You are a NEET exam expert. Solve the given NEET question step by step.
+        system=f"""You are a NEET exam expert. Solve the given NEET question step by step.
 
 Format your response exactly like this:
 
@@ -305,32 +309,33 @@ Rules:
 2. Use bullet points only
 3. Keep it short and clear
 4. For ALL math formulas use KaTeX format:
-   - Inline: $formula$ example: $\\frac{1}{2}mv^2$
+   - Inline: $formula$ example: $\\frac{{1}}{{2}}mv^2$
    - Display: $$formula$$ example: $$E = mc^2$$
    - Always write $H_2O$ not H₂O
-   - Always write $v^2$ not v²""",
+   - Always write $v^2$ not v²{lang_instruction}""",
         messages=[
             {"role": "user", "content": f"Solve this NEET question:\n\nQuestion: {req.question}\n\nA) {req.option_a}\nB) {req.option_b}\nC) {req.option_c}\nD) {req.option_d}\n\nCorrect Answer: {req.correct_answer}"}
         ]
     )
     return {"solution": message.content[0].text}
-  
 
-   
+
+
 @app.post("/chat")
 async def chat(message: Message):
     return StreamingResponse(
-       stream_response(message.text, message.history, message.image, message.image_type, message.pdf, message.answer_style, message.student_name),
+       stream_response(message.text, message.history, message.image, message.image_type, message.pdf, message.answer_style, message.student_name, message.language),
         media_type="text/plain"
     )
 
 @app.post("/title")
 async def generate_title(message: Message):
     client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
+    title_lang = "entirely in Hindi (Devanagari script) — every word in Hindi, no English words mixed in" if message.language == "hi" else "in English"
     response = client.messages.create(
      model="claude-haiku-4-5",
         max_tokens=15,
-        system="Generate a short 3-5 word title for this NEET question. Return ONLY the title. No punctuation. No extra words.",
+        system=f"Generate a short 3-5 word title {title_lang} for this NEET question. Return ONLY the title. No punctuation. No extra words.",
         messages=[{"role": "user", "content": message.text}]
     )
     return {"title": response.content[0].text}

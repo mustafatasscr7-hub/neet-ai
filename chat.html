@@ -203,36 +203,36 @@
 
    <button class="new-chat-btn" id="newChatBtn">
       <span class="icon">+</span>
-      <span class="new-chat-text">New Chat</span>
+      <span class="new-chat-text" data-i18n="chat.newChat">New Chat</span>
     </button>
 
     <div class="sidebar-nav">
     <div class="nav-item" id="navSearch" onclick="toggleSearchChats()">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-        <span>Search chats</span>
+        <span data-i18n="chat.searchChats">Search chats</span>
       </div>
       <div id="searchChatsBox" style="display:none;padding:4px 8px;">
-        <input id="searchChatsInput" type="text" placeholder="Search chats..." style="width:100%;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;padding:8px 12px;color:#ececec;font-size:13px;font-family:Inter,sans-serif;outline:none;" />
+        <input id="searchChatsInput" type="text" placeholder="Search chats..." data-i18n-placeholder="chat.searchPlaceholder" style="width:100%;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;padding:8px 12px;color:#ececec;font-size:13px;font-family:Inter,sans-serif;outline:none;" />
       </div>
       <div class="nav-item active" id="navChats">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-        <span>Chats</span>
+        <span data-i18n="chat.chatsHeading">Chats</span>
       </div>
     <div class="nav-item" id="navPYQ" onclick="window.location.href='./pyqbank.html'">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
-        <span>PYQ Bank</span>
+        <span data-i18n="chat.pyqBank">PYQ Bank</span>
       </div>
     <div class="nav-item" id="navSaved" onclick="window.location.href='./savedquestions.html'">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
-        <span>Saved Questions</span>
+        <span data-i18n="chat.savedQuestions">Saved Questions</span>
       </div>
       <div class="nav-item" id="navMockTests" onclick="window.location.href='./mocktest.html'">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
-        <span>Mock Tests</span>
+        <span data-i18n="chat.mockTests">Mock Tests</span>
       </div>
       <div class="nav-item" id="navScoreboard" onclick="window.location.href='./scoreboard.html'">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 20V10"/><path d="M12 20V4"/><path d="M6 20v-6"/></svg>
-        <span>Scoreboard</span>
+        <span data-i18n="chat.scoreboard">Scoreboard</span>
       </div>
     </div>
    <div class="sidebar-divider"></div>
@@ -240,22 +240,22 @@
    <div class="sidebar-divider"></div>
    
     <div class="sidebar-divider"></div>
-    <div class="sidebar-label">Recent</div>
+    <div class="sidebar-label" data-i18n="chat.recent">Recent</div>
     <div class="history-list" id="historyList"></div>
 
     <div class="sidebar-bottom">
       <div class="profile-menu" id="profileMenu" style="display:none">
-        <div class="profile-menu-item" onclick="alert('Coming soon!')">📋 My Plan</div>
-        <div class="profile-menu-item" onclick="document.getElementById('profileMenu').style.display='none';openSettings();">⚙️ Settings</div>
+        <div class="profile-menu-item" onclick="alert('Coming soon!')" data-i18n="chat.myPlan">📋 My Plan</div>
+        <div class="profile-menu-item" onclick="document.getElementById('profileMenu').style.display='none';openSettings();" data-i18n="chat.settings">⚙️ Settings</div>
         <div class="profile-menu-divider"></div>
-        <div class="profile-menu-item logout" id="logoutBtn">↩ Log out</div>
+        <div class="profile-menu-item logout" id="logoutBtn" data-i18n="chat.logout">↩ Log out</div>
       </div>
 
       <div class="profile-btn" id="profileSection" style="display:none" onclick="event.stopPropagation(); const m=document.getElementById('profileMenu'); m.style.display=(m.style.display==='none'||m.style.display==='')?'block':'none';">
         <div class="profile-avatar">S</div>
         <div class="profile-info">
-          <div class="profile-name">Student</div>
-          <div class="profile-plan">Free Plan</div>
+          <div class="profile-name" data-i18n="chat.student">Student</div>
+          <div class="profile-plan" data-i18n="chat.freePlan">Free Plan</div>
         </div>
         <svg viewBox="0 0 24 24" class="profile-more" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>
@@ -264,10 +264,10 @@
 
       <div class="login-nudge" id="loginNudge" style="display:none">
         <div class="nudge-text">
-          <strong>Get answers tailored to you</strong>
-          <span>Log in to save chats and track progress.</span>
+          <strong data-i18n="chat.guestTitle">Get answers tailored to you</strong>
+          <span data-i18n="chat.guestSubtitle">Log in to save chats and track progress.</span>
         </div>
-        <button class="nudge-login-btn" onclick="window.location.href='./login.html'">Log in</button>
+        <button class="nudge-login-btn" onclick="window.location.href='./login.html'" data-i18n="chat.login">Log in</button>
       </div>
     </div>
   </div>
@@ -280,71 +280,71 @@
       </div>
     <div style="display:flex;align-items:center;gap:10px;">
 <div style="position:relative;" id="countdownWrapper">
-          <div style="font-size:12px;font-weight:600;color:#4f8ef7;background:#4f8ef710;border:1px solid #4f8ef730;padding:4px 12px;border-radius:6px;cursor:default;">NEET 2026 — <span id="countdownDays">--</span> days left</div>
+          <div style="font-size:12px;font-weight:600;color:#4f8ef7;background:#4f8ef710;border:1px solid #4f8ef730;padding:4px 12px;border-radius:6px;cursor:default;">NEET <span data-i18n-num>2027</span> — <span id="countdownDays">--</span> <span data-i18n="chat.daysLeft">days left</span></div>
           <div id="countdownTooltip" style="display:none;position:absolute;top:36px;right:0;background:#111;border:1px solid #4f8ef730;border-radius:10px;padding:16px 20px;min-width:200px;z-index:999;box-shadow:0 8px 24px rgba(0,0,0,0.6);">
-            <div style="font-size:10px;color:#4f8ef7;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:10px;">Time until NEET 2026</div>
+            <div style="font-size:10px;color:#4f8ef7;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:10px;" data-i18n="chat.timeUntilNeet">Time until NEET 2027</div>
             <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;text-align:center;">
-              <div><div id="ttDays" style="font-size:22px;font-weight:700;color:#fff;">--</div><div style="font-size:9px;color:#555;margin-top:2px;">DAYS</div></div>
-              <div><div id="ttHours" style="font-size:22px;font-weight:700;color:#fff;">--</div><div style="font-size:9px;color:#555;margin-top:2px;">HRS</div></div>
-              <div><div id="ttMins" style="font-size:22px;font-weight:700;color:#fff;">--</div><div style="font-size:9px;color:#555;margin-top:2px;">MIN</div></div>
-              <div><div id="ttSecs" style="font-size:22px;font-weight:700;color:#4f8ef7;">--</div><div style="font-size:9px;color:#555;margin-top:2px;">SEC</div></div>
+              <div><div id="ttDays" style="font-size:22px;font-weight:700;color:#fff;">--</div><div style="font-size:9px;color:#555;margin-top:2px;" data-i18n="chat.daysLabel">DAYS</div></div>
+              <div><div id="ttHours" style="font-size:22px;font-weight:700;color:#fff;">--</div><div style="font-size:9px;color:#555;margin-top:2px;" data-i18n="chat.hrsLabel">HRS</div></div>
+              <div><div id="ttMins" style="font-size:22px;font-weight:700;color:#fff;">--</div><div style="font-size:9px;color:#555;margin-top:2px;" data-i18n="chat.minLabel">MIN</div></div>
+              <div><div id="ttSecs" style="font-size:22px;font-weight:700;color:#4f8ef7;">--</div><div style="font-size:9px;color:#555;margin-top:2px;" data-i18n="chat.secLabel">SEC</div></div>
             </div>
-            <div style="font-size:10px;color:#333;margin-top:10px;text-align:center;">June 21, 2026</div>
+            <div style="font-size:10px;color:#333;margin-top:10px;text-align:center;" data-i18n="chat.neetDateFormatted">May 4, 2027</div>
           </div>
        </div>
-        <div class="header-badge">⚡ AI Powered</div>
-        <button onclick="window.location.href='./pricing.html'" style="background:transparent;border:1px solid #3a3a3a;color:#ececec;padding:6px 14px;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600;font-family:Inter,sans-serif;transition:all 0.2s;">⭐ Upgrade</button>
+        <div class="header-badge" data-i18n="chat.aiPowered">⚡ AI Powered</div>
+        <button onclick="window.location.href='./pricing.html'" style="background:transparent;border:1px solid #3a3a3a;color:#ececec;padding:6px 14px;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600;font-family:Inter,sans-serif;transition:all 0.2s;" data-i18n="chat.upgradeBtn">⭐ Upgrade</button>
       </div>
     </div>
 
     <div class="chat-window" id="chatWindow">
       <div class="welcome" id="welcome">
-        <h2>What do you want to learn today?</h2>
+        <h2 data-i18n="chat.welcomeHeading">What do you want to learn today?</h2>
         <div class="welcome-search">
-          <input type="text" id="welcomeInput" placeholder="Ask your NEET doubt..." />
+          <input type="text" id="welcomeInput" placeholder="Ask your NEET doubt..." data-i18n-placeholder="chat.askPlaceholder" />
           <button class="welcome-send" id="welcomeSend">
             <svg viewBox="0 0 24 24"><path d="M2 21l21-9L2 3v7l15 2-15 2v7z"/></svg>
           </button>
         </div>
         <div class="suggestions">
-          <div class="suggestion"><span class="suggestion-icon">🔬</span>What is crossing over in meiosis?</div>
-          <div class="suggestion"><span class="suggestion-icon">⚗️</span>Explain Krebs cycle step by step</div>
-          <div class="suggestion"><span class="suggestion-icon">📊</span>Most important Biology topics for NEET 2025</div>
-          <div class="suggestion"><span class="suggestion-icon">🧪</span>Difference between DNA and RNA</div>
+          <div class="suggestion"><span class="suggestion-icon">🔬</span><span data-i18n="chat.suggestion1">What is crossing over in meiosis?</span></div>
+          <div class="suggestion"><span class="suggestion-icon">⚗️</span><span data-i18n="chat.suggestion2">Explain Krebs cycle step by step</span></div>
+          <div class="suggestion"><span class="suggestion-icon">📊</span><span data-i18n="chat.suggestion3">Most important Biology topics for NEET 2025</span></div>
+          <div class="suggestion"><span class="suggestion-icon">🧪</span><span data-i18n="chat.suggestion4">Difference between DNA and RNA</span></div>
         </div>
       </div>
     </div>
 
-   
-    
+
+
     <div class="input-area" id="inputArea" style="display:none">
 <div class="input-wrapper">
        <div id="limitBanner" style="display:none;border-bottom:1px solid #1e1e1e;padding:10px 6px;margin-bottom:6px;align-items:center;justify-content:space-between;gap:12px;">
-          <span style="font-size:12px;color:#666;">⚡ Daily limit reached — resets at midnight</span>
-          <button onclick="alert('Subscription coming soon!')" style="background:linear-gradient(135deg,#4f8ef7,#7c3aed);border:none;color:white;padding:5px 14px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;font-family:Inter,sans-serif;white-space:nowrap;flex-shrink:0;">Upgrade to Pro →</button>
+          <span style="font-size:12px;color:#666;" data-i18n="chat.dailyLimitReached">⚡ Daily limit reached — resets at midnight</span>
+          <button onclick="alert('Subscription coming soon!')" style="background:linear-gradient(135deg,#4f8ef7,#7c3aed);border:none;color:white;padding:5px 14px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;font-family:Inter,sans-serif;white-space:nowrap;flex-shrink:0;" data-i18n="chat.upgradeToPro">Upgrade to Pro →</button>
         </div>
         <div id="attachment-preview-inner"></div>
         <div class="input-row">
         <input type="file" id="imageInput" accept="image/*" style="display:none;" />
         <input type="file" id="pdfInput" accept=".pdf" style="display:none;" />
         <div style="position:relative;">
-          <button id="plusBtn" onclick="togglePlusMenu()" style="background:transparent;border:none;color:#666;cursor:pointer;padding:6px;display:flex;align-items:center;flex-shrink:0;border-radius:8px;" title="Add attachment">
+          <button id="plusBtn" onclick="togglePlusMenu()" style="background:transparent;border:none;color:#666;cursor:pointer;padding:6px;display:flex;align-items:center;flex-shrink:0;border-radius:8px;" title="Add attachment" data-i18n-title="chat.addAttachment">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
           </button>
           <div id="plusMenu" style="display:none;position:absolute;bottom:44px;left:0;background:#1e1e1e;border:1px solid #2a2a2a;border-radius:12px;padding:6px;width:200px;box-shadow:0 8px 24px rgba(0,0,0,0.6);z-index:100;">
             <div onclick="document.getElementById('imageInput').click();togglePlusMenu();" style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;cursor:pointer;font-size:13px;color:#ccc;" onmouseover="this.style.background='#2a2a2a'" onmouseout="this.style.background='transparent'">
-              <span>📷</span> Upload Image
+              <span>📷</span> <span data-i18n="chat.uploadImage">Upload Image</span>
             </div>
             <div onclick="document.getElementById('pdfInput').click();togglePlusMenu();" style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;cursor:pointer;font-size:13px;color:#ccc;" onmouseover="this.style.background='#2a2a2a'" onmouseout="this.style.background='transparent'">
-              <span>📄</span> Upload PDF
+              <span>📄</span> <span data-i18n="chat.uploadPdf">Upload PDF</span>
             </div>
             <div onclick="addURL();togglePlusMenu();" style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;cursor:pointer;font-size:13px;color:#ccc;" onmouseover="this.style.background='#2a2a2a'" onmouseout="this.style.background='transparent'">
-              <span>🌐</span> Add Website URL
+              <span>🌐</span> <span data-i18n="chat.addUrl">Add Website URL</span>
             </div>
           </div>
         </div>
-        <textarea id="userInput" placeholder="Ask your NEET doubt..." rows="1"></textarea>
-        <button id="voiceBtn" onclick="toggleVoice()" style="background:transparent;border:none;color:#666;cursor:pointer;padding:6px;display:flex;align-items:center;flex-shrink:0;border-radius:8px;" title="Voice input">
+        <textarea id="userInput" placeholder="Ask your NEET doubt..." rows="1" data-i18n-placeholder="chat.askPlaceholder"></textarea>
+        <button id="voiceBtn" onclick="toggleVoice()" style="background:transparent;border:none;color:#666;cursor:pointer;padding:6px;display:flex;align-items:center;flex-shrink:0;border-radius:8px;" title="Voice input" data-i18n-title="chat.voiceInput">
           <svg id="voiceIcon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
         </button>
         <button class="send-btn" id="sendBtn">
@@ -353,11 +353,12 @@
         </button>
     </div>
       </div>
-      <div class="input-hint">Answers sourced from NCERT Class 11 & 12 only</div>
+      <div class="input-hint" data-i18n="chat.answerSource">Answers sourced from NCERT Class 11 & 12 only</div>
     </div>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="./i18n.js"></script>
   <script>
     const SUPABASE_URL = 'https://hvhnfttrfouajlyhvunq.supabase.co'
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh2aG5mdHRyZm91YWpseWh2dW5xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg5NDI1NTIsImV4cCI6MjA5NDUxODU1Mn0.8RaSu5yiTpQCEUGKrFO2y6oiRXSqdBehIz933j9Z7WA'
@@ -401,11 +402,11 @@
     });
 
   function updateCountdown() {
-      const neetDate = new Date('2026-06-21T00:00:00');
+      const neetDate = new Date('2027-05-04T00:00:00');
       const now = new Date();
       const diff = neetDate - now;
       if (diff <= 0) {
-        document.getElementById('countdownDays').textContent = '0';
+        document.getElementById('countdownDays').textContent = localizeNum(0);
         return;
       }
       const days = Math.floor(diff / (1000 * 60 * 60 * 24));
@@ -413,13 +414,13 @@
       const mins = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
       const secs = Math.floor((diff % (1000 * 60)) / 1000);
       const el = document.getElementById('countdownDays');
-      if (el) el.textContent = days;
+      if (el) el.textContent = localizeNum(days);
       const td = document.getElementById('ttDays');
       if (td) {
-        document.getElementById('ttDays').textContent = days;
-        document.getElementById('ttHours').textContent = String(hours).padStart(2,'0');
-        document.getElementById('ttMins').textContent = String(mins).padStart(2,'0');
-        document.getElementById('ttSecs').textContent = String(secs).padStart(2,'0');
+        document.getElementById('ttDays').textContent = localizeNum(days);
+        document.getElementById('ttHours').textContent = localizeNum(String(hours).padStart(2,'0'));
+        document.getElementById('ttMins').textContent = localizeNum(String(mins).padStart(2,'0'));
+        document.getElementById('ttSecs').textContent = localizeNum(String(secs).padStart(2,'0'));
       }
     }
     updateCountdown();
@@ -696,7 +697,7 @@ let selectedImage = null;
           card.style.cssText = 'background:#2a2a3e;border-radius:8px;padding:16px;margin-bottom:12px;border-left:3px solid ' + (subjectColors[subject] || '#a78bfa') + ';overflow:hidden;';
           const meta = document.createElement('div');
           meta.style.cssText = 'color:' + (subjectColors[subject] || '#a78bfa') + ';font-size:12px;margin-bottom:8px;';
-          meta.textContent = 'NEET ' + (q.year || '') + ' • ' + (q.subject || '');
+          meta.textContent = 'NEET ' + localizeNum(q.year || '') + ' • ' + (subjectName(q.subject) || '');
           const question = document.createElement('div');
           question.style.cssText = 'line-height:1.6;margin-bottom:12px;color:#e2e8f0;font-size:14px;';
           question.textContent = q.question;
@@ -757,7 +758,7 @@ let selectedImage = null;
                 const res = await fetch('https://neet-ai-production.up.railway.app/solve', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ question: q.question, option_a: q.option_a, option_b: q.option_b, option_c: q.option_c, option_d: q.option_d, correct_answer: q.correct_answer })
+                  body: JSON.stringify({ question: q.question, option_a: q.option_a, option_b: q.option_b, option_c: q.option_c, option_d: q.option_d, correct_answer: q.correct_answer, language: getLang() })
                 });
                 const data = await res.json();
                 solDiv.innerHTML = parseWithMath(data.solution);
@@ -788,7 +789,7 @@ let selectedImage = null;
 
       subjects.forEach(subject => {
         const tab = document.createElement('button');
-        tab.textContent = subject;
+        tab.textContent = subjectName(subject);
         tab.dataset.subject = subject;
         tab.style.cssText = 'padding:6px 16px;border-radius:8px;border:1px solid #2a2a2a;background:transparent;color:#666;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;transition:all 0.2s;';
         tab.onclick = () => renderPYQQuestions(subject);
@@ -1029,7 +1030,7 @@ function copyMessage(btn) {
         const res = await fetch('https://neet-ai-production.up.railway.app/title', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: firstMessage })
+          body: JSON.stringify({ text: firstMessage, language: getLang() })
         });
         const data = await res.json();
         if (data.title) title = data.title;
@@ -1097,7 +1098,7 @@ function copyMessage(btn) {
       const welcome = document.createElement('div');
       welcome.className = 'welcome';
       welcome.id = 'welcome';
-      welcome.innerHTML = '<h2>What do you want to learn today?</h2><div class="welcome-search"><input type="text" id="welcomeInput" placeholder="Ask your NEET doubt..." /><button class="welcome-send" id="welcomeSend"><svg viewBox="0 0 24 24"><path d="M2 21l21-9L2 3v7l15 2-15 2v7z"/></svg></button></div><div class="suggestions"><div class="suggestion"><span class="suggestion-icon">🔬</span>What is crossing over in meiosis?</div><div class="suggestion"><span class="suggestion-icon">⚗️</span>Explain Krebs cycle step by step</div><div class="suggestion"><span class="suggestion-icon">📊</span>Most important Biology topics for NEET 2025</div><div class="suggestion"><span class="suggestion-icon">🧪</span>Difference between DNA and RNA</div></div>';
+      welcome.innerHTML = `<h2>${t('chat','welcomeHeading')}</h2><div class="welcome-search"><input type="text" id="welcomeInput" placeholder="${t('chat','askPlaceholder')}" /><button class="welcome-send" id="welcomeSend"><svg viewBox="0 0 24 24"><path d="M2 21l21-9L2 3v7l15 2-15 2v7z"/></svg></button></div><div class="suggestions"><div class="suggestion"><span class="suggestion-icon">🔬</span>${t('chat','suggestion1')}</div><div class="suggestion"><span class="suggestion-icon">⚗️</span>${t('chat','suggestion2')}</div><div class="suggestion"><span class="suggestion-icon">📊</span>${t('chat','suggestion3')}</div><div class="suggestion"><span class="suggestion-icon">🧪</span>${t('chat','suggestion4')}</div></div>`;
       chatWindow.appendChild(welcome);
       document.getElementById('welcomeInput').addEventListener('keydown', function(e) {
         if (e.key === 'Enter') { input.value = this.value; sendMessage(); }
@@ -1194,7 +1195,8 @@ function copyMessage(btn) {
           text: text || 'Describe this image and answer any NEET related content in it.',
           history: currentConversation.slice(0, -1),
           answer_style: localStorage.getItem('answerStyle') || 'detailed',
-          student_name: document.querySelector('.profile-name')?.textContent || ''
+          student_name: document.querySelector('.profile-name')?.textContent || '',
+          language: getLang()
         };
 
         if (selectedImage) {
@@ -1306,7 +1308,7 @@ function copyMessage(btn) {
   client.from('user_streaks').select('current_streak').eq('user_id', user.id).single().then(({ data }) => {
     if (data && data.current_streak > 0) {
       const streakEl = document.querySelector('.profile-plan');
-      if (streakEl) streakEl.textContent = `🔥 ${data.current_streak} day streak`;
+      if (streakEl) streakEl.textContent = t('chat','streakDays').replace('{n}', localizeNum(data.current_streak));
     }
   });
 });
@@ -1371,26 +1373,26 @@ function openSettings() {
 
           <!-- Left sidebar -->
           <div style="width:200px;background:#111;padding:16px 8px;display:flex;flex-direction:column;gap:2px;border-right:1px solid #1e1e1e;flex-shrink:0;">
-            <div style="font-size:11px;color:#444;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;padding:8px 12px;margin-bottom:4px;">Settings</div>
+            <div style="font-size:11px;color:#444;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;padding:8px 12px;margin-bottom:4px;" data-i18n="chat.settingsTitle">Settings</div>
            <div class="settings-nav-item active" onclick="showSettingsSection('general', this)" style="padding:9px 14px;border-radius:8px;cursor:pointer;font-size:13px;color:#ececec;background:#2a2a2a;display:flex;align-items:center;gap:10px;">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-              General
+              <span data-i18n="chat.settingsGeneral">General</span>
             </div>
             <div class="settings-nav-item" onclick="showSettingsSection('account', this)" style="padding:9px 14px;border-radius:8px;cursor:pointer;font-size:13px;color:#666;display:flex;align-items:center;gap:10px;">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-              Account
+              <span data-i18n="chat.settingsAccount">Account</span>
             </div>
             <div class="settings-nav-item" onclick="showSettingsSection('study', this)" style="padding:9px 14px;border-radius:8px;cursor:pointer;font-size:13px;color:#666;display:flex;align-items:center;gap:10px;">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
-              Study
+              <span data-i18n="chat.settingsStudy">Study</span>
             </div>
             <div class="settings-nav-item" onclick="showSettingsSection('plan', this)" style="padding:9px 14px;border-radius:8px;cursor:pointer;font-size:13px;color:#666;display:flex;align-items:center;gap:10px;">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
-              Plan
+              <span data-i18n="chat.settingsPlan">Plan</span>
             </div>
             <div class="settings-nav-item" onclick="showSettingsSection('privacy', this)" style="padding:9px 14px;border-radius:8px;cursor:pointer;font-size:13px;color:#666;display:flex;align-items:center;gap:10px;">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-              Privacy
+              <span data-i18n="chat.settingsPrivacy">Privacy</span>
             </div>
           </div>
 
@@ -1419,55 +1421,58 @@ function openSettings() {
       
       if (section === 'general') {
         content.innerHTML = `
-          <h2 style="font-size:18px;font-weight:700;color:#fff;margin-bottom:24px;">General</h2>
-          
+          <h2 style="font-size:18px;font-weight:700;color:#fff;margin-bottom:24px;" data-i18n="chat.settingsGeneral">General</h2>
+
           <div style="margin-bottom:32px;">
-            <h3 style="font-size:13px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:16px;">Appearance</h3>
+            <h3 style="font-size:13px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:16px;" data-i18n="chat.appearance">Appearance</h3>
             <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid #1e1e1e;">
               <div>
-                <div style="font-size:14px;color:#ececec;margin-bottom:2px;">Theme</div>
-                <div style="font-size:12px;color:#555;">Choose your preferred look</div>
+                <div style="font-size:14px;color:#ececec;margin-bottom:2px;" data-i18n="chat.theme">Theme</div>
+                <div style="font-size:12px;color:#555;" data-i18n="chat.themeDesc">Choose your preferred look</div>
               </div>
               <div style="display:flex;gap:8px;">
-                <button onclick="setTheme('dark')" id="darkBtn" style="padding:6px 14px;border-radius:8px;border:1px solid #4f8ef7;background:#4f8ef720;color:#4f8ef7;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;">🌙 Dark</button>
-                <button onclick="setTheme('light')" id="lightBtn" style="padding:6px 14px;border-radius:8px;border:1px solid #2a2a2a;background:transparent;color:#666;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;">☀️ Light</button>
+                <button onclick="setTheme('dark')" id="darkBtn" style="padding:6px 14px;border-radius:8px;border:1px solid #4f8ef7;background:#4f8ef720;color:#4f8ef7;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;" data-i18n="chat.themeDark">🌙 Dark</button>
+                <button onclick="setTheme('light')" id="lightBtn" style="padding:6px 14px;border-radius:8px;border:1px solid #2a2a2a;background:transparent;color:#666;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;" data-i18n="chat.themeLight">☀️ Light</button>
               </div>
             </div>
             <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid #1e1e1e;">
               <div>
-                <div style="font-size:14px;color:#ececec;margin-bottom:2px;">Font Size</div>
-                <div style="font-size:12px;color:#555;">Adjust text size across the app</div>
+                <div style="font-size:14px;color:#ececec;margin-bottom:2px;" data-i18n="chat.fontSize">Font Size</div>
+                <div style="font-size:12px;color:#555;" data-i18n="chat.fontSizeDesc">Adjust text size across the app</div>
               </div>
               <div style="display:flex;gap:8px;">
-                <button onclick="setFontSize('small')" style="padding:6px 14px;border-radius:8px;border:1px solid #2a2a2a;background:transparent;color:#666;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;">Small</button>
-                <button onclick="setFontSize('medium')" style="padding:6px 14px;border-radius:8px;border:1px solid #4f8ef7;background:#4f8ef720;color:#4f8ef7;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;">Medium</button>
-                <button onclick="setFontSize('large')" style="padding:6px 14px;border-radius:8px;border:1px solid #2a2a2a;background:transparent;color:#666;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;">Large</button>
+                <button onclick="setFontSize('small')" style="padding:6px 14px;border-radius:8px;border:1px solid #2a2a2a;background:transparent;color:#666;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;" data-i18n="chat.small">Small</button>
+                <button onclick="setFontSize('medium')" style="padding:6px 14px;border-radius:8px;border:1px solid #4f8ef7;background:#4f8ef720;color:#4f8ef7;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;" data-i18n="chat.medium">Medium</button>
+                <button onclick="setFontSize('large')" style="padding:6px 14px;border-radius:8px;border:1px solid #2a2a2a;background:transparent;color:#666;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;" data-i18n="chat.large">Large</button>
               </div>
             </div>
           </div>
 
          <div style="margin-bottom:32px;">
-            <h3 style="font-size:13px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:16px;">AI Behaviour</h3>
+            <h3 style="font-size:13px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:16px;" data-i18n="chat.aiBehaviour">AI Behaviour</h3>
             <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid #1e1e1e;">
               <div>
-                <div style="font-size:14px;color:#ececec;margin-bottom:2px;">Answer Style</div>
-                <div style="font-size:12px;color:#555;">How detailed should AI responses be</div>
+                <div style="font-size:14px;color:#ececec;margin-bottom:2px;" data-i18n="chat.answerStyle">Answer Style</div>
+                <div style="font-size:12px;color:#555;" data-i18n="chat.answerStyleDesc">How detailed should AI responses be</div>
               </div>
               <div style="display:flex;gap:8px;">
-                <button onclick="setAnswerStyle('concise')" id="conciseBtn" style="padding:6px 14px;border-radius:8px;border:1px solid #2a2a2a;background:transparent;color:#666;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;">Concise</button>
-                <button onclick="setAnswerStyle('detailed')" id="detailedBtn" style="padding:6px 14px;border-radius:8px;border:1px solid #4f8ef7;background:#4f8ef720;color:#4f8ef7;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;">Detailed</button>
+                <button onclick="setAnswerStyle('concise')" id="conciseBtn" style="padding:6px 14px;border-radius:8px;border:1px solid #2a2a2a;background:transparent;color:#666;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;" data-i18n="chat.concise">Concise</button>
+                <button onclick="setAnswerStyle('detailed')" id="detailedBtn" style="padding:6px 14px;border-radius:8px;border:1px solid #4f8ef7;background:#4f8ef720;color:#4f8ef7;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;" data-i18n="chat.detailed">Detailed</button>
               </div>
             </div>
           </div>
 
           <div style="margin-bottom:32px;">
-            <h3 style="font-size:13px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:16px;">Language</h3>
+            <h3 style="font-size:13px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:16px;" data-i18n="chat.language">Language</h3>
             <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid #1e1e1e;">
               <div>
-                <div style="font-size:14px;color:#ececec;margin-bottom:2px;">App Language</div>
-                <div style="font-size:12px;color:#555;">Hindi support coming soon</div>
+                <div style="font-size:14px;color:#ececec;margin-bottom:2px;" data-i18n="chat.appLanguage">App Language</div>
+                <div style="font-size:12px;color:#555;" data-i18n="chat.appLanguageDesc">Switch the whole site and AI answers between English and Hindi</div>
               </div>
-              <div style="padding:6px 14px;border-radius:8px;border:1px solid #2a2a2a;background:transparent;color:#555;font-size:12px;">English only</div>
+              <div style="display:flex;gap:8px;">
+                <button onclick="setAppLanguage('en')" id="langEnBtn" style="padding:6px 14px;border-radius:8px;border:1px solid #2a2a2a;background:transparent;color:#666;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;">English</button>
+                <button onclick="setAppLanguage('hi')" id="langHiBtn" style="padding:6px 14px;border-radius:8px;border:1px solid #2a2a2a;background:transparent;color:#666;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;">हिंदी</button>
+              </div>
             </div>
           </div>
         `;
@@ -1483,29 +1488,32 @@ function openSettings() {
               darkBtn.style.cssText = 'padding:6px 14px;border-radius:8px;border:1px solid #2a2a2a;background:transparent;color:#666;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;';
             }
           }
+          updateLangButtons();
+          applyTranslations();
         }, 50);
       } else if (section === 'account') {
         content.innerHTML = `
-          <h2 style="font-size:18px;font-weight:700;color:#fff;margin-bottom:24px;">Account</h2>
+          <h2 style="font-size:18px;font-weight:700;color:#fff;margin-bottom:24px;" data-i18n="chat.settingsAccount">Account</h2>
           <div style="margin-bottom:32px;">
-            <h3 style="font-size:13px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:16px;">Profile</h3>
+            <h3 style="font-size:13px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:16px;" data-i18n="chat.profile">Profile</h3>
             <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid #1e1e1e;">
-              <div style="font-size:14px;color:#ececec;">Display Name</div>
+              <div style="font-size:14px;color:#ececec;" data-i18n="chat.displayName">Display Name</div>
               <div style="display:flex;gap:8px;align-items:center;">
                 <input id="displayNameInput" type="text" value="${document.querySelector('.profile-name')?.textContent || ''}" style="background:#0d0d0d;border:1px solid #2a2a2a;border-radius:8px;padding:6px 12px;color:#ececec;font-size:13px;font-family:Inter,sans-serif;outline:none;width:200px;" />
                 <button onclick="saveDisplayName()" style="padding:6px 14px;border-radius:8px;background:#4f8ef7;border:none;color:white;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;">Save</button>
               </div>
             </div>
             <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid #1e1e1e;">
-              <div style="font-size:14px;color:#ececec;">Email</div>
+              <div style="font-size:14px;color:#ececec;" data-i18n="chat.email">Email</div>
               <div style="font-size:13px;color:#555;">${document.querySelector('.profile-plan')?.textContent || 'Not logged in'}</div>
             </div>
             <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid #1e1e1e;">
-              <div style="font-size:14px;color:#ececec;">Password</div>
-              <button onclick="resetPassword()" style="padding:6px 14px;border-radius:8px;border:1px solid #2a2a2a;background:transparent;color:#888;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;">Send Reset Email</button>
+              <div style="font-size:14px;color:#ececec;" data-i18n="chat.password">Password</div>
+              <button onclick="resetPassword()" style="padding:6px 14px;border-radius:8px;border:1px solid #2a2a2a;background:transparent;color:#888;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;" data-i18n="chat.sendResetEmail">Send Reset Email</button>
             </div>
           </div>
         `;
+        applyTranslations();
       } else if (section === 'study') {
         const savedTarget = localStorage.getItem('targetScore') || '600';
         const savedGoal = localStorage.getItem('dailyGoal') || '10';
@@ -1526,31 +1534,31 @@ function openSettings() {
         } catch(e) {}
 
         content.innerHTML = `
-          <h2 style="font-size:18px;font-weight:700;color:#fff;margin-bottom:24px;">Study</h2>
+          <h2 style="font-size:18px;font-weight:700;color:#fff;margin-bottom:24px;" data-i18n="chat.settingsStudy">Study</h2>
           <div style="margin-bottom:32px;">
-            <h3 style="font-size:13px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:16px;">Usage Stats</h3>
+            <h3 style="font-size:13px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:16px;" data-i18n="chat.usageStats">Usage Stats</h3>
             <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px;">
               <div style="background:#0d0d0d;border:1px solid #1e1e1e;border-radius:10px;padding:16px;text-align:center;">
-                <div style="font-size:28px;font-weight:700;color:#4f8ef7;">${todayCount}</div>
-                <div style="font-size:11px;color:#555;margin-top:4px;">Today</div>
+                <div style="font-size:28px;font-weight:700;color:#4f8ef7;">${localizeNum(todayCount)}</div>
+                <div style="font-size:11px;color:#555;margin-top:4px;" data-i18n="chat.today">Today</div>
               </div>
               <div style="background:#0d0d0d;border:1px solid #1e1e1e;border-radius:10px;padding:16px;text-align:center;">
-                <div style="font-size:28px;font-weight:700;color:#4f8ef7;">${weekCount}</div>
-                <div style="font-size:11px;color:#555;margin-top:4px;">This Week</div>
+                <div style="font-size:28px;font-weight:700;color:#4f8ef7;">${localizeNum(weekCount)}</div>
+                <div style="font-size:11px;color:#555;margin-top:4px;" data-i18n="chat.thisWeek">This Week</div>
               </div>
               <div style="background:#0d0d0d;border:1px solid #1e1e1e;border-radius:10px;padding:16px;text-align:center;">
-                <div style="font-size:28px;font-weight:700;color:#4f8ef7;">${totalCount}</div>
-                <div style="font-size:11px;color:#555;margin-top:4px;">Total</div>
+                <div style="font-size:28px;font-weight:700;color:#4f8ef7;">${localizeNum(totalCount)}</div>
+                <div style="font-size:11px;color:#555;margin-top:4px;" data-i18n="chat.total">Total</div>
               </div>
             </div>
           </div>
-          
+
           <div style="margin-bottom:32px;">
-            <h3 style="font-size:13px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:16px;">Goals</h3>
+            <h3 style="font-size:13px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:16px;" data-i18n="chat.goals">Goals</h3>
             <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid #1e1e1e;">
               <div>
-                <div style="font-size:14px;color:#ececec;margin-bottom:2px;">Target NEET Score</div>
-                <div style="font-size:12px;color:#555;">Out of 720</div>
+                <div style="font-size:14px;color:#ececec;margin-bottom:2px;" data-i18n="chat.targetScore">Target NEET Score</div>
+                <div style="font-size:12px;color:#555;" data-i18n="chat.outOf720">Out of 720</div>
               </div>
               <div style="display:flex;gap:8px;align-items:center;">
                 <input id="targetScoreInput" type="number" min="0" max="720" value="${savedTarget}" style="background:#0d0d0d;border:1px solid #2a2a2a;border-radius:8px;padding:6px 12px;color:#ececec;font-size:13px;font-family:Inter,sans-serif;outline:none;width:100px;" />
@@ -1559,8 +1567,8 @@ function openSettings() {
             </div>
             <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid #1e1e1e;">
               <div>
-                <div style="font-size:14px;color:#ececec;margin-bottom:2px;">Daily Question Goal</div>
-                <div style="font-size:12px;color:#555;">Questions per day</div>
+                <div style="font-size:14px;color:#ececec;margin-bottom:2px;" data-i18n="chat.dailyGoal">Daily Question Goal</div>
+                <div style="font-size:12px;color:#555;" data-i18n="chat.questionsPerDay">Questions per day</div>
               </div>
               <div style="display:flex;gap:8px;align-items:center;">
                 <input id="dailyGoalInput" type="number" min="1" max="100" value="${savedGoal}" style="background:#0d0d0d;border:1px solid #2a2a2a;border-radius:8px;padding:6px 12px;color:#ececec;font-size:13px;font-family:Inter,sans-serif;outline:none;width:100px;" />
@@ -1569,49 +1577,72 @@ function openSettings() {
             </div>
           </div>
           <div>
-            <h3 style="font-size:13px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:16px;">Notifications</h3>
+            <h3 style="font-size:13px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:16px;" data-i18n="chat.notifications">Notifications</h3>
             <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid #1e1e1e;">
               <div>
-                <div style="font-size:14px;color:#ececec;margin-bottom:2px;">Study Reminders</div>
-                <div style="font-size:12px;color:#555;">Coming soon after deployment</div>
+                <div style="font-size:14px;color:#ececec;margin-bottom:2px;" data-i18n="chat.studyReminders">Study Reminders</div>
+                <div style="font-size:12px;color:#555;" data-i18n="chat.comingSoonDeploy">Coming soon after deployment</div>
               </div>
-              <div style="font-size:12px;color:#333;padding:6px 14px;border:1px solid #1e1e1e;border-radius:8px;">Coming Soon</div>
+              <div style="font-size:12px;color:#333;padding:6px 14px;border:1px solid #1e1e1e;border-radius:8px;" data-i18n="chat.comingSoon">Coming Soon</div>
             </div>
           </div>
         `;
+        applyTranslations();
       } else if (section === 'plan') {
         content.innerHTML = `
-          <h2 style="font-size:18px;font-weight:700;color:#fff;margin-bottom:24px;">Plan</h2>
+          <h2 style="font-size:18px;font-weight:700;color:#fff;margin-bottom:24px;" data-i18n="chat.settingsPlan">Plan</h2>
           <div style="background:#111;border:1px solid #1e1e1e;border-radius:12px;padding:24px;margin-bottom:16px;">
-            <div style="font-size:13px;color:#555;margin-bottom:4px;">Current Plan</div>
-            <div style="font-size:22px;font-weight:700;color:#fff;margin-bottom:8px;">Free</div>
-            <div style="font-size:13px;color:#666;margin-bottom:20px;">5 questions per day · Basic access</div>
-            <button onclick="window.open('./pricing.html','_blank')" style="background:#4f8ef7;border:none;color:white;padding:10px 24px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;font-family:Inter,sans-serif;">⭐ Upgrade to Pro — ₹299/month</button>
+            <div style="font-size:13px;color:#555;margin-bottom:4px;" data-i18n="chat.currentPlan">Current Plan</div>
+            <div style="font-size:22px;font-weight:700;color:#fff;margin-bottom:8px;" data-i18n="chat.free">Free</div>
+            <div style="font-size:13px;color:#666;margin-bottom:20px;" data-i18n="chat.freePlanDesc">5 questions per day · Basic access</div>
+            <button onclick="window.open('./pricing.html','_blank')" style="background:#4f8ef7;border:none;color:white;padding:10px 24px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;font-family:Inter,sans-serif;" data-i18n="chat.upgradeToProFull">⭐ Upgrade to Pro — ₹299/month</button>
           </div>
-          <div style="font-size:12px;color:#333;text-align:center;">Payments powered by Razorpay · Launching soon</div>
+          <div style="font-size:12px;color:#333;text-align:center;" data-i18n="chat.razorpayNote">Payments powered by Razorpay · Launching soon</div>
         `;
+        applyTranslations();
       } else if (section === 'privacy') {
         content.innerHTML = `
-          <h2 style="font-size:18px;font-weight:700;color:#fff;margin-bottom:24px;">Privacy</h2>
+          <h2 style="font-size:18px;font-weight:700;color:#fff;margin-bottom:24px;" data-i18n="chat.settingsPrivacy">Privacy</h2>
           <div style="margin-bottom:32px;">
-            <h3 style="font-size:13px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:16px;">Data</h3>
+            <h3 style="font-size:13px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:16px;" data-i18n="chat.data">Data</h3>
             <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid #1e1e1e;">
               <div>
-                <div style="font-size:14px;color:#ececec;margin-bottom:2px;">Chat History</div>
-                <div style="font-size:12px;color:#555;">All your chats are saved securely</div>
+                <div style="font-size:14px;color:#ececec;margin-bottom:2px;" data-i18n="chat.chatHistory">Chat History</div>
+                <div style="font-size:12px;color:#555;" data-i18n="chat.chatHistoryDesc">All your chats are saved securely</div>
               </div>
-              <div style="font-size:12px;color:#4ade80;">Protected</div>
+              <div style="font-size:12px;color:#4ade80;" data-i18n="chat.protected">Protected</div>
             </div>
             <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid #1e1e1e;">
               <div>
-                <div style="font-size:14px;color:#ececec;margin-bottom:2px;">Delete Account</div>
-                <div style="font-size:12px;color:#555;">Permanently delete your account and data</div>
+                <div style="font-size:14px;color:#ececec;margin-bottom:2px;" data-i18n="chat.deleteAccount">Delete Account</div>
+                <div style="font-size:12px;color:#555;" data-i18n="chat.deleteAccountDesc">Permanently delete your account and data</div>
               </div>
-              <button onclick="deleteAccount()" style="padding:6px 14px;border-radius:8px;border:1px solid #ef4444;background:transparent;color:#ef4444;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;">Delete Account</button>
+              <button onclick="deleteAccount()" style="padding:6px 14px;border-radius:8px;border:1px solid #ef4444;background:transparent;color:#ef4444;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;" data-i18n="chat.deleteAccount">Delete Account</button>
             </div>
           </div>
         `;
+        applyTranslations();
       }
+    }
+
+    function updateLangButtons() {
+      const enBtn = document.getElementById('langEnBtn');
+      const hiBtn = document.getElementById('langHiBtn');
+      if (!enBtn || !hiBtn) return;
+      const active = 'padding:6px 14px;border-radius:8px;border:1px solid #4f8ef7;background:#4f8ef720;color:#4f8ef7;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;';
+      const inactive = 'padding:6px 14px;border-radius:8px;border:1px solid #2a2a2a;background:transparent;color:#666;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;';
+      if (getLang() === 'hi') {
+        hiBtn.style.cssText = active;
+        enBtn.style.cssText = inactive;
+      } else {
+        enBtn.style.cssText = active;
+        hiBtn.style.cssText = inactive;
+      }
+    }
+
+    function setAppLanguage(lang) {
+      setLang(lang);
+      updateLangButtons();
     }
 
     function setTheme(theme) {

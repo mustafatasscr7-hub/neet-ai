@@ -81,16 +81,20 @@
 
  <div class="header">
     <div style="display:flex;align-items:center;gap:16px;">
-      <button onclick="handleBack()" style="background:transparent;border:none;color:#555;cursor:pointer;font-size:13px;font-family:Inter,sans-serif;padding:0;" onmouseover="this.style.color='#4f8ef7'" onmouseout="this.style.color='#555'">← Back</button>
-      <span class="header-title">NEET<span>-AI</span> PYQ Bank</span>
+      <button onclick="handleBack()" style="background:transparent;border:none;color:#555;cursor:pointer;font-size:13px;font-family:Inter,sans-serif;padding:0;" onmouseover="this.style.color='#4f8ef7'" onmouseout="this.style.color='#555'" data-i18n="common.back">← Back</button>
+      <span class="header-title">NEET<span>-AI</span> <span data-i18n="pyqbank.headerTitle">PYQ Bank</span></span>
     </div>
-    <button class="btn btn-primary" onclick="window.location.href='./chat.html'">Back to NEET-AI</button>
+    <div style="display:flex;gap:10px;">
+      <button class="lang-toggle" onclick="toggleLang(); showSubjects();" style="background:transparent;border:1px solid #2a2a2a;color:#888;padding:8px 14px;border-radius:8px;cursor:pointer;font-size:13px;font-family:Inter,sans-serif;">हिं</button>
+      <button class="btn btn-primary" onclick="window.location.href='./chat.html'" data-i18n="personalisedTest.backToNeetAiBtn">Back to NEET-AI</button>
+    </div>
   </div>
   <div class="container">
     <div id="mainContent"></div>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="./i18n.js"></script>
   <script>
     const SUPABASE_URL = 'https://hvhnfttrfouajlyhvunq.supabase.co';
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh2aG5mdHRyZm91YWpseWh2dW5xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg5NDI1NTIsImV4cCI6MjA5NDUxODU1Mn0.8RaSu5yiTpQCEUGKrFO2y6oiRXSqdBehIz933j9Z7WA';
@@ -146,15 +150,15 @@ function handleBack() {
    function showSubjects() {
       selectedSubject = null; selectedClass = null; selectedChapter = null;
       document.getElementById('mainContent').innerHTML = `
-       
-      
-        <div class="page-title">PYQ Bank</div>
+
+
+        <div class="page-title">${t('pyqbank','pageTitle')}</div>
         <div class="subject-grid">
           ${Object.entries(subjectConfig).map(([name, cfg]) => `
             <div class="subject-card" style="--color:${cfg.color}" onclick="showClasses('${name}')">
               <div class="subject-icon">${cfg.icon}</div>
-              <div class="subject-name">${name}</div>
-              <div class="subject-count">Click to browse</div>
+              <div class="subject-name">${subjectName(name)}</div>
+              <div class="subject-count">${t('pyqbank','clickToBrowse')}</div>
             </div>
           `).join('')}
         </div>
@@ -173,24 +177,24 @@ function handleBack() {
         return `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;">
           ${chapters.map((name, i) => `
             <div class="chapter-item" style="flex-direction:column;align-items:flex-start;gap:4px;" onclick="showQuestions('${subject}', ${classNum}, '${name.replace(/'/g, "\\'")}')">
-              <div style="font-size:10px;color:#555;font-weight:600;">${i + 1}</div>
-              <div class="chapter-name" style="font-size:13px;">${name}</div>
-              <div class="chapter-count">${counts[name] ? counts[name] + ' Qs' : 'Coming soon'}</div>
+              <div style="font-size:10px;color:#555;font-weight:600;">${localizeNum(i + 1)}</div>
+              <div class="chapter-name" style="font-size:13px;">${chapterName(name)}</div>
+              <div class="chapter-count">${counts[name] ? localizeNum(counts[name]) + ' ' + t('pyqbank','qsSuffix') : t('pyqbank','comingSoon')}</div>
             </div>
           `).join('')}
         </div>`;
       };
 
       document.getElementById('mainContent').innerHTML = `
-      
-       <div class="page-title" style="margin-bottom:24px;">${subject}</div>
+
+       <div class="page-title" style="margin-bottom:24px;">${subjectName(subject)}</div>
         <div style="margin-bottom:32px;">
-          <div style="font-size:13px;font-weight:700;color:#4f8ef7;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:16px;padding:8px 0;border-bottom:1px solid #1e1e1e;">Class 11</div>
+          <div style="font-size:13px;font-weight:700;color:#4f8ef7;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:16px;padding:8px 0;border-bottom:1px solid #1e1e1e;">${t('pyqbank','classWord')} ${localizeNum(11)}</div>
           ${renderChapters(neetSyllabus[subject][11], 11)}
         </div>
 
         <div style="margin-bottom:32px;">
-          <div style="font-size:13px;font-weight:700;color:#4f8ef7;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:16px;padding:8px 0;border-bottom:1px solid #1e1e1e;">Class 12</div>
+          <div style="font-size:13px;font-weight:700;color:#4f8ef7;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:16px;padding:8px 0;border-bottom:1px solid #1e1e1e;">${t('pyqbank','classWord')} ${localizeNum(12)}</div>
           ${renderChapters(neetSyllabus[subject][12], 12)}
         </div>
       `;
@@ -205,15 +209,15 @@ function handleBack() {
       selectedChapter = chapter;
       document.getElementById('mainContent').innerHTML = `
         <div class="breadcrumb">
-          <span class="breadcrumb-item" onclick="showSubjects()">PYQ Bank</span>
+          <span class="breadcrumb-item" onclick="showSubjects()">${t('pyqbank','pageTitle')}</span>
           <span class="breadcrumb-sep">›</span>
-          <span class="breadcrumb-item" onclick="showClasses('${subject}')">${subject}</span>
+          <span class="breadcrumb-item" onclick="showClasses('${subject}')">${subjectName(subject)}</span>
           <span class="breadcrumb-sep">›</span>
-          <span class="breadcrumb-item" onclick="showChapters('${subject}', ${classNum})">Class ${classNum}</span>
+          <span class="breadcrumb-item" onclick="showChapters('${subject}', ${classNum})">${t('pyqbank','classWord')} ${localizeNum(classNum)}</span>
           <span class="breadcrumb-sep">›</span>
-          <span class="breadcrumb-item active">${chapter}</span>
+          <span class="breadcrumb-item active">${chapterName(chapter)}</span>
         </div>
-        <div class="loading"><div class="spinner"></div>Loading questions...</div>
+        <div class="loading"><div class="spinner"></div>${t('pyqbank','loadingQuestions')}</div>
       `;
 
       let query = client.from('pyq').select('*').eq('subject', subject).eq('class', classNum).eq('chapter', chapter).eq('is_active', true);
@@ -222,7 +226,7 @@ const { data, error } = await query;
 
       if (error || !data || data.length === 0) {
         document.getElementById('mainContent').innerHTML = `
-          <div class="empty">No questions found for this chapter.</div>
+          <div class="empty">${t('pyqbank','noQuestionsFound')}</div>
         `;
         return;
       }
@@ -245,33 +249,33 @@ const { data, error } = await query;
      
 
      const years = [...new Set(currentChapterQuestions.map(q => q.year).filter(Boolean))].sort((a,b) => b-a);
-const yearOptions = `<option value="">All Years</option>` + years.map(y => `<option value="${y}">${y}</option>`).join('');
+const yearOptions = `<option value="">${t('pyqbank','allYears')}</option>` + years.map(y => `<option value="${y}">${localizeNum(y)}</option>`).join('');
 
 document.getElementById('mainContent').innerHTML = `
-        <div class="page-title">${chapter}</div>
+        <div class="page-title">${chapterName(chapter)}</div>
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
-          <div class="page-subtitle">Question ${i + 1} of ${data.length}</div>
+          <div class="page-subtitle">${t('pyqbank','questionOf').replace('{i}', localizeNum(i + 1)).replace('{n}', localizeNum(data.length))}</div>
           <select onchange="filterByYear(this.value, '${subject}', ${classNum}, '${chapter}')" style="background:#0d0d12;border:1px solid #2a2a35;border-radius:8px;padding:6px 12px;color:#ececec;font-size:13px;font-family:Inter,sans-serif;cursor:pointer;">
             ${yearOptions}
           </select>
         </div>
         <div class="question-card">
           <div class="q-meta">
-            <span class="q-year">${q.year || ''}</span>
-            <span>${q.subject || ''}</span>
-            ${q.chapter ? `<span>${q.chapter}</span>` : ''}
+            <span class="q-year">${localizeNum(q.year || '')}</span>
+            <span>${subjectName(q.subject) || ''}</span>
+            ${q.chapter ? `<span>${chapterName(q.chapter)}</span>` : ''}
           </div>
          <div class="q-text">${q.question}</div>
 ${q.diagram_url ? `<img src="${q.diagram_url}" style="max-width:100%;border-radius:8px;margin:12px 0;border:1px solid #2a2a2a;">` : ''}
           <div class="q-options">${opts}</div>
           <div class="q-actions">
-            <button class="sol-btn" onclick="toggleSolution(this, '${q.id}', ${JSON.stringify(q).replace(/"/g, '&quot;')})">💡 Show Solution</button>
-            <button class="sol-btn" style="border-color:#f97316;color:#f97316;" onclick="saveQuestion(${JSON.stringify(q).replace(/"/g, '&quot;')}, 'PYQ Bank')">🔖 Save</button>
+            <button class="sol-btn" onclick="toggleSolution(this, '${q.id}', ${JSON.stringify(q).replace(/"/g, '&quot;')})">${t('pyqbank','showSolution')}</button>
+            <button class="sol-btn" style="border-color:#f97316;color:#f97316;" onclick="saveQuestion(${JSON.stringify(q).replace(/"/g, '&quot;')}, 'PYQ Bank')">${t('pyqbank','save')}</button>
           </div>
           <div class="sol-div" id="sol-${q.id}"></div>
           <div style="display:flex;justify-content:space-between;margin-top:20px;">
-            <button class="sol-btn" ${i === 0 ? 'disabled style="opacity:0.4;"' : ''} onclick="prevQuestion('${subject}', ${classNum}, '${chapter}')">← Prev</button>
-            <button class="sol-btn" ${i === data.length - 1 ? 'disabled style="opacity:0.4;"' : ''} onclick="nextQuestion('${subject}', ${classNum}, '${chapter}')">Next →</button>
+            <button class="sol-btn" ${i === 0 ? 'disabled style="opacity:0.4;"' : ''} onclick="prevQuestion('${subject}', ${classNum}, '${chapter}')">${t('pyqbank','prev')}</button>
+            <button class="sol-btn" ${i === data.length - 1 ? 'disabled style="opacity:0.4;"' : ''} onclick="nextQuestion('${subject}', ${classNum}, '${chapter}')">${t('pyqbank','next')}</button>
           </div>
         </div>
       `;
@@ -346,40 +350,40 @@ ${q.diagram_url ? `<img src="${q.diagram_url}" style="max-width:100%;border-radi
       const solDiv = document.getElementById('sol-' + id);
       if (solDiv.style.display === 'block') {
         solDiv.style.display = 'none';
-        btn.textContent = '💡 Show Solution';
+        btn.textContent = t('pyqbank','showSolution');
         return;
       }
       if (solDiv.innerHTML) {
         solDiv.style.display = 'block';
-        btn.textContent = '🔼 Hide Solution';
+        btn.textContent = t('pyqbank','hideSolution');
         return;
       }
-      btn.textContent = '⏳ Generating...';
+      btn.textContent = t('pyqbank','generatingSolution');
       btn.disabled = true;
       solDiv.style.display = 'block';
-      solDiv.innerHTML = '<span style="color:#888;">AI is solving this...</span>';
+      solDiv.innerHTML = `<span style="color:#888;">${t('pyqbank','aiSolving')}</span>`;
       try {
         const res = await fetch('https://neet-ai-production.up.railway.app/solve', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ question: q.question, option_a: q.option_a, option_b: q.option_b, option_c: q.option_c, option_d: q.option_d, correct_answer: q.correct_answer })
+          body: JSON.stringify({ question: q.question, option_a: q.option_a, option_b: q.option_b, option_c: q.option_c, option_d: q.option_d, correct_answer: q.correct_answer, language: getLang() })
         });
         const data = await res.json();
         const correctOpt = document.getElementById('opt-' + q.correct_answer.toLowerCase().trim());
         if (correctOpt) correctOpt.classList.add('correct');
         solDiv.innerHTML = parseWithMath(data.solution);
-        btn.textContent = '🔼 Hide Solution';
+        btn.textContent = t('pyqbank','hideSolution');
         btn.disabled = false;
       } catch(e) {
-        solDiv.innerHTML = '<span style="color:#ef4444;">Failed to generate solution.</span>';
-        btn.textContent = '💡 Show Solution';
+        solDiv.innerHTML = `<span style="color:#ef4444;">${t('pyqbank','failedSolution')}</span>`;
+        btn.textContent = t('pyqbank','showSolution');
         btn.disabled = false;
       }
     }
 
     async function saveQuestion(q, source) {
       const { data: { session } } = await client.auth.getSession();
-      if (!session) { alert('Please log in to save questions.'); return; }
+      if (!session) { alert(t('pyqbank','pleaseLoginSave')); return; }
       const { error } = await client.from('saved_questions').insert({
         user_id: session.user.id,
         question_id: q.id,
@@ -394,8 +398,8 @@ ${q.diagram_url ? `<img src="${q.diagram_url}" style="max-width:100%;border-radi
         year: q.year,
         source: source
       });
-      if (error) { alert('Failed to save question.'); return; }
-      alert('Question saved! ✅');
+      if (error) { alert(t('pyqbank','failedSaveQuestion')); return; }
+      alert(t('pyqbank','questionSaved'));
     }
 
     showSubjects();

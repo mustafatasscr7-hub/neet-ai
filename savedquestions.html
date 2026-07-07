@@ -50,30 +50,34 @@
 <body>
 
   <div class="header">
-    <span class="header-title">NEET<span>-AI</span> Saved Questions</span>
-    <button class="btn btn-primary" onclick="window.location.href='./chat.html'">Back to NEET-AI</button>
+    <span class="header-title">NEET<span>-AI</span> <span data-i18n="savedquestions.headerTitle">Saved Questions</span></span>
+    <div style="display:flex;gap:10px;">
+      <button class="lang-toggle" onclick="toggleLang(); loadSavedQuestions();" style="background:transparent;border:1px solid #2a2a2a;color:#888;padding:8px 14px;border-radius:8px;cursor:pointer;font-size:13px;font-family:Inter,sans-serif;">हिं</button>
+      <button class="btn btn-primary" onclick="window.location.href='./chat.html'" data-i18n="personalisedTest.backToNeetAiBtn">Back to NEET-AI</button>
+    </div>
   </div>
 
   <div class="container">
-    <div class="page-title">Saved Questions</div>
-    <div class="page-subtitle">Questions you bookmarked from PYQ Bank and Mock Tests</div>
+    <div class="page-title" data-i18n="savedquestions.pageTitle">Saved Questions</div>
+    <div class="page-subtitle" data-i18n="savedquestions.pageSubtitle">Questions you bookmarked from PYQ Bank and Mock Tests</div>
 
     <div class="filter-tabs">
-      <button class="filter-tab active" onclick="filterBy('all', this)">All</button>
-      <button class="filter-tab" onclick="filterBy('Biology', this)">🔬 Biology</button>
-      <button class="filter-tab" onclick="filterBy('Physics', this)">⚡ Physics</button>
-      <button class="filter-tab" onclick="filterBy('Chemistry', this)">⚗️ Chemistry</button>
-      <button class="filter-tab" onclick="filterBy('PYQ Bank', this)">📚 From PYQ Bank</button>
-      <button class="filter-tab" onclick="filterBy('Mock Test', this)">📝 From Mock Test</button>
-      <button class="filter-tab" onclick="filterBy('Mistake Journal', this)">🚨 Mistake Journal</button>
+      <button class="filter-tab active" onclick="filterBy('all', this)" data-i18n="savedquestions.all">All</button>
+      <button class="filter-tab" onclick="filterBy('Biology', this)">🔬 <span data-i18n="common.biology">Biology</span></button>
+      <button class="filter-tab" onclick="filterBy('Physics', this)">⚡ <span data-i18n="common.physics">Physics</span></button>
+      <button class="filter-tab" onclick="filterBy('Chemistry', this)">⚗️ <span data-i18n="common.chemistry">Chemistry</span></button>
+      <button class="filter-tab" onclick="filterBy('PYQ Bank', this)" data-i18n="savedquestions.fromPyqBank">📚 From PYQ Bank</button>
+      <button class="filter-tab" onclick="filterBy('Mock Test', this)" data-i18n="savedquestions.fromMockTest">📝 From Mock Test</button>
+      <button class="filter-tab" onclick="filterBy('Mistake Journal', this)" data-i18n="savedquestions.mistakeJournal">🚨 Mistake Journal</button>
     </div>
 
     <div id="questionsList">
-      <div class="loading"><div class="spinner"></div>Loading saved questions...</div>
+      <div class="loading"><div class="spinner"></div><span data-i18n="savedquestions.loadingSaved">Loading saved questions...</span></div>
     </div>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="./i18n.js"></script>
   <script>
     const SUPABASE_URL = 'https://hvhnfttrfouajlyhvunq.supabase.co';
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh2aG5mdHRyZm91YWpseWh2dW5xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg5NDI1NTIsImV4cCI6MjA5NDUxODU1Mn0.8RaSu5yiTpQCEUGKrFO2y6oiRXSqdBehIz933j9Z7WA';
@@ -96,13 +100,13 @@
     }
 
     function formatDate(iso) {
-      return new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+      return localizeNum(new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }));
     }
 
     function renderQuestions(questions) {
       const container = document.getElementById('questionsList');
       if (!questions || questions.length === 0) {
-        container.innerHTML = '<div class="empty">No saved questions found.<br><br>Save questions from PYQ Bank or Mock Test to see them here.</div>';
+        container.innerHTML = `<div class="empty">${t('savedquestions','noSavedFound')}<br><br>${t('savedquestions','saveHint')}</div>`;
         return;
       }
 
@@ -117,17 +121,17 @@
         return `
           <div class="question-card" id="qcard-${q.id}">
             <div class="q-meta">
-              <span class="q-year">${q.year || ''}</span>
-              <span>${q.subject || ''}</span>
-              ${q.chapter ? `<span>${q.chapter}</span>` : ''}
+              <span class="q-year">${localizeNum(q.year || '')}</span>
+              <span>${subjectName(q.subject) || ''}</span>
+              ${q.chapter ? `<span>${chapterName(q.chapter)}</span>` : ''}
               <span class="q-source">📌 ${q.source || 'PYQ Bank'}</span>
               <span class="q-saved-at">🕐 ${formatDate(q.saved_at)}</span>
             </div>
             <div class="q-text">${q.question}</div>
             <div class="q-options">${opts}</div>
             <div class="q-actions">
-              <button class="sol-btn" onclick="toggleSolution(this, '${q.id}', ${JSON.stringify(q).replace(/"/g, '&quot;')})">💡 Show Solution</button>
-              <button class="del-btn" onclick="deleteQuestion('${q.id}')">🗑 Remove</button>
+              <button class="sol-btn" onclick="toggleSolution(this, '${q.id}', ${JSON.stringify(q).replace(/"/g, '&quot;')})">${t('pyqbank','showSolution')}</button>
+              <button class="del-btn" onclick="deleteQuestion('${q.id}')">${t('savedquestions','remove')}</button>
             </div>
             <div class="sol-div" id="sol-${q.id}"></div>
           </div>
@@ -146,9 +150,9 @@
     }
 
     async function deleteQuestion(id) {
-      if (!confirm('Remove this question from saved?')) return;
+      if (!confirm(t('savedquestions','confirmRemove'))) return;
       const { error } = await client.from('saved_questions').delete().eq('id', id);
-      if (error) { alert('Failed to remove.'); return; }
+      if (error) { alert(t('savedquestions','failedRemove')); return; }
       allQuestions = allQuestions.filter(q => q.id !== id);
       document.getElementById('qcard-' + id)?.remove();
     }
@@ -157,31 +161,31 @@
       const solDiv = document.getElementById('sol-' + id);
       if (solDiv.style.display === 'block') {
         solDiv.style.display = 'none';
-        btn.textContent = '💡 Show Solution';
+        btn.textContent = t('pyqbank','showSolution');
         return;
       }
       if (solDiv.innerHTML) {
         solDiv.style.display = 'block';
-        btn.textContent = '🔼 Hide Solution';
+        btn.textContent = t('pyqbank','hideSolution');
         return;
       }
-      btn.textContent = '⏳ Generating...';
+      btn.textContent = t('pyqbank','generatingSolution');
       btn.disabled = true;
       solDiv.style.display = 'block';
-      solDiv.innerHTML = '<span style="color:#888;">AI is solving this...</span>';
+      solDiv.innerHTML = `<span style="color:#888;">${t('pyqbank','aiSolving')}</span>`;
       try {
         const res = await fetch('https://neet-ai-production.up.railway.app/solve', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ question: q.question, option_a: q.option_a, option_b: q.option_b, option_c: q.option_c, option_d: q.option_d, correct_answer: q.correct_answer })
+          body: JSON.stringify({ question: q.question, option_a: q.option_a, option_b: q.option_b, option_c: q.option_c, option_d: q.option_d, correct_answer: q.correct_answer, language: getLang() })
         });
         const data = await res.json();
         solDiv.innerHTML = parseWithMath(data.solution);
-        btn.textContent = '🔼 Hide Solution';
+        btn.textContent = t('pyqbank','hideSolution');
         btn.disabled = false;
       } catch(e) {
-        solDiv.innerHTML = '<span style="color:#ef4444;">Failed to generate solution.</span>';
-        btn.textContent = '💡 Show Solution';
+        solDiv.innerHTML = `<span style="color:#ef4444;">${t('pyqbank','failedSolution')}</span>`;
+        btn.textContent = t('pyqbank','showSolution');
         btn.disabled = false;
       }
     }
@@ -189,12 +193,12 @@
     async function loadSavedQuestions() {
       const { data: { session } } = await client.auth.getSession();
       if (!session) {
-        document.getElementById('questionsList').innerHTML = '<div class="empty">Please <a href="./login.html" style="color:#4f8ef7;">log in</a> to see your saved questions.</div>';
+        document.getElementById('questionsList').innerHTML = `<div class="empty">${t('savedquestions','loginToSeePrefix')}<a href="./login.html" style="color:#4f8ef7;">${t('savedquestions','loginToSee')}</a>${t('savedquestions','loginToSeeSuffix')}</div>`;
         return;
       }
       const { data, error } = await client.from('saved_questions').select('*').eq('user_id', session.user.id).order('saved_at', { ascending: false });
       if (error || !data) {
-        document.getElementById('questionsList').innerHTML = '<div class="empty">Failed to load saved questions.</div>';
+        document.getElementById('questionsList').innerHTML = `<div class="empty">${t('savedquestions','failedLoadSaved')}</div>`;
         return;
       }
       allQuestions = data;

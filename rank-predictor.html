@@ -33,56 +33,60 @@
   </style>
 </head>
 <body>
+  <div style="position:fixed;top:16px;right:16px;">
+    <button class="lang-toggle" onclick="toggleLang()" style="background:transparent;border:1px solid #2a2a35;color:#888;padding:8px 14px;border-radius:100px;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;">हिं</button>
+  </div>
   <div class="card">
-    <div class="badge">NEET 2027 Tool</div>
-    <div class="title">Rank Predictor</div>
-    <div class="subtitle">Estimate your All India Rank based on previous year data</div>
+    <div class="badge" data-i18n="rankpredictor.badge">NEET 2027 Tool</div>
+    <div class="title" data-i18n="rankpredictor.title">Rank Predictor</div>
+    <div class="subtitle" data-i18n="rankpredictor.subtitle">Estimate your All India Rank based on previous year data</div>
 
-    <label>Your Expected Score (out of 720)</label>
-    <input type="number" id="score" min="0" max="720" placeholder="e.g. 550" oninput="this.value = Math.min(720, Math.max(0, this.value))"/>
-    <div class="score-hint">Enter marks after applying +4 / -1 marking scheme</div>
+    <label data-i18n="rankpredictor.scoreLabel">Your Expected Score (out of 720)</label>
+    <input type="number" id="score" min="0" max="720" placeholder="e.g. 550" data-i18n-placeholder="rankpredictor.scorePlaceholder" oninput="this.value = Math.min(720, Math.max(0, this.value))"/>
+    <div class="score-hint" data-i18n="rankpredictor.scoreHint">Enter marks after applying +4 / -1 marking scheme</div>
 
-    <label>Category</label>
+    <label data-i18n="rankpredictor.categoryLabel">Category</label>
     <select id="category">
-      <option value="general">General (UR)</option>
-      <option value="obc">OBC</option>
-      <option value="sc">SC</option>
-      <option value="st">ST</option>
-      <option value="ews">EWS</option>
-      <option value="pwd">PwD</option>
+      <option value="general" data-i18n="rankpredictor.catGeneral">General (UR)</option>
+      <option value="obc" data-i18n="rankpredictor.catObc">OBC</option>
+      <option value="sc" data-i18n="rankpredictor.catSc">SC</option>
+      <option value="st" data-i18n="rankpredictor.catSt">ST</option>
+      <option value="ews" data-i18n="rankpredictor.catEws">EWS</option>
+      <option value="pwd" data-i18n="rankpredictor.catPwd">PwD</option>
     </select>
 
-    <button class="predict-btn" onclick="predict()">Predict My Rank →</button>
+    <button class="predict-btn" onclick="predict()" data-i18n="rankpredictor.predictBtn">Predict My Rank →</button>
 
     <div class="result" id="result">
       <div class="result-rank" id="rankDisplay"></div>
-      <div class="result-label">Estimated All India Rank</div>
+      <div class="result-label" data-i18n="rankpredictor.estimatedRank">Estimated All India Rank</div>
       <div class="result-grid">
         <div class="result-item">
-          <div class="result-item-label">Score Range</div>
+          <div class="result-item-label" data-i18n="rankpredictor.scoreRangeLabel">Score Range</div>
           <div class="result-item-value" id="scoreRange"></div>
         </div>
         <div class="result-item">
-          <div class="result-item-label">Percentile</div>
+          <div class="result-item-label" data-i18n="rankpredictor.percentileLabel">Percentile</div>
           <div class="result-item-value" id="percentile"></div>
         </div>
         <div class="result-item">
-          <div class="result-item-label">MBBS Chances</div>
+          <div class="result-item-label" data-i18n="rankpredictor.mbbsChances">MBBS Chances</div>
           <div class="result-item-value" id="mbbs"></div>
         </div>
         <div class="result-item">
-          <div class="result-item-label">Govt College</div>
+          <div class="result-item-label" data-i18n="rankpredictor.govtCollege">Govt College</div>
           <div class="result-item-value" id="govt"></div>
         </div>
       </div>
-      <div class="disclaimer">⚠️ This prediction is based on official NEET 2025 data and is approximate.Actual rank depends on number of candidates, paper difficulty, and cutoff that year. Use as a rough guide only.</div>
+      <div class="disclaimer" data-i18n="rankpredictor.disclaimer">⚠️ This prediction is based on official NEET 2025 data and is approximate. Actual rank depends on number of candidates, paper difficulty, and cutoff that year. Use as a rough guide only.</div>
       <div class="cta">
-        <p>Practice more to improve your score 🎯</p>
-        <button onclick="window.location.href='./chat.html'">Start Practicing on NEET-AI →</button>
+        <p data-i18n="rankpredictor.ctaText">Practice more to improve your score 🎯</p>
+        <button onclick="window.location.href='./chat.html'" data-i18n="rankpredictor.ctaBtn">Start Practicing on NEET-AI →</button>
       </div>
     </div>
   </div>
 
+  <script src="./i18n.js"></script>
   <script>
 
 
@@ -95,16 +99,24 @@ window.addEventListener('load', function() {
   }
 });
 
+    let lastPredictedScore = null, lastPredictedCategory = null;
+
+    document.addEventListener('langchange', () => {
+      if (lastPredictedScore !== null) predict();
+    });
+
     function predict() {
       const score = parseInt(document.getElementById('score').value);
       const category = document.getElementById('category').value;
       if (!score || score < 0 || score > 720) {
-        alert('Please enter a valid score between 0 and 720');
+        alert(t('rankpredictor','invalidScore'));
         return;
       }
+      lastPredictedScore = score;
+      lastPredictedCategory = category;
 
       // Based on NEET 2024 data patterns
-      let rank, percentile, mbbs, govt;
+      let rank, percentile, mbbsKey, govtKey;
 
      if (score >= 680) { rank = [1, 50]; percentile = 99.99; }
 else if (score >= 660) { rank = [51, 300]; percentile = 99.97; }
@@ -132,20 +144,20 @@ else { rank = [700001, 2200000]; percentile = 28.00; }
         general: 720, obc: 680, sc: 600, st: 560, ews: 680, pwd: 400
       };
 
-      if (score >= 550) { mbbs = '✅ High'; govt = score >= 620 ? '✅ Likely' : '⚠️ Possible'; }
-      else if (score >= 450) { mbbs = '⚠️ Moderate'; govt = '❌ Unlikely'; }
-      else { mbbs = '❌ Low'; govt = '❌ Unlikely'; }
+      if (score >= 550) { mbbsKey = 'mbbsHigh'; govtKey = score >= 620 ? 'govtLikely' : 'govtPossible'; }
+      else if (score >= 450) { mbbsKey = 'mbbsModerate'; govtKey = 'govtUnlikely'; }
+      else { mbbsKey = 'mbbsLow'; govtKey = 'govtUnlikely'; }
 
       if (category !== 'general') {
-        if (score >= 400) mbbs = '⚠️ Possible';
-        if (score >= 350) mbbs = mbbs === '❌ Low' ? '⚠️ Check cutoff' : mbbs;
+        if (score >= 400) mbbsKey = 'mbbsPossible';
+        if (score >= 350) mbbsKey = mbbsKey === 'mbbsLow' ? 'mbbsCheckCutoff' : mbbsKey;
       }
 
-      document.getElementById('rankDisplay').textContent = `${rank[0].toLocaleString()} – ${rank[1].toLocaleString()}`;
-      document.getElementById('scoreRange').textContent = `${score} / 720`;
-      document.getElementById('percentile').textContent = `~${percentile}%`;
-      document.getElementById('mbbs').textContent = mbbs;
-      document.getElementById('govt').textContent = govt;
+      document.getElementById('rankDisplay').textContent = `${localizeNum(rank[0].toLocaleString())} – ${localizeNum(rank[1].toLocaleString())}`;
+      document.getElementById('scoreRange').textContent = `${localizeNum(score)} / ${localizeNum(720)}`;
+      document.getElementById('percentile').textContent = `~${localizeNum(percentile)}%`;
+      document.getElementById('mbbs').textContent = t('rankpredictor', mbbsKey);
+      document.getElementById('govt').textContent = t('rankpredictor', govtKey);
       document.getElementById('result').style.display = 'block';
       document.getElementById('result').scrollIntoView({ behavior: 'smooth' });
     }

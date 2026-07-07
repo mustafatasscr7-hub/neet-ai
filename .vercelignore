@@ -1,0 +1,15 @@
+node_modules
+__pycache__
+*.pyc
+.env
+*.py
+Procfile
+railway.json
+requirements.txt
+package.json
+package-lock.json
+ncert-pdfs
+pyq-pdfs
+bio_pdfs_to_process
+chapter-Qs
+.claude

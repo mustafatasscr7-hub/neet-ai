@@ -55,100 +55,104 @@
 
   <div class="header">
     <div style="display:flex;align-items:center;gap:16px;">
-      <button onclick="history.back()" style="background:transparent;border:none;color:#555;cursor:pointer;font-size:13px;font-family:Inter,sans-serif;padding:0;" onmouseover="this.style.color='#7c5cff'" onmouseout="this.style.color='#555'">← Back</button>
+      <button onclick="history.back()" style="background:transparent;border:none;color:#555;cursor:pointer;font-size:13px;font-family:Inter,sans-serif;padding:0;" onmouseover="this.style.color='#7c5cff'" onmouseout="this.style.color='#555'" data-i18n="common.back">← Back</button>
       <span class="header-title">NEET<span>-AI</span></span>
     </div>
+    <button class="lang-toggle" onclick="toggleLang()" style="background:transparent;border:1px solid #2a2a32;color:#888;padding:8px 14px;border-radius:100px;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;">हिं</button>
   </div>
 
   <div class="container">
-    <div class="page-title">Simple, transparent pricing</div>
-    <div class="page-subtitle">Start free. Upgrade when you need more.</div>
+    <div class="page-title" data-i18n="pricing.pageTitle">Simple, transparent pricing</div>
+    <div class="page-subtitle" data-i18n="pricing.pageSubtitle">Start free. Upgrade when you need more.</div>
 
     <div class="toggle-wrap">
-      <span class="toggle-label active" id="monthlyLabel">Monthly</span>
+      <span class="toggle-label active" id="monthlyLabel" data-i18n="pricing.monthly">Monthly</span>
       <div class="toggle-btn" id="billingToggle" onclick="toggleBilling()"></div>
-      <span class="toggle-label" id="yearlyLabel">Yearly</span>
-      <span class="save-tag">Save 20%</span>
+      <span class="toggle-label" id="yearlyLabel" data-i18n="pricing.yearly">Yearly</span>
+      <span class="save-tag" data-i18n="pricing.save20">Save 20%</span>
     </div>
 
     <div class="plans">
       <div class="plan">
         <div class="plan-icon">🌱</div>
-        <div class="plan-name">Free</div>
-        <div class="plan-tagline">Get started with NEET-AI</div>
-        <div class="plan-price">₹0</div>
-        <div class="plan-price-sub">forever free</div>
-        <button class="plan-btn free-btn" onclick="window.location.href='./index.html'">Get started free</button>
+        <div class="plan-name" data-i18n="pricing.freeName">Free</div>
+        <div class="plan-tagline" data-i18n="pricing.freeTagline">Get started with NEET-AI</div>
+        <div class="plan-price" data-i18n-num>₹0</div>
+        <div class="plan-price-sub" data-i18n="pricing.foreverFree">forever free</div>
+        <button class="plan-btn free-btn" onclick="window.location.href='./index.html'" data-i18n="pricing.getStartedFree">Get started free</button>
         <div class="divider"></div>
-        <div class="features-label">What's included</div>
+        <div class="features-label" data-i18n="pricing.whatsIncluded">What's included</div>
         <div class="features">
-          <div class="feature yes"><span class="feature-check">✓</span> 5 AI questions per day</div>
-          <div class="feature yes"><span class="feature-check">✓</span> NCERT-based answers</div>
-          <div class="feature yes"><span class="feature-check">✓</span> Biology PYQ Bank</div>
-          <div class="feature yes"><span class="feature-check">✓</span> 3 Mock Tests per month</div>
-          <div class="feature yes"><span class="feature-check">✓</span> Save up to 10 questions</div>
-          <div class="feature"><span class="feature-cross">✕</span> Physics & Chemistry PYQ</div>
-          <div class="feature"><span class="feature-cross">✕</span> Unlimited mock tests</div>
-          <div class="feature"><span class="feature-cross">✕</span> Weak topic detector</div>
-          <div class="feature"><span class="feature-cross">✕</span> Image question solving</div>
-          <div class="feature"><span class="feature-cross">✕</span> Formula sheets</div>
+          <div class="feature yes"><span class="feature-check">✓</span> <span data-i18n="pricing.free1">5 AI questions per day</span></div>
+          <div class="feature yes"><span class="feature-check">✓</span> <span data-i18n="pricing.free2">NCERT-based answers</span></div>
+          <div class="feature yes"><span class="feature-check">✓</span> <span data-i18n="pricing.free3">Biology PYQ Bank</span></div>
+          <div class="feature yes"><span class="feature-check">✓</span> <span data-i18n="pricing.free4">3 Mock Tests per month</span></div>
+          <div class="feature yes"><span class="feature-check">✓</span> <span data-i18n="pricing.free5">Save up to 10 questions</span></div>
+          <div class="feature"><span class="feature-cross">✕</span> <span data-i18n="pricing.freeCross1">Physics & Chemistry PYQ</span></div>
+          <div class="feature"><span class="feature-cross">✕</span> <span data-i18n="pricing.freeCross2">Unlimited mock tests</span></div>
+          <div class="feature"><span class="feature-cross">✕</span> <span data-i18n="pricing.freeCross3">Weak topic detector</span></div>
+          <div class="feature"><span class="feature-cross">✕</span> <span data-i18n="pricing.freeCross4">Image question solving</span></div>
+          <div class="feature"><span class="feature-cross">✕</span> <span data-i18n="pricing.freeCross5">Formula sheets</span></div>
         </div>
       </div>
 
       <div class="plan pro">
-        <div class="pro-badge">MOST POPULAR</div>
+        <div class="pro-badge" data-i18n="pricing.mostPopular">MOST POPULAR</div>
         <div class="plan-icon">⚡</div>
-        <div class="plan-name">Pro</div>
-        <div class="plan-tagline">Everything you need to crack NEET</div>
+        <div class="plan-name" data-i18n="pricing.proName">Pro</div>
+        <div class="plan-tagline" data-i18n="pricing.proTagline">Everything you need to crack NEET</div>
         <div class="plan-price" id="proPrice">₹299</div>
-        <div class="plan-price-sub" id="priceSub">per month · cancel anytime</div>
-        <button class="plan-btn pro-btn" onclick="alert('Payments coming soon! We\'ll notify you.')">Get Pro plan</button>
+        <div class="plan-price-sub" id="priceSub" data-i18n="pricing.perMonthCancel">per month · cancel anytime</div>
+        <button class="plan-btn pro-btn" onclick="alert(t('pricing','paymentsComingSoon'))" data-i18n="pricing.getProPlan">Get Pro plan</button>
         <div class="divider"></div>
-        <div class="features-label">Everything in Free, plus</div>
+        <div class="features-label" data-i18n="pricing.everythingInFreePlus">Everything in Free, plus</div>
         <div class="features">
-          <div class="feature yes"><span class="feature-check">✓</span> Unlimited AI questions</div>
-          <div class="feature yes"><span class="feature-check">✓</span> Physics & Chemistry PYQ Bank</div>
-          <div class="feature yes"><span class="feature-check">✓</span> Unlimited mock tests</div>
-          <div class="feature yes"><span class="feature-check">✓</span> Weak topic detector</div>
-          <div class="feature yes"><span class="feature-check">✓</span> Image & diagram questions</div>
-          <div class="feature yes"><span class="feature-check">✓</span> Formula sheets</div>
-          <div class="feature yes"><span class="feature-check">✓</span> Unlimited saved questions</div>
-          <div class="feature yes"><span class="feature-check">✓</span> Performance analytics</div>
-          <div class="feature yes"><span class="feature-check">✓</span> Priority support</div>
-          <div class="feature yes"><span class="feature-check">✓</span> Early access to new features</div>
+          <div class="feature yes"><span class="feature-check">✓</span> <span data-i18n="pricing.pro1">Unlimited AI questions</span></div>
+          <div class="feature yes"><span class="feature-check">✓</span> <span data-i18n="pricing.pro2">Physics & Chemistry PYQ Bank</span></div>
+          <div class="feature yes"><span class="feature-check">✓</span> <span data-i18n="pricing.pro3">Unlimited mock tests</span></div>
+          <div class="feature yes"><span class="feature-check">✓</span> <span data-i18n="pricing.pro4">Weak topic detector</span></div>
+          <div class="feature yes"><span class="feature-check">✓</span> <span data-i18n="pricing.pro5">Image & diagram questions</span></div>
+          <div class="feature yes"><span class="feature-check">✓</span> <span data-i18n="pricing.pro6">Formula sheets</span></div>
+          <div class="feature yes"><span class="feature-check">✓</span> <span data-i18n="pricing.pro7">Unlimited saved questions</span></div>
+          <div class="feature yes"><span class="feature-check">✓</span> <span data-i18n="pricing.pro8">Performance analytics</span></div>
+          <div class="feature yes"><span class="feature-check">✓</span> <span data-i18n="pricing.pro9">Priority support</span></div>
+          <div class="feature yes"><span class="feature-check">✓</span> <span data-i18n="pricing.pro10">Early access to new features</span></div>
         </div>
       </div>
     </div>
 
     <div class="footer-note">
-      *Prices in INR. NRI students see <a href="#">international pricing</a>. No commitment — cancel anytime.
+      <span data-i18n="pricing.footerNotePrefix">*Prices in INR. NRI students see </span><a href="#" data-i18n="pricing.footerNoteLink">international pricing</a><span data-i18n="pricing.footerNoteSuffix">. No commitment — cancel anytime.</span>
     </div>
   </div>
 
+  <script src="./i18n.js"></script>
   <script>
     let isYearly = false;
+
+    function updatePriceSub() {
+      document.getElementById('priceSub').textContent = isYearly ? t('pricing','perMonthBilledYearly') : t('pricing','perMonthCancel');
+      document.getElementById('proPrice').textContent = localizeNum(isYearly ? '₹239' : '₹299');
+    }
+    document.addEventListener('langchange', updatePriceSub);
+    updatePriceSub();
 
     function toggleBilling() {
       isYearly = !isYearly;
       const toggle = document.getElementById('billingToggle');
       const monthlyLabel = document.getElementById('monthlyLabel');
       const yearlyLabel = document.getElementById('yearlyLabel');
-      const proPrice = document.getElementById('proPrice');
-      const priceSub = document.getElementById('priceSub');
 
       if (isYearly) {
         toggle.classList.add('yearly');
         monthlyLabel.classList.remove('active');
         yearlyLabel.classList.add('active');
-        proPrice.textContent = '₹239';
-        priceSub.textContent = 'per month · billed ₹2,868/year';
       } else {
         toggle.classList.remove('yearly');
         monthlyLabel.classList.add('active');
         yearlyLabel.classList.remove('active');
-        proPrice.textContent = '₹299';
-        priceSub.textContent = 'per month · cancel anytime';
       }
+      updatePriceSub();
     }
   </script>
 </body>

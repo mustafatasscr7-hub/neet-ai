@@ -31,6 +31,8 @@
     .nav-links a:hover { color: var(--text); }
     .nav-cta { background: var(--accent); color: #fff; padding: 10px 24px; border-radius: 8px; font-size: 13px; font-weight: 600; text-decoration: none; transition: all 0.2s; font-family: 'Inter', sans-serif; }
     .nav-cta:hover { background: var(--accent2); color: #0a0a16; }
+    .lang-toggle { background: transparent; border: 1px solid var(--border); color: var(--muted); padding: 8px 14px; border-radius: 100px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; transition: all 0.2s; }
+    .lang-toggle:hover { border-color: var(--accent2); color: var(--accent2); }
 
     /* HERO */
     .hero { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 120px 24px 80px; position: relative; overflow: hidden; }
@@ -169,42 +171,45 @@
 <nav>
   <div class="nav-logo">NEET<span>-AI</span></div>
   <div class="nav-links">
-    <a href="#features">Features</a>
-    <a href="#pyq">PYQ Bank</a>
-    <a href="#pricing">Pricing</a>
+    <a href="#features" data-i18n="index.navFeatures">Features</a>
+    <a href="#pyq" data-i18n="index.navPyq">PYQ Bank</a>
+    <a href="#pricing" data-i18n="index.navPricing">Pricing</a>
   </div>
-  <a href="./chat.html" class="nav-cta">Start Free →</a>
+  <div style="display:flex;align-items:center;gap:12px;">
+    <button class="lang-toggle" onclick="toggleLang()">हिं</button>
+    <a href="./chat.html" class="nav-cta" data-i18n="index.navStart">Start Free →</a>
+  </div>
 </nav>
 
 <!-- HERO -->
 <section class="hero">
-  <div class="hero-badge"><span class="hero-badge-dot"></span> AI-Powered NEET Preparation</div>
-  <h1>Stop guessing.<br><em>Start knowing.</em></h1>
-  <p>NCERT-based AI answers, 10 years of previous year questions, full mock tests, and a mistake journal that learns how you think.</p>
+  <div class="hero-badge"><span class="hero-badge-dot"></span> <span data-i18n="index.heroBadge">AI-Powered NEET Preparation</span></div>
+  <h1><span data-i18n="index.heroTitlePart1">Stop guessing.</span><br><em data-i18n="index.heroTitlePart2">Start knowing.</em></h1>
+  <p data-i18n="index.heroSubtitle">NCERT-based AI answers, 10 years of previous year questions, full mock tests, and a mistake journal that learns how you think.</p>
   <div class="hero-actions">
-    <a href="./chat.html" class="btn-primary">Start for Free — No Card Needed</a>
-    <a href="#features" class="btn-secondary">See How It Works</a>
+    <a href="./chat.html" class="btn-primary" data-i18n="index.heroCtaPrimary">Start for Free — No Card Needed</a>
+    <a href="#features" class="btn-secondary" data-i18n="index.heroCtaSecondary">See How It Works</a>
   </div>
   <div class="hero-stats">
-    <div class="stat"><div class="stat-num">10+</div><div class="stat-label">Years of PYQs</div></div>
-    <div class="stat"><div class="stat-num">180</div><div class="stat-label">Question Mock Tests</div></div>
-    <div class="stat"><div class="stat-num">NCERT</div><div class="stat-label">Source Verified</div></div>
-    <div class="stat"><div class="stat-num">₹299</div><div class="stat-label">Per Month Pro</div></div>
+    <div class="stat"><div class="stat-num" data-i18n-num>10+</div><div class="stat-label" data-i18n="index.statPyq">Years of PYQs</div></div>
+    <div class="stat"><div class="stat-num" data-i18n-num>180</div><div class="stat-label" data-i18n="index.statMock">Question Mock Tests</div></div>
+    <div class="stat"><div class="stat-num">NCERT</div><div class="stat-label" data-i18n="index.statNcert">Source Verified</div></div>
+    <div class="stat"><div class="stat-num" data-i18n-num>₹299</div><div class="stat-label" data-i18n="index.statPro">Per Month Pro</div></div>
   </div>
 </section>
 
 <!-- CHAT DEMO -->
 <section class="demo-section" id="features">
-  <div class="section-label">AI Doubt Solving</div>
-  <div class="section-title">Ask anything. Get NCERT-backed answers.</div>
+  <div class="section-label" data-i18n="index.sectionDemoLabel">AI Doubt Solving</div>
+  <div class="section-title" data-i18n="index.sectionDemoTitle">Ask anything. Get NCERT-backed answers.</div>
   <div class="chat-demo">
     <div class="chat-msg user">
       <div class="chat-avatar user-av">A</div>
-      <div class="chat-bubble user-bubble">What is the difference between C3 and C4 plants in photosynthesis?</div>
+      <div class="chat-bubble user-bubble" data-i18n="index.demoUser1">What is the difference between C3 and C4 plants in photosynthesis?</div>
     </div>
     <div class="chat-msg ai">
       <div class="chat-avatar ai-av">N</div>
-      <div class="chat-bubble ai-bubble">
+      <div class="chat-bubble ai-bubble" data-i18n-html="index.demoAi1">
         <strong>C3 Plants</strong> fix CO₂ directly in the Calvin cycle using RuBisCO, producing a 3-carbon compound (3-PGA) as the first stable product. They photorespire significantly, losing efficiency in hot, dry conditions.<br><br>
         <strong>C4 Plants</strong> have an additional CO₂ fixation step in mesophyll cells (producing 4-carbon oxaloacetate), then concentrate CO₂ in bundle sheath cells. This suppresses photorespiration and makes them far more efficient in high temperature and light.<br><br>
         <strong>Key NEET point:</strong> Sugarcane, maize, and sorghum are C4. Wheat, rice, and most trees are C3. C4 plants have Kranz anatomy — look for this in questions.
@@ -212,128 +217,128 @@
     </div>
     <div class="chat-msg user">
       <div class="chat-avatar user-av">A</div>
-      <div class="chat-bubble user-bubble">Which NEET questions have asked about this before?</div>
+      <div class="chat-bubble user-bubble" data-i18n="index.demoUser2">Which NEET questions have asked about this before?</div>
     </div>
     <div class="chat-msg ai">
       <div class="chat-avatar ai-av">N</div>
-      <div class="chat-bubble ai-bubble">NEET has tested C3 vs C4 in 2019, 2021, and 2023 — mainly around Kranz anatomy, photorespiration, and the first product of CO₂ fixation. I can pull those exact PYQs for you from the bank.</div>
+      <div class="chat-bubble ai-bubble" data-i18n="index.demoAi2">NEET has tested C3 vs C4 in 2019, 2021, and 2023 — mainly around Kranz anatomy, photorespiration, and the first product of CO₂ fixation. I can pull those exact PYQs for you from the bank.</div>
     </div>
   </div>
 </section>
 
 <!-- FEATURES -->
 <section class="features-section">
-  <div class="section-label">Everything You Need</div>
-  <div class="section-title">Built for NEET 2027 aspirants</div>
+  <div class="section-label" data-i18n="index.sectionFeaturesLabel">Everything You Need</div>
+  <div class="section-title" data-i18n="index.sectionFeaturesTitle">Built for NEET 2027 aspirants</div>
   <div class="features-grid">
     <div class="feature-card">
       <div class="feature-icon">🧠</div>
-      <div class="feature-title">NCERT RAG Answers</div>
-      <div class="feature-desc">Every answer is grounded in NCERT textbook content — not generic AI responses. Sources are verified Biology, Physics, and Chemistry chapters.</div>
+      <div class="feature-title" data-i18n="index.featureRagTitle">NCERT RAG Answers</div>
+      <div class="feature-desc" data-i18n="index.featureRagDesc">Every answer is grounded in NCERT textbook content — not generic AI responses. Sources are verified Biology, Physics, and Chemistry chapters.</div>
     </div>
     <div class="feature-card">
       <div class="feature-icon">📚</div>
-      <div class="feature-title">10-Year PYQ Bank</div>
-      <div class="feature-desc">Previous year questions from 2016–2025, chapter-tagged and searchable. Biology, Physics, Chemistry — all three subjects covered.</div>
+      <div class="feature-title" data-i18n="index.featurePyqTitle">10-Year PYQ Bank</div>
+      <div class="feature-desc" data-i18n="index.featurePyqDesc">Previous year questions from 2016–2025, chapter-tagged and searchable. Biology, Physics, Chemistry — all three subjects covered.</div>
     </div>
     <div class="feature-card">
       <div class="feature-icon">📝</div>
-      <div class="feature-title">Full Mock Tests</div>
-      <div class="feature-desc">180 questions, 3 hour 20 minute timer, exact NEET format (+4/-1 marking). Biology 1–90, Physics 91–135, Chemistry 136–180.</div>
+      <div class="feature-title" data-i18n="index.featureMockTitle">Full Mock Tests</div>
+      <div class="feature-desc" data-i18n="index.featureMockDesc">180 questions, 3 hour 20 minute timer, exact NEET format (+4/-1 marking). Biology 1–90, Physics 91–135, Chemistry 136–180.</div>
     </div>
     <div class="feature-card">
       <div class="feature-icon">🚨</div>
-      <div class="feature-title">Mistake Journal</div>
-      <div class="feature-desc">Every wrong answer auto-saved. Review later, re-attempt, mark as mastered. The mistakes you make are the marks you recover.</div>
+      <div class="feature-title" data-i18n="index.featureMistakeTitle">Mistake Journal</div>
+      <div class="feature-desc" data-i18n="index.featureMistakeDesc">Every wrong answer auto-saved. Review later, re-attempt, mark as mastered. The mistakes you make are the marks you recover.</div>
     </div>
     <div class="feature-card">
       <div class="feature-icon">🎯</div>
-      <div class="feature-title">NEET Rank Predictor</div>
-      <div class="feature-desc">Based on NEET 2025 official data. Enter your expected score, get your estimated All India Rank range by category.</div>
+      <div class="feature-title" data-i18n="index.featureRankTitle">NEET Rank Predictor</div>
+      <div class="feature-desc" data-i18n="index.featureRankDesc">Based on NEET 2025 official data. Enter your expected score, get your estimated All India Rank range by category.</div>
     </div>
     <div class="feature-card">
       <div class="feature-icon">🔥</div>
-      <div class="feature-title">Daily Streak</div>
-      <div class="feature-desc">Practice daily, build your streak. Streak increments when you answer questions or complete tests — not just for logging in.</div>
+      <div class="feature-title" data-i18n="index.featureStreakTitle">Daily Streak</div>
+      <div class="feature-desc" data-i18n="index.featureStreakDesc">Practice daily, build your streak. Streak increments when you answer questions or complete tests — not just for logging in.</div>
     </div>
   </div>
 </section>
 
 <!-- PYQ PREVIEW -->
 <section class="pyq-section" id="pyq">
-  <div class="section-label">PYQ Bank Preview</div>
-  <div class="section-title">Real exam questions. Real answers.</div>
+  <div class="section-label" data-i18n="index.sectionPyqLabel">PYQ Bank Preview</div>
+  <div class="section-title" data-i18n="index.sectionPyqTitle">Real exam questions. Real answers.</div>
   <div class="pyq-card">
     <div class="pyq-meta">
-      <span class="pyq-tag year">NEET 2024</span>
-      <span class="pyq-tag sub">Biology</span>
+      <span class="pyq-tag year" data-i18n-num>NEET 2024</span>
+      <span class="pyq-tag sub" data-i18n="common.biology">Biology</span>
     </div>
-    <div class="pyq-q">Which of the following is the correct sequence of events during meiosis I prophase?</div>
+    <div class="pyq-q" data-i18n="index.pyqQ1">Which of the following is the correct sequence of events during meiosis I prophase?</div>
     <div class="pyq-opts">
-      <div class="pyq-opt">A) Leptotene → Zygotene → Pachytene → Diplotene → Diakinesis</div>
-      <div class="pyq-opt correct">B) Leptotene → Zygotene → Pachytene → Diplotene → Diakinesis ✓</div>
-      <div class="pyq-opt">C) Zygotene → Leptotene → Pachytene → Diakinesis → Diplotene</div>
-      <div class="pyq-opt">D) Pachytene → Leptotene → Zygotene → Diplotene → Diakinesis</div>
+      <div class="pyq-opt" data-i18n="index.pyqQ1OptA">A) Leptotene → Zygotene → Pachytene → Diplotene → Diakinesis</div>
+      <div class="pyq-opt correct" data-i18n="index.pyqQ1OptB">B) Leptotene → Zygotene → Pachytene → Diplotene → Diakinesis ✓</div>
+      <div class="pyq-opt" data-i18n="index.pyqQ1OptC">C) Zygotene → Leptotene → Pachytene → Diakinesis → Diplotene</div>
+      <div class="pyq-opt" data-i18n="index.pyqQ1OptD">D) Pachytene → Leptotene → Zygotene → Diplotene → Diakinesis</div>
     </div>
   </div>
   <div class="pyq-card">
     <div class="pyq-meta">
-      <span class="pyq-tag year">NEET 2023</span>
-      <span class="pyq-tag sub">Biology</span>
+      <span class="pyq-tag year" data-i18n-num>NEET 2023</span>
+      <span class="pyq-tag sub" data-i18n="common.biology">Biology</span>
     </div>
-    <div class="pyq-q">SA node is called the pacemaker of the heart because it:</div>
+    <div class="pyq-q" data-i18n="index.pyqQ2">SA node is called the pacemaker of the heart because it:</div>
     <div class="pyq-opts">
-      <div class="pyq-opt">A) Is situated in the right atrium</div>
-      <div class="pyq-opt correct">B) Has the highest rate of depolarisation ✓</div>
-      <div class="pyq-opt">C) Generates maximum voltage</div>
-      <div class="pyq-opt">D) Is innervated by vagus nerve</div>
+      <div class="pyq-opt" data-i18n="index.pyqQ2OptA">A) Is situated in the right atrium</div>
+      <div class="pyq-opt correct" data-i18n="index.pyqQ2OptB">B) Has the highest rate of depolarisation ✓</div>
+      <div class="pyq-opt" data-i18n="index.pyqQ2OptC">C) Generates maximum voltage</div>
+      <div class="pyq-opt" data-i18n="index.pyqQ2OptD">D) Is innervated by vagus nerve</div>
     </div>
   </div>
 </section>
 
 <!-- PRICING -->
 <section class="pricing-section" id="pricing">
-  <div class="section-label">Pricing</div>
-  <div class="section-title">Simple. Transparent. Affordable.</div>
+  <div class="section-label" data-i18n="index.sectionPricingLabel">Pricing</div>
+  <div class="section-title" data-i18n="index.sectionPricingTitle">Simple. Transparent. Affordable.</div>
   <div class="pricing-grid">
     <div class="pricing-card">
-      <div class="plan-name">Free</div>
-      <div class="plan-price">₹0</div>
-      <div class="plan-sub">forever free</div>
+      <div class="plan-name" data-i18n="index.planFreeName">Free</div>
+      <div class="plan-price" data-i18n-num>₹0</div>
+      <div class="plan-sub" data-i18n="index.planFreeSub">forever free</div>
       <ul class="plan-features">
-        <li class="yes"><span class="check">✓</span> 5 AI questions per day</li>
-        <li class="yes"><span class="check">✓</span> NCERT-based answers</li>
-        <li class="yes"><span class="check">✓</span> Biology PYQ Bank</li>
-        <li class="yes"><span class="check">✓</span> 3 Mock Tests per month</li>
-        <li><span class="cross">✕</span> Physics & Chemistry PYQ</li>
-        <li><span class="cross">✕</span> Unlimited AI questions</li>
-        <li><span class="cross">✕</span> Weak topic detector</li>
+        <li class="yes"><span class="check">✓</span> <span data-i18n="index.planFree1">5 AI questions per day</span></li>
+        <li class="yes"><span class="check">✓</span> <span data-i18n="index.planFree2">NCERT-based answers</span></li>
+        <li class="yes"><span class="check">✓</span> <span data-i18n="index.planFree3">Biology PYQ Bank</span></li>
+        <li class="yes"><span class="check">✓</span> <span data-i18n="index.planFree4">3 Mock Tests per month</span></li>
+        <li><span class="cross">✕</span> <span data-i18n="index.planFreeCross1">Physics & Chemistry PYQ</span></li>
+        <li><span class="cross">✕</span> <span data-i18n="index.planFreeCross2">Unlimited AI questions</span></li>
+        <li><span class="cross">✕</span> <span data-i18n="index.planFreeCross3">Weak topic detector</span></li>
       </ul>
-      <a href="./chat.html" class="plan-btn free">Get Started Free</a>
+      <a href="./chat.html" class="plan-btn free" data-i18n="index.planFreeBtn">Get Started Free</a>
     </div>
     <div class="pricing-card pro">
-      <div class="plan-name">Pro</div>
-      <div class="plan-price">₹299</div>
-      <div class="plan-sub">per month · cancel anytime</div>
+      <div class="plan-name" data-i18n="index.planProName">Pro</div>
+      <div class="plan-price" data-i18n-num>₹299</div>
+      <div class="plan-sub" data-i18n="index.planProSub">per month · cancel anytime</div>
       <ul class="plan-features">
-        <li class="yes"><span class="check">✓</span> Unlimited AI questions</li>
-        <li class="yes"><span class="check">✓</span> All 3 subjects PYQ Bank</li>
-        <li class="yes"><span class="check">✓</span> Unlimited mock tests</li>
-        <li class="yes"><span class="check">✓</span> Mistake Journal</li>
-        <li class="yes"><span class="check">✓</span> Performance analytics</li>
-        <li class="yes"><span class="check">✓</span> Priority support</li>
-        <li class="yes"><span class="check">✓</span> Early access to new features</li>
+        <li class="yes"><span class="check">✓</span> <span data-i18n="index.planPro1">Unlimited AI questions</span></li>
+        <li class="yes"><span class="check">✓</span> <span data-i18n="index.planPro2">All 3 subjects PYQ Bank</span></li>
+        <li class="yes"><span class="check">✓</span> <span data-i18n="index.planPro3">Unlimited mock tests</span></li>
+        <li class="yes"><span class="check">✓</span> <span data-i18n="index.planPro4">Mistake Journal</span></li>
+        <li class="yes"><span class="check">✓</span> <span data-i18n="index.planPro5">Performance analytics</span></li>
+        <li class="yes"><span class="check">✓</span> <span data-i18n="index.planPro6">Priority support</span></li>
+        <li class="yes"><span class="check">✓</span> <span data-i18n="index.planPro7">Early access to new features</span></li>
       </ul>
-      <a href="./chat.html" class="plan-btn pro-btn">Get Pro Plan →</a>
+      <a href="./chat.html" class="plan-btn pro-btn" data-i18n="index.planProBtn">Get Pro Plan →</a>
     </div>
   </div>
 </section>
 
 <!-- CTA -->
 <section class="cta-section">
-  <h2>Every mistake you fix<br>is a mark you recover.</h2>
-  <p>Start free. No credit card. No commitment.</p>
-  <a href="./chat.html" class="btn-primary">Open NEET-AI →</a>
+  <h2><span data-i18n="index.ctaHeading1">Every mistake you fix</span><br><span data-i18n="index.ctaHeading2">is a mark you recover.</span></h2>
+  <p data-i18n="index.ctaSubtitle">Start free. No credit card. No commitment.</p>
+  <a href="./chat.html" class="btn-primary" data-i18n="index.ctaButton">Open NEET-AI →</a>
 </section>
 
 <footer class="site-footer">
@@ -341,11 +346,11 @@
     <div class="footer-cta">
       <div class="footer-cta-inner">
         <div class="footer-cta-text">
-          <h3>Start cracking NEET today — free</h3>
-          <p>No credit card. No commitment. 1 free mock test per month.</p>
+          <h3 data-i18n="index.footerCtaHeading">Start cracking NEET today — free</h3>
+          <p data-i18n="index.footerCtaSubtitle">No credit card. No commitment. 1 free mock test per month.</p>
         </div>
         <div class="footer-cta-actions">
-          <a href="./login.html" class="pill-btn pill-primary">⚡ Get Started Free</a>
+          <a href="./login.html" class="pill-btn pill-primary" data-i18n="index.footerCtaPrimary">⚡ Get Started Free</a>
           <span class="play-badge" title="Coming soon on Android" aria-disabled="true">
             <span class="play-icon">▶</span>
             <span class="play-text"><small>GET IT ON</small><strong>Google Play</strong></span>
@@ -358,41 +363,42 @@
   <div class="footer-columns">
     <div class="footer-col footer-brand">
       <div class="footer-logo">NEET<span>-AI</span></div>
-      <p class="footer-tagline">Your NCERT-grounded AI study partner — built to turn every mistake into a mark you recover on exam day.</p>
+      <p class="footer-tagline" data-i18n="index.footerTagline">Your NCERT-grounded AI study partner — built to turn every mistake into a mark you recover on exam day.</p>
       <div class="footer-tags">
-        <span class="footer-tag">Biology</span>
-        <span class="footer-tag">Physics</span>
-        <span class="footer-tag">Chemistry</span>
+        <span class="footer-tag" data-i18n="common.biology">Biology</span>
+        <span class="footer-tag" data-i18n="common.physics">Physics</span>
+        <span class="footer-tag" data-i18n="common.chemistry">Chemistry</span>
       </div>
     </div>
     <div class="footer-col">
-      <div class="footer-heading">Practice</div>
-      <a href="./mocktest.html">Mock Tests</a>
-      <a href="#" class="footer-soon" tabindex="-1" onclick="return false">Subject Tests</a>
-      <a href="#" class="footer-soon" tabindex="-1" onclick="return false">Chapter Tests</a>
-      <a href="./pyqbank.html">PYQ Tests</a>
+      <div class="footer-heading" data-i18n="index.footerPractice">Practice</div>
+      <a href="./mocktest.html" data-i18n="index.footerMockTests">Mock Tests</a>
+      <a href="#" class="footer-soon" tabindex="-1" onclick="return false" data-i18n="index.footerSubjectTests">Subject Tests</a>
+      <a href="#" class="footer-soon" tabindex="-1" onclick="return false" data-i18n="index.footerChapterTests">Chapter Tests</a>
+      <a href="./pyqbank.html" data-i18n="index.footerPyqTests">PYQ Tests</a>
     </div>
     <div class="footer-col">
-      <div class="footer-heading">Account</div>
-      <a href="./login.html">Sign Up Free</a>
-      <a href="./login.html">Login</a>
-      <a href="#" class="footer-soon" tabindex="-1" onclick="return false">Dashboard</a>
-      <a href="./pricing.html">Upgrade to Premium</a>
+      <div class="footer-heading" data-i18n="index.footerAccount">Account</div>
+      <a href="./login.html" data-i18n="index.footerSignUp">Sign Up Free</a>
+      <a href="./login.html" data-i18n="index.footerLogin">Login</a>
+      <a href="#" class="footer-soon" tabindex="-1" onclick="return false" data-i18n="index.footerDashboard">Dashboard</a>
+      <a href="./pricing.html" data-i18n="index.footerUpgrade">Upgrade to Premium</a>
     </div>
     <div class="footer-col">
-      <div class="footer-heading">Company</div>
-      <a href="#" class="footer-soon" tabindex="-1" onclick="return false">About</a>
-      <a href="./privacy.html">Privacy Policy</a>
-      <a href="./terms.html">Terms of Use</a>
-      <a href="#" class="footer-soon" tabindex="-1" onclick="return false">Contact</a>
+      <div class="footer-heading" data-i18n="index.footerCompany">Company</div>
+      <a href="#" class="footer-soon" tabindex="-1" onclick="return false" data-i18n="index.footerAbout">About</a>
+      <a href="./privacy.html" data-i18n="index.footerPrivacy">Privacy Policy</a>
+      <a href="./terms.html" data-i18n="index.footerTerms">Terms of Use</a>
+      <a href="#" class="footer-soon" tabindex="-1" onclick="return false" data-i18n="index.footerContact">Contact</a>
     </div>
   </div>
 
   <div class="footer-bottom">
-    <p>© 2026 NEET-AI. All rights reserved.</p>
-    <p class="footer-disclaimer">NEET exam questions sourced from official NTA papers — public domain.</p>
+    <p data-i18n="index.footerCopyright">© 2026 NEET-AI. All rights reserved.</p>
+    <p class="footer-disclaimer" data-i18n="index.footerDisclaimer">NEET exam questions sourced from official NTA papers — public domain.</p>
   </div>
 </footer>
 
+<script src="./i18n.js"></script>
 </body>
 </html>

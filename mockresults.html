@@ -66,61 +66,63 @@
   <div class="header">
     <span class="header-title">NEET<span>-AI</span> Results</span>
     <div style="display:flex;gap:10px;">
-     <button class="btn btn-outline" onclick="window.location.href='./mocktest.html'">Take Another Test</button>
-      <button class="btn btn-outline" onclick="window.location.href='./scoreboard.html'">📊 Scoreboard</button>
-      <button class="btn btn-outline" onclick="generateScorecard()">📤 Share Scorecard</button>
-      <button class="btn btn-primary" onclick="window.location.href='./chat.html'">Back to NEET-AI</button>
+      <button class="lang-toggle" onclick="toggleLang()" style="background:transparent;border:1px solid #2a2a2a;color:#888;padding:8px 14px;border-radius:8px;cursor:pointer;font-size:13px;font-family:Inter,sans-serif;">हिं</button>
+     <button class="btn btn-outline" onclick="window.location.href='./mocktest.html'" data-i18n="personalisedTest.takeAnotherTest">Take Another Test</button>
+      <button class="btn btn-outline" onclick="window.location.href='./scoreboard.html'" data-i18n="mockresults.scoreboardBtn">📊 Scoreboard</button>
+      <button class="btn btn-outline" onclick="generateScorecard()" data-i18n="mockresults.shareScorecard">📤 Share Scorecard</button>
+      <button class="btn btn-primary" onclick="window.location.href='./chat.html'" data-i18n="personalisedTest.backToNeetAiBtn">Back to NEET-AI</button>
     </div>
   </div>
 
   <div class="container">
     <div class="score-card">
-      <div class="score-label">Your Score</div>
+      <div class="score-label" data-i18n="personalisedTest.yourScore">Your Score</div>
       <div class="score-value" id="scoreValue">0</div>
-      <div class="score-total">out of 720
+      <div class="score-total" data-i18n="mockresults.outOf720">out of 720
       </div>
       <div style="text-align:center;margin:16px 0;">
-        <a id="rankPredictorBtn" href="./rank-predictor.html" style="display:inline-block;padding:10px 24px;background:linear-gradient(135deg,#7c5cff,#4f8ef7);color:#fff;border-radius:8px;font-size:13px;font-weight:600;text-decoration:none;font-family:Inter,sans-serif;">🎯 Predict My NEET Rank →</a>
+        <a id="rankPredictorBtn" href="./rank-predictor.html" style="display:inline-block;padding:10px 24px;background:linear-gradient(135deg,#7c5cff,#4f8ef7);color:#fff;border-radius:8px;font-size:13px;font-weight:600;text-decoration:none;font-family:Inter,sans-serif;" data-i18n="mockresults.predictRank">🎯 Predict My NEET Rank →</a>
       </div>
       <div class="score-stats">
         <div class="stat-box">
           <div class="stat-box-value" style="color:#4ade80;" id="correctCount">0</div>
-          <div class="stat-box-label">Correct</div>
+          <div class="stat-box-label" data-i18n="personalisedTest.correct">Correct</div>
 
         </div>
 
         <div class="stat-box">
           <div class="stat-box-value" style="color:#ef4444;" id="wrongCount">0</div>
-          <div class="stat-box-label">Wrong</div>
+          <div class="stat-box-label" data-i18n="personalisedTest.wrong">Wrong</div>
         </div>
         <div class="stat-box">
           <div class="stat-box-value" style="color:#555;" id="skippedCount">0</div>
-          <div class="stat-box-label">Skipped</div>
+          <div class="stat-box-label" data-i18n="personalisedTest.skippedLabel">Skipped</div>
         </div>
       </div>
     </div>
 
     <div class="subject-breakdown">
-      <div class="section-title">Subject-wise Performance</div>
+      <div class="section-title" data-i18n="mockresults.subjectWisePerformance">Subject-wise Performance</div>
       <div id="subjectBreakdown"></div>
     </div>
 
     <div class="review-section">
-      <div class="section-title">Question Review</div>
+      <div class="section-title" data-i18n="personalisedTest.questionReview">Question Review</div>
       <div class="filter-tabs">
-        <button class="filter-tab active" onclick="filterQuestions('all', this)">All</button>
-        <button class="filter-tab" onclick="filterQuestions('correct', this)">✅ Correct</button>
-        <button class="filter-tab" onclick="filterQuestions('wrong', this)">❌ Wrong</button>
-        <button class="filter-tab" onclick="filterQuestions('skipped', this)">⬜ Skipped</button>
-        <button class="filter-tab" onclick="filterQuestions('Biology', this)">Biology</button>
-        <button class="filter-tab" onclick="filterQuestions('Physics', this)">Physics</button>
-        <button class="filter-tab" onclick="filterQuestions('Chemistry', this)">Chemistry</button>
+        <button class="filter-tab active" onclick="filterQuestions('all', this)" data-i18n="personalisedTest.all">All</button>
+        <button class="filter-tab" onclick="filterQuestions('correct', this)" data-i18n="personalisedTest.correctFilter">✅ Correct</button>
+        <button class="filter-tab" onclick="filterQuestions('wrong', this)" data-i18n="personalisedTest.wrongFilter">❌ Wrong</button>
+        <button class="filter-tab" onclick="filterQuestions('skipped', this)" data-i18n="personalisedTest.skippedFilter">⬜ Skipped</button>
+        <button class="filter-tab" onclick="filterQuestions('Biology', this)" data-i18n="common.biology">Biology</button>
+        <button class="filter-tab" onclick="filterQuestions('Physics', this)" data-i18n="common.physics">Physics</button>
+        <button class="filter-tab" onclick="filterQuestions('Chemistry', this)" data-i18n="common.chemistry">Chemistry</button>
       </div>
       <div id="questionReview"></div>
     </div>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="./i18n.js"></script>
   <script>
     const SUPABASE_URL = 'https://hvhnfttrfouajlyhvunq.supabase.co';
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh2aG5mdHRyZm91YWpseWh2dW5xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg5NDI1NTIsImV4cCI6MjA5NDUxODU1Mn0.8RaSu5yiTpQCEUGKrFO2y6oiRXSqdBehIz933j9Z7WA';
@@ -147,13 +149,13 @@
     }
 
     if (!data) {
-      document.querySelector('.container').innerHTML = '<div class="no-results">No test results found. <a href="./mocktest.html" style="color:#4f8ef7;">Take a mock test</a></div>';
+      document.querySelector('.container').innerHTML = `<div class="no-results">${t('mockresults','noResultsMsg')} <a href="./mocktest.html" style="color:#4f8ef7;">${t('mockresults','takeMockTest')}</a></div>`;
     } else {
       // Score
-      document.getElementById('scoreValue').textContent = Math.max(0, data.score);
-      document.getElementById('correctCount').textContent = data.correct;
-      document.getElementById('wrongCount').textContent = data.wrong;
-      document.getElementById('skippedCount').textContent = data.skipped;
+      document.getElementById('scoreValue').textContent = localizeNum(Math.max(0, data.score));
+      document.getElementById('correctCount').textContent = localizeNum(data.correct);
+      document.getElementById('wrongCount').textContent = localizeNum(data.wrong);
+      document.getElementById('skippedCount').textContent = localizeNum(data.skipped);
       const rankBtn = document.getElementById('rankPredictorBtn');
 if (rankBtn) rankBtn.href = `./rank-predictor.html?score=${Math.max(0, data.score)}`;
 
@@ -183,10 +185,10 @@ if (rankBtn) rankBtn.href = `./rank-predictor.html?score=${Math.max(0, data.scor
         const pct = max > 0 ? (score / max) * 100 : 0;
         breakdown.innerHTML += `
           <div class="subject-row">
-            <div class="subject-name">${s}</div>
+            <div class="subject-name">${subjectName(s)}</div>
             <div class="subject-bar-wrap"><div class="subject-bar" style="width:${pct}%;background:${subjectColors[s]};"></div></div>
-            <div class="subject-score">${score}/${max}</div>
-            <div class="subject-detail">${sd.correct}✓ ${sd.wrong}✗ ${sd.skipped}−</div>
+            <div class="subject-score">${localizeNum(score)}/${localizeNum(max)}</div>
+            <div class="subject-detail">${localizeNum(sd.correct)}✓ ${localizeNum(sd.wrong)}✗ ${localizeNum(sd.skipped)}−</div>
           </div>
         `;
       });
@@ -356,18 +358,18 @@ function generateScorecard() {
           return `<div class="${cls}">${opt.toUpperCase()}) ${q['option_' + opt]}</div>`;
         }).join('');
 
-        const statusText = q.status === 'correct' ? '✅ Correct (+4)' : q.status === 'wrong' ? '❌ Wrong (-1)' : '⬜ Skipped (0)';
+        const statusText = q.status === 'correct' ? t('mockresults','statusCorrect') : q.status === 'wrong' ? t('mockresults','statusWrong') : t('mockresults','statusSkipped');
 
        card.innerHTML = `
           <div class="q-meta">
-            <span>${q.subject || ''}</span>
+            <span>${subjectName(q.subject) || ''}</span>
             <span>${q.year || ''}</span>
             <span class="q-status ${q.status}">${statusText}</span>
           </div>
           <div class="q-text">${q.question}</div>
           <div class="q-options">${opts}</div>
-          ${q.userAnswer ? `<div style="font-size:11px;color:#555;margin-bottom:8px;">Your answer: ${q.userAnswer?.toUpperCase()}</div>` : ''}
-          <button id="save-${i}" onclick="saveFromResults(${i})" style="background:transparent;border:1px solid #f97316;color:#f97316;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:11px;font-family:Inter,sans-serif;margin-top:4px;">🔖 Save Question</button>
+          ${q.userAnswer ? `<div style="font-size:11px;color:#555;margin-bottom:8px;">${t('mockresults','yourAnswer')} ${q.userAnswer?.toUpperCase()}</div>` : ''}
+          <button id="save-${i}" onclick="saveFromResults(${i})" style="background:transparent;border:1px solid #f97316;color:#f97316;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:11px;font-family:Inter,sans-serif;margin-top:4px;">${t('mockresults','saveQuestion')}</button>
         `;
         container.appendChild(card);
       });
