@@ -1,7 +1,8 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Header, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from typing import Optional, List
 import anthropic
 import requests
 import openai
@@ -23,6 +24,10 @@ ANTHROPIC_KEY = os.getenv("ANTHROPIC_KEY")
 OPENAI_KEY = os.getenv("OPENAI_KEY")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+# Service-role key bypasses RLS for admin writes — falls back to the anon key if not set,
+# but admin updates may fail under RLS until a real service_role key is added.
+SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", SUPABASE_KEY)
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "neetai-admin-2027")
 
 openai_client = openai.OpenAI(api_key=OPENAI_KEY)
 import requests as http_requests
@@ -108,6 +113,25 @@ class PersonalisedTestRequest(BaseModel):
 class PersonalisedCatalogStartRequest(BaseModel):
     subject: str
     test_number: int
+
+class AdminPyqUpdate(BaseModel):
+    chapter: Optional[str] = None
+    correct_answer: Optional[str] = None
+    is_active: Optional[bool] = None
+
+class AdminPyqBulkUpdate(BaseModel):
+    ids: List[str]
+    chapter: Optional[str] = None
+    is_active: Optional[bool] = None
+
+def verify_admin(x_admin_key: str = Header(None)):
+    if not x_admin_key or x_admin_key != ADMIN_PASSWORD:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+ADMIN_HEADERS = {
+    "apikey": SUPABASE_SERVICE_KEY,
+    "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"
+}
 
 import hashlib
 
@@ -490,6 +514,157 @@ async def start_personalised_catalog_test(req: PersonalisedCatalogStartRequest):
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+# ---------- Admin: PYQ data management (admin-dashboard.html only, not linked from any student page) ----------
+
+ADMIN_SORT_COLUMNS = {"id", "subject", "chapter", "question", "correct_answer", "is_active", "year"}
+
+def _admin_count(params):
+    resp = http_requests.get(
+        f"{SUPABASE_URL}/rest/v1/pyq",
+        headers={**ADMIN_HEADERS, "Prefer": "count=exact"},
+        params={**params, "select": "id", "limit": 1}
+    )
+    content_range = resp.headers.get("content-range", "")
+    tail = content_range.split("/")[-1] if "/" in content_range else ""
+    return int(tail) if tail.isdigit() else 0
+
+@app.post("/admin/verify")
+async def admin_verify(_: None = Depends(verify_admin)):
+    return {"ok": True}
+
+@app.get("/admin/pyq-stats")
+async def admin_pyq_stats(_: None = Depends(verify_admin)):
+    try:
+        total_active = _admin_count({"is_active": "eq.true"})
+        empty_answer = _admin_count({"is_active": "eq.true", "or": "(correct_answer.is.null,correct_answer.eq.)"})
+        empty_chapter = _admin_count({"is_active": "eq.true", "or": "(chapter.is.null,chapter.eq.)"})
+        return {
+            "total_active": total_active,
+            "empty_correct_answer": empty_answer,
+            "empty_chapter": empty_chapter
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/admin/pyq-chapters")
+async def admin_pyq_chapters(subject: str, _: None = Depends(verify_admin)):
+    if subject not in ("Biology", "Physics", "Chemistry"):
+        return {"error": "Invalid subject"}
+    try:
+        response = http_requests.get(
+            f"{SUPABASE_URL}/rest/v1/pyq",
+            headers=ADMIN_HEADERS,
+            params={
+                "subject": f"eq.{subject}",
+                "chapter": "not.is.null",
+                "select": "chapter",
+                "limit": 5000
+            }
+        )
+        rows = response.json()
+        chapters = sorted(set(r["chapter"].strip() for r in rows if r.get("chapter") and r["chapter"].strip()))
+        return {"chapters": chapters}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/admin/pyq-search")
+async def admin_pyq_search(
+    subject: str = None,
+    chapter: str = None,
+    search: str = None,
+    is_active: str = None,
+    page: int = 1,
+    sort_by: str = "id",
+    sort_dir: str = "asc",
+    _: None = Depends(verify_admin)
+):
+    try:
+        page = max(1, page)
+        page_size = 50
+        offset = (page - 1) * page_size
+        sort_col = sort_by if sort_by in ADMIN_SORT_COLUMNS else "id"
+        sort_direction = "desc" if sort_dir == "desc" else "asc"
+
+        params = {
+            "select": "id,subject,chapter,question,correct_answer,is_active,year",
+            "order": f"{sort_col}.{sort_direction}",
+            "limit": page_size,
+            "offset": offset
+        }
+        if subject in ("Biology", "Physics", "Chemistry"):
+            params["subject"] = f"eq.{subject}"
+        if chapter:
+            params["chapter"] = f"eq.{chapter}"
+        if is_active in ("true", "false"):
+            params["is_active"] = f"eq.{is_active}"
+        if search:
+            params["question"] = f"ilike.*{search}*"
+
+        response = http_requests.get(
+            f"{SUPABASE_URL}/rest/v1/pyq",
+            headers={**ADMIN_HEADERS, "Prefer": "count=exact"},
+            params=params
+        )
+        rows = response.json()
+        content_range = response.headers.get("content-range", "")
+        tail = content_range.split("/")[-1] if "/" in content_range else ""
+        total = int(tail) if tail.isdigit() else len(rows)
+        return {"rows": rows, "total": total, "page": page, "page_size": page_size}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.patch("/admin/pyq-update/{pyq_id}")
+async def admin_pyq_update(pyq_id: str, body: AdminPyqUpdate, _: None = Depends(verify_admin)):
+    update_fields = {}
+    if body.chapter is not None:
+        update_fields["chapter"] = body.chapter
+    if body.correct_answer is not None:
+        update_fields["correct_answer"] = body.correct_answer
+    if body.is_active is not None:
+        update_fields["is_active"] = body.is_active
+    if not update_fields:
+        return {"error": "No fields to update"}
+    try:
+        response = http_requests.patch(
+            f"{SUPABASE_URL}/rest/v1/pyq",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
+            params={"id": f"eq.{pyq_id}", "select": "id,subject,chapter,question,correct_answer,is_active,year"},
+            json=update_fields
+        )
+        if response.status_code >= 400:
+            return {"error": response.text}
+        updated = response.json()
+        if not updated:
+            return {"error": "Row not found"}
+        return {"updated": updated[0]}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.patch("/admin/pyq-bulk-update")
+async def admin_pyq_bulk_update(body: AdminPyqBulkUpdate, _: None = Depends(verify_admin)):
+    if not body.ids:
+        return {"error": "No ids provided"}
+    update_fields = {}
+    if body.chapter is not None:
+        update_fields["chapter"] = body.chapter
+    if body.is_active is not None:
+        update_fields["is_active"] = body.is_active
+    if not update_fields:
+        return {"error": "No fields to update"}
+    try:
+        id_list = ",".join(str(i) for i in body.ids)
+        response = http_requests.patch(
+            f"{SUPABASE_URL}/rest/v1/pyq",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
+            params={"id": f"in.({id_list})", "select": "id"},
+            json=update_fields
+        )
+        if response.status_code >= 400:
+            return {"error": response.text}
+        return {"updated_count": len(response.json())}
+    except Exception as e:
+        return {"error": str(e)}
 
 if __name__ == "__main__":
     import uvicorn

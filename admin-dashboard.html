@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta name="robots" content="noindex, nofollow"/>
+  <title>PYQ Admin — NEET-AI</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Inter', sans-serif; background: #0d0d0d; color: #ececec; min-height: 100vh; }
+
+    /* Password gate */
+    #gateOverlay { position: fixed; inset: 0; background: #0d0d0d; display: flex; align-items: center; justify-content: center; z-index: 999; }
+    .gate-box { background: #111; border: 1px solid #2a2a2a; border-radius: 14px; padding: 32px; width: 100%; max-width: 340px; text-align: center; }
+    .gate-box h1 { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
+    .gate-box p { font-size: 12px; color: #666; margin-bottom: 20px; }
+    .gate-box input { width: 100%; background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 8px; padding: 10px 14px; color: #ececec; font-size: 14px; font-family: 'Inter', sans-serif; outline: none; margin-bottom: 12px; }
+    .gate-box input:focus { border-color: #4f8ef7; }
+    .gate-box button { width: 100%; background: #4f8ef7; border: none; border-radius: 8px; padding: 10px; color: white; font-size: 13px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
+    .gate-box button:hover { background: #3b7de8; }
+    .gate-error { font-size: 12px; color: #ef4444; margin-top: 10px; min-height: 14px; }
+
+    /* Dashboard */
+    #dashboard { display: none; max-width: 1400px; margin: 0 auto; padding: 24px; }
+    .db-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+    .db-header h1 { font-size: 18px; font-weight: 700; }
+    .db-header h1 span { color: #4f8ef7; }
+    .logout-btn { background: transparent; border: 1px solid #2a2a2a; color: #888; padding: 6px 14px; border-radius: 8px; font-size: 12px; cursor: pointer; font-family: 'Inter', sans-serif; }
+    .logout-btn:hover { color: #ccc; border-color: #3a3a3a; }
+
+    /* Stats */
+    .stats-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 20px; }
+    .stat-card { background: #111; border: 1px solid #1e1e1e; border-radius: 10px; padding: 16px; }
+    .stat-card .num { font-size: 26px; font-weight: 700; color: #4f8ef7; }
+    .stat-card.warn .num { color: #f97316; }
+    .stat-card .label { font-size: 11px; color: #666; margin-top: 4px; }
+
+    /* Filters */
+    .filter-bar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 16px; background: #111; border: 1px solid #1e1e1e; border-radius: 10px; padding: 12px; }
+    .filter-bar select, .filter-bar input[type="text"] {
+      background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 8px; padding: 8px 12px;
+      color: #ececec; font-size: 13px; font-family: 'Inter', sans-serif; outline: none;
+    }
+    .filter-bar select:focus, .filter-bar input:focus { border-color: #4f8ef7; }
+    .filter-bar input[type="text"] { flex: 1; min-width: 200px; }
+    .filter-bar .result-count { font-size: 12px; color: #666; margin-left: auto; white-space: nowrap; }
+
+    /* Bulk bar */
+    #bulkBar { display: none; align-items: center; gap: 10px; flex-wrap: wrap; background: #4f8ef712; border: 1px solid #4f8ef740; border-radius: 10px; padding: 10px 14px; margin-bottom: 14px; font-size: 13px; }
+    #bulkBar .count { color: #4f8ef7; font-weight: 600; }
+    #bulkBar input { background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 6px; padding: 6px 10px; color: #ececec; font-size: 12px; font-family: 'Inter', sans-serif; outline: none; width: 160px; }
+    #bulkBar button { background: #4f8ef7; border: none; border-radius: 6px; padding: 6px 12px; color: white; font-size: 12px; cursor: pointer; font-family: 'Inter', sans-serif; }
+    #bulkBar button:hover { background: #3b7de8; }
+    #bulkBar button.danger { background: transparent; border: 1px solid #ef4444; color: #ef4444; }
+    #bulkBar button.danger:hover { background: #ef444420; }
+    #bulkBar .clear-sel { background: transparent; border: 1px solid #2a2a2a; color: #888; }
+    #bulkBar .clear-sel:hover { background: #1a1a1a; }
+
+    /* Table */
+    .table-wrap { background: #111; border: 1px solid #1e1e1e; border-radius: 10px; overflow: hidden; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    thead th { text-align: left; padding: 10px 12px; border-bottom: 1px solid #1e1e1e; color: #888; font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; cursor: pointer; white-space: nowrap; user-select: none; }
+    thead th:hover { color: #ccc; }
+    thead th .sort-arrow { font-size: 9px; margin-left: 3px; color: #4f8ef7; }
+    tbody tr.row-main { border-bottom: 1px solid #1a1a1a; cursor: pointer; transition: background 0.15s; }
+    tbody tr.row-main:hover { background: #161616; }
+    tbody tr.row-main.selected { background: #4f8ef710; }
+    tbody td { padding: 10px 12px; vertical-align: middle; }
+    td.q-cell { max-width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #ccc; }
+    td.chapter-cell { color: #a78bfa; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    td.chapter-cell.empty, td.answer-cell.empty { color: #ef4444; font-style: italic; }
+    td.answer-cell { color: #4ade80; font-weight: 600; text-transform: uppercase; }
+    .active-badge { font-size: 11px; padding: 2px 8px; border-radius: 20px; font-weight: 600; }
+    .active-badge.yes { background: #4ade8020; color: #4ade80; }
+    .active-badge.no { background: #ef444420; color: #ef4444; }
+    .empty-row td { text-align: center; padding: 40px; color: #555; }
+
+    /* Inline edit row */
+    tr.edit-row td { background: #0d0d0d; padding: 16px; border-bottom: 1px solid #1a1a1a; }
+    .edit-grid { display: grid; grid-template-columns: 2fr 1fr 1fr auto; gap: 12px; align-items: end; }
+    .edit-field label { display: block; font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 5px; }
+    .edit-field input[type="text"] { width: 100%; background: #111; border: 1px solid #2a2a2a; border-radius: 6px; padding: 7px 10px; color: #ececec; font-size: 13px; font-family: 'Inter', sans-serif; outline: none; }
+    .edit-field input:focus { border-color: #4f8ef7; }
+    .edit-field.checkbox-field { display: flex; align-items: center; gap: 8px; }
+    .edit-field.checkbox-field label { margin: 0; }
+    .edit-actions { display: flex; gap: 8px; }
+    .edit-actions button { padding: 7px 16px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; border: none; }
+    .save-btn { background: #4f8ef7; color: white; }
+    .save-btn:hover { background: #3b7de8; }
+    .save-confirm { font-size: 12px; color: #4ade80; margin-left: 10px; opacity: 0; transition: opacity 0.2s; }
+    .save-confirm.show { opacity: 1; }
+    .edit-error { font-size: 12px; color: #ef4444; margin-top: 8px; }
+
+    /* Pagination */
+    .pagination { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 16px; }
+    .pagination button { background: #1a1a1a; border: 1px solid #2a2a2a; color: #ececec; padding: 6px 14px; border-radius: 6px; font-size: 12px; cursor: pointer; font-family: 'Inter', sans-serif; }
+    .pagination button:hover:not(:disabled) { border-color: #4f8ef7; color: #4f8ef7; }
+    .pagination button:disabled { opacity: 0.3; cursor: not-allowed; }
+    .pagination .page-info { font-size: 12px; color: #666; }
+
+    .loading-text { text-align: center; padding: 40px; color: #555; font-size: 13px; }
+  </style>
+</head>
+<body>
+
+  <div id="gateOverlay">
+    <div class="gate-box">
+      <h1>PYQ Admin</h1>
+      <p>Internal tool — enter admin password</p>
+      <input type="password" id="gatePassword" placeholder="Password" autocomplete="off"/>
+      <button onclick="verifyPassword()">Enter</button>
+      <div class="gate-error" id="gateError"></div>
+    </div>
+  </div>
+
+  <div id="dashboard">
+    <div class="db-header">
+      <h1>NEET<span>-AI</span> PYQ Admin</h1>
+      <button class="logout-btn" onclick="logout()">Log out</button>
+    </div>
+
+    <div class="stats-row">
+      <div class="stat-card"><div class="num" id="statTotalActive">–</div><div class="label">Total Active Rows</div></div>
+      <div class="stat-card warn"><div class="num" id="statEmptyAnswer">–</div><div class="label">Missing correct_answer</div></div>
+      <div class="stat-card warn"><div class="num" id="statEmptyChapter">–</div><div class="label">Missing chapter</div></div>
+    </div>
+
+    <div class="filter-bar">
+      <select id="filterSubject" onchange="onSubjectChange()">
+        <option value="">All Subjects</option>
+        <option value="Biology">Biology</option>
+        <option value="Physics">Physics</option>
+        <option value="Chemistry">Chemistry</option>
+      </select>
+      <select id="filterChapter" onchange="onFilterChange()">
+        <option value="">All Chapters</option>
+      </select>
+      <select id="filterActive" onchange="onFilterChange()">
+        <option value="">All Status</option>
+        <option value="true">Active only</option>
+        <option value="false">Inactive only</option>
+      </select>
+      <input type="text" id="filterSearch" placeholder="Search question text..." oninput="onSearchInput()"/>
+      <div class="result-count" id="resultCount"></div>
+    </div>
+
+    <div id="bulkBar">
+      <span class="count"><span id="bulkCount">0</span> selected</span>
+      <input type="text" id="bulkChapter" placeholder="Set chapter to..."/>
+      <button onclick="bulkSetChapter()">Apply Chapter</button>
+      <button onclick="bulkSetActive(true)">Set Active</button>
+      <button class="danger" onclick="bulkSetActive(false)">Set Inactive</button>
+      <button class="clear-sel" onclick="clearSelection()">Clear selection</button>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:32px;"><input type="checkbox" id="selectAllBox" onchange="toggleSelectAll(this)"/></th>
+            <th onclick="setSort('id')">ID<span class="sort-arrow" id="arrow-id"></span></th>
+            <th onclick="setSort('subject')">Subject<span class="sort-arrow" id="arrow-subject"></span></th>
+            <th onclick="setSort('chapter')">Chapter<span class="sort-arrow" id="arrow-chapter"></span></th>
+            <th onclick="setSort('question')">Question<span class="sort-arrow" id="arrow-question"></span></th>
+            <th onclick="setSort('correct_answer')">Answer<span class="sort-arrow" id="arrow-correct_answer"></span></th>
+            <th onclick="setSort('is_active')">Active<span class="sort-arrow" id="arrow-is_active"></span></th>
+          </tr>
+        </thead>
+        <tbody id="tableBody">
+          <tr><td colspan="7" class="loading-text">Loading...</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="pagination">
+      <button id="prevPageBtn" onclick="changePage(-1)">← Prev</button>
+      <span class="page-info" id="pageInfo">Page 1</span>
+      <button id="nextPageBtn" onclick="changePage(1)">Next →</button>
+    </div>
+  </div>
+
+  <script>
+    const API_BASE = 'https://neet-ai-production.up.railway.app';
+    let adminKey = sessionStorage.getItem('admin_key') || '';
+    let currentPage = 1;
+    let totalRows = 0;
+    let sortBy = 'id';
+    let sortDir = 'asc';
+    let selectedIds = new Set();
+    let currentRows = [];
+    let expandedRowId = null;
+
+    function authHeaders(extra) {
+      return Object.assign({ 'X-Admin-Key': adminKey }, extra || {});
+    }
+
+    async function verifyPassword() {
+      const pw = document.getElementById('gatePassword').value;
+      const errEl = document.getElementById('gateError');
+      errEl.textContent = '';
+      try {
+        const res = await fetch(`${API_BASE}/admin/verify`, { method: 'POST', headers: authHeaders({ 'X-Admin-Key': pw }) });
+        if (res.status === 200) {
+          adminKey = pw;
+          sessionStorage.setItem('admin_key', adminKey);
+          enterDashboard();
+        } else {
+          errEl.textContent = 'Wrong password.';
+        }
+      } catch (e) {
+        errEl.textContent = 'Could not reach server.';
+      }
+    }
+
+    document.getElementById('gatePassword').addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') verifyPassword();
+    });
+
+    function logout() {
+      sessionStorage.removeItem('admin_key');
+      adminKey = '';
+      document.getElementById('dashboard').style.display = 'none';
+      document.getElementById('gateOverlay').style.display = 'flex';
+      document.getElementById('gatePassword').value = '';
+    }
+
+    async function enterDashboard() {
+      document.getElementById('gateOverlay').style.display = 'none';
+      document.getElementById('dashboard').style.display = 'block';
+      loadStats();
+      loadResults();
+    }
+
+    async function loadStats() {
+      try {
+        const res = await fetch(`${API_BASE}/admin/pyq-stats`, { headers: authHeaders() });
+        if (res.status === 401) return logout();
+        const data = await res.json();
+        document.getElementById('statTotalActive').textContent = data.total_active ?? '–';
+        document.getElementById('statEmptyAnswer').textContent = data.empty_correct_answer ?? '–';
+        document.getElementById('statEmptyChapter').textContent = data.empty_chapter ?? '–';
+      } catch (e) {}
+    }
+
+    async function onSubjectChange() {
+      const subject = document.getElementById('filterSubject').value;
+      const chapterSel = document.getElementById('filterChapter');
+      chapterSel.innerHTML = '<option value="">All Chapters</option>';
+      if (subject) {
+        try {
+          const res = await fetch(`${API_BASE}/admin/pyq-chapters?subject=${encodeURIComponent(subject)}`, { headers: authHeaders() });
+          const data = await res.json();
+          (data.chapters || []).forEach(ch => {
+            const opt = document.createElement('option');
+            opt.value = ch;
+            opt.textContent = ch;
+            chapterSel.appendChild(opt);
+          });
+        } catch (e) {}
+      }
+      currentPage = 1;
+      loadResults();
+    }
+
+    function onFilterChange() {
+      currentPage = 1;
+      loadResults();
+    }
+
+    let searchDebounce = null;
+    function onSearchInput() {
+      clearTimeout(searchDebounce);
+      searchDebounce = setTimeout(() => { currentPage = 1; loadResults(); }, 400);
+    }
+
+    function setSort(col) {
+      if (sortBy === col) {
+        sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+      } else {
+        sortBy = col;
+        sortDir = 'asc';
+      }
+      document.querySelectorAll('.sort-arrow').forEach(el => el.textContent = '');
+      document.getElementById('arrow-' + col).textContent = sortDir === 'asc' ? '▲' : '▼';
+      currentPage = 1;
+      loadResults();
+    }
+
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str == null ? '' : String(str);
+      return div.innerHTML;
+    }
+
+    async function loadResults() {
+      const tbody = document.getElementById('tableBody');
+      tbody.innerHTML = '<tr><td colspan="7" class="loading-text">Loading...</td></tr>';
+      expandedRowId = null;
+
+      const params = new URLSearchParams();
+      const subject = document.getElementById('filterSubject').value;
+      const chapter = document.getElementById('filterChapter').value;
+      const isActive = document.getElementById('filterActive').value;
+      const search = document.getElementById('filterSearch').value.trim();
+      if (subject) params.set('subject', subject);
+      if (chapter) params.set('chapter', chapter);
+      if (isActive) params.set('is_active', isActive);
+      if (search) params.set('search', search);
+      params.set('page', currentPage);
+      params.set('sort_by', sortBy);
+      params.set('sort_dir', sortDir);
+
+      try {
+        const res = await fetch(`${API_BASE}/admin/pyq-search?${params.toString()}`, { headers: authHeaders() });
+        if (res.status === 401) return logout();
+        const data = await res.json();
+        if (data.error) {
+          tbody.innerHTML = `<tr class="empty-row"><td colspan="7">Error: ${escapeHtml(data.error)}</td></tr>`;
+          return;
+        }
+        currentRows = data.rows || [];
+        totalRows = data.total || 0;
+        renderTable();
+        renderPagination();
+        document.getElementById('resultCount').textContent = `${totalRows} matching row${totalRows === 1 ? '' : 's'}`;
+      } catch (e) {
+        tbody.innerHTML = '<tr class="empty-row"><td colspan="7">Could not reach server.</td></tr>';
+      }
+    }
+
+    function renderTable() {
+      const tbody = document.getElementById('tableBody');
+      if (currentRows.length === 0) {
+        tbody.innerHTML = '<tr class="empty-row"><td colspan="7">No rows match these filters.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = currentRows.map(row => {
+        const qTruncated = (row.question || '').length > 90 ? row.question.slice(0, 90) + '…' : (row.question || '');
+        const chapterEmpty = !row.chapter || !row.chapter.trim();
+        const answerEmpty = !row.correct_answer || !row.correct_answer.trim();
+        const isSelected = selectedIds.has(row.id);
+        const mainRow = `
+          <tr class="row-main${isSelected ? ' selected' : ''}" data-id="${escapeHtml(row.id)}">
+            <td onclick="event.stopPropagation()"><input type="checkbox" class="row-check" data-id="${escapeHtml(row.id)}" ${isSelected ? 'checked' : ''} onchange="toggleRowSelect('${row.id}', this.checked)"/></td>
+            <td>${row.id}</td>
+            <td>${escapeHtml(row.subject)}</td>
+            <td class="chapter-cell${chapterEmpty ? ' empty' : ''}">${chapterEmpty ? '(none)' : escapeHtml(row.chapter)}</td>
+            <td class="q-cell" title="${escapeHtml(row.question)}">${escapeHtml(qTruncated)}</td>
+            <td class="answer-cell${answerEmpty ? ' empty' : ''}">${answerEmpty ? '(none)' : escapeHtml(row.correct_answer)}</td>
+            <td><span class="active-badge ${row.is_active ? 'yes' : 'no'}">${row.is_active ? 'Active' : 'Inactive'}</span></td>
+          </tr>`;
+        const editRow = expandedRowId === row.id ? renderEditRow(row) : '';
+        return mainRow + editRow;
+      }).join('');
+
+      document.querySelectorAll('tr.row-main').forEach(tr => {
+        tr.addEventListener('click', () => toggleEditRow(tr.dataset.id));
+      });
+    }
+
+    function renderEditRow(row) {
+      return `
+        <tr class="edit-row" data-edit-for="${row.id}">
+          <td colspan="7">
+            <div class="edit-grid">
+              <div class="edit-field">
+                <label>Chapter</label>
+                <input type="text" id="edit-chapter-${row.id}" value="${escapeHtml(row.chapter || '')}"/>
+              </div>
+              <div class="edit-field">
+                <label>Correct Answer</label>
+                <input type="text" id="edit-answer-${row.id}" value="${escapeHtml(row.correct_answer || '')}" maxlength="1"/>
+              </div>
+              <div class="edit-field checkbox-field">
+                <input type="checkbox" id="edit-active-${row.id}" ${row.is_active ? 'checked' : ''}/>
+                <label for="edit-active-${row.id}">Active</label>
+              </div>
+              <div class="edit-actions">
+                <button class="save-btn" onclick="event.stopPropagation(); saveRow('${row.id}')">Save</button>
+                <span class="save-confirm" id="save-confirm-${row.id}">✓ Saved</span>
+              </div>
+            </div>
+            <div class="edit-error" id="edit-error-${row.id}"></div>
+          </td>
+        </tr>`;
+    }
+
+    function toggleEditRow(id) {
+      expandedRowId = expandedRowId === id ? null : id;
+      renderTable();
+    }
+
+    async function saveRow(id) {
+      const chapter = document.getElementById(`edit-chapter-${id}`).value.trim();
+      const correct_answer = document.getElementById(`edit-answer-${id}`).value.trim();
+      const is_active = document.getElementById(`edit-active-${id}`).checked;
+      const errEl = document.getElementById(`edit-error-${id}`);
+      errEl.textContent = '';
+      try {
+        const res = await fetch(`${API_BASE}/admin/pyq-update/${id}`, {
+          method: 'PATCH',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ chapter, correct_answer, is_active })
+        });
+        if (res.status === 401) return logout();
+        const data = await res.json();
+        if (data.error) { errEl.textContent = data.error; return; }
+        const idx = currentRows.findIndex(r => r.id === id);
+        if (idx !== -1) currentRows[idx] = Object.assign({}, currentRows[idx], data.updated);
+        const confirmEl = document.getElementById(`save-confirm-${id}`);
+        confirmEl.classList.add('show');
+        setTimeout(() => confirmEl.classList.remove('show'), 1800);
+        renderTable();
+        loadStats();
+      } catch (e) {
+        errEl.textContent = 'Save failed — check connection.';
+      }
+    }
+
+    function toggleRowSelect(id, checked) {
+      if (checked) selectedIds.add(id); else selectedIds.delete(id);
+      updateBulkBar();
+    }
+
+    function toggleSelectAll(box) {
+      currentRows.forEach(r => { if (box.checked) selectedIds.add(r.id); else selectedIds.delete(r.id); });
+      renderTable();
+      updateBulkBar();
+    }
+
+    function clearSelection() {
+      selectedIds.clear();
+      document.getElementById('selectAllBox').checked = false;
+      renderTable();
+      updateBulkBar();
+    }
+
+    function updateBulkBar() {
+      const bar = document.getElementById('bulkBar');
+      document.getElementById('bulkCount').textContent = selectedIds.size;
+      bar.style.display = selectedIds.size > 0 ? 'flex' : 'none';
+    }
+
+    async function bulkSetChapter() {
+      const chapter = document.getElementById('bulkChapter').value.trim();
+      if (!chapter) { alert('Enter a chapter name first.'); return; }
+      await bulkUpdate({ chapter });
+    }
+
+    async function bulkSetActive(value) {
+      await bulkUpdate({ is_active: value });
+    }
+
+    async function bulkUpdate(fields) {
+      if (selectedIds.size === 0) return;
+      try {
+        const res = await fetch(`${API_BASE}/admin/pyq-bulk-update`, {
+          method: 'PATCH',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify(Object.assign({ ids: Array.from(selectedIds) }, fields))
+        });
+        if (res.status === 401) return logout();
+        const data = await res.json();
+        if (data.error) { alert('Bulk update failed: ' + data.error); return; }
+        document.getElementById('bulkChapter').value = '';
+        clearSelection();
+        loadResults();
+        loadStats();
+      } catch (e) {
+        alert('Bulk update failed — check connection.');
+      }
+    }
+
+    function renderPagination() {
+      const totalPages = Math.max(1, Math.ceil(totalRows / 50));
+      document.getElementById('pageInfo').textContent = `Page ${currentPage} of ${totalPages}`;
+      document.getElementById('prevPageBtn').disabled = currentPage <= 1;
+      document.getElementById('nextPageBtn').disabled = currentPage >= totalPages;
+    }
+
+    function changePage(delta) {
+      const totalPages = Math.max(1, Math.ceil(totalRows / 50));
+      const next = currentPage + delta;
+      if (next < 1 || next > totalPages) return;
+      currentPage = next;
+      loadResults();
+    }
+
+    if (adminKey) {
+      enterDashboard();
+    }
+  </script>
+</body>
+</html>
