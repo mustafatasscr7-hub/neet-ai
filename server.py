@@ -97,6 +97,7 @@ class Message(BaseModel):
     language: str = "en"
     user_id: str = ""
     personalize: bool = True
+    skip_cache: bool = False
 
 class SolveRequest(BaseModel):
     question: str
@@ -310,12 +311,14 @@ def get_student_context(user_id: str) -> str:
         "similar — just let it shape the answer naturally):\n" + "\n".join(parts)
     )
 
-def stream_response(text: str, history: list = [], image: str = None, image_type: str = None, pdf: str = None, answer_style: str = "detailed", student_name: str = "", language: str = "en", user_id: str = "", personalize: bool = True):
+def stream_response(text: str, history: list = [], image: str = None, image_type: str = None, pdf: str = None, answer_style: str = "detailed", student_name: str = "", language: str = "en", user_id: str = "", personalize: bool = True, skip_cache: bool = False):
     print(f"stream_response called - text: {text[:50]}, image: {bool(image)}")
     import hashlib
     # Personalized answers are specific to this student and must never be served from —
     # or written to — the shared answer cache, which is keyed only on question text.
-    use_shared_cache = not (personalize and user_id)
+    # skip_cache is for explicit retries: the student has already seen the cached
+    # answer and wants a genuinely different generation, so it must bypass cache too.
+    use_shared_cache = not (personalize and user_id) and not skip_cache
     answer_hash = hashlib.sha256(f"{language}:{text.strip().lower()}".encode()).hexdigest()
     # Service-role key: answer_cache has RLS with no anon INSERT policy, so writes via
     # the anon key were silently rejected (401) — reads worked, writes never did.
@@ -460,7 +463,7 @@ Rules:
 @app.post("/chat")
 async def chat(message: Message, _: None = Depends(rate_limiter(15, 60))):
     return StreamingResponse(
-       stream_response(message.text, message.history, message.image, message.image_type, message.pdf, message.answer_style, message.student_name, message.language, message.user_id, message.personalize),
+       stream_response(message.text, message.history, message.image, message.image_type, message.pdf, message.answer_style, message.student_name, message.language, message.user_id, message.personalize, message.skip_cache),
         media_type="text/plain"
     )
 

@@ -700,50 +700,9 @@ let selectedImage = null;
       }
 
       if (isRecording) {
-      const bubble = btn.closest('.message-content').querySelector('.message-bubble');
-      navigator.clipboard.writeText(bubble.innerText).then(() => {
-        const orig = btn.innerHTML;
-        btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="#4ade80" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>';
-        setTimeout(() => btn.innerHTML = orig, 2000);
-      });
-    }
-
-    function shareMessage(btn) {
-      const bubble = btn.closest('.message-content').querySelector('.message-bubble');
-      const text = bubble.innerText;
-      if (navigator.share) {
-        navigator.share({ title: 'NEET-AI Answer', text: text });
-      } else {
-        navigator.clipboard.writeText(text).then(() => {
-          alert('Answer copied to clipboard!');
-        });
+        recognition.stop();
+        return;
       }
-    }
-
-    function retryMessage(btn) {
-      const allRows = document.querySelectorAll('.message-row');
-      let lastUserText = '';
-      allRows.forEach(row => {
-        if (row.classList.contains('user')) {
-          lastUserText = row.querySelector('.message-bubble').innerText;
-        }
-      });
-      if (lastUserText) {
-        input.value = lastUserText;
-        sendMessage();
-      }
-    }
-
-    function editMessage(btn) {
-      const bubble = btn.closest('.message-content').querySelector('.message-bubble');
-      const text = bubble.innerText;
-      input.value = text;
-      input.focus();
-      input.style.height = 'auto';
-      input.style.height = Math.min(input.scrollHeight, 160) + 'px';
-    }
-
-  
 
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
       recognition = new SpeechRecognition();
@@ -971,9 +930,10 @@ let selectedImage = null;
       document.body.appendChild(modal);
     }
 
-    function addMessageRow(role, text, userQuestion) {
+    function addMessageRow(role, text, userQuestion, msgIndex) {
       const row = document.createElement('div');
       row.className = 'message-row ' + role;
+      if (msgIndex !== undefined) row.dataset.msgIndex = msgIndex;
       const avatar = document.createElement('div');
       avatar.className = 'avatar ' + role;
       avatar.textContent = role === 'ai' ? '⚡' : '👤';
@@ -1078,24 +1038,87 @@ function copyMessage(btn) {
       }
     }
 
-    function retryMessage(btn) {
-      const allRows = document.querySelectorAll('.message-row');
-      let lastUserText = '';
-      allRows.forEach(row => {
-        if (row.classList.contains('user')) {
-          lastUserText = row.querySelector('.message-bubble') ? row.querySelector('.message-bubble').innerText : '';
-        }
-      });
-      if (lastUserText) { input.value = lastUserText; sendMessage(); }
+    async function retryMessage(btn) {
+      if (isStreaming) return;
+      const row = btn.closest('.message-row');
+      const aiIndex = parseInt(row.dataset.msgIndex, 10);
+      if (isNaN(aiIndex) || aiIndex < 1) return;
+      const userMsg = currentConversation[aiIndex - 1];
+      if (!userMsg || userMsg.role !== 'user') return;
+      const questionText = userMsg.text;
+
+      let node = row;
+      while (node) {
+        const next = node.nextSibling;
+        node.remove();
+        node = next;
+      }
+
+      currentConversation = currentConversation.slice(0, aiIndex);
+      await streamAIResponse(questionText, { skipCache: true });
     }
 
     function editMessage(btn) {
-      const bubble = btn.closest('.message-content').querySelector('.message-bubble');
-      const text = bubble.innerText;
-      input.value = text;
-      input.focus();
-      input.style.height = 'auto';
-      input.style.height = Math.min(input.scrollHeight, 160) + 'px';
+      if (isStreaming) return;
+      const row = btn.closest('.message-row');
+      const userIndex = parseInt(row.dataset.msgIndex, 10);
+      if (isNaN(userIndex)) return;
+      const contentWrapper = row.querySelector('.message-content');
+      const bubble = contentWrapper.querySelector('.message-bubble');
+      const actions = contentWrapper.querySelector('.message-actions');
+      const originalText = currentConversation[userIndex] ? currentConversation[userIndex].text : bubble.innerText;
+
+      const editWrap = document.createElement('div');
+      editWrap.style.cssText = 'display:flex;flex-direction:column;align-items:flex-end;gap:8px;width:100%;';
+
+      const textarea = document.createElement('textarea');
+      textarea.value = originalText;
+      textarea.style.cssText = 'width:100%;max-width:500px;min-height:60px;background:#1e1e2e;border:1px solid #2a2a3a;color:#ececec;border-radius:12px;padding:12px 16px;font-size:var(--chat-font-size,14px);font-family:inherit;line-height:1.7;resize:vertical;outline:none;';
+
+      const controls = document.createElement('div');
+      controls.style.cssText = 'display:flex;gap:8px;';
+
+      const cancelBtn = document.createElement('button');
+      cancelBtn.textContent = 'Cancel';
+      cancelBtn.style.cssText = 'background:transparent;color:#999;border:1px solid #2a2a3a;border-radius:8px;padding:6px 14px;font-size:13px;cursor:pointer;';
+      cancelBtn.onclick = function() {
+        editWrap.replaceWith(bubble, actions);
+      };
+
+      const saveBtn = document.createElement('button');
+      saveBtn.textContent = 'Save & Submit';
+      saveBtn.style.cssText = 'background:#4f8ef7;color:#fff;border:none;border-radius:8px;padding:6px 14px;font-size:13px;cursor:pointer;';
+      saveBtn.onclick = async function() {
+        if (isStreaming) return;
+        const newText = textarea.value.trim();
+        if (!newText) return;
+
+        let node = row;
+        while (node) {
+          const next = node.nextSibling;
+          node.remove();
+          node = next;
+        }
+        currentConversation = currentConversation.slice(0, userIndex);
+
+        const newIndex = currentConversation.length;
+        addMessageRow('user', newText, undefined, newIndex);
+        currentConversation.push({ role: 'user', text: newText });
+        if (currentConversation.length === 1) saveToSidebar(newText);
+
+        await streamAIResponse(newText, { skipCache: false });
+      };
+
+      controls.appendChild(cancelBtn);
+      controls.appendChild(saveBtn);
+      editWrap.appendChild(textarea);
+      editWrap.appendChild(controls);
+
+      bubble.replaceWith(editWrap);
+      actions.remove();
+      textarea.focus();
+      textarea.style.height = 'auto';
+      textarea.style.height = Math.min(textarea.scrollHeight, 300) + 'px';
     }
     function createHistoryItem(id, title, onClickFn) {
       const item = document.createElement('div');
@@ -1217,12 +1240,12 @@ function copyMessage(btn) {
       chatWindow.innerHTML = '';
       inputArea.style.display = 'block';
       let lastUserText = '';
-      chat.messages.forEach(function(msg) {
+      chat.messages.forEach(function(msg, i) {
         if (msg.role === 'user') {
           lastUserText = msg.text;
-          addMessageRow(msg.role, msg.text);
+          addMessageRow(msg.role, msg.text, undefined, i);
         } else if (msg.role === 'ai') {
-          const bubble = addMessageRow('ai', msg.text, lastUserText);
+          const bubble = addMessageRow('ai', msg.text, lastUserText, i);
         }
       });
       currentConversation = chat.messages;
@@ -1235,12 +1258,12 @@ function copyMessage(btn) {
       if (!conv) return;
       chatWindow.innerHTML = '';
       let lastUserText = '';
-      conv.messages.forEach(function(msg) {
+      conv.messages.forEach(function(msg, i) {
         if (msg.role === 'user') {
           lastUserText = msg.text;
-          addMessageRow(msg.role, msg.text);
+          addMessageRow(msg.role, msg.text, undefined, i);
         } else if (msg.role === 'ai') {
-          addMessageRow('ai', msg.text, lastUserText);
+          addMessageRow('ai', msg.text, lastUserText, i);
         }
       });
       currentConversation = conv.messages;
@@ -1293,12 +1316,12 @@ function copyMessage(btn) {
           .eq('user_id', session.user.id)
           .eq('reset_date', today)
           .single();
-        
+
         const FREE_LIMIT = 999;
         const count = usage ? usage.message_count : 0;
-        
+
         if (count >= FREE_LIMIT) {
-         
+
           document.getElementById('limitBanner').style.display = 'flex';
           document.getElementById('sendBtn').disabled = true;
           document.getElementById('sendBtn').style.opacity = '0.4';
@@ -1321,24 +1344,43 @@ function copyMessage(btn) {
       if (welcome) welcome.remove();
       inputArea.style.display = 'block';
 
+      const userIndex = currentConversation.length;
       if (selectedImage) {
         const imgRow = document.createElement('div');
         imgRow.className = 'message-row user';
+        imgRow.dataset.msgIndex = userIndex;
        imgRow.innerHTML = `<div class="avatar user">👤</div><div class="message-content user"><div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;"><img src="${selectedImage}" style="max-width:300px;max-height:300px;border-radius:12px;border:1px solid #2a2a3a;display:block;"/>${text ? `<div class="message-bubble user">${text}</div>` : ''}</div></div>`;
         chatWindow.appendChild(imgRow);
         scrollBottom();
       } else {
-        addMessageRow('user', text);
+        addMessageRow('user', text, undefined, userIndex);
       }
       input.value = '';
       input.style.height = 'auto';
 
+      currentConversation.push({ role: 'user', text: text });
+      if (currentConversation.length === 1) saveToSidebar(text);
+
+      const imageData = selectedImage, imageTypeData = selectedImage ? selectedImage.split(';')[0].split(':')[1] : null, pdfData = selectedPDF;
+      await streamAIResponse(text || 'Describe this image and answer any NEET related content in it.', {
+        image: imageData ? imageData.split(',')[1] : null,
+        imageType: imageTypeData,
+        pdf: pdfData ? pdfData.split(',')[1] : null
+      });
+
+      removeAttachment('image');
+      removeAttachment('pdf');
+      selectedImage = null;
+      selectedPDF = null;
+    }
+
+    // Shared by sendMessage / retryMessage / editMessage: calls /chat for questionText
+    // (assumed to already be the last entry in currentConversation), streams the
+    // response into a new AI bubble, and persists the updated conversation.
+    async function streamAIResponse(questionText, options = {}) {
       isStreaming = true;
       document.getElementById('sendIcon').style.display = 'none';
       document.getElementById('stopIcon').style.display = 'block';
-
-      currentConversation.push({ role: 'user', text: text });
-      if (currentConversation.length === 1) saveToSidebar(text);
 
       const typingRow = document.createElement('div');
       typingRow.className = 'typing-row';
@@ -1348,26 +1390,27 @@ function copyMessage(btn) {
 
       try {
         streamController = new AbortController();
-       const requestBody = {
-          text: text || 'Describe this image and answer any NEET related content in it.',
+        const { data: { session } } = await client.auth.getSession();
+        const requestBody = {
+          text: questionText,
           history: currentConversation.slice(0, -1),
           answer_style: localStorage.getItem('answerStyle') || 'detailed',
           student_name: document.querySelector('.profile-name')?.textContent || '',
           language: getLang(),
           user_id: session?.user?.id || '',
-          personalize: localStorage.getItem('personalize') !== 'false'
+          personalize: localStorage.getItem('personalize') !== 'false',
+          skip_cache: !!options.skipCache
         };
 
-        if (selectedImage) {
-          requestBody.image = selectedImage.split(',')[1];
-          requestBody.image_type = selectedImage.split(';')[0].split(':')[1];
+        if (options.image) {
+          requestBody.image = options.image;
+          requestBody.image_type = options.imageType;
         }
-        console.log('Sending request with image:', !!requestBody.image);
+        if (options.pdf) {
+          requestBody.pdf = options.pdf;
+        }
 
-        if (selectedPDF) {
-          requestBody.pdf = selectedPDF.split(',')[1];
-        }
-                const response = await fetch('https://neet-ai-production.up.railway.app/chat', {
+        const response = await fetch('https://neet-ai-production.up.railway.app/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(requestBody),
@@ -1376,12 +1419,13 @@ function copyMessage(btn) {
 
         if (typingRow.parentNode === chatWindow) chatWindow.removeChild(typingRow);
 
+        const aiIndex = currentConversation.length;
         const aiRow = document.createElement('div');
         aiRow.className = 'message-row ai';
+        aiRow.dataset.msgIndex = aiIndex;
         aiRow.innerHTML = '<div class="avatar ai">⚡</div><div class="message-content ai"><div class="message-bubble ai"></div></div>';
         chatWindow.appendChild(aiRow);
 
-        const currentQuestion = text;
         const bubble = aiRow.querySelector('.message-bubble.ai');
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
@@ -1413,7 +1457,7 @@ function copyMessage(btn) {
             const res = await fetch('https://neet-ai-production.up.railway.app/pyq', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ text: currentQuestion })
+              body: JSON.stringify({ text: questionText })
             });
             const data = await res.json();
             if (data.pyqs && data.pyqs.length > 0) {
@@ -1429,17 +1473,13 @@ function copyMessage(btn) {
         };
         bubble.appendChild(pyqBtn);
 
-       removeAttachment('image');
-        removeAttachment('pdf');
-        selectedImage = null;
-        selectedPDF = null;
         currentConversation.push({ role: 'ai', text: fullText });
         const conv = conversations.find(c => c.id === currentId || c.supabaseId === currentId);
         if (conv) conv.messages = currentConversation;
 
-        const { data: { session } } = await client.auth.getSession();
-        if (session && conv && conv.supabaseId) {
-          await client.from('chats').update({ messages: currentConversation }).eq('id', conv.supabaseId).eq('user_id', session.user.id);
+        const { data: { session: sessionAfter } } = await client.auth.getSession();
+        if (sessionAfter && conv && conv.supabaseId) {
+          await client.from('chats').update({ messages: currentConversation }).eq('id', conv.supabaseId).eq('user_id', sessionAfter.user.id);
         }
 
       } catch (error) {
