@@ -181,9 +181,11 @@ import hashlib
 
 def get_embedding(text: str):
     question_hash = hashlib.sha256(text.encode()).hexdigest()
+    # Service-role key: embedding_cache has RLS with no anon INSERT policy, so writes
+    # via the anon key were silently rejected (401) — reads worked, writes never did.
     headers = {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}"
+        "apikey": SUPABASE_SERVICE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"
     }
 
     cached = http_requests.get(
@@ -315,9 +317,11 @@ def stream_response(text: str, history: list = [], image: str = None, image_type
     # or written to — the shared answer cache, which is keyed only on question text.
     use_shared_cache = not (personalize and user_id)
     answer_hash = hashlib.sha256(f"{language}:{text.strip().lower()}".encode()).hexdigest()
+    # Service-role key: answer_cache has RLS with no anon INSERT policy, so writes via
+    # the anon key were silently rejected (401) — reads worked, writes never did.
     headers = {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}"
+        "apikey": SUPABASE_SERVICE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"
     }
     if not image and not pdf and use_shared_cache:
         cached = http_requests.get(
