@@ -155,6 +155,21 @@ def verify_admin(request: Request, x_admin_key: str = Header(None)):
 
     _admin_login_attempts.pop(ip, None)
 
+# ---------- Rate limiting for paid-API endpoints (per IP, per route) ----------
+_rate_limit_buckets = {}  # "ip:path" -> [timestamps]
+
+def rate_limiter(max_requests: int = 15, window_seconds: int = 60):
+    def dependency(request: Request):
+        ip = _client_ip(request)
+        key = f"{ip}:{request.url.path}"
+        now = time.time()
+        timestamps = [t for t in _rate_limit_buckets.get(key, []) if now - t < window_seconds]
+        if len(timestamps) >= max_requests:
+            raise HTTPException(status_code=429, detail="Too many requests — please slow down and try again shortly.")
+        timestamps.append(now)
+        _rate_limit_buckets[key] = timestamps
+    return dependency
+
 ADMIN_HEADERS = {
     "apikey": SUPABASE_SERVICE_KEY,
     "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"
@@ -335,7 +350,7 @@ def stream_response(text: str, history: list = [], image: str = None, image_type
         yield f"Error: {str(e)}"
 
 @app.post("/solve")
-async def solve_question(req: SolveRequest):
+async def solve_question(req: SolveRequest, _: None = Depends(rate_limiter(15, 60))):
     client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
     lang_instruction = "\n5. Respond ONLY in Hindi (Devanagari script) — every word in Hindi, no English words or Hinglish mixing. The ONLY exceptions are LaTeX/KaTeX math notation, chemical formulas/symbols, and units, which stay exactly as-is." if req.language == "hi" else ""
     message = client.messages.create(
@@ -373,14 +388,14 @@ Rules:
 
 
 @app.post("/chat")
-async def chat(message: Message):
+async def chat(message: Message, _: None = Depends(rate_limiter(15, 60))):
     return StreamingResponse(
        stream_response(message.text, message.history, message.image, message.image_type, message.pdf, message.answer_style, message.student_name, message.language),
         media_type="text/plain"
     )
 
 @app.post("/title")
-async def generate_title(message: Message):
+async def generate_title(message: Message, _: None = Depends(rate_limiter(15, 60))):
     client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
     title_lang = "entirely in Hindi (Devanagari script) — every word in Hindi, no English words mixed in" if message.language == "hi" else "in English"
     response = client.messages.create(
@@ -392,7 +407,7 @@ async def generate_title(message: Message):
     return {"title": response.content[0].text}
 
 @app.post("/pyq")
-async def get_pyq(message: Message):
+async def get_pyq(message: Message, _: None = Depends(rate_limiter(15, 60))):
     results = search_pyq(message.text)
     return {"pyqs": results}
 @app.get("/mock-test-questions")

@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
   <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: 'Inter', sans-serif; background: #0d0d0d; color: #ececec; min-height: 100vh; }
@@ -200,7 +201,7 @@
       html = html.replace(/\$([^$\n]+)\$/g, function(_, math) {
         try { return katex.renderToString(math.trim(), { displayMode: false, throwOnError: false }); } catch(e) { return _; }
       });
-      return marked.parse(html);
+      return DOMPurify.sanitize(marked.parse(html));
     }
  
 function handleBack() {

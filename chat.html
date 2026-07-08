@@ -6,6 +6,7 @@
   <title>NEET-AI</title>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
   <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
   <style>
@@ -743,7 +744,7 @@ let selectedImage = null;
           return katex.renderToString(math.trim(), { displayMode: false, throwOnError: false });
         } catch(e) { return _; }
       });
-      return marked.parse(html);
+      return DOMPurify.sanitize(marked.parse(html));
     }
 
     function showPYQModal(questions) {
@@ -1348,7 +1349,7 @@ function copyMessage(btn) {
           for (let i = 0; i < chunk.length; i++) {
             if (streamController && streamController.signal.aborted) break;
             fullText += chunk[i];
-            bubble.innerHTML = marked.parse(fullText);
+            bubble.innerHTML = DOMPurify.sanitize(marked.parse(fullText));
             scrollBottom();
             await new Promise(r => setTimeout(r, 1));
           }
