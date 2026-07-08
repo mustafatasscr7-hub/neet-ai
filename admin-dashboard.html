@@ -101,8 +101,7 @@
 
     .loading-text { text-align: center; padding: 40px; color: #555; font-size: 13px; }
   
-    /* Smooth cross-page transitions (native View Transitions where supported, fade-in fallback everywhere) */
-    @view-transition { navigation: auto; }
+    /* Smooth fade-in on page load */
     body { animation: pageFadeIn 0.22s ease; }
     @keyframes pageFadeIn { from { opacity: 0; } to { opacity: 1; } }
   </style>

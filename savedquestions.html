@@ -83,8 +83,7 @@
     @keyframes spin { to { transform: rotate(360deg); } }
     .empty { text-align: center; padding: 60px; color: #555; font-size: 14px; }
   
-    /* Smooth cross-page transitions (native View Transitions where supported, fade-in fallback everywhere) */
-    @view-transition { navigation: auto; }
+    /* Smooth fade-in on page load */
     body { animation: pageFadeIn 0.22s ease; }
     @keyframes pageFadeIn { from { opacity: 0; } to { opacity: 1; } }
   </style>

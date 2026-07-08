@@ -54,8 +54,7 @@
     body.light-mode .cta { background: linear-gradient(135deg, #7c5cff10, #4f8ef710) !important; border-color: #7c5cff40 !important; }
     body.light-mode .cta p { color: #55555f !important; }
   
-    /* Smooth cross-page transitions (native View Transitions where supported, fade-in fallback everywhere) */
-    @view-transition { navigation: auto; }
+    /* Smooth fade-in on page load */
     body { animation: pageFadeIn 0.22s ease; }
     @keyframes pageFadeIn { from { opacity: 0; } to { opacity: 1; } }
   </style>
