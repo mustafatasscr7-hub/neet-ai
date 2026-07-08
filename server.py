@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Header, Depends, HTTPException
+from fastapi import FastAPI, Header, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -124,9 +124,36 @@ class AdminPyqBulkUpdate(BaseModel):
     chapter: Optional[str] = None
     is_active: Optional[bool] = None
 
-def verify_admin(x_admin_key: str = Header(None)):
+import time
+
+ADMIN_MAX_ATTEMPTS = 3
+ADMIN_COOLDOWN_SECONDS = 300  # 5 minutes
+_admin_login_attempts = {}  # ip -> {"count": int, "blocked_until": float}
+
+def _client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+def verify_admin(request: Request, x_admin_key: str = Header(None)):
+    ip = _client_ip(request)
+    now = time.time()
+    record = _admin_login_attempts.get(ip, {"count": 0, "blocked_until": 0})
+
+    if record["blocked_until"] > now:
+        remaining = int(record["blocked_until"] - now)
+        raise HTTPException(status_code=429, detail=f"Too many failed attempts. Try again in {remaining} seconds.")
+
     if not x_admin_key or x_admin_key != ADMIN_PASSWORD:
+        record["count"] += 1
+        if record["count"] >= ADMIN_MAX_ATTEMPTS:
+            record["blocked_until"] = now + ADMIN_COOLDOWN_SECONDS
+            record["count"] = 0
+        _admin_login_attempts[ip] = record
         raise HTTPException(status_code=401, detail="Unauthorized")
+
+    _admin_login_attempts.pop(ip, None)
 
 ADMIN_HEADERS = {
     "apikey": SUPABASE_SERVICE_KEY,

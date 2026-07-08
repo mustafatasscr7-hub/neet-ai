@@ -205,6 +205,9 @@
           adminKey = pw;
           sessionStorage.setItem('admin_key', adminKey);
           enterDashboard();
+        } else if (res.status === 429) {
+          const data = await res.json().catch(() => ({}));
+          errEl.textContent = data.detail || 'Too many failed attempts. Try again later.';
         } else {
           errEl.textContent = 'Wrong password.';
         }
