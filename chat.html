@@ -52,6 +52,8 @@
     body.light-mode .sidebar-bottom { border-color: #e0e0e5 !important; }
 
     body.light-mode .profile-btn:hover { background: #e4e4ea !important; }
+    body.light-mode .guest-avatar-btn { background: #ffffff !important; border-color: #d5d5dd !important; color: #55555f !important; }
+    body.light-mode .guest-avatar-btn:hover { background: #f0f0f3 !important; color: #222228 !important; }
     body.light-mode .profile-name { color: #0d0d0d !important; }
     body.light-mode .profile-plan { color: #7a7a85 !important; }
     body.light-mode .profile-menu { background: #ffffff !important; border-color: #e0e0e5 !important; box-shadow: 0 -4px 20px rgba(0,0,0,0.1) !important; }
@@ -120,7 +122,8 @@
     .sidebar.collapsed .sidebar-divider { display: none; }
     .sidebar.collapsed .profile-info { display: none; }
     .sidebar.collapsed .profile-more { display: none; }
-    .sidebar.collapsed .login-nudge { display: none; }
+    .sidebar.collapsed .login-nudge { display: none !important; }
+    .sidebar.collapsed .guest-menu { display: none !important; }
     .sidebar.collapsed .profile-btn { justify-content: center; padding: 10px 0; }
     .sidebar.collapsed .logo { display: flex; justify-content: center; }
     .sidebar.collapsed .logo .logo-icon { display: none; }
@@ -165,6 +168,10 @@
     .profile-btn { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 8px; cursor: pointer; transition: background 0.2s; }
     .profile-btn:hover { background: #1a1a1a; }
     .profile-avatar { width: 28px; height: 28px; background: linear-gradient(135deg, #4f8ef7, #7c3aed); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: white; flex-shrink: 0; }
+    .guest-avatar-btn { width: 28px; height: 28px; border-radius: 50%; background: #1e1e1e; border: 1px solid #2a2a2a; align-items: center; justify-content: center; cursor: pointer; color: #888; margin: 0 auto; transition: all 0.2s; }
+    .guest-avatar-btn svg { width: 15px; height: 15px; }
+    .guest-avatar-btn:hover { background: #252525; color: #ccc; border-color: #3a3a3a; }
+    .sidebar:not(.collapsed) .guest-avatar-btn { display: none !important; }
     .profile-info { flex: 1; min-width: 0; }
     .profile-name { font-size: 13px; font-weight: 600; color: #ececec; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .profile-plan { font-size: 11px; color: #444; margin-top: 1px; }
@@ -378,6 +385,26 @@
         </svg>
      </div>
 
+      <div class="guest-menu" id="guestMenu" style="display:none;flex-direction:column;gap:1px;margin-bottom:6px;">
+        <div class="nav-item" onclick="window.location.href='./pricing.html'">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41L13.42 20.58a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
+          <span data-i18n="chat.seePricing">See plans and pricing</span>
+        </div>
+        <div class="nav-item" onclick="openSettings()">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          <span data-i18n="chat.settingsLabel">Settings</span>
+        </div>
+        <div class="nav-item" onclick="window.location.href='mailto:mustafatasscr7@gmail.com'">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          <span data-i18n="chat.help">Help</span>
+        </div>
+        <div class="sidebar-divider" style="margin:6px 0;"></div>
+      </div>
+
+      <div class="guest-avatar-btn" id="guestAvatarBtn" style="display:none;" onclick="window.location.href='./login.html'" title="Log in" data-i18n-title="chat.login">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+      </div>
+
       <div class="login-nudge" id="loginNudge" style="display:none">
         <div class="nudge-text">
           <strong data-i18n="chat.guestTitle">Get answers tailored to you</strong>
@@ -511,6 +538,7 @@
     let conversations = [];
     let currentConversation = [];
     let currentId = null;
+    let isLoggedIn = false;
 
     chatWindow.addEventListener('scroll', function() {
       const atBottom = chatWindow.scrollHeight - chatWindow.scrollTop - chatWindow.clientHeight < 50;
@@ -1426,6 +1454,7 @@ function copyMessage(btn) {
     }
 
     client.auth.getSession().then(async ({ data: { session } }) => {
+      isLoggedIn = !!session;
       if (session) {
         const user = session.user;
         const name = user.user_metadata.full_name || user.email;
@@ -1442,6 +1471,8 @@ function copyMessage(btn) {
        document.querySelector('.profile-plan').textContent = 'Free';
         document.querySelector('.profile-avatar').textContent = initial;
         document.getElementById('loginNudge').style.display = 'none';
+        document.getElementById('guestMenu').style.display = 'none';
+        document.getElementById('guestAvatarBtn').style.display = 'none';
         document.getElementById('profileSection').style.display = 'flex';
 
         const { data: chats } = await client.from('chats').select('*').eq('user_id', user.id).order('created_at', { ascending: false });
@@ -1454,6 +1485,8 @@ function copyMessage(btn) {
         }
       } else {
         document.getElementById('loginNudge').style.display = 'flex';
+        document.getElementById('guestMenu').style.display = 'flex';
+        document.getElementById('guestAvatarBtn').style.display = 'flex';
         document.getElementById('profileSection').style.display = 'none';
       }
     });
@@ -1505,6 +1538,7 @@ function openSettings() {
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
               <span data-i18n="chat.settingsGeneral">General</span>
             </div>
+            ${isLoggedIn ? `
             <div class="settings-nav-item" onclick="showSettingsSection('account', this)" style="padding:9px 14px;border-radius:8px;cursor:pointer;font-size:13px;color:#666;display:flex;align-items:center;gap:10px;">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
               <span data-i18n="chat.settingsAccount">Account</span>
@@ -1521,6 +1555,7 @@ function openSettings() {
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
               <span data-i18n="chat.settingsPrivacy">Privacy</span>
             </div>
+            ` : ''}
           </div>
 
           <!-- Right content -->
@@ -1577,6 +1612,7 @@ function openSettings() {
               </div>
               ${renderSettingsDropdown('answerStyle')}
             </div>
+            ${isLoggedIn ? `
             <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid #1e1e1e;">
               <div>
                 <div style="font-size:14px;color:#ececec;margin-bottom:2px;" data-i18n="chat.personalize">Personalize my AI tutor</div>
@@ -1587,6 +1623,7 @@ function openSettings() {
                 <span class="toggle-track"><span class="toggle-thumb"></span></span>
               </label>
             </div>
+            ` : ''}
           </div>
 
           <div style="margin-bottom:32px;">
