@@ -299,6 +299,11 @@
     body.light-mode .toggle-switch .toggle-track { background: #d5d5dd !important; }
     body.light-mode .toggle-switch .toggle-thumb { background: #ffffff !important; }
     body.light-mode .toggle-switch input:checked + .toggle-track { background: #4f8ef7 !important; }
+  
+    /* Smooth cross-page transitions (native View Transitions where supported, fade-in fallback everywhere) */
+    @view-transition { navigation: auto; }
+    body { animation: pageFadeIn 0.22s ease; }
+    @keyframes pageFadeIn { from { opacity: 0; } to { opacity: 1; } }
   </style>
 </head>
 <body>

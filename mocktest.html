@@ -147,6 +147,11 @@
     body.light-mode .stat-count { color: #0d0d0d !important; }
     body.light-mode .stat-label { color: #7a7a85 !important; }
     body.light-mode .stat-dot[style*="background:#555"] { background: #9a9aa5 !important; }
+  
+    /* Smooth cross-page transitions (native View Transitions where supported, fade-in fallback everywhere) */
+    @view-transition { navigation: auto; }
+    body { animation: pageFadeIn 0.22s ease; }
+    @keyframes pageFadeIn { from { opacity: 0; } to { opacity: 1; } }
   </style>
 </head>
 <body>

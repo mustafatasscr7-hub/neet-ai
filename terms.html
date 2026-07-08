@@ -30,6 +30,11 @@
     body.light-mode p, body.light-mode li { color: #45454f !important; }
     body.light-mode .back-btn { color: #6b6b76 !important; }
     body.light-mode .back-btn:hover { color: #7c5cff !important; }
+  
+    /* Smooth cross-page transitions (native View Transitions where supported, fade-in fallback everywhere) */
+    @view-transition { navigation: auto; }
+    body { animation: pageFadeIn 0.22s ease; }
+    @keyframes pageFadeIn { from { opacity: 0; } to { opacity: 1; } }
   </style>
 </head>
 <body>

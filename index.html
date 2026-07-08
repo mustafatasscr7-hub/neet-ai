@@ -187,6 +187,11 @@
       .footer-tags { justify-content: center; }
       .footer-bottom { flex-direction: column; text-align: center; }
     }
+  
+    /* Smooth cross-page transitions (native View Transitions where supported, fade-in fallback everywhere) */
+    @view-transition { navigation: auto; }
+    body { animation: pageFadeIn 0.22s ease; }
+    @keyframes pageFadeIn { from { opacity: 0; } to { opacity: 1; } }
   </style>
 </head>
 <body>
