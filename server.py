@@ -95,6 +95,8 @@ class Message(BaseModel):
     image_type: str = None
     pdf: str = None
     language: str = "en"
+    user_id: str = ""
+    personalize: bool = True
 
 class SolveRequest(BaseModel):
     question: str
@@ -246,15 +248,78 @@ def search_pyq(query: str, limit: int = 5):
         return response.json()
     return []
 
-def stream_response(text: str, history: list = [], image: str = None, image_type: str = None, pdf: str = None, answer_style: str = "detailed", student_name: str = "", language: str = "en"):
+def get_student_context(user_id: str) -> str:
+    if not user_id:
+        return ""
+    # Uses the service-role key deliberately: these tables are RLS-scoped to the
+    # authenticated owner, and this request is made server-side on the student's
+    # behalf (already filtered to their own user_id below), not through their session.
+    headers = {"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"}
+    parts = []
+
+    try:
+        results = http_requests.get(
+            f"{SUPABASE_URL}/rest/v1/mock_results",
+            headers=headers,
+            params={
+                "user_id": f"eq.{user_id}",
+                "select": "score,correct,wrong,subject_biology_score,subject_physics_score,subject_chemistry_score",
+                "order": "created_at.desc",
+                "limit": 5
+            }
+        ).json()
+        if isinstance(results, list) and results:
+            avg_score = sum(r.get("score", 0) for r in results) / len(results)
+            parts.append(f"Recent mock test average score: {avg_score:.0f}/720 over the last {len(results)} test(s).")
+    except Exception:
+        pass
+
+    try:
+        mistakes = http_requests.get(
+            f"{SUPABASE_URL}/rest/v1/saved_questions",
+            headers=headers,
+            params={
+                "user_id": f"eq.{user_id}",
+                "select": "subject,chapter",
+                "order": "saved_at.desc",
+                "limit": 15
+            }
+        ).json()
+        if isinstance(mistakes, list) and mistakes:
+            chapter_counts = {}
+            for m in mistakes:
+                ch = (m.get("chapter") or "").strip()
+                if ch:
+                    chapter_counts[ch] = chapter_counts.get(ch, 0) + 1
+            if chapter_counts:
+                weak = sorted(chapter_counts.items(), key=lambda x: -x[1])[:3]
+                weak_str = ", ".join(f"{ch} ({count} missed questions)" for ch, count in weak)
+                parts.append(f"Chapters this student struggles with most: {weak_str}.")
+    except Exception:
+        pass
+
+    if not parts:
+        return ""
+
+    return (
+        "\n\nSTUDENT CONTEXT (use this to naturally tailor depth and examples to this "
+        "specific student — e.g. spend more care on their weak chapters, don't over-explain "
+        "things they're already strong in. Don't explicitly say 'according to your data' or "
+        "similar — just let it shape the answer naturally):\n" + "\n".join(parts)
+    )
+
+def stream_response(text: str, history: list = [], image: str = None, image_type: str = None, pdf: str = None, answer_style: str = "detailed", student_name: str = "", language: str = "en", user_id: str = "", personalize: bool = True):
     print(f"stream_response called - text: {text[:50]}, image: {bool(image)}")
     import hashlib
-    if not image and not pdf:
-        answer_hash = hashlib.sha256(f"{language}:{text.strip().lower()}".encode()).hexdigest()
-        headers = {
-            "apikey": SUPABASE_KEY,
-            "Authorization": f"Bearer {SUPABASE_KEY}"
-        }
+    # Personalized answers are specific to this student and must never be served from —
+    # or written to — the shared answer cache, which is keyed only on question text.
+    use_shared_cache = not (personalize and user_id)
+    answer_hash = hashlib.sha256(f"{language}:{text.strip().lower()}".encode()).hexdigest()
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}"
+    }
+    if not image and not pdf and use_shared_cache:
         cached = http_requests.get(
             f"{SUPABASE_URL}/rest/v1/answer_cache?question_hash=eq.{answer_hash}&select=answer",
             headers=headers
@@ -329,17 +394,18 @@ def stream_response(text: str, history: list = [], image: str = None, image_type
         name_context = f"\n\nThe student name is {student_name}. Use their name naturally and occasionally in responses to make it personal." if student_name else ""
         style_context = "\n\nIMPORTANT: The student has selected CONCISE mode. Give a very short answer — maximum 3 sentences only. No bullet points, no key points section, no memory tricks. Just the core answer." if answer_style == "concise" else ""
         lang_context = "\n\nIMPORTANT: Respond ONLY in Hindi (Devanagari script). Every word — headings, key points, explanations, memory tricks — must be in Hindi. Do not mix in English words or Hinglish, even for common scientific terms (e.g. write \"गुणसूत्र\" not \"chromosome\"). The ONLY exceptions are: LaTeX/KaTeX math notation, chemical formulas/symbols (e.g. $H_2O$), units (e.g. m/s, kg), and proper nouns like NEET or NCERT — keep those exactly as-is, do not translate or romanize them." if language == "hi" else ""
+        student_context = get_student_context(user_id) if (personalize and user_id) else ""
         with client.messages.stream(
             model=selected_model,
             max_tokens=1024,
-            system=SYSTEM_PROMPT + name_context + style_context + lang_context,
+            system=SYSTEM_PROMPT + name_context + style_context + lang_context + student_context,
             messages=messages
         ) as stream:
             full_answer = ""
             for text_chunk in stream.text_stream:
                 full_answer += text_chunk
                 yield text_chunk
-            if not image and not pdf:
+            if not image and not pdf and use_shared_cache:
                 http_requests.post(
                     f"{SUPABASE_URL}/rest/v1/answer_cache",
                     headers={**headers, "Content-Type": "application/json"},
@@ -390,7 +456,7 @@ Rules:
 @app.post("/chat")
 async def chat(message: Message, _: None = Depends(rate_limiter(15, 60))):
     return StreamingResponse(
-       stream_response(message.text, message.history, message.image, message.image_type, message.pdf, message.answer_style, message.student_name, message.language),
+       stream_response(message.text, message.history, message.image, message.image_type, message.pdf, message.answer_style, message.student_name, message.language, message.user_id, message.personalize),
         media_type="text/plain"
     )
 

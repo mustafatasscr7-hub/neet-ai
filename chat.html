@@ -280,6 +280,18 @@
     body.light-mode .dropdown-option { color: #333338 !important; }
     body.light-mode .dropdown-option:hover { background: #f0f0f3 !important; }
     body.light-mode .dropdown-option.selected { color: #4f8ef7 !important; }
+
+    /* Toggle switch (e.g. Personalize AI) */
+    .toggle-switch { position: relative; display: inline-block; width: 40px; height: 22px; flex-shrink: 0; cursor: pointer; }
+    .toggle-switch input { opacity: 0; width: 0; height: 0; }
+    .toggle-switch .toggle-track { position: absolute; inset: 0; background: #2a2a2a; border-radius: 22px; transition: background 0.2s; }
+    .toggle-switch .toggle-thumb { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; background: #ececec; border-radius: 50%; transition: transform 0.2s; }
+    .toggle-switch input:checked + .toggle-track { background: #4f8ef7; }
+    .toggle-switch input:checked + .toggle-track .toggle-thumb { transform: translateX(18px); }
+
+    body.light-mode .toggle-switch .toggle-track { background: #d5d5dd !important; }
+    body.light-mode .toggle-switch .toggle-thumb { background: #ffffff !important; }
+    body.light-mode .toggle-switch input:checked + .toggle-track { background: #4f8ef7 !important; }
   </style>
 </head>
 <body>
@@ -1309,7 +1321,9 @@ function copyMessage(btn) {
           history: currentConversation.slice(0, -1),
           answer_style: localStorage.getItem('answerStyle') || 'detailed',
           student_name: document.querySelector('.profile-name')?.textContent || '',
-          language: getLang()
+          language: getLang(),
+          user_id: session?.user?.id || '',
+          personalize: localStorage.getItem('personalize') !== 'false'
         };
 
         if (selectedImage) {
@@ -1563,6 +1577,16 @@ function openSettings() {
               </div>
               ${renderSettingsDropdown('answerStyle')}
             </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid #1e1e1e;">
+              <div>
+                <div style="font-size:14px;color:#ececec;margin-bottom:2px;" data-i18n="chat.personalize">Personalize my AI tutor</div>
+                <div style="font-size:12px;color:#555;" data-i18n="chat.personalizeDesc">Use your mock test scores and mistake history to tailor answers to you</div>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="personalizeToggle" ${localStorage.getItem('personalize') !== 'false' ? 'checked' : ''} onchange="setPersonalize(this.checked)"/>
+                <span class="toggle-track"><span class="toggle-thumb"></span></span>
+              </label>
+            </div>
           </div>
 
           <div style="margin-bottom:32px;">
@@ -1739,6 +1763,10 @@ function openSettings() {
 
     function setAnswerStyle(style) {
       localStorage.setItem('answerStyle', style);
+    }
+
+    function setPersonalize(enabled) {
+      localStorage.setItem('personalize', enabled ? 'true' : 'false');
     }
 
     function setFontSize(size) {
