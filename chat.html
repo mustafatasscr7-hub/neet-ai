@@ -257,6 +257,28 @@
     #pyq-modal ul, #pyq-modal ol { padding-left: 16px; margin: 4px 0; }
     #pyq-modal li { word-wrap: break-word; overflow-wrap: break-word; }
     #pyq-modal .katex-display { overflow-x: auto; overflow-y: hidden; }
+
+    /* Settings dropdowns (Theme / Font Size / Answer Style / Language) */
+    .settings-dropdown { position: relative; }
+    .dropdown-trigger { display: flex; align-items: center; gap: 10px; padding: 7px 12px; border-radius: 8px; border: 1px solid #2a2a2a; background: #1a1a1a; color: #ececec; font-size: 12px; font-family: 'Inter', sans-serif; cursor: pointer; min-width: 120px; justify-content: space-between; transition: border-color 0.15s; }
+    .dropdown-trigger:hover { border-color: #3a3a3a; }
+    .dropdown-trigger svg { width: 12px; height: 12px; color: #888; flex-shrink: 0; transition: transform 0.15s; }
+    .settings-dropdown.open .dropdown-trigger svg { transform: rotate(180deg); }
+    .settings-dropdown.open .dropdown-trigger { border-color: #4f8ef7; }
+    .dropdown-menu { position: absolute; top: calc(100% + 6px); right: 0; min-width: 170px; background: #1e1e1e; border: 1px solid #333; border-radius: 10px; padding: 4px; z-index: 50; box-shadow: 0 8px 24px rgba(0,0,0,0.5); display: none; }
+    .settings-dropdown.open .dropdown-menu { display: block; }
+    .dropdown-option { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 12px; border-radius: 6px; font-size: 13px; color: #ccc; cursor: pointer; transition: background 0.15s; }
+    .dropdown-option:hover { background: #2a2a2a; }
+    .dropdown-option.selected { color: #4f8ef7; }
+    .dropdown-check { color: #4f8ef7; font-size: 12px; }
+
+    body.light-mode .dropdown-trigger { background: #ffffff !important; border-color: #d5d5dd !important; color: #0d0d0d !important; }
+    body.light-mode .settings-dropdown.open .dropdown-trigger { border-color: #4f8ef7 !important; }
+    body.light-mode .dropdown-trigger svg { color: #6b6b76 !important; }
+    body.light-mode .dropdown-menu { background: #ffffff !important; border-color: #e0e0e5 !important; box-shadow: 0 8px 24px rgba(0,0,0,0.12) !important; }
+    body.light-mode .dropdown-option { color: #333338 !important; }
+    body.light-mode .dropdown-option:hover { background: #f0f0f3 !important; }
+    body.light-mode .dropdown-option.selected { color: #4f8ef7 !important; }
   </style>
 </head>
 <body>
@@ -1520,21 +1542,14 @@ function openSettings() {
                 <div style="font-size:14px;color:#ececec;margin-bottom:2px;" data-i18n="chat.theme">Theme</div>
                 <div style="font-size:12px;color:#555;" data-i18n="chat.themeDesc">Choose your preferred look</div>
               </div>
-              <div style="display:flex;gap:8px;">
-                <button onclick="setTheme('dark')" id="darkBtn" style="padding:6px 14px;border-radius:8px;border:1px solid #4f8ef7;background:#4f8ef720;color:#4f8ef7;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;" data-i18n="chat.themeDark">🌙 Dark</button>
-                <button onclick="setTheme('light')" id="lightBtn" style="padding:6px 14px;border-radius:8px;border:1px solid #2a2a2a;background:transparent;color:#666;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;" data-i18n="chat.themeLight">☀️ Light</button>
-              </div>
+              ${renderSettingsDropdown('theme')}
             </div>
             <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid #1e1e1e;">
               <div>
                 <div style="font-size:14px;color:#ececec;margin-bottom:2px;" data-i18n="chat.fontSize">Font Size</div>
                 <div style="font-size:12px;color:#555;" data-i18n="chat.fontSizeDesc">Adjust text size across the app</div>
               </div>
-              <div style="display:flex;gap:8px;">
-                <button onclick="setFontSize('small')" style="padding:6px 14px;border-radius:8px;border:1px solid #2a2a2a;background:transparent;color:#666;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;" data-i18n="chat.small">Small</button>
-                <button onclick="setFontSize('medium')" style="padding:6px 14px;border-radius:8px;border:1px solid #4f8ef7;background:#4f8ef720;color:#4f8ef7;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;" data-i18n="chat.medium">Medium</button>
-                <button onclick="setFontSize('large')" style="padding:6px 14px;border-radius:8px;border:1px solid #2a2a2a;background:transparent;color:#666;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;" data-i18n="chat.large">Large</button>
-              </div>
+              ${renderSettingsDropdown('fontSize')}
             </div>
           </div>
 
@@ -1545,10 +1560,7 @@ function openSettings() {
                 <div style="font-size:14px;color:#ececec;margin-bottom:2px;" data-i18n="chat.answerStyle">Answer Style</div>
                 <div style="font-size:12px;color:#555;" data-i18n="chat.answerStyleDesc">How detailed should AI responses be</div>
               </div>
-              <div style="display:flex;gap:8px;">
-                <button onclick="setAnswerStyle('concise')" id="conciseBtn" style="padding:6px 14px;border-radius:8px;border:1px solid #2a2a2a;background:transparent;color:#666;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;" data-i18n="chat.concise">Concise</button>
-                <button onclick="setAnswerStyle('detailed')" id="detailedBtn" style="padding:6px 14px;border-radius:8px;border:1px solid #4f8ef7;background:#4f8ef720;color:#4f8ef7;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;" data-i18n="chat.detailed">Detailed</button>
-              </div>
+              ${renderSettingsDropdown('answerStyle')}
             </div>
           </div>
 
@@ -1559,28 +1571,11 @@ function openSettings() {
                 <div style="font-size:14px;color:#ececec;margin-bottom:2px;" data-i18n="chat.appLanguage">App Language</div>
                 <div style="font-size:12px;color:#555;" data-i18n="chat.appLanguageDesc">Switch the whole site and AI answers between English and Hindi</div>
               </div>
-              <div style="display:flex;gap:8px;">
-                <button onclick="setAppLanguage('en')" id="langEnBtn" style="padding:6px 14px;border-radius:8px;border:1px solid #2a2a2a;background:transparent;color:#666;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;">English</button>
-                <button onclick="setAppLanguage('hi')" id="langHiBtn" style="padding:6px 14px;border-radius:8px;border:1px solid #2a2a2a;background:transparent;color:#666;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;">हिंदी</button>
-              </div>
+              ${renderSettingsDropdown('language')}
             </div>
           </div>
         `;
-        setTimeout(() => {
-          const savedStyle = localStorage.getItem('answerStyle') || 'detailed';
-          setAnswerStyle(savedStyle);
-          const savedTheme = localStorage.getItem('theme') || 'dark';
-          const darkBtn = document.getElementById('darkBtn');
-          const lightBtn = document.getElementById('lightBtn');
-          if (darkBtn && lightBtn) {
-            if (savedTheme === 'light') {
-              lightBtn.style.cssText = 'padding:6px 14px;border-radius:8px;border:1px solid #4f8ef7;background:#4f8ef720;color:#4f8ef7;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;';
-              darkBtn.style.cssText = 'padding:6px 14px;border-radius:8px;border:1px solid #2a2a2a;background:transparent;color:#666;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;';
-            }
-          }
-          updateLangButtons();
-          applyTranslations();
-        }, 50);
+        applyTranslations();
       } else if (section === 'account') {
         content.innerHTML = `
           <h2 style="font-size:18px;font-weight:700;color:#fff;margin-bottom:24px;" data-i18n="chat.settingsAccount">Account</h2>
@@ -1715,24 +1710,8 @@ function openSettings() {
       }
     }
 
-    function updateLangButtons() {
-      const enBtn = document.getElementById('langEnBtn');
-      const hiBtn = document.getElementById('langHiBtn');
-      if (!enBtn || !hiBtn) return;
-      const active = 'padding:6px 14px;border-radius:8px;border:1px solid #4f8ef7;background:#4f8ef720;color:#4f8ef7;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;';
-      const inactive = 'padding:6px 14px;border-radius:8px;border:1px solid #2a2a2a;background:transparent;color:#666;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;';
-      if (getLang() === 'hi') {
-        hiBtn.style.cssText = active;
-        enBtn.style.cssText = inactive;
-      } else {
-        enBtn.style.cssText = active;
-        hiBtn.style.cssText = inactive;
-      }
-    }
-
     function setAppLanguage(lang) {
       setLang(lang);
-      updateLangButtons();
     }
 
     function setTheme(theme) {
@@ -1755,43 +1734,105 @@ function openSettings() {
         document.body.classList.add('dark-mode');
         document.body.classList.remove('light-mode');
       }
-      // Update buttons if in settings
-      const darkBtn = document.getElementById('darkBtn');
-      const lightBtn = document.getElementById('lightBtn');
-      const activeBtnStyle = 'padding:6px 14px;border-radius:8px;border:1px solid #4f8ef7;background:#4f8ef720;color:#4f8ef7;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;';
-      const inactiveBtnStyle = theme === 'light'
-        ? 'padding:6px 14px;border-radius:8px;border:1px solid #d5d5dd;background:transparent;color:#55555f;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;'
-        : 'padding:6px 14px;border-radius:8px;border:1px solid #2a2a2a;background:transparent;color:#666;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;';
-      if (darkBtn && lightBtn) {
-        if (theme === 'light') {
-          lightBtn.style.cssText = activeBtnStyle;
-          darkBtn.style.cssText = inactiveBtnStyle;
-        } else {
-          darkBtn.style.cssText = activeBtnStyle;
-          lightBtn.style.cssText = inactiveBtnStyle;
-        }
-      }
     }
-      
 
     function setAnswerStyle(style) {
       localStorage.setItem('answerStyle', style);
-      const conciseBtn = document.getElementById('conciseBtn');
-      const detailedBtn = document.getElementById('detailedBtn');
-      if (!conciseBtn || !detailedBtn) return;
-      if (style === 'concise') {
-        conciseBtn.style.cssText = 'padding:6px 14px;border-radius:8px;border:1px solid #4f8ef7;background:#4f8ef720;color:#4f8ef7;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;';
-        detailedBtn.style.cssText = 'padding:6px 14px;border-radius:8px;border:1px solid #2a2a2a;background:transparent;color:#666;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;';
-      } else {
-        detailedBtn.style.cssText = 'padding:6px 14px;border-radius:8px;border:1px solid #4f8ef7;background:#4f8ef720;color:#4f8ef7;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;';
-        conciseBtn.style.cssText = 'padding:6px 14px;border-radius:8px;border:1px solid #2a2a2a;background:transparent;color:#666;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;';
-      }
     }
+
     function setFontSize(size) {
       const sizes = { small: '13px', medium: '14px', large: '16px' };
       document.body.style.fontSize = sizes[size];
       localStorage.setItem('fontSize', size);
     }
+
+    // ---------- Reusable settings dropdown (Theme / Font Size / Answer Style / Language) ----------
+    const SETTINGS_DROPDOWNS = {
+      theme: {
+        options: [{ value: 'dark', labelKey: 'themeDark' }, { value: 'light', labelKey: 'themeLight' }],
+        get: () => localStorage.getItem('theme') || 'dark',
+        set: (v) => setTheme(v)
+      },
+      fontSize: {
+        options: [{ value: 'small', labelKey: 'small' }, { value: 'medium', labelKey: 'medium' }, { value: 'large', labelKey: 'large' }],
+        get: () => localStorage.getItem('fontSize') || 'medium',
+        set: (v) => setFontSize(v)
+      },
+      answerStyle: {
+        options: [{ value: 'concise', labelKey: 'concise' }, { value: 'detailed', labelKey: 'detailed' }],
+        get: () => localStorage.getItem('answerStyle') || 'detailed',
+        set: (v) => setAnswerStyle(v)
+      },
+      language: {
+        options: [{ value: 'en', label: 'English' }, { value: 'hi', label: 'हिंदी' }],
+        get: () => getLang(),
+        set: (v) => setAppLanguage(v)
+      }
+    };
+
+    function dropdownOptionLabel(opt) {
+      return opt.label || t('chat', opt.labelKey);
+    }
+
+    function renderSettingsDropdown(key) {
+      const cfg = SETTINGS_DROPDOWNS[key];
+      const current = cfg.get();
+      const currentOpt = cfg.options.find(o => o.value === current) || cfg.options[0];
+      return `
+        <div class="settings-dropdown" data-dropdown-key="${key}">
+          <button type="button" class="dropdown-trigger" onclick="event.stopPropagation(); toggleSettingsDropdown('${key}')">
+            <span>${dropdownOptionLabel(currentOpt)}</span>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+          </button>
+          <div class="dropdown-menu">
+            ${cfg.options.map(o => `
+              <div class="dropdown-option${o.value === current ? ' selected' : ''}" onclick="event.stopPropagation(); chooseSettingsDropdown('${key}','${o.value}')">
+                <span>${dropdownOptionLabel(o)}</span>
+                ${o.value === current ? '<span class="dropdown-check">✓</span>' : ''}
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      `;
+    }
+
+    function toggleSettingsDropdown(key) {
+      const el = document.querySelector(`.settings-dropdown[data-dropdown-key="${key}"]`);
+      if (!el) return;
+      const isOpen = el.classList.contains('open');
+      document.querySelectorAll('.settings-dropdown.open').forEach(d => d.classList.remove('open'));
+      if (!isOpen) el.classList.add('open');
+    }
+
+    function refreshSettingsDropdown(key) {
+      const el = document.querySelector(`.settings-dropdown[data-dropdown-key="${key}"]`);
+      if (!el) return;
+      el.outerHTML = renderSettingsDropdown(key);
+    }
+
+    function chooseSettingsDropdown(key, value) {
+      SETTINGS_DROPDOWNS[key].set(value);
+      refreshSettingsDropdown(key);
+    }
+
+    document.addEventListener('click', function(e) {
+      if (!e.target.closest('.settings-dropdown')) {
+        document.querySelectorAll('.settings-dropdown.open').forEach(d => d.classList.remove('open'));
+      }
+    });
+
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape') {
+        document.querySelectorAll('.settings-dropdown.open').forEach(d => d.classList.remove('open'));
+      }
+    });
+
+    // Language affects every dropdown's labels, not just its own — refresh all of them when it changes.
+    document.addEventListener('langchange', function() {
+      if (document.getElementById('settingsModal')) {
+        Object.keys(SETTINGS_DROPDOWNS).forEach(refreshSettingsDropdown);
+      }
+    });
 
     function saveDisplayName() {
       const name = document.getElementById('displayNameInput').value.trim();
