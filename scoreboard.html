@@ -4,101 +4,141 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Scoreboard — NEET-AI</title>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet"/>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: 'Inter', sans-serif; background: #0d0d0d; color: #ececec; min-height: 100vh; }
-    .header { padding: 14px 24px; border-bottom: 1px solid #1a1a1a; display: flex; align-items: center; justify-content: space-between; background: #0d0d0d; position: sticky; top: 0; z-index: 10; }
-    .header-title { font-size: 15px; font-weight: 700; color: #fff; }
-    .header-title span { color: #4f8ef7; }
-    .btn { padding: 8px 20px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600; font-family: 'Inter', sans-serif; transition: all 0.2s; border: none; }
-    .btn-primary { background: #4f8ef7; color: white; }
-    .btn-primary:hover { background: #3b7de8; }
-    .btn-outline { background: transparent; border: 1px solid #2a2a2a; color: #888; }
-    .btn-outline:hover { color: #ccc; border-color: #3a3a3a; }
-    .container { max-width: 900px; margin: 0 auto; padding: 32px 24px; }
-    .page-title { font-size: 22px; font-weight: 700; color: #fff; margin-bottom: 4px; }
-    .page-subtitle { font-size: 13px; color: #555; margin-bottom: 32px; }
+    body { font-family: 'Inter', sans-serif; background: #08080c; color: #ececec; min-height: 100vh; }
 
-    .summary-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 32px; }
-    .summary-card { background: #111; border: 1px solid #1e1e1e; border-radius: 12px; padding: 20px; }
-    .summary-card-value { font-size: 28px; font-weight: 700; color: #4f8ef7; margin-bottom: 4px; }
-    .summary-card-label { font-size: 12px; color: #555; }
+    .bg-glow { position: fixed; top: -200px; left: 50%; transform: translateX(-50%); width: 900px; height: 500px; background: radial-gradient(ellipse, rgba(79,142,247,0.12) 0%, transparent 70%); pointer-events: none; z-index: 0; }
+
+    .header { padding: 16px 28px; border-bottom: 1px solid #1a1a1e; display: flex; align-items: center; justify-content: space-between; background: rgba(8,8,12,0.9); backdrop-filter: blur(12px); position: sticky; top: 0; z-index: 10; }
+    .header-title { font-size: 15px; font-weight: 700; color: #fff; position: relative; z-index: 1; }
+    .header-title .brand-accent { background: linear-gradient(135deg, #4f8ef7, #a78bfa); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+    .btn { padding: 9px 20px; border-radius: 10px; cursor: pointer; font-size: 13px; font-weight: 600; font-family: 'Inter', sans-serif; transition: all 0.2s; border: none; }
+    .btn-primary { background: linear-gradient(135deg, #4f8ef7, #6f7bf7); color: white; box-shadow: 0 4px 16px rgba(79,142,247,0.3); }
+    .btn-primary:hover { filter: brightness(1.08); transform: translateY(-1px); }
+    .btn-outline { background: transparent; border: 1px solid #26262c; color: #999; }
+    .btn-outline:hover { color: #ddd; border-color: #38383f; background: #131317; }
+    .lang-toggle { background: transparent; border: 1px solid #26262c; color: #999; padding: 9px 16px; border-radius: 10px; cursor: pointer; font-size: 13px; font-family: 'Inter', sans-serif; transition: all 0.2s; }
+    .lang-toggle:hover { color: #ddd; border-color: #38383f; }
+
+    .container { max-width: 960px; margin: 0 auto; padding: 40px 24px 60px; position: relative; z-index: 1; }
+    .page-title { font-size: 26px; font-weight: 800; color: #fff; margin-bottom: 6px; letter-spacing: -0.5px; }
+    .page-subtitle { font-size: 13.5px; color: #666; margin-bottom: 36px; }
+
+    /* Stat cards */
+    .summary-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 28px; }
+    .summary-card { position: relative; background: #111116; border: 1px solid #1e1e24; border-radius: 16px; padding: 20px 18px; overflow: hidden; transition: transform 0.2s, border-color 0.2s; }
+    .summary-card:hover { transform: translateY(-2px); border-color: #2a2a33; }
+    .summary-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: var(--accent, #4f8ef7); opacity: 0.8; }
+    .summary-card-icon { font-size: 18px; margin-bottom: 10px; display: block; }
+    .summary-card-value { font-size: 26px; font-weight: 800; color: #fff; margin-bottom: 3px; letter-spacing: -0.5px; }
+    .summary-card-sub { font-size: 10.5px; color: #4a4a52; margin-bottom: 6px; }
+    .summary-card-label { font-size: 11.5px; color: #7a7a85; font-weight: 500; }
+
+    /* Chart card */
+    .chart-card { background: #111116; border: 1px solid #1e1e24; border-radius: 18px; padding: 24px 24px 12px; margin-bottom: 28px; }
+    .chart-card-header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 18px; }
+    .chart-title { font-size: 14px; font-weight: 700; color: #fff; }
+    .chart-hint { font-size: 11.5px; color: #555; }
+    .chart-empty { text-align: center; padding: 30px 0; color: #4a4a52; font-size: 13px; }
+    .chart-dot { cursor: pointer; }
+
+    /* Section label */
+    .section-label { font-size: 12px; font-weight: 700; color: #666; text-transform: uppercase; letter-spacing: 0.08em; margin: 8px 0 14px; }
 
     .tests-list { display: flex; flex-direction: column; gap: 12px; }
-    .test-card { background: #111; border: 1px solid #1e1e1e; border-radius: 12px; padding: 20px; display: flex; align-items: center; gap: 20px; cursor: pointer; transition: all 0.2s; }
-    .test-card:hover { border-color: #2a2a2a; background: #161616; }
-    .test-number { width: 40px; height: 40px; background: #1a1a1a; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; color: #666; flex-shrink: 0; }
-    .test-info { flex: 1; }
-    .test-date { font-size: 12px; color: #555; margin-bottom: 4px; }
-    .test-score { font-size: 20px; font-weight: 700; color: #ececec; margin-bottom: 6px; }
-    .test-stats { display: flex; gap: 16px; font-size: 12px; }
+    .test-card { background: #111116; border: 1px solid #1e1e24; border-radius: 16px; padding: 18px 22px; display: flex; align-items: center; gap: 22px; cursor: pointer; transition: all 0.2s; }
+    .test-card:hover { border-color: #2f2f3a; background: #15151b; transform: translateY(-1px); }
+    .test-number { width: 38px; height: 38px; background: #1a1a20; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 12.5px; font-weight: 700; color: #6b6b76; flex-shrink: 0; }
+    .test-info { flex: 1; min-width: 0; }
+    .test-date { font-size: 11.5px; color: #5a5a63; margin-bottom: 5px; }
+    .test-score { font-size: 21px; font-weight: 800; margin-bottom: 7px; letter-spacing: -0.3px; }
+    .test-score .out-of { font-size: 12.5px; color: #555; font-weight: 500; }
+    .test-stats { display: flex; gap: 14px; font-size: 11.5px; font-weight: 500; }
     .test-stat-correct { color: #4ade80; }
     .test-stat-wrong { color: #ef4444; }
-    .test-stat-skipped { color: #555; }
-    .test-subjects { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
-    .subject-pill { font-size: 11px; padding: 3px 10px; border-radius: 20px; font-weight: 500; }
-    .bio-pill { background: #4ade8015; color: #4ade80; border: 1px solid #4ade8030; }
-    .phy-pill { background: #4f8ef715; color: #4f8ef7; border: 1px solid #4f8ef730; }
-    .che-pill { background: #f9731615; color: #f97316; border: 1px solid #f9731630; }
-    .test-time { font-size: 11px; color: #444; margin-top: 4px; text-align: right; }
+    .test-stat-skipped { color: #5a5a63; }
+    .test-subjects { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; flex-shrink: 0; }
+    .subject-pill { font-size: 10.5px; padding: 3px 10px; border-radius: 20px; font-weight: 600; white-space: nowrap; }
+    .bio-pill { background: #4ade8014; color: #4ade80; border: 1px solid #4ade8028; }
+    .phy-pill { background: #4f8ef714; color: #4f8ef7; border: 1px solid #4f8ef728; }
+    .che-pill { background: #f9731614; color: #f97316; border: 1px solid #f9731628; }
+    .test-time { font-size: 10.5px; color: #444; margin-top: 2px; text-align: right; }
 
-    .score-bar-wrap { width: 80px; height: 80px; position: relative; flex-shrink: 0; }
+    .score-bar-wrap { width: 76px; height: 76px; position: relative; flex-shrink: 0; }
     .score-circle { transform: rotate(-90deg); }
-    .score-circle-bg { fill: none; stroke: #1a1a1a; stroke-width: 6; }
-    .score-circle-fill { fill: none; stroke: #4f8ef7; stroke-width: 6; stroke-linecap: round; transition: stroke-dashoffset 1s ease; }
+    .score-circle-bg { fill: none; stroke: #1c1c22; stroke-width: 6; }
+    .score-circle-fill { fill: none; stroke-width: 6; stroke-linecap: round; transition: stroke-dashoffset 1s ease; }
     .score-pct { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 13px; font-weight: 700; color: #ececec; }
 
-    .empty-state { text-align: center; padding: 60px 24px; color: #555; }
-    .empty-state h3 { font-size: 18px; color: #666; margin-bottom: 8px; }
+    .empty-state { text-align: center; padding: 70px 24px; color: #555; background: #111116; border: 1px solid #1e1e24; border-radius: 18px; }
+    .empty-state .empty-icon { font-size: 38px; margin-bottom: 14px; display: block; }
+    .empty-state h3 { font-size: 18px; color: #ccc; margin-bottom: 8px; font-weight: 700; }
     .empty-state p { font-size: 13px; margin-bottom: 24px; }
 
-    .loading { text-align: center; padding: 60px; color: #555; }
-    .spinner { width: 32px; height: 32px; border: 3px solid #1e1e1e; border-top-color: #4f8ef7; border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 16px; }
+    .loading { text-align: center; padding: 80px; color: #555; }
+    .spinner { width: 32px; height: 32px; border: 3px solid #1e1e24; border-top-color: #4f8ef7; border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 16px; }
     @keyframes spin { to { transform: rotate(360deg); } }
 
-    body.light-mode { background: #f5f5f5 !important; color: #0d0d0d !important; }
-    body.light-mode .header { background: #ffffff !important; border-color: #e3e3ea !important; }
+    @media (max-width: 640px) {
+      .summary-cards { grid-template-columns: repeat(2, 1fr); }
+      .test-card { flex-wrap: wrap; }
+      .test-subjects { align-items: flex-start; margin-left: 98px; }
+    }
+
+    body.light-mode { background: #f5f5f7 !important; color: #0d0d0d !important; }
+    body.light-mode .bg-glow { opacity: 0.5; }
+    body.light-mode .header { background: rgba(255,255,255,0.9) !important; border-color: #e5e5ea !important; }
     body.light-mode .header-title { color: #0d0d0d !important; }
     body.light-mode .btn-outline { border-color: #d5d5dd !important; color: #55555f !important; }
-    body.light-mode .btn-outline:hover { color: #222228 !important; border-color: #c8c8d0 !important; }
+    body.light-mode .btn-outline:hover { color: #222228 !important; border-color: #c8c8d0 !important; background: #f0f0f3 !important; }
     body.light-mode .lang-toggle { background: #ffffff !important; border-color: #d5d5dd !important; color: #55555f !important; }
 
     body.light-mode .page-title { color: #0d0d0d !important; }
     body.light-mode .page-subtitle { color: #7a7a85 !important; }
+    body.light-mode .section-label { color: #7a7a85 !important; }
 
-    body.light-mode .summary-card { background: #ffffff !important; border-color: #e3e3ea !important; box-shadow: 0 1px 3px rgba(0,0,0,0.04) !important; }
+    body.light-mode .summary-card { background: #ffffff !important; border-color: #e5e5ea !important; box-shadow: 0 1px 3px rgba(0,0,0,0.04) !important; }
+    body.light-mode .summary-card-value { color: #0d0d0d !important; }
+    body.light-mode .summary-card-sub { color: #9a9aa5 !important; }
     body.light-mode .summary-card-label { color: #7a7a85 !important; }
 
-    body.light-mode .test-card { background: #ffffff !important; border-color: #e3e3ea !important; box-shadow: 0 1px 3px rgba(0,0,0,0.04) !important; }
+    body.light-mode .chart-card { background: #ffffff !important; border-color: #e5e5ea !important; box-shadow: 0 1px 3px rgba(0,0,0,0.04) !important; }
+    body.light-mode .chart-title { color: #0d0d0d !important; }
+    body.light-mode .chart-hint { color: #9a9aa5 !important; }
+    body.light-mode .chart-empty { color: #9a9aa5 !important; }
+
+    body.light-mode .test-card { background: #ffffff !important; border-color: #e5e5ea !important; box-shadow: 0 1px 3px rgba(0,0,0,0.04) !important; }
     body.light-mode .test-card:hover { border-color: #d5d5dd !important; background: #f7f7fa !important; }
-    body.light-mode .test-number { background: #e4e4ea !important; color: #55555f !important; }
-    body.light-mode .test-date { color: #7a7a85 !important; }
-    body.light-mode .test-score { color: #0d0d0d !important; }
-    body.light-mode .test-score span { color: #9a9aa5 !important; }
+    body.light-mode .test-number { background: #eeeef1 !important; color: #55555f !important; }
+    body.light-mode .test-date { color: #9a9aa5 !important; }
+    body.light-mode .test-score .out-of { color: #9a9aa5 !important; }
     body.light-mode .test-stat-skipped { color: #9a9aa5 !important; }
-    body.light-mode .test-time { color: #9a9aa5 !important; }
+    body.light-mode .test-time { color: #b0b0ba !important; }
 
-    body.light-mode .bio-pill { background: #4ade8015 !important; color: #2f9d5e !important; border-color: #4ade8040 !important; }
-    body.light-mode .phy-pill { background: #4f8ef715 !important; color: #3b7de8 !important; border-color: #4f8ef740 !important; }
-    body.light-mode .che-pill { background: #f9731615 !important; color: #c85f13 !important; border-color: #f9731640 !important; }
+    body.light-mode .bio-pill { background: #4ade8014 !important; color: #2f9d5e !important; border-color: #4ade8030 !important; }
+    body.light-mode .phy-pill { background: #4f8ef714 !important; color: #3b7de8 !important; border-color: #4f8ef730 !important; }
+    body.light-mode .che-pill { background: #f9731614 !important; color: #c85f13 !important; border-color: #f9731630 !important; }
 
-    body.light-mode .score-circle-bg { stroke: #e4e4ea !important; }
+    body.light-mode .score-circle-bg { stroke: #eaeaef !important; }
     body.light-mode .score-pct { color: #0d0d0d !important; }
 
-    body.light-mode .empty-state { color: #7a7a85 !important; }
-    body.light-mode .empty-state h3 { color: #55555f !important; }
+    body.light-mode .empty-state { background: #ffffff !important; border-color: #e5e5ea !important; color: #7a7a85 !important; }
+    body.light-mode .empty-state h3 { color: #333338 !important; }
 
     body.light-mode .loading { color: #7a7a85 !important; }
-    body.light-mode .spinner { border-color: #e3e3ea !important; border-top-color: #4f8ef7 !important; }
+    body.light-mode .spinner { border-color: #e5e5ea !important; border-top-color: #4f8ef7 !important; }
   </style>
 </head>
 <body>
 
+  <div class="bg-glow"></div>
+
   <div class="header">
-    <span class="header-title">NEET<span>-AI</span> <span data-i18n="scoreboard.headerTitle">Scoreboard</span></span>
+    <span class="header-title">NEET<span class="brand-accent">-AI</span> <span data-i18n="scoreboard.headerTitle">Scoreboard</span></span>
     <div style="display:flex;gap:10px;">
-      <button class="lang-toggle" onclick="toggleLang()" style="background:transparent;border:1px solid #2a2a2a;color:#888;padding:8px 14px;border-radius:8px;cursor:pointer;font-size:13px;font-family:Inter,sans-serif;">हिं</button>
+      <button class="lang-toggle" onclick="toggleLang()">हिं</button>
       <button class="btn btn-outline" onclick="window.location.href='./mocktest.html'" data-i18n="scoreboard.takeNewTest">Take New Test</button>
       <button class="btn btn-primary" onclick="window.location.href='./chat.html'" data-i18n="personalisedTest.backToNeetAiBtn">Back to NEET-AI</button>
     </div>
@@ -109,10 +149,18 @@
     <div class="page-subtitle" data-i18n="scoreboard.pageSubtitle">All mock tests taken so far</div>
 
     <div class="summary-cards" id="summaryCards">
-      <div class="summary-card"><div class="summary-card-value" id="totalTests">-</div><div class="summary-card-label" data-i18n="scoreboard.testsTaken">Tests Taken</div></div>
-      <div class="summary-card"><div class="summary-card-value" id="bestScore">-</div><div class="summary-card-label" data-i18n="scoreboard.bestScore">Best Score</div></div>
-      <div class="summary-card"><div class="summary-card-value" id="avgScore">-</div><div class="summary-card-label" data-i18n="scoreboard.avgScore">Average Score</div></div>
-      <div class="summary-card"><div class="summary-card-value" id="improvement">-</div><div class="summary-card-label" data-i18n="scoreboard.improvement">Improvement</div></div>
+      <div class="summary-card" style="--accent:#4f8ef7;"><span class="summary-card-icon">📝</span><div class="summary-card-value" id="totalTests">-</div><div class="summary-card-label" data-i18n="scoreboard.testsTaken">Tests Taken</div></div>
+      <div class="summary-card" style="--accent:#facc15;"><span class="summary-card-icon">🏆</span><div class="summary-card-value" id="bestScore">-</div><div class="summary-card-sub" id="bestScoreSub"></div><div class="summary-card-label" data-i18n="scoreboard.bestScore">Best Score</div></div>
+      <div class="summary-card" style="--accent:#a78bfa;"><span class="summary-card-icon">📊</span><div class="summary-card-value" id="avgScore">-</div><div class="summary-card-sub" id="avgScoreSub"></div><div class="summary-card-label" data-i18n="scoreboard.avgScore">Average Score</div></div>
+      <div class="summary-card" id="improvementCard" style="--accent:#4ade80;"><span class="summary-card-icon" id="improvementIcon">📈</span><div class="summary-card-value" id="improvement">-</div><div class="summary-card-label" data-i18n="scoreboard.improvement">Improvement</div></div>
+    </div>
+
+    <div class="chart-card" id="chartCard" style="display:none;">
+      <div class="chart-card-header">
+        <div class="chart-title" data-i18n="scoreboard.scoreTrend">Score Trend</div>
+        <div class="chart-hint" data-i18n="scoreboard.scoreTrendHint">Hover a point for details</div>
+      </div>
+      <div id="chartContainer"></div>
     </div>
 
     <div id="testsList">
@@ -140,6 +188,10 @@
       return localizeNum(new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }));
     }
 
+    function formatDateShort(iso) {
+      return localizeNum(new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }));
+    }
+
     function getScoreColor(score) {
       const pct = (score / 720) * 100;
       if (pct >= 70) return '#4ade80';
@@ -148,17 +200,64 @@
       return '#ef4444';
     }
 
+    function renderChart(resultsNewestFirst) {
+      const chartCard = document.getElementById('chartCard');
+      const holder = document.getElementById('chartContainer');
+      if (resultsNewestFirst.length < 2) { chartCard.style.display = 'none'; return; }
+      chartCard.style.display = 'block';
+
+      const data = [...resultsNewestFirst].reverse().slice(-12); // oldest -> newest, cap at last 12
+      const width = 880, height = 200, padTop = 16, padBottom = 30, padX = 10;
+      const maxScore = 720;
+      const n = data.length;
+
+      const points = data.map((r, i) => {
+        const x = padX + (n === 1 ? width / 2 : (i / (n - 1)) * (width - padX * 2));
+        const y = padTop + (height - padTop - padBottom) * (1 - Math.max(0, r.score) / maxScore);
+        return { x, y, score: r.score, date: r.created_at };
+      });
+
+      const linePath = points.map((p, i) => (i === 0 ? 'M' : 'L') + p.x.toFixed(1) + ',' + p.y.toFixed(1)).join(' ');
+      const areaPath = `${linePath} L${points[points.length - 1].x.toFixed(1)},${height - padBottom} L${points[0].x.toFixed(1)},${height - padBottom} Z`;
+
+      const dots = points.map(p => `
+        <circle class="chart-dot" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="4" fill="#08080c" stroke="#4f8ef7" stroke-width="2">
+          <title>${formatDate(p.date)} — ${localizeNum(p.score)}/720</title>
+        </circle>
+      `).join('');
+
+      const labels = points.map((p, i) => {
+        if (n > 6 && i % Math.ceil(n / 6) !== 0 && i !== n - 1) return '';
+        return `<text x="${p.x.toFixed(1)}" y="${height - 8}" font-size="10" fill="#555" text-anchor="middle">${formatDateShort(p.date)}</text>`;
+      }).join('');
+
+      holder.innerHTML = `
+        <svg viewBox="0 0 ${width} ${height}" style="width:100%;height:auto;display:block;">
+          <defs>
+            <linearGradient id="chartFill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#4f8ef7" stop-opacity="0.28"/>
+              <stop offset="100%" stop-color="#4f8ef7" stop-opacity="0"/>
+            </linearGradient>
+          </defs>
+          <path d="${areaPath}" fill="url(#chartFill)"/>
+          <path d="${linePath}" fill="none" stroke="#4f8ef7" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+          ${dots}
+          ${labels}
+        </svg>
+      `;
+    }
+
     async function loadScoreboard() {
       const { data: { session } } = await client.auth.getSession();
       if (!session) {
-        document.getElementById('testsList').innerHTML = `<div class="empty-state"><h3>${t('scoreboard','notLoggedIn')}</h3><p>${t('scoreboard','loginToSeeHistory')}</p><button class="btn btn-primary" onclick="window.location.href='./login.html'">${t('scoreboard','logIn')}</button></div>`;
+        document.getElementById('testsList').innerHTML = `<div class="empty-state"><span class="empty-icon">🔒</span><h3>${t('scoreboard','notLoggedIn')}</h3><p>${t('scoreboard','loginToSeeHistory')}</p><button class="btn btn-primary" onclick="window.location.href='./login.html'">${t('scoreboard','logIn')}</button></div>`;
         return;
       }
 
       const { data: results, error } = await client.from('mock_results').select('*').eq('user_id', session.user.id).order('created_at', { ascending: false });
 
       if (error || !results || results.length === 0) {
-        document.getElementById('testsList').innerHTML = `<div class="empty-state"><h3>${t('scoreboard','noTestsYet')}</h3><p>${t('scoreboard','takeFirstTest')}</p><button class="btn btn-primary" onclick="window.location.href='./mocktest.html'">${t('scoreboard','startMockTest')}</button></div>`;
+        document.getElementById('testsList').innerHTML = `<div class="empty-state"><span class="empty-icon">📋</span><h3>${t('scoreboard','noTestsYet')}</h3><p>${t('scoreboard','takeFirstTest')}</p><button class="btn btn-primary" onclick="window.location.href='./mocktest.html'">${t('scoreboard','startMockTest')}</button></div>`;
         document.getElementById('totalTests').textContent = localizeNum(0);
         document.getElementById('bestScore').textContent = '-';
         document.getElementById('avgScore').textContent = '-';
@@ -174,8 +273,28 @@
 
       document.getElementById('totalTests').textContent = localizeNum(results.length);
       document.getElementById('bestScore').textContent = localizeNum(best);
+      document.getElementById('bestScoreSub').textContent = `/ ${localizeNum(720)}`;
       document.getElementById('avgScore').textContent = localizeNum(avg);
+      document.getElementById('avgScoreSub').textContent = `/ ${localizeNum(720)}`;
+
+      const improvementCard = document.getElementById('improvementCard');
+      const improvementIcon = document.getElementById('improvementIcon');
+      if (improvement > 0) {
+        improvementCard.style.setProperty('--accent', '#4ade80');
+        improvementIcon.textContent = '📈';
+        document.getElementById('improvement').style.color = '#4ade80';
+      } else if (improvement < 0) {
+        improvementCard.style.setProperty('--accent', '#ef4444');
+        improvementIcon.textContent = '📉';
+        document.getElementById('improvement').style.color = '#ef4444';
+      } else {
+        improvementCard.style.setProperty('--accent', '#666');
+        improvementIcon.textContent = '➖';
+        document.getElementById('improvement').style.color = '#ececec';
+      }
       document.getElementById('improvement').textContent = (improvement >= 0 ? '+' : '') + localizeNum(improvement);
+
+      renderChart(results);
 
       // Tests list
       const list = document.getElementById('testsList');
@@ -185,8 +304,8 @@
 
       results.forEach((r, i) => {
         const pct = Math.round((r.score / 720) * 100);
-        const circumference = 2 * Math.PI * 28;
-        const offset = circumference - (pct / 100) * circumference;
+        const circumference = 2 * Math.PI * 26;
+        const offset = circumference - (Math.max(0, Math.min(100, pct)) / 100) * circumference;
         const color = getScoreColor(r.score);
 
         const card = document.createElement('div');
@@ -194,15 +313,15 @@
         card.innerHTML = `
           <div class="test-number">#${localizeNum(results.length - i)}</div>
           <div class="score-bar-wrap">
-            <svg class="score-circle" width="80" height="80" viewBox="0 0 80 80">
-              <circle class="score-circle-bg" cx="40" cy="40" r="28"/>
-              <circle class="score-circle-fill" cx="40" cy="40" r="28" stroke="${color}" stroke-dasharray="${circumference}" stroke-dashoffset="${offset}"/>
+            <svg class="score-circle" width="76" height="76" viewBox="0 0 76 76">
+              <circle class="score-circle-bg" cx="38" cy="38" r="26"/>
+              <circle class="score-circle-fill" cx="38" cy="38" r="26" stroke="${color}" stroke-dasharray="${circumference}" stroke-dashoffset="${offset}"/>
             </svg>
             <div class="score-pct">${localizeNum(pct)}%</div>
           </div>
           <div class="test-info">
             <div class="test-date">${formatDate(r.created_at)}</div>
-            <div class="test-score" style="color:${color};">${localizeNum(r.score)} <span style="font-size:13px;color:#555;">/ ${localizeNum(720)}</span></div>
+            <div class="test-score" style="color:${color};">${localizeNum(r.score)} <span class="out-of">/ ${localizeNum(720)}</span></div>
             <div class="test-stats">
               <span class="test-stat-correct">✓ ${localizeNum(r.correct)} ${t('scoreboard','correctWord')}</span>
               <span class="test-stat-wrong">✗ ${localizeNum(r.wrong)} ${t('scoreboard','wrongWord')}</span>
