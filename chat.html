@@ -930,6 +930,38 @@ let selectedImage = null;
       document.body.appendChild(modal);
     }
 
+    function buildActionsDiv(role, timeStr) {
+      const actions = document.createElement('div');
+      actions.className = 'message-actions';
+      if (role === 'ai') {
+        actions.innerHTML = `
+          <span class="message-time">${timeStr}</span>
+          <button class="action-btn" title="Copy" onclick="copyMessage(this)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          </button>
+          <button class="action-btn" title="Share" onclick="shareMessage(this)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>
+          </button>
+          <button class="action-btn" title="Retry" onclick="retryMessage(this)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.95"/></svg>
+          </button>
+        `;
+      } else {
+        actions.style.justifyContent = 'flex-end';
+        actions.style.alignSelf = 'flex-end';
+        actions.innerHTML = `
+          <button class="action-btn" title="Copy" onclick="copyMessage(this)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          </button>
+          <button class="action-btn" title="Edit" onclick="editMessage(this)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+          </button>
+          <span class="message-time">${timeStr}</span>
+        `;
+      }
+      return actions;
+    }
+
     function addMessageRow(role, text, userQuestion, msgIndex) {
       const row = document.createElement('div');
       row.className = 'message-row ' + role;
@@ -977,40 +1009,12 @@ let selectedImage = null;
           bubble.appendChild(pyqBtn);
         }
 
-        const aiActions = document.createElement('div');
-        aiActions.className = 'message-actions';
-        aiActions.innerHTML = `
-          <span class="message-time">${timeStr}</span>
-          <button class="action-btn" title="Copy" onclick="copyMessage(this)">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-          </button>
-          <button class="action-btn" title="Share" onclick="shareMessage(this)">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>
-          </button>
-          <button class="action-btn" title="Retry" onclick="retryMessage(this)">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.95"/></svg>
-          </button>
-        `;
         contentWrapper.appendChild(bubble);
-        contentWrapper.appendChild(aiActions);
+        contentWrapper.appendChild(buildActionsDiv('ai', timeStr));
       } else {
         bubble.textContent = text;
-
-        const userActions = document.createElement('div');
-        userActions.className = 'message-actions';
-        userActions.style.justifyContent = 'flex-end';
-        userActions.style.alignSelf = 'flex-end';
-        userActions.innerHTML = `
-          <button class="action-btn" title="Copy" onclick="copyMessage(this)">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-          </button>
-          <button class="action-btn" title="Edit" onclick="editMessage(this)">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-          </button>
-          <span class="message-time">${timeStr}</span>
-        `;
         contentWrapper.appendChild(bubble);
-        contentWrapper.appendChild(userActions);
+        contentWrapper.appendChild(buildActionsDiv('user', timeStr));
       }
     
       row.appendChild(avatar);
@@ -1472,6 +1476,9 @@ function copyMessage(btn) {
           }
         };
         bubble.appendChild(pyqBtn);
+
+        const aiTimeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        aiRow.querySelector('.message-content').appendChild(buildActionsDiv('ai', aiTimeStr));
 
         currentConversation.push({ role: 'ai', text: fullText });
         const conv = conversations.find(c => c.id === currentId || c.supabaseId === currentId);
