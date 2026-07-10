@@ -44,6 +44,10 @@
     body.light-mode .item-menu-option:hover { background: #f0f0f3 !important; }
     body.light-mode .item-menu-option.delete { color: #ef4444 !important; }
     body.light-mode .item-menu-divider { background: #e5e5ea !important; }
+    body.light-mode .selection-toolbar { background: #ffffff !important; border-color: #e0e0e5 !important; box-shadow: 0 8px 24px rgba(0,0,0,0.12) !important; }
+    body.light-mode .selection-toolbar-btn { color: #333338 !important; }
+    body.light-mode .selection-toolbar-btn:hover { background: #f0f0f3 !important; color: #0d0d0d !important; }
+    body.light-mode .selection-toolbar-divider { background: #e5e5ea !important; }
 
     body.light-mode .nav-item { color: #55555f !important; }
     body.light-mode .nav-item:hover { background: #e4e4ea !important; color: #222228 !important; }
@@ -155,6 +159,12 @@
     .item-menu-option:hover { background: #2a2a2a; }
     .item-menu-option.delete { color: #ef4444; }
     .item-menu-divider { height: 1px; background: #2a2a2a; margin: 4px 0; }
+
+    .selection-toolbar { position: fixed; display: none; align-items: center; gap: 2px; background: #1e1e1e; border: 1px solid #333; border-radius: 8px; padding: 4px; z-index: 10000; box-shadow: 0 8px 24px rgba(0,0,0,0.6); }
+    .selection-toolbar.visible { display: flex; }
+    .selection-toolbar-btn { background: transparent; border: none; color: #ccc; font-size: 13px; font-family: 'Inter', sans-serif; padding: 6px 10px; border-radius: 6px; cursor: pointer; white-space: nowrap; transition: background 0.15s; }
+    .selection-toolbar-btn:hover { background: #2a2a2a; color: #fff; }
+    .selection-toolbar-divider { width: 1px; height: 16px; background: #333; flex-shrink: 0; }
 
     .sidebar-nav { display: flex; flex-direction: column; gap: 1px; margin-bottom: 4px; }
     .nav-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 8px; font-size: 13px; color: #666; cursor: pointer; transition: all 0.2s; border: 1px solid transparent; font-weight: 500; }
@@ -1147,6 +1157,102 @@ function plainTextFromMarkdown(text) {
       textarea.style.height = 'auto';
       textarea.style.height = Math.min(textarea.scrollHeight, 300) + 'px';
     }
+
+    // Text-selection popup toolbar for AI messages (Copy / Ask about this / Explain simply).
+    const selectionToolbar = document.createElement('div');
+    selectionToolbar.className = 'selection-toolbar';
+    selectionToolbar.innerHTML = `
+      <button class="selection-toolbar-btn" data-action="copy">Copy</button>
+      <span class="selection-toolbar-divider"></span>
+      <button class="selection-toolbar-btn" data-action="ask">Ask about this</button>
+      <span class="selection-toolbar-divider"></span>
+      <button class="selection-toolbar-btn" data-action="explain">Explain simply</button>
+    `;
+    document.body.appendChild(selectionToolbar);
+
+    // Prevent the browser from collapsing the selection when the toolbar itself is clicked.
+    selectionToolbar.addEventListener('mousedown', function(e) { e.preventDefault(); });
+
+    function hideSelectionToolbar() {
+      selectionToolbar.classList.remove('visible');
+    }
+
+    // KaTeX renders both a visible .katex-html span and a hidden .katex-mathml
+    // span (for screen readers) for every formula -- a raw DOM selection walks
+    // both, so plain selection.toString() doubles every formula. Strip the
+    // hidden MathML copy from a cloned fragment of just the selected range
+    // before reading its text, same root-cause fix as copyMessage/shareMessage.
+    function plainTextFromSelectionRange(range) {
+      const frag = range.cloneContents();
+      frag.querySelectorAll('.katex-mathml').forEach(el => el.remove());
+      return frag.textContent.trim();
+    }
+
+    function showSelectionToolbarForRange(range) {
+      selectionToolbar.classList.add('visible');
+      const toolbarRect = selectionToolbar.getBoundingClientRect();
+      const rect = range.getBoundingClientRect();
+      let left = rect.left + rect.width / 2 - toolbarRect.width / 2;
+      left = Math.max(8, Math.min(left, window.innerWidth - toolbarRect.width - 8));
+      let top = rect.top - toolbarRect.height - 8;
+      if (top < 4) top = rect.bottom + 8;
+      selectionToolbar.style.left = left + 'px';
+      selectionToolbar.style.top = top + 'px';
+    }
+
+    document.addEventListener('mouseup', function(e) {
+      if (e.target.closest && e.target.closest('.selection-toolbar')) return;
+      setTimeout(() => {
+        const selection = window.getSelection();
+        if (!selection || selection.isCollapsed || selection.rangeCount === 0 || !selection.toString().trim()) {
+          hideSelectionToolbar();
+          return;
+        }
+        const range = selection.getRangeAt(0);
+        const container = range.commonAncestorContainer;
+        const containerEl = container.nodeType === 3 ? container.parentElement : container;
+        const aiBubble = containerEl && containerEl.closest ? containerEl.closest('.message-bubble.ai') : null;
+        if (!aiBubble) {
+          hideSelectionToolbar();
+          return;
+        }
+        showSelectionToolbarForRange(range);
+      }, 0);
+    });
+
+    chatWindow.addEventListener('scroll', hideSelectionToolbar);
+
+    document.addEventListener('mousedown', function(e) {
+      if (!selectionToolbar.classList.contains('visible')) return;
+      if (selectionToolbar.contains(e.target)) return;
+      hideSelectionToolbar();
+    });
+
+    selectionToolbar.addEventListener('click', function(e) {
+      const btn = e.target.closest('.selection-toolbar-btn');
+      if (!btn) return;
+      const selection = window.getSelection();
+      if (!selection || selection.rangeCount === 0) { hideSelectionToolbar(); return; }
+      const selectedText = plainTextFromSelectionRange(selection.getRangeAt(0));
+
+      if (btn.dataset.action === 'copy') {
+        navigator.clipboard.writeText(selectedText);
+      } else if (btn.dataset.action === 'ask') {
+        input.value = `Explain this in more detail: ${selectedText}`;
+        input.focus();
+        input.style.height = 'auto';
+        input.style.height = Math.min(input.scrollHeight, 160) + 'px';
+      } else if (btn.dataset.action === 'explain') {
+        input.value = `Explain this in simpler terms: ${selectedText}`;
+        input.focus();
+        input.style.height = 'auto';
+        input.style.height = Math.min(input.scrollHeight, 160) + 'px';
+      }
+
+      selection.removeAllRanges();
+      hideSelectionToolbar();
+    });
+
     function createHistoryItem(id, title, onClickFn) {
       const item = document.createElement('div');
       item.className = 'history-item';
