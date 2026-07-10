@@ -1024,8 +1024,11 @@ let selectedImage = null;
       return bubble;
     }
 function copyMessage(btn) {
-      const bubble = btn.closest('.message-content').querySelector('.message-bubble');
-      navigator.clipboard.writeText(bubble.innerText).then(() => {
+      const row = btn.closest('.message-row');
+      const msgIndex = parseInt(row.dataset.msgIndex, 10);
+      const msg = !isNaN(msgIndex) ? currentConversation[msgIndex] : undefined;
+      const rawText = msg ? msg.text : btn.closest('.message-content').querySelector('.message-bubble').innerText;
+      navigator.clipboard.writeText(rawText).then(() => {
         const orig = btn.innerHTML;
         btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="#4ade80" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>';
         setTimeout(() => btn.innerHTML = orig, 2000);
