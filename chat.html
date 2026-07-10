@@ -1023,11 +1023,29 @@ let selectedImage = null;
       scrollBottom();
       return bubble;
     }
-function copyMessage(btn) {
+function plainTextFromMarkdown(text) {
+      let out = text;
+      out = out.replace(/\$\$([\s\S]*?)\$\$/g, '$1');
+      out = out.replace(/\$([^$\n]+?)\$/g, '$1');
+      out = out.replace(/\\times/g, '×');
+      out = out.replace(/\\div/g, '÷');
+      out = out.replace(/\\cdot/g, '·');
+      out = out.replace(/\\pm/g, '±');
+      out = out.replace(/\\sqrt\{([^}]*)\}/g, '√($1)');
+      out = out.replace(/\\sqrt/g, '√');
+      out = out.replace(/\\frac\{([^}]*)\}\{([^}]*)\}/g, '($1)/($2)');
+      out = out.replace(/\\text\{([^}]*)\}/g, '$1');
+      out = out.replace(/\\left|\\right/g, '');
+      out = out.replace(/\*\*(.*?)\*\*/g, '$1');
+      out = out.replace(/[ \t]{2,}/g, ' ');
+      return out;
+    }
+
+    function copyMessage(btn) {
       const row = btn.closest('.message-row');
       const msgIndex = parseInt(row.dataset.msgIndex, 10);
       const msg = !isNaN(msgIndex) ? currentConversation[msgIndex] : undefined;
-      const rawText = msg ? msg.text : btn.closest('.message-content').querySelector('.message-bubble').innerText;
+      const rawText = plainTextFromMarkdown(msg ? msg.text : btn.closest('.message-content').querySelector('.message-bubble').innerText);
       navigator.clipboard.writeText(rawText).then(() => {
         const orig = btn.innerHTML;
         btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="#4ade80" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>';
@@ -1039,7 +1057,7 @@ function copyMessage(btn) {
       const row = btn.closest('.message-row');
       const msgIndex = parseInt(row.dataset.msgIndex, 10);
       const msg = !isNaN(msgIndex) ? currentConversation[msgIndex] : undefined;
-      const text = msg ? msg.text : btn.closest('.message-content').querySelector('.message-bubble').innerText;
+      const text = plainTextFromMarkdown(msg ? msg.text : btn.closest('.message-content').querySelector('.message-bubble').innerText);
       if (navigator.share) {
         navigator.share({ title: 'NEET-AI Answer', text: text });
       } else {
