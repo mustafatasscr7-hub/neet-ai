@@ -1036,8 +1036,10 @@ function copyMessage(btn) {
     }
 
     function shareMessage(btn) {
-      const bubble = btn.closest('.message-content').querySelector('.message-bubble');
-      const text = bubble.innerText;
+      const row = btn.closest('.message-row');
+      const msgIndex = parseInt(row.dataset.msgIndex, 10);
+      const msg = !isNaN(msgIndex) ? currentConversation[msgIndex] : undefined;
+      const text = msg ? msg.text : btn.closest('.message-content').querySelector('.message-bubble').innerText;
       if (navigator.share) {
         navigator.share({ title: 'NEET-AI Answer', text: text });
       } else {
