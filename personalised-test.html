@@ -63,7 +63,7 @@
     .subject-card { background: #0d0d12; border: 1px solid #2a2a35; border-radius: 10px; padding: 16px 10px; text-align: center; cursor: pointer; transition: all 0.2s; color: #888; font-size: 13px; font-weight: 600; }
     .subject-card .subject-emoji { font-size: 22px; display: block; margin-bottom: 6px; }
     .subject-card:hover { border-color: #4f8ef750; color: #ccc; }
-    .subject-card.selected { border-color: #4f8ef7; background: #4f8ef715; color: #4f8ef7; }
+    .subject-card.selected { border-color: var(--accent-color, #4f8ef7); background: var(--accent-color-bg, #4f8ef715); color: var(--accent-color, #4f8ef7); }
 
     .chapter-list-actions { display: flex; gap: 12px; }
     .chapter-list-actions button { background: transparent; border: none; color: #4f8ef7; font-size: 11px; font-family: 'Inter', sans-serif; cursor: pointer; padding: 0; }
@@ -76,6 +76,15 @@
     .chapter-check:hover { background: #ffffff08; }
     .chapter-check input { accent-color: #4f8ef7; width: 15px; height: 15px; flex-shrink: 0; }
     .chapter-placeholder, .chapter-empty, .chapter-loading { font-size: 13px; color: #555; padding: 10px 4px; grid-column: 1 / -1; }
+    .chapter-subject-heading { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; padding: 6px 8px 2px; }
+    .chapter-category-heading { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: #555; padding: 4px 8px 2px 16px; }
+
+    .chip-tray { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+    .chip { display: inline-flex; align-items: center; gap: 6px; background: #0d0d12; border: 1px solid #2a2a35; border-radius: 100px; padding: 5px 8px 5px 10px; font-size: 12px; font-weight: 600; color: #ccc; }
+    .chip-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+    .chip-remove { background: transparent; border: none; color: #666; font-size: 11px; line-height: 1; cursor: pointer; padding: 3px; display: flex; align-items: center; border-radius: 50%; }
+    .chip-remove:hover { color: #fff; background: #ffffff15; }
+    .chip-count { font-size: 11px; color: #666; margin-left: 4px; }
 
     .count-grid { display: flex; gap: 10px; flex-wrap: wrap; }
     .count-btn { background: #0d0d12; border: 1px solid #2a2a35; border-radius: 10px; padding: 12px 20px; color: #888; font-size: 14px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; transition: all 0.2s; }
@@ -258,7 +267,7 @@
 
     body.light-mode .subject-card { background: #f5f5f7 !important; border-color: #d5d5dd !important; color: #55555f !important; }
     body.light-mode .subject-card:hover { border-color: #4f8ef750 !important; color: #0d0d0d !important; }
-    body.light-mode .subject-card.selected { border-color: #4f8ef7 !important; background: #4f8ef71a !important; color: #4f8ef7 !important; }
+    body.light-mode .subject-card.selected { border-color: var(--accent-color, #4f8ef7) !important; background: var(--accent-color-bg, #4f8ef71a) !important; color: var(--accent-color, #4f8ef7) !important; }
 
     body.light-mode .chapter-list-actions button { color: #4f8ef7 !important; }
     body.light-mode .chapter-list { background: #f5f5f7 !important; border-color: #d5d5dd !important; }
@@ -266,6 +275,12 @@
     body.light-mode .chapter-check { color: #333338 !important; }
     body.light-mode .chapter-check:hover { background: #ececf0 !important; }
     body.light-mode .chapter-check span[style*="color:#444"] { color: #9a9aa5 !important; }
+    body.light-mode .chapter-subject-heading { color: #55555f !important; }
+    body.light-mode .chapter-category-heading { color: #9a9aa5 !important; }
+    body.light-mode .chip { background: #f5f5f7 !important; border-color: #d5d5dd !important; color: #333338 !important; }
+    body.light-mode .chip-remove { color: #9a9aa5 !important; }
+    body.light-mode .chip-remove:hover { color: #0d0d0d !important; background: #00000010 !important; }
+    body.light-mode .chip-count { color: #7a7a85 !important; }
 
     body.light-mode .count-btn { background: #f5f5f7 !important; border-color: #d5d5dd !important; color: #55555f !important; }
     body.light-mode .count-btn:hover { border-color: #4f8ef750 !important; color: #0d0d0d !important; }
@@ -433,10 +448,20 @@
           <div class="setup-step">
             <div class="setup-step-label" data-i18n="personalisedTest.subjectLabel">Subject</div>
             <div class="subject-grid">
-              <div class="subject-card" onclick="selectSubject('Biology', this)"><span class="subject-emoji">🧬</span><span data-i18n="common.biology">Biology</span></div>
-              <div class="subject-card" onclick="selectSubject('Physics', this)"><span class="subject-emoji">⚛️</span><span data-i18n="common.physics">Physics</span></div>
-              <div class="subject-card" onclick="selectSubject('Chemistry', this)"><span class="subject-emoji">🧪</span><span data-i18n="common.chemistry">Chemistry</span></div>
+              <div class="subject-card" data-subject="Biology" style="--accent-color:#4ade80;--accent-color-bg:#4ade8015;" onclick="toggleSubjectCard('Biology', this)"><span class="subject-emoji">🧬</span><span data-i18n="common.biology">Biology</span></div>
+              <div class="subject-card" data-subject="Physics" style="--accent-color:#4f8ef7;--accent-color-bg:#4f8ef715;" onclick="toggleSubjectCard('Physics', this)"><span class="subject-emoji">⚛️</span><span data-i18n="common.physics">Physics</span></div>
+              <div class="subject-card" data-subject="Chemistry" style="--accent-color:#f97316;--accent-color-bg:#f9731615;" onclick="toggleSubjectCard('Chemistry', this)"><span class="subject-emoji">🧪</span><span data-i18n="common.chemistry">Chemistry</span></div>
             </div>
+          </div>
+
+          <div class="setup-step" id="selectionSummaryStep" style="display:none;">
+            <div class="setup-step-label">
+              <span data-i18n="personalisedTest.selectedChaptersLabel">Selected</span>
+              <span class="chapter-list-actions">
+                <button type="button" onclick="clearAllChapters()" data-i18n="personalisedTest.clearAll">Clear</button>
+              </span>
+            </div>
+            <div class="chip-tray" id="chipTray"></div>
           </div>
 
           <div class="setup-step">
@@ -448,7 +473,7 @@
               </span>
             </div>
             <div class="chapter-list" id="chapterList">
-              <div class="chapter-placeholder">Select a subject first.</div>
+              <div class="chapter-placeholder" data-i18n="personalisedTest.selectSubjectsFirst">Select one or more subjects first.</div>
             </div>
           </div>
 
@@ -465,7 +490,7 @@
             </div>
           </div>
 
-          <button class="generate-btn" id="generateBtn" onclick="generateTest()" disabled data-i18n="personalisedTest.selectSubjectFirst">Select a subject to continue</button>
+          <button class="generate-btn" id="generateBtn" onclick="generateTest()" disabled data-i18n="personalisedTest.selectSubjectFirst">Select at least one subject to continue</button>
         </div>
       </div>
     </div>
@@ -570,6 +595,13 @@
     let selectedCount = 10;
     let subjectTabSubject = 'Biology';
     let chapterTabSubject = 'Biology';
+
+    // Custom-tab-only state: lets the Custom tab pick chapters across multiple
+    // subjects at once, independent of the single-subject selectedSubject/
+    // selectedChapters above (which the Subject and Chapter tabs still use).
+    let activeSubjects = new Set();
+    let selectedChaptersBySubject = { Biology: new Set(), Physics: new Set(), Chemistry: new Set() };
+    let chapterFetchToken = { Biology: 0, Physics: 0, Chemistry: 0 };
 
     const SUBJECT_META = {
       Biology:   { color: '#4ade80' },
@@ -812,53 +844,165 @@
     }
 
     // ---------- Custom tab (subject/chapter/count wizard) ----------
-    async function selectSubject(subject, btn) {
-      selectedSubject = subject;
-      document.querySelectorAll('#panel-custom .subject-card').forEach(b => b.classList.remove('selected'));
-      btn.classList.add('selected');
-      selectedChapters = new Set();
+    function chapterListPlaceholderHtml() {
+      return '<div class="chapter-placeholder" data-i18n="personalisedTest.selectSubjectsFirst">Select one or more subjects first.</div>';
+    }
 
-      const generateBtn = document.getElementById('generateBtn');
-      generateBtn.disabled = false;
-      generateBtn.textContent = t('personalisedTest','generateBtn');
+    function chapterCheckHtml(subject, ch) {
+      return `
+        <label class="chapter-check">
+          <input type="checkbox" value="${escapeHtml(ch.name)}" data-subject="${escapeHtml(subject)}" onchange="toggleChapter(this)"/>
+          <span>${escapeHtml(chapterName(ch.name))} <span style="color:#444;">(${localizeNum(ch.count)})</span></span>
+        </label>
+      `;
+    }
 
+    function renderChapterSectionBody(subject, chapters) {
+      if (chapters.length === 0) {
+        return '<div class="chapter-empty">No chapter tags available for this subject yet — your test will draw from all active questions.</div>';
+      }
+      let bodyHtml;
+      if (SUBJECT_CATEGORIES[subject]) {
+        const { groups, order } = groupChaptersByCategory(chapters, SUBJECT_CATEGORIES[subject]);
+        bodyHtml = order.filter(g => groups[g].length).map(g => `
+          <div class="chapter-category-heading">${escapeHtml(g)}</div>
+          ${groups[g].map(ch => chapterCheckHtml(subject, ch)).join('')}
+        `).join('');
+      } else {
+        bodyHtml = chapters.map(ch => chapterCheckHtml(subject, ch)).join('');
+      }
+      return bodyHtml;
+    }
+
+    async function toggleSubjectCard(subject, btn) {
       const chapterList = document.getElementById('chapterList');
-      chapterList.innerHTML = '<div class="chapter-loading">Loading chapters…</div>';
+      const isNowActive = !activeSubjects.has(subject);
 
+      if (!isNowActive) {
+        activeSubjects.delete(subject);
+        btn.classList.remove('selected');
+        selectedChaptersBySubject[subject].clear();
+        const section = document.getElementById('chapterGroup-' + subject);
+        if (section) section.remove();
+        if (activeSubjects.size === 0) chapterList.innerHTML = chapterListPlaceholderHtml();
+        renderSelectedChips();
+        updateGenerateBtnState();
+        return;
+      }
+
+      activeSubjects.add(subject);
+      btn.classList.add('selected');
+      const placeholder = chapterList.querySelector('.chapter-placeholder');
+      if (placeholder) placeholder.remove();
+
+      const color = SUBJECT_META[subject].color;
+      const heading = `<div class="chapter-subject-heading" style="color:${color};">${escapeHtml(subjectName(subject))}</div>`;
+      const section = document.createElement('div');
+      section.className = 'chapter-subject-group';
+      section.id = 'chapterGroup-' + subject;
+      section.innerHTML = heading + '<div class="chapter-loading">Loading chapters…</div>';
+      chapterList.appendChild(section);
+
+      const myToken = ++chapterFetchToken[subject];
       try {
         const res = await fetch(`${API_BASE}/pyq-chapters?subject=${encodeURIComponent(subject)}`);
         const data = await res.json();
-        const chapters = data.chapters || [];
-        if (chapters.length === 0) {
-          chapterList.innerHTML = '<div class="chapter-empty">No chapter tags available for this subject yet — your test will draw from all active questions.</div>';
-          return;
-        }
-        chapterList.innerHTML = chapters.map(c => `
-          <label class="chapter-check">
-            <input type="checkbox" value="${escapeHtml(c.name)}" onchange="toggleChapter(this)"/>
-            <span>${escapeHtml(chapterName(c.name))} <span style="color:#444;">(${localizeNum(c.count)})</span></span>
-          </label>
-        `).join('');
+        if (myToken !== chapterFetchToken[subject] || !activeSubjects.has(subject)) return;
+        section.innerHTML = heading + renderChapterSectionBody(subject, data.chapters || []);
+        selectedChaptersBySubject[subject].forEach(chapterVal => {
+          const cb = section.querySelector(`input[value="${CSS.escape(chapterVal)}"]`);
+          if (cb) cb.checked = true;
+        });
       } catch (e) {
-        chapterList.innerHTML = '<div class="chapter-empty">Could not load chapters. You can still generate a test using all chapters.</div>';
+        if (myToken !== chapterFetchToken[subject] || !activeSubjects.has(subject)) return;
+        section.innerHTML = heading + '<div class="chapter-empty">Could not load chapters. You can still generate a test using all chapters.</div>';
       }
+      renderSelectedChips();
+      updateGenerateBtnState();
     }
 
     function toggleChapter(checkbox) {
-      if (checkbox.checked) selectedChapters.add(checkbox.value);
-      else selectedChapters.delete(checkbox.value);
+      const set = selectedChaptersBySubject[checkbox.dataset.subject];
+      if (checkbox.checked) set.add(checkbox.value);
+      else set.delete(checkbox.value);
+      renderSelectedChips();
+      updateGenerateBtnState();
+    }
+
+    function removeChip(subject, chapter) {
+      selectedChaptersBySubject[subject].delete(chapter);
+      const section = document.getElementById('chapterGroup-' + subject);
+      const cb = section && section.querySelector(`input[value="${CSS.escape(chapter)}"]`);
+      if (cb) cb.checked = false;
+      renderSelectedChips();
+      updateGenerateBtnState();
+    }
+
+    function renderSelectedChips() {
+      const step = document.getElementById('selectionSummaryStep');
+      const tray = document.getElementById('chipTray');
+      if (activeSubjects.size === 0) {
+        step.style.display = 'none';
+        tray.innerHTML = '';
+        return;
+      }
+      step.style.display = 'block';
+
+      const chips = [];
+      let totalChapters = 0;
+      activeSubjects.forEach(subject => {
+        const set = selectedChaptersBySubject[subject];
+        const color = SUBJECT_META[subject].color;
+        if (set.size === 0) {
+          chips.push(`
+            <span class="chip" style="border-color:${color}40;">
+              <span class="chip-dot" style="background:${color};"></span>${escapeHtml(subjectName(subject))}: <span data-i18n="personalisedTest.allChapters">All chapters</span>
+            </span>
+          `);
+        } else {
+          set.forEach(chapter => {
+            totalChapters++;
+            chips.push(`
+              <span class="chip" style="border-color:${color}40;">
+                <span class="chip-dot" style="background:${color};"></span>${escapeHtml(chapterName(chapter))}
+                <button type="button" class="chip-remove" onclick="removeChip('${escapeHtml(subject)}','${escapeHtml(chapter)}')" aria-label="Remove">✕</button>
+              </span>
+            `);
+          });
+        }
+      });
+
+      const countLabel = totalChapters > 0
+        ? `${localizeNum(totalChapters)} chapter${totalChapters === 1 ? '' : 's'}`
+        : t('personalisedTest', 'allChapters');
+      const subjectCount = activeSubjects.size;
+      chips.push(`<span class="chip-count">${countLabel} · ${localizeNum(subjectCount)} subject${subjectCount === 1 ? '' : 's'}</span>`);
+
+      tray.innerHTML = chips.join('');
+    }
+
+    function updateGenerateBtnState() {
+      const generateBtn = document.getElementById('generateBtn');
+      generateBtn.disabled = activeSubjects.size === 0;
+      generateBtn.textContent = activeSubjects.size === 0
+        ? t('personalisedTest', 'selectSubjectFirst')
+        : t('personalisedTest', 'generateBtn');
     }
 
     function selectAllChapters() {
       document.querySelectorAll('#chapterList input[type="checkbox"]').forEach(cb => {
         cb.checked = true;
-        selectedChapters.add(cb.value);
+        selectedChaptersBySubject[cb.dataset.subject].add(cb.value);
       });
+      renderSelectedChips();
+      updateGenerateBtnState();
     }
 
     function clearAllChapters() {
       document.querySelectorAll('#chapterList input[type="checkbox"]').forEach(cb => cb.checked = false);
-      selectedChapters.clear();
+      activeSubjects.forEach(subject => selectedChaptersBySubject[subject].clear());
+      renderSelectedChips();
+      updateGenerateBtnState();
     }
 
     function selectCount(n, btn) {
@@ -898,30 +1042,30 @@
     }
 
     async function generateTest() {
-      if (!selectedSubject) return;
+      const useMultiSubject = activeSubjects.size > 0;
+      if (!useMultiSubject && !selectedSubject) return;
       const btn = document.getElementById('generateBtn');
       btn.disabled = true;
       btn.textContent = 'Preparing your test...';
       document.getElementById('setupError').style.display = 'none';
       showSetupNotice('Preparing your test…');
 
+      const selections = useMultiSubject
+        ? Array.from(activeSubjects).map(subject => ({ subject, chapters: Array.from(selectedChaptersBySubject[subject]) }))
+        : [{ subject: selectedSubject, chapters: Array.from(selectedChapters) }];
+
       try {
         const res = await fetch(`${API_BASE}/personalised-test-questions`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            subject: selectedSubject,
-            chapters: Array.from(selectedChapters),
-            count: selectedCount
-          })
+          body: JSON.stringify({ selections, count: selectedCount })
         });
         const data = await res.json();
 
         if (data.error || !data.questions || data.questions.length === 0) {
           hideSetupNotice();
           showSetupError('No active questions matched your selection. Try a different chapter or subject.');
-          btn.disabled = false;
-          btn.textContent = 'Generate My Test →';
+          updateGenerateBtnState();
           return;
         }
 
@@ -937,8 +1081,7 @@
       } catch (e) {
         hideSetupNotice();
         showSetupError('Could not reach the server. Make sure the backend is running.');
-        btn.disabled = false;
-        btn.textContent = 'Generate My Test →';
+        updateGenerateBtnState();
       }
     }
 
@@ -958,8 +1101,15 @@
     function startTest() {
       document.getElementById('setupScreen').style.display = 'none';
       document.getElementById('testScreen').style.display = 'flex';
-      document.getElementById('sidebarSubject').textContent = subjectName(selectedSubject) +
-        (selectedChapters.size ? ` • ${localizeNum(selectedChapters.size)} chapter${selectedChapters.size === 1 ? '' : 's'}` : ' • All chapters');
+
+      if (activeSubjects.size > 0) {
+        const totalChapters = Array.from(activeSubjects).reduce((sum, s) => sum + selectedChaptersBySubject[s].size, 0);
+        document.getElementById('sidebarSubject').textContent = Array.from(activeSubjects).map(s => subjectName(s)).join(' + ') +
+          (totalChapters ? ` • ${localizeNum(totalChapters)} chapter${totalChapters === 1 ? '' : 's'}` : ' • All chapters');
+      } else {
+        document.getElementById('sidebarSubject').textContent = subjectName(selectedSubject) +
+          (selectedChapters.size ? ` • ${localizeNum(selectedChapters.size)} chapter${selectedChapters.size === 1 ? '' : 's'}` : ' • All chapters');
+      }
 
       totalSeconds = Math.max(300, questions.length * 70);
       dangerAt = Math.floor(totalSeconds * 0.15);
@@ -1170,8 +1320,19 @@
       try {
         const { data: { session } } = await client.auth.getSession();
         if (!session) return;
-        const subjectScore = { Biology: 0, Physics: 0, Chemistry: 0 };
-        subjectScore[selectedSubject] = Math.max(0, data.score);
+        // Per-subject breakdown, not just a single-bucket dump of the overall
+        // score -- needed now that a test can span more than one subject, and
+        // more accurate than the old approach even for single-subject tests.
+        const subjectTally = { Biology: { correct: 0, wrong: 0 }, Physics: { correct: 0, wrong: 0 }, Chemistry: { correct: 0, wrong: 0 } };
+        data.results.forEach(q => {
+          if (!subjectTally[q.subject]) return;
+          if (q.status === 'correct') subjectTally[q.subject].correct++;
+          else if (q.status === 'wrong') subjectTally[q.subject].wrong++;
+        });
+        const subjectScore = {};
+        Object.keys(subjectTally).forEach(s => {
+          subjectScore[s] = Math.max(0, subjectTally[s].correct * 4 - subjectTally[s].wrong);
+        });
         await client.from('mock_results').insert({
           user_id: session.user.id,
           score: Math.max(0, data.score),

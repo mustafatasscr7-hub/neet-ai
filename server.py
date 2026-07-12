@@ -108,9 +108,12 @@ class SolveRequest(BaseModel):
     correct_answer: str = ""
     language: str = "en"
 
-class PersonalisedTestRequest(BaseModel):
+class PersonalisedTestSelection(BaseModel):
     subject: str
     chapters: list = []
+
+class PersonalisedTestRequest(BaseModel):
+    selections: List[PersonalisedTestSelection]
     count: int = 10
 
 class PersonalisedCatalogStartRequest(BaseModel):
@@ -536,7 +539,9 @@ async def get_pyq_chapters(subject: str):
 
 @app.post("/personalised-test-questions")
 async def get_personalised_test_questions(req: PersonalisedTestRequest):
-    if req.subject not in ("Biology", "Physics", "Chemistry"):
+    if not req.selections:
+        return {"error": "No subjects selected"}
+    if any(sel.subject not in ("Biology", "Physics", "Chemistry") for sel in req.selections):
         return {"error": "Invalid subject"}
     try:
         import random
@@ -545,21 +550,27 @@ async def get_personalised_test_questions(req: PersonalisedTestRequest):
             "apikey": SUPABASE_KEY,
             "Authorization": f"Bearer {SUPABASE_KEY}"
         }
-        params = {
-            "subject": f"eq.{req.subject}",
-            "is_active": "eq.true",
-            "select": "*",
-            "limit": 1000
-        }
-        chapters = [c.strip() for c in req.chapters if c and c.strip()]
-        if chapters:
-            params["chapter"] = "in.(" + ",".join(chapters) + ")"
-        response = http_requests.get(
-            f"{SUPABASE_URL}/rest/v1/pyq",
-            headers=headers,
-            params=params
-        )
-        pool = response.json()
+        pool = []
+        seen_subjects = set()
+        for sel in req.selections:
+            if sel.subject in seen_subjects:
+                continue
+            seen_subjects.add(sel.subject)
+            params = {
+                "subject": f"eq.{sel.subject}",
+                "is_active": "eq.true",
+                "select": "*",
+                "limit": 1000
+            }
+            chapters = [c.strip() for c in sel.chapters if c and c.strip()]
+            if chapters:
+                params["chapter"] = "in.(" + ",".join(chapters) + ")"
+            response = http_requests.get(
+                f"{SUPABASE_URL}/rest/v1/pyq",
+                headers=headers,
+                params=params
+            )
+            pool.extend(response.json())
         available = len(pool)
         selected = random.sample(pool, min(count, available)) if available else []
         return {"questions": selected, "requested": count, "available": available}
