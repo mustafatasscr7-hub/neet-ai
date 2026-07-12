@@ -488,7 +488,7 @@
         </div>
         <div id="attachment-preview-inner"></div>
         <div class="input-row">
-        <input type="file" id="imageInput" accept="image/*" style="display:none;" />
+        <input type="file" id="imageInput" accept="image/*" multiple style="display:none;" />
         <input type="file" id="pdfInput" accept=".pdf" style="display:none;" />
         <div style="position:relative;">
           <button id="plusBtn" onclick="togglePlusMenu()" style="background:transparent;border:none;color:#666;cursor:pointer;padding:6px;display:flex;align-items:center;flex-shrink:0;border-radius:8px;" title="Add attachment" data-i18n-title="chat.addAttachment">
@@ -634,18 +634,34 @@ function togglePlusMenu() {
       const menu = document.getElementById('plusMenu');
       menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
     }
-let selectedImage = null;
+let selectedImages = [];
     let selectedPDF = null;
+    let selectedPDFName = null;
+
+    function isPro() {
+      // No subscription system exists yet - always false until billing is wired up.
+      return false;
+    }
+    function maxImages() {
+      return isPro() ? 3 : 1;
+    }
+
+    function addImageFiles(files) {
+      const room = maxImages() - selectedImages.length;
+      if (room <= 0) { renderAttachmentPreview(); return; }
+      files.slice(0, room).forEach(file => {
+        const reader = new FileReader();
+        reader.onload = function(event) {
+          selectedImages.push({ data: event.target.result, name: file.name || 'Pasted image' });
+          renderAttachmentPreview();
+        };
+        reader.readAsDataURL(file);
+      });
+    }
 
     document.getElementById('imageInput').addEventListener('change', function(e) {
-      const file = e.target.files[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = function(event) {
-        selectedImage = event.target.result;
-        showAttachmentPreview('🖼️', file.name, 'image');
-      };
-      reader.readAsDataURL(file);
+      addImageFiles(Array.from(e.target.files));
+      this.value = '';
     });
 
     document.getElementById('pdfInput').addEventListener('change', function(e) {
@@ -654,80 +670,104 @@ let selectedImage = null;
       const reader = new FileReader();
       reader.onload = function(event) {
         selectedPDF = event.target.result;
-        showAttachmentPreview('📄', file.name, 'pdf');
+        selectedPDFName = file.name;
+        renderAttachmentPreview();
       };
       reader.readAsDataURL(file);
     });
 
-    function getPastedImageFile(e) {
+    function getPastedImageFiles(e) {
       const items = e.clipboardData && e.clipboardData.items;
-      if (!items) return null;
+      if (!items) return [];
+      const files = [];
       for (let i = 0; i < items.length; i++) {
-        if (items[i].type && items[i].type.startsWith('image/')) return items[i].getAsFile();
+        if (items[i].type && items[i].type.startsWith('image/')) {
+          const f = items[i].getAsFile();
+          if (f) files.push(f);
+        }
       }
-      return null;
-    }
-
-    function attachPastedImage(file) {
-      const reader = new FileReader();
-      reader.onload = function(event) {
-        selectedImage = event.target.result;
-        showAttachmentPreview('🖼️', file.name || 'Pasted image', 'image');
-      };
-      reader.readAsDataURL(file);
+      return files;
     }
 
     input.addEventListener('paste', function(e) {
-      const file = getPastedImageFile(e);
-      if (!file) return;
+      const files = getPastedImageFiles(e);
+      if (files.length === 0) return;
       e.preventDefault();
-      attachPastedImage(file);
+      addImageFiles(files);
     });
 
     function handleWelcomePaste(e) {
-      const file = getPastedImageFile(e);
-      if (!file) return;
+      const files = getPastedImageFiles(e);
+      if (files.length === 0) return;
       e.preventDefault();
       input.value = document.getElementById('welcomeInput').value;
       const welcome = document.getElementById('welcome');
       if (welcome) welcome.remove();
       inputArea.style.display = 'block';
-      attachPastedImage(file);
+      addImageFiles(files);
       input.focus();
     }
 
-   function showAttachmentPreview(icon, name, type) {
+   function renderAttachmentPreview() {
       const container = document.getElementById('attachment-preview-inner');
       container.innerHTML = '';
-      container.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 0;';
+      if (selectedImages.length === 0 && !selectedPDF) return;
+      container.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 0;flex-wrap:wrap;';
 
-      if (type === 'image' && selectedImage) {
-        container.innerHTML = `
-          <div style="position:relative;display:inline-block;">
-            <img src="${selectedImage}" style="width:60px;height:60px;object-fit:cover;border-radius:8px;border:1px solid #2a2a2a;display:block;"/>
-            <button onclick="removeAttachment('image')" style="position:absolute;top:-6px;right:-6px;background:#333;border:none;color:#ccc;cursor:pointer;font-size:11px;width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;">✕</button>
-          </div>
+      selectedImages.forEach((img, i) => {
+        const wrap = document.createElement('div');
+        wrap.style.cssText = 'position:relative;display:inline-block;';
+        wrap.innerHTML = `
+          <img src="${img.data}" style="width:60px;height:60px;object-fit:cover;border-radius:8px;border:1px solid #2a2a2a;display:block;"/>
+          <button onclick="removeImageAttachment(${i})" style="position:absolute;top:-6px;right:-6px;background:#333;border:none;color:#ccc;cursor:pointer;font-size:11px;width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;">✕</button>
         `;
-      } else {
-        container.innerHTML = `
-          <div style="display:flex;align-items:center;gap:8px;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;padding:6px 10px;">
-            <span>${icon}</span>
-            <span style="font-size:12px;color:#ccc;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${name}</span>
-            <button onclick="removeAttachment('${type}')" style="background:transparent;border:none;color:#666;cursor:pointer;font-size:13px;">✕</button>
-          </div>
-        `;
+        container.appendChild(wrap);
+      });
+
+      if (selectedPDF) {
+        const chip = document.createElement('div');
+        chip.style.cssText = 'display:flex;align-items:center;gap:8px;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;padding:6px 10px;';
+        const nameSpan = document.createElement('span');
+        nameSpan.style.cssText = 'font-size:12px;color:#ccc;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+        nameSpan.textContent = selectedPDFName || 'PDF';
+        const rm = document.createElement('button');
+        rm.textContent = '✕';
+        rm.style.cssText = 'background:transparent;border:none;color:#666;cursor:pointer;font-size:13px;';
+        rm.onclick = removePdfAttachment;
+        chip.innerHTML = '<span>📄</span>';
+        chip.appendChild(nameSpan);
+        chip.appendChild(rm);
+        container.appendChild(chip);
+      }
+
+      if (!isPro() && selectedImages.length >= maxImages()) {
+        const notice = document.createElement('span');
+        notice.style.cssText = 'font-size:11px;color:#666;';
+        notice.textContent = 'Free plan: 1 image · Pro users can add up to 3';
+        container.appendChild(notice);
       }
     }
 
-    function removeAttachment(type) {
-      if (type === 'image') {
-        selectedImage = null;
-        document.getElementById('imageInput').value = '';
-      } else {
-        selectedPDF = null;
-        document.getElementById('pdfInput').value = '';
-      }
-      document.getElementById('attachment-preview-inner').innerHTML = '';
+    function removeImageAttachment(index) {
+      selectedImages.splice(index, 1);
+      document.getElementById('imageInput').value = '';
+      renderAttachmentPreview();
+    }
+
+    function removePdfAttachment() {
+      selectedPDF = null;
+      selectedPDFName = null;
+      document.getElementById('pdfInput').value = '';
+      renderAttachmentPreview();
+    }
+
+    function clearAttachments() {
+      selectedImages = [];
+      selectedPDF = null;
+      selectedPDFName = null;
+      document.getElementById('imageInput').value = '';
+      document.getElementById('pdfInput').value = '';
+      renderAttachmentPreview();
     }
     function addURL() {
       const url = prompt('Enter website URL:');
@@ -1526,7 +1566,7 @@ function plainTextFromMarkdown(text) {
 
  async function sendMessage() {
       const text = input.value.trim();
-      if (!text && !selectedImage && !selectedPDF) return;
+      if (!text && selectedImages.length === 0 && !selectedPDF) return;
 
       // Check usage limit
       const { data: { session } } = await client.auth.getSession();
@@ -1566,11 +1606,12 @@ function plainTextFromMarkdown(text) {
       inputArea.style.display = 'block';
 
       const userIndex = currentConversation.length;
-      if (selectedImage) {
+      if (selectedImages.length > 0) {
         const imgRow = document.createElement('div');
         imgRow.className = 'message-row user';
         imgRow.dataset.msgIndex = userIndex;
-       imgRow.innerHTML = `<div class="avatar user">👤</div><div class="message-content user"><div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;"><img src="${selectedImage}" style="max-width:300px;max-height:300px;border-radius:12px;border:1px solid #2a2a3a;display:block;"/>${text ? `<div class="message-bubble user">${text}</div>` : ''}</div></div>`;
+        const thumbs = selectedImages.map(img => `<img src="${img.data}" style="max-width:200px;max-height:200px;border-radius:12px;border:1px solid #2a2a3a;display:block;"/>`).join('');
+       imgRow.innerHTML = `<div class="avatar user">👤</div><div class="message-content user"><div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;"><div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end;">${thumbs}</div>${text ? `<div class="message-bubble user">${text}</div>` : ''}</div></div>`;
         chatWindow.appendChild(imgRow);
         scrollBottom();
       } else {
@@ -1582,17 +1623,17 @@ function plainTextFromMarkdown(text) {
       currentConversation.push({ role: 'user', text: text });
       if (currentConversation.length === 1) saveToSidebar(text);
 
-      const imageData = selectedImage, imageTypeData = selectedImage ? selectedImage.split(';')[0].split(':')[1] : null, pdfData = selectedPDF;
+      const imagesPayload = selectedImages.map(img => ({
+        data: img.data.split(',')[1],
+        type: img.data.split(';')[0].split(':')[1]
+      }));
+      const pdfData = selectedPDF;
       await streamAIResponse(text || 'Describe this image and answer any NEET related content in it.', {
-        image: imageData ? imageData.split(',')[1] : null,
-        imageType: imageTypeData,
+        images: imagesPayload,
         pdf: pdfData ? pdfData.split(',')[1] : null
       });
 
-      removeAttachment('image');
-      removeAttachment('pdf');
-      selectedImage = null;
-      selectedPDF = null;
+      clearAttachments();
     }
 
     // Shared by sendMessage / retryMessage / editMessage: calls /chat for questionText
@@ -1623,9 +1664,8 @@ function plainTextFromMarkdown(text) {
           skip_cache: !!options.skipCache
         };
 
-        if (options.image) {
-          requestBody.image = options.image;
-          requestBody.image_type = options.imageType;
+        if (options.images && options.images.length > 0) {
+          requestBody.images = options.images.map(img => ({ data: img.data, media_type: img.type }));
         }
         if (options.pdf) {
           requestBody.pdf = options.pdf;

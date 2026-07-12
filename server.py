@@ -86,13 +86,16 @@ Rules:
    - Subscripts: $H_2O$ NOT H₂O
    - Superscripts: $x^2$ NOT x²"""
 
+class ImageAttachment(BaseModel):
+    data: str
+    media_type: str = "image/jpeg"
+
 class Message(BaseModel):
     text: str
     answer_style: str = "detailed"
     student_name: str = ""
     history: list = []
-    image: str = None
-    image_type: str = None
+    images: List[ImageAttachment] = []
     pdf: str = None
     language: str = "en"
     user_id: str = ""
@@ -314,8 +317,9 @@ def get_student_context(user_id: str) -> str:
         "similar — just let it shape the answer naturally):\n" + "\n".join(parts)
     )
 
-def stream_response(text: str, history: list = [], image: str = None, image_type: str = None, pdf: str = None, answer_style: str = "detailed", student_name: str = "", language: str = "en", user_id: str = "", personalize: bool = True, skip_cache: bool = False):
-    print(f"stream_response called - text: {text[:50]}, image: {bool(image)}")
+def stream_response(text: str, history: list = [], images: list = [], pdf: str = None, answer_style: str = "detailed", student_name: str = "", language: str = "en", user_id: str = "", personalize: bool = True, skip_cache: bool = False):
+    images = (images or [])[:3]
+    print(f"stream_response called - text: {text[:50]}, images: {len(images)}")
     import hashlib
     # Personalized answers are specific to this student and must never be served from —
     # or written to — the shared answer cache, which is keyed only on question text.
@@ -329,7 +333,7 @@ def stream_response(text: str, history: list = [], image: str = None, image_type
         "apikey": SUPABASE_SERVICE_KEY,
         "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"
     }
-    if not image and not pdf and use_shared_cache:
+    if not images and not pdf and use_shared_cache:
         cached = http_requests.get(
             f"{SUPABASE_URL}/rest/v1/answer_cache?question_hash=eq.{answer_hash}&select=answer",
             headers=headers
@@ -355,25 +359,21 @@ def stream_response(text: str, history: list = [], image: str = None, image_type
         role = "user" if msg["role"] == "user" else "assistant"
         messages.append({"role": role, "content": msg["text"]})
 
-        print(f"Image received: {bool(image)}, PDF received: {bool(pdf)}")
-    if image:
-        messages.append({
-            "role": "user",
-            "content": [
-                {
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": image_type or "image/jpeg",
-                        "data": image
-                    }
-                },
-                {
-                    "type": "text",
-                    "text": user_message
+        print(f"Images received: {len(images)}, PDF received: {bool(pdf)}")
+    if images:
+        content = [
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": img.media_type or "image/jpeg",
+                    "data": img.data
                 }
-            ]
-        })
+            }
+            for img in images
+        ]
+        content.append({"type": "text", "text": user_message})
+        messages.append({"role": "user", "content": content})
     elif pdf:
         messages.append({
             "role": "user",
@@ -415,7 +415,7 @@ def stream_response(text: str, history: list = [], image: str = None, image_type
             for text_chunk in stream.text_stream:
                 full_answer += text_chunk
                 yield text_chunk
-            if not image and not pdf and use_shared_cache:
+            if not images and not pdf and use_shared_cache:
                 http_requests.post(
                     f"{SUPABASE_URL}/rest/v1/answer_cache",
                     headers={**headers, "Content-Type": "application/json"},
@@ -466,7 +466,7 @@ Rules:
 @app.post("/chat")
 async def chat(message: Message, _: None = Depends(rate_limiter(15, 60))):
     return StreamingResponse(
-       stream_response(message.text, message.history, message.image, message.image_type, message.pdf, message.answer_style, message.student_name, message.language, message.user_id, message.personalize, message.skip_cache),
+       stream_response(message.text, message.history, message.images, message.pdf, message.answer_style, message.student_name, message.language, message.user_id, message.personalize, message.skip_cache),
         media_type="text/plain"
     )
 
