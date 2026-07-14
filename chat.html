@@ -921,37 +921,16 @@ let selectedImages = [];
         .replace(/\n/g, '<br>');
     }
 
-    // Splits streaming updates into a cheap per-character path and an expensive
-    // throttled one, so the char-by-char reveal stays smooth while KaTeX/marked only
-    // re-run a few times a second instead of on every character:
-    //   - update(): cheap, call every character - reuses the last rendered HTML and
-    //     just appends a plain-text (escaped) tail for whatever hasn't been through
-    //     parseWithMath yet.
-    //   - flush(): expensive, call throttled - re-renders everything up to the current
-    //     safe boundary through the real KaTeX/markdown pipeline and caches it, so the
-    //     next update() calls build on the new, larger safe prefix.
-    function createStreamRenderer(bubble) {
-      // Separate DOM nodes for the safe (already KaTeX/marked-rendered) content and the
-      // growing plain-text tail, so update() only ever touches the tail node. Writing the
-      // combined HTML into one shared innerHTML on every character was tearing down and
-      // rebuilding already-rendered KaTeX markup (which can be a deep, complex node tree)
-      // dozens of times a second, causing visible flicker/glitching during streaming.
-      bubble.innerHTML = '<div class="stream-safe"></div><div class="stream-tail"></div>';
-      const safeEl = bubble.querySelector('.stream-safe');
-      const tailEl = bubble.querySelector('.stream-tail');
-      let renderedSafeLen = 0;
-      return {
-        update(fullText) {
-          tailEl.innerHTML = escapeStreamingTail(fullText.slice(renderedSafeLen));
-        },
-        flush(fullText) {
-          const safeLen = findSafeRenderBoundary(fullText);
-          if (safeLen > renderedSafeLen) {
-            safeEl.innerHTML = parseWithMath(fullText.slice(0, safeLen));
-            renderedSafeLen = safeLen;
-          }
-        }
-      };
+    // Renders everything up to the last safe boundary through the real pipeline
+    // (KaTeX + markdown), and shows the still-open trailing fragment as escaped
+    // plain text so raw "$$" / "**" never flashes on screen mid-stream. Call this
+    // on a throttle (see RENDER_THROTTLE_MS in streamAIResponse), not per-character -
+    // a per-character cached-safe-HTML/live-tail split was tried and pulled back out
+    // (see git history) after it introduced its own repeated/duplicated-content bug
+    // that wasn't present in this simpler single-write version.
+    function renderStreamingText(bubble, fullText) {
+      const safeLen = findSafeRenderBoundary(fullText);
+      bubble.innerHTML = parseWithMath(fullText.slice(0, safeLen)) + escapeStreamingTail(fullText.slice(safeLen));
     }
 
     function showPYQModal(questions) {
@@ -1632,6 +1611,7 @@ function plainTextFromMarkdown(text) {
     });
 
  async function sendMessage() {
+      if (isStreaming) return;
       const text = input.value.trim();
       if (!text && selectedImages.length === 0 && !selectedPDF) return;
 
@@ -1759,8 +1739,7 @@ function plainTextFromMarkdown(text) {
         const decoder = new TextDecoder();
         let fullText = '';
         let lastRenderTime = 0;
-        const RENDER_THROTTLE_MS = 200;
-        const streamRenderer = createStreamRenderer(bubble);
+        const RENDER_THROTTLE_MS = 100;
 
         while (true) {
           if (streamController && streamController.signal.aborted) break;
@@ -1772,16 +1751,13 @@ function plainTextFromMarkdown(text) {
             fullText += chunk[i];
             const now = Date.now();
             if (now - lastRenderTime >= RENDER_THROTTLE_MS) {
-              streamRenderer.flush(fullText);
+              renderStreamingText(bubble, fullText);
               lastRenderTime = now;
-              // Throttled with flush(), not on every character: scrollBottom() does an
-              // animated scrollTo({behavior:'smooth'}), and .chat-window is also
-              // scroll-behavior:smooth in CSS. Calling it every character retriggers a
-              // new scroll animation before the last one can finish, which looks like
-              // jittery flicker rather than a smooth follow.
+              // scrollBottom() animates via scroll-behavior:smooth - throttled with the
+              // render, not called on every character, or repeated calls interrupt each
+              // other's in-flight animation and look like jittery flicker.
               scrollBottom();
             }
-            streamRenderer.update(fullText);
             await new Promise(r => setTimeout(r, 1));
           }
         }
