@@ -1774,9 +1774,14 @@ function plainTextFromMarkdown(text) {
             if (now - lastRenderTime >= RENDER_THROTTLE_MS) {
               streamRenderer.flush(fullText);
               lastRenderTime = now;
+              // Throttled with flush(), not on every character: scrollBottom() does an
+              // animated scrollTo({behavior:'smooth'}), and .chat-window is also
+              // scroll-behavior:smooth in CSS. Calling it every character retriggers a
+              // new scroll animation before the last one can finish, which looks like
+              // jittery flicker rather than a smooth follow.
+              scrollBottom();
             }
             streamRenderer.update(fullText);
-            scrollBottom();
             await new Promise(r => setTimeout(r, 1));
           }
         }
