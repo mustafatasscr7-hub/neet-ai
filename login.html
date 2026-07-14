@@ -141,6 +141,57 @@
 
     .footer { font-size: 11px; color: #333; text-align: center; }
 
+    .phone-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      background: transparent;
+      color: #ececec;
+      border: 1px solid #2a2a2a;
+      padding: 13px 24px;
+      border-radius: 10px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 600;
+      font-family: 'Inter', sans-serif;
+      transition: all 0.2s;
+      width: 100%;
+    }
+    .phone-btn:hover { border-color: #4f8ef750; color: #4f8ef7; }
+
+    .phone-row { display: flex; gap: 8px; }
+    .country-select {
+      flex: 0 0 92px;
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      color: #ececec;
+      padding: 12px 8px;
+      border-radius: 10px;
+      font-size: 14px;
+      font-family: 'Inter', sans-serif;
+      outline: none;
+    }
+    .phone-row .input-field { flex: 1; }
+
+    .otp-input {
+      text-align: center;
+      font-size: 22px;
+      letter-spacing: 0.5em;
+      font-weight: 600;
+    }
+    .otp-input::placeholder { letter-spacing: normal; font-size: 14px; font-weight: 400; }
+
+    .otp-sent-to { font-size: 13px; color: #666; text-align: center; }
+
+    .resend-row { font-size: 13px; color: #555; text-align: center; }
+    .resend-link { background: transparent; border: none; color: #4f8ef7; font-size: 13px; font-weight: 500; cursor: pointer; font-family: 'Inter', sans-serif; }
+    .resend-link:disabled { color: #444; cursor: default; }
+    .resend-link:not(:disabled):hover { text-decoration: underline; }
+
+    .back-link { background: transparent; border: none; color: #555; font-size: 13px; cursor: pointer; font-family: 'Inter', sans-serif; text-align: center; }
+    .back-link:hover { color: #888; }
+
     body.light-mode { background: #f5f5f5 !important; color: #0d0d0d !important; }
     body.light-mode .login-box { background: #ffffff !important; border-color: #e3e3ea !important; box-shadow: 0 4px 24px rgba(0,0,0,0.06) !important; }
     body.light-mode .lang-toggle { background: #ffffff !important; border-color: #d5d5dd !important; color: #55555f !important; }
@@ -167,7 +218,16 @@
     body.light-mode .toggle-text span { color: #4f8ef7 !important; }
 
     body.light-mode .footer { color: #9a9aa5 !important; }
-  
+
+    body.light-mode .phone-btn { color: #0d0d0d !important; border-color: #d5d5dd !important; }
+    body.light-mode .phone-btn:hover { border-color: #4f8ef7 !important; color: #4f8ef7 !important; }
+    body.light-mode .country-select { background: #f5f5f7 !important; border-color: #d5d5dd !important; color: #0d0d0d !important; }
+    body.light-mode .otp-sent-to { color: #7a7a85 !important; }
+    body.light-mode .resend-row { color: #7a7a85 !important; }
+    body.light-mode .resend-link:disabled { color: #b5b5c0 !important; }
+    body.light-mode .back-link { color: #7a7a85 !important; }
+    body.light-mode .back-link:hover { color: #4f4f58 !important; }
+
     /* Smooth fade-in on page load */
     body { animation: pageFadeIn 0.22s ease; }
     @keyframes pageFadeIn { from { opacity: 0; } to { opacity: 1; } }
@@ -199,24 +259,66 @@
       <div class="subtitle" style="margin-top:6px" id="formSubtitle">Sign in to continue your NEET preparation.</div>
     </div>
 
-    <button class="google-btn" id="googleBtn">
-      <img src="https://www.google.com/favicon.ico" alt="Google"/>
-      <span data-i18n="login.continueWithGoogle">Continue with Google</span>
-    </button>
+    <div id="defaultView" style="display:flex;flex-direction:column;gap:20px;">
+      <button class="google-btn" id="googleBtn">
+        <img src="https://www.google.com/favicon.ico" alt="Google"/>
+        <span data-i18n="login.continueWithGoogle">Continue with Google</span>
+      </button>
 
-    <div class="divider" data-i18n="login.or">or</div>
+      <button class="phone-btn" id="phoneBtn">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><rect x="7" y="2" width="10" height="20" rx="2"/><line x1="11" y1="18" x2="13" y2="18"/></svg>
+        <span data-i18n="login.continueWithPhone">Continue with Phone</span>
+      </button>
 
-    <input type="email" class="input-field" id="emailInput" placeholder="Email address" data-i18n-placeholder="login.emailPlaceholder" />
-    <input type="password" class="input-field" id="passwordInput" placeholder="Password" data-i18n-placeholder="login.passwordPlaceholder" />
+      <div class="divider" data-i18n="login.or">or</div>
+
+      <input type="email" class="input-field" id="emailInput" placeholder="Email address" data-i18n-placeholder="login.emailPlaceholder" />
+      <input type="password" class="input-field" id="passwordInput" placeholder="Password" data-i18n-placeholder="login.passwordPlaceholder" />
+
+      <button class="submit-btn" id="submitBtn">Sign In</button>
+
+      <div class="toggle-text">
+        <span id="toggleTextLabel">Don't have an account? </span><span id="toggleLink">Sign Up</span>
+      </div>
+    </div>
+
+    <div id="phoneView" style="display:none;flex-direction:column;gap:20px;">
+      <div class="phone-row">
+        <select class="country-select" id="countryCode">
+          <option value="+91" selected>🇮🇳 +91</option>
+          <option value="+965">🇰🇼 +965</option>
+          <option value="+971">🇦🇪 +971</option>
+          <option value="+966">🇸🇦 +966</option>
+          <option value="+974">🇶🇦 +974</option>
+          <option value="+973">🇧🇭 +973</option>
+          <option value="+968">🇴🇲 +968</option>
+          <option value="+1">🇺🇸 +1</option>
+          <option value="+44">🇬🇧 +44</option>
+          <option value="+977">🇳🇵 +977</option>
+          <option value="+880">🇧🇩 +880</option>
+          <option value="+94">🇱🇰 +94</option>
+        </select>
+        <input type="tel" class="input-field" id="phoneNumberInput" placeholder="Phone number" data-i18n-placeholder="login.phonePlaceholder" />
+      </div>
+
+      <button class="submit-btn" id="sendOtpBtn" data-i18n="login.sendOtp">Send OTP</button>
+      <button class="back-link" id="phoneBackBtn" data-i18n="login.back">← Back</button>
+    </div>
+
+    <div id="otpView" style="display:none;flex-direction:column;gap:20px;">
+      <div class="otp-sent-to" id="otpSentToLabel"></div>
+      <input type="text" class="input-field otp-input" id="otpCodeInput" placeholder="------" maxlength="6" inputmode="numeric" autocomplete="one-time-code" />
+
+      <button class="submit-btn" id="verifyOtpBtn" data-i18n="login.verifyOtp">Verify &amp; Sign In</button>
+
+      <div class="resend-row">
+        <button class="resend-link" id="resendOtpBtn" data-i18n="login.resendOtp">Resend OTP</button>
+      </div>
+      <button class="back-link" id="otpBackBtn" data-i18n="login.back">← Back</button>
+    </div>
 
     <div class="error-msg" id="errorMsg"></div>
     <div class="success-msg" id="successMsg"></div>
-
-    <button class="submit-btn" id="submitBtn">Sign In</button>
-
-    <div class="toggle-text">
-      <span id="toggleTextLabel">Don't have an account? </span><span id="toggleLink">Sign Up</span>
-    </div>
 
     <div class="footer">
       <span data-i18n="login.footerTerms">By signing in you agree to our Terms of Service.</span><br/>
@@ -287,6 +389,106 @@
     // Enter key
     document.getElementById('passwordInput').addEventListener('keydown', (e) => {
       if (e.key === 'Enter') document.getElementById('submitBtn').click()
+    })
+
+    // ---------- Phone + OTP login ----------
+    const AUTH_API_BASE = 'https://neet-ai-production.up.railway.app'
+    let currentOtpPhone = ''
+    let resendTimerInterval = null
+
+    function showView(view) {
+      document.getElementById('defaultView').style.display = view === 'default' ? 'flex' : 'none'
+      document.getElementById('phoneView').style.display = view === 'phone' ? 'flex' : 'none'
+      document.getElementById('otpView').style.display = view === 'otp' ? 'flex' : 'none'
+      hideMessages()
+    }
+
+    document.getElementById('phoneBtn').addEventListener('click', () => showView('phone'))
+    document.getElementById('phoneBackBtn').addEventListener('click', () => showView('default'))
+    document.getElementById('otpBackBtn').addEventListener('click', () => {
+      clearInterval(resendTimerInterval)
+      showView('phone')
+    })
+
+    async function sendOtp() {
+      const code = document.getElementById('countryCode').value
+      const localNumber = document.getElementById('phoneNumberInput').value.trim().replace(/\D/g, '')
+      if (!localNumber) { showError(t('login', 'enterPhone')); return }
+      const phone = code + localNumber
+
+      const sendBtn = document.getElementById('sendOtpBtn')
+      const originalLabel = sendBtn.textContent
+      sendBtn.disabled = true
+
+      try {
+        const res = await fetch(`${AUTH_API_BASE}/auth/send-otp`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phone })
+        })
+        const data = await res.json()
+        sendBtn.disabled = false
+        sendBtn.textContent = originalLabel
+
+        if (!res.ok) {
+          showError(res.status === 429 ? t('login', 'tooManyOtpRequests') : (data.detail || t('login', 'otpSendFailed')))
+          return
+        }
+
+        currentOtpPhone = phone
+        document.getElementById('otpSentToLabel').textContent = `${t('login', 'otpSentTo')} ${phone}`
+        document.getElementById('otpCodeInput').value = ''
+        showView('otp')
+        startResendCooldown()
+      } catch (e) {
+        sendBtn.disabled = false
+        sendBtn.textContent = originalLabel
+        showError(t('login', 'otpSendFailed'))
+      }
+    }
+    document.getElementById('sendOtpBtn').addEventListener('click', sendOtp)
+
+    function startResendCooldown() {
+      let seconds = 60
+      const resendBtn = document.getElementById('resendOtpBtn')
+      resendBtn.disabled = true
+      resendBtn.textContent = `${t('login', 'resendCooldown')} ${seconds}s`
+      clearInterval(resendTimerInterval)
+      resendTimerInterval = setInterval(() => {
+        seconds--
+        if (seconds <= 0) {
+          clearInterval(resendTimerInterval)
+          resendBtn.disabled = false
+          resendBtn.textContent = t('login', 'resendOtp')
+        } else {
+          resendBtn.textContent = `${t('login', 'resendCooldown')} ${seconds}s`
+        }
+      }, 1000)
+    }
+
+    document.getElementById('resendOtpBtn').addEventListener('click', () => {
+      if (document.getElementById('resendOtpBtn').disabled) return
+      sendOtp()
+    })
+
+    document.getElementById('verifyOtpBtn').addEventListener('click', async () => {
+      const token = document.getElementById('otpCodeInput').value.trim()
+      if (!token || token.length !== 6) { showError(t('login', 'invalidOtp')); return }
+
+      const verifyBtn = document.getElementById('verifyOtpBtn')
+      verifyBtn.disabled = true
+      const { error } = await client.auth.verifyOtp({ phone: currentOtpPhone, token, type: 'sms' })
+      verifyBtn.disabled = false
+
+      if (error) { showError(t('login', 'invalidOtp')); return }
+      window.location.href = './chat.html'
+    })
+
+    document.getElementById('phoneNumberInput').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') document.getElementById('sendOtpBtn').click()
+    })
+    document.getElementById('otpCodeInput').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') document.getElementById('verifyOtpBtn').click()
     })
 
     function showError(msg) {

@@ -897,7 +897,19 @@ const TRANSLATIONS = {
       footerSource: 'Answers sourced from NCERT Class 11 & 12.',
       enterEmailPassword: 'Please enter email and password.',
       accountCreated: 'Account created! Please check your email to verify.',
-      invalidCredentials: 'Invalid email or password.'
+      invalidCredentials: 'Invalid email or password.',
+      continueWithPhone: 'Continue with Phone',
+      phonePlaceholder: 'Phone number',
+      sendOtp: 'Send OTP',
+      enterPhone: 'Please enter a valid phone number.',
+      otpSentTo: 'Enter the 6-digit code sent to',
+      verifyOtp: 'Verify & Sign In',
+      resendOtp: 'Resend OTP',
+      resendCooldown: 'Resend in',
+      back: '← Back',
+      invalidOtp: 'Invalid or expired code. Please try again.',
+      otpSendFailed: 'Could not send OTP. Please check the number and try again.',
+      tooManyOtpRequests: 'Too many attempts. Please wait a few minutes and try again.'
     },
     hi: {
       welcomeBack: 'वापसी पर स्वागत है',
@@ -916,7 +928,19 @@ const TRANSLATIONS = {
       footerSource: 'उत्तर NCERT कक्षा 11 और 12 से लिए गए हैं।',
       enterEmailPassword: 'कृपया ईमेल और पासवर्ड दर्ज करें।',
       accountCreated: 'खाता बन गया! कृपया सत्यापित करने के लिए अपना ईमेल जाँचें।',
-      invalidCredentials: 'अमान्य ईमेल या पासवर्ड।'
+      invalidCredentials: 'अमान्य ईमेल या पासवर्ड।',
+      continueWithPhone: 'फ़ोन से जारी रखें',
+      phonePlaceholder: 'फ़ोन नंबर',
+      sendOtp: 'OTP भेजें',
+      enterPhone: 'कृपया एक मान्य फ़ोन नंबर दर्ज करें।',
+      otpSentTo: 'इस नंबर पर भेजा गया 6 अंकों का कोड दर्ज करें:',
+      verifyOtp: 'सत्यापित करें और साइन इन करें',
+      resendOtp: 'OTP फिर से भेजें',
+      resendCooldown: 'फिर से भेजें',
+      back: '← वापस',
+      invalidOtp: 'अमान्य या समाप्त कोड। कृपया पुनः प्रयास करें।',
+      otpSendFailed: 'OTP भेजने में समस्या हुई। कृपया नंबर जाँचें और पुनः प्रयास करें।',
+      tooManyOtpRequests: 'बहुत अधिक प्रयास। कृपया कुछ मिनट प्रतीक्षा करें और पुनः प्रयास करें।'
     }
   },
 

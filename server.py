@@ -102,6 +102,9 @@ class Message(BaseModel):
     personalize: bool = True
     skip_cache: bool = False
 
+class PhoneOtpRequest(BaseModel):
+    phone: str
+
 class SolveRequest(BaseModel):
     question: str
     option_a: str = ""
@@ -178,6 +181,22 @@ def rate_limiter(max_requests: int = 15, window_seconds: int = 60):
         timestamps.append(now)
         _rate_limit_buckets[key] = timestamps
     return dependency
+
+# ---------- Rate limiting for phone OTP sends, per phone number ----------
+# Separate from rate_limiter() above (which is per-IP): a phone number can be
+# targeted from many IPs, and one IP can try many numbers, so both axes need
+# their own cap. IP is covered by rate_limiter(3, 600) on the route itself.
+_otp_phone_buckets = {}  # phone -> [timestamps]
+OTP_MAX_PER_PHONE = 3
+OTP_PHONE_WINDOW_SECONDS = 600  # 10 minutes
+
+def _check_phone_otp_limit(phone: str):
+    now = time.time()
+    timestamps = [t for t in _otp_phone_buckets.get(phone, []) if now - t < OTP_PHONE_WINDOW_SECONDS]
+    if len(timestamps) >= OTP_MAX_PER_PHONE:
+        raise HTTPException(status_code=429, detail="Too many OTP requests for this number — please wait a few minutes and try again.")
+    timestamps.append(now)
+    _otp_phone_buckets[phone] = timestamps
 
 ADMIN_HEADERS = {
     "apikey": SUPABASE_SERVICE_KEY,
@@ -462,6 +481,33 @@ Rules:
     return {"solution": message.content[0].text}
 
 
+
+@app.post("/auth/send-otp")
+async def send_otp(req: PhoneOtpRequest, _: None = Depends(rate_limiter(3, 600))):
+    phone = req.phone.strip()
+    if not phone.startswith("+") or not phone[1:].isdigit() or len(phone) < 8:
+        raise HTTPException(status_code=400, detail="Enter a valid phone number in international format, e.g. +919876543210.")
+
+    _check_phone_otp_limit(phone)
+
+    try:
+        response = http_requests.post(
+            f"{SUPABASE_URL}/auth/v1/otp",
+            headers={"apikey": SUPABASE_KEY, "Content-Type": "application/json"},
+            json={"phone": phone}
+        )
+    except Exception:
+        raise HTTPException(status_code=502, detail="Could not reach the auth service. Please try again.")
+
+    if response.status_code >= 400:
+        msg = "Could not send OTP. Please check the number and try again."
+        try:
+            msg = response.json().get("msg", msg)
+        except Exception:
+            pass
+        raise HTTPException(status_code=400, detail=msg)
+
+    return {"success": True}
 
 @app.post("/chat")
 async def chat(message: Message, _: None = Depends(rate_limiter(15, 60))):
