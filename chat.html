@@ -931,16 +931,23 @@ let selectedImages = [];
     //     safe boundary through the real KaTeX/markdown pipeline and caches it, so the
     //     next update() calls build on the new, larger safe prefix.
     function createStreamRenderer(bubble) {
-      let cachedSafeHtml = '';
+      // Separate DOM nodes for the safe (already KaTeX/marked-rendered) content and the
+      // growing plain-text tail, so update() only ever touches the tail node. Writing the
+      // combined HTML into one shared innerHTML on every character was tearing down and
+      // rebuilding already-rendered KaTeX markup (which can be a deep, complex node tree)
+      // dozens of times a second, causing visible flicker/glitching during streaming.
+      bubble.innerHTML = '<div class="stream-safe"></div><div class="stream-tail"></div>';
+      const safeEl = bubble.querySelector('.stream-safe');
+      const tailEl = bubble.querySelector('.stream-tail');
       let renderedSafeLen = 0;
       return {
         update(fullText) {
-          bubble.innerHTML = cachedSafeHtml + escapeStreamingTail(fullText.slice(renderedSafeLen));
+          tailEl.innerHTML = escapeStreamingTail(fullText.slice(renderedSafeLen));
         },
         flush(fullText) {
           const safeLen = findSafeRenderBoundary(fullText);
           if (safeLen > renderedSafeLen) {
-            cachedSafeHtml = parseWithMath(fullText.slice(0, safeLen));
+            safeEl.innerHTML = parseWithMath(fullText.slice(0, safeLen));
             renderedSafeLen = safeLen;
           }
         }
