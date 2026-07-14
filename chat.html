@@ -921,12 +921,30 @@ let selectedImages = [];
         .replace(/\n/g, '<br>');
     }
 
-    // Renders everything up to the last safe boundary through the real pipeline
-    // (KaTeX + markdown), and shows the still-open trailing fragment as escaped
-    // plain text so raw "$$" / "**" never flashes on screen mid-stream.
-    function renderStreamingText(bubble, fullText) {
-      const safeLen = findSafeRenderBoundary(fullText);
-      bubble.innerHTML = parseWithMath(fullText.slice(0, safeLen)) + escapeStreamingTail(fullText.slice(safeLen));
+    // Splits streaming updates into a cheap per-character path and an expensive
+    // throttled one, so the char-by-char reveal stays smooth while KaTeX/marked only
+    // re-run a few times a second instead of on every character:
+    //   - update(): cheap, call every character - reuses the last rendered HTML and
+    //     just appends a plain-text (escaped) tail for whatever hasn't been through
+    //     parseWithMath yet.
+    //   - flush(): expensive, call throttled - re-renders everything up to the current
+    //     safe boundary through the real KaTeX/markdown pipeline and caches it, so the
+    //     next update() calls build on the new, larger safe prefix.
+    function createStreamRenderer(bubble) {
+      let cachedSafeHtml = '';
+      let renderedSafeLen = 0;
+      return {
+        update(fullText) {
+          bubble.innerHTML = cachedSafeHtml + escapeStreamingTail(fullText.slice(renderedSafeLen));
+        },
+        flush(fullText) {
+          const safeLen = findSafeRenderBoundary(fullText);
+          if (safeLen > renderedSafeLen) {
+            cachedSafeHtml = parseWithMath(fullText.slice(0, safeLen));
+            renderedSafeLen = safeLen;
+          }
+        }
+      };
     }
 
     function showPYQModal(questions) {
@@ -1735,6 +1753,7 @@ function plainTextFromMarkdown(text) {
         let fullText = '';
         let lastRenderTime = 0;
         const RENDER_THROTTLE_MS = 200;
+        const streamRenderer = createStreamRenderer(bubble);
 
         while (true) {
           if (streamController && streamController.signal.aborted) break;
@@ -1746,10 +1765,11 @@ function plainTextFromMarkdown(text) {
             fullText += chunk[i];
             const now = Date.now();
             if (now - lastRenderTime >= RENDER_THROTTLE_MS) {
-              renderStreamingText(bubble, fullText);
+              streamRenderer.flush(fullText);
               lastRenderTime = now;
-              scrollBottom();
             }
+            streamRenderer.update(fullText);
+            scrollBottom();
             await new Promise(r => setTimeout(r, 1));
           }
         }
