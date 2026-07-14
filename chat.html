@@ -887,6 +887,48 @@ let selectedImages = [];
       return DOMPurify.sanitize(marked.parse(html));
     }
 
+    // Scans for the longest prefix of `text` where every $$...$$, $...$ and **...**
+    // pair is fully closed. Streaming text past that point is still mid-delimiter
+    // (e.g. "$$\frac{1}{2}mv" with no closing $$ yet) and unsafe to run through
+    // parseWithMath - it would render broken/partial KaTeX.
+    function findSafeRenderBoundary(text) {
+      let i = 0;
+      let lastSafe = 0;
+      let inDisplay = false, inInline = false, inBold = false;
+      while (i < text.length) {
+        if (!inInline && !inBold && text.startsWith('$$', i)) {
+          inDisplay = !inDisplay;
+          i += 2;
+        } else if (!inDisplay && !inBold && text[i] === '$') {
+          inInline = !inInline;
+          i += 1;
+        } else if (!inDisplay && !inInline && text.startsWith('**', i)) {
+          inBold = !inBold;
+          i += 2;
+        } else {
+          i += 1;
+        }
+        if (!inDisplay && !inInline && !inBold) lastSafe = i;
+      }
+      return lastSafe;
+    }
+
+    function escapeStreamingTail(text) {
+      return text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/\n/g, '<br>');
+    }
+
+    // Renders everything up to the last safe boundary through the real pipeline
+    // (KaTeX + markdown), and shows the still-open trailing fragment as escaped
+    // plain text so raw "$$" / "**" never flashes on screen mid-stream.
+    function renderStreamingText(bubble, fullText) {
+      const safeLen = findSafeRenderBoundary(fullText);
+      bubble.innerHTML = parseWithMath(fullText.slice(0, safeLen)) + escapeStreamingTail(fullText.slice(safeLen));
+    }
+
     function showPYQModal(questions) {
       const existing = document.getElementById('pyq-modal');
       if (existing) existing.remove();
@@ -1691,6 +1733,8 @@ function plainTextFromMarkdown(text) {
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let fullText = '';
+        let lastRenderTime = 0;
+        const RENDER_THROTTLE_MS = 200;
 
         while (true) {
           if (streamController && streamController.signal.aborted) break;
@@ -1700,8 +1744,12 @@ function plainTextFromMarkdown(text) {
           for (let i = 0; i < chunk.length; i++) {
             if (streamController && streamController.signal.aborted) break;
             fullText += chunk[i];
-            bubble.innerHTML = DOMPurify.sanitize(marked.parse(fullText));
-            scrollBottom();
+            const now = Date.now();
+            if (now - lastRenderTime >= RENDER_THROTTLE_MS) {
+              renderStreamingText(bubble, fullText);
+              lastRenderTime = now;
+              scrollBottom();
+            }
             await new Promise(r => setTimeout(r, 1));
           }
         }
