@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Header, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List
 import anthropic
 import requests
@@ -135,6 +135,25 @@ class AdminPyqBulkUpdate(BaseModel):
     ids: List[str]
     chapter: Optional[str] = None
     is_active: Optional[bool] = None
+
+class AdminPyqCreate(BaseModel):
+    subject: str
+    chapter: Optional[str] = None
+    question: str
+    option_a: str = ""
+    option_b: str = ""
+    option_c: str = ""
+    option_d: str = ""
+    correct_answer: Optional[str] = None
+    year: Optional[int] = None
+    class_: Optional[int] = Field(None, alias="class")
+    has_diagram: bool = False
+    diagram_url: Optional[str] = None
+
+class AdminDiagramUpload(BaseModel):
+    filename: str
+    data: str
+    media_type: str = "image/png"
 
 import time
 
@@ -835,6 +854,88 @@ async def admin_pyq_bulk_update(body: AdminPyqBulkUpdate, _: None = Depends(veri
         if response.status_code >= 400:
             return {"error": response.text}
         return {"updated_count": len(response.json())}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.post("/admin/pyq-create")
+async def admin_pyq_create(body: AdminPyqCreate, _: None = Depends(verify_admin)):
+    if body.subject not in ("Biology", "Physics", "Chemistry"):
+        return {"error": "Invalid subject"}
+    if not body.question or not body.question.strip():
+        return {"error": "Question text is required"}
+    if body.class_ is not None and body.class_ not in (11, 12):
+        return {"error": "Class must be 11 or 12"}
+    correct_answer = body.correct_answer.strip().lower() if body.correct_answer else None
+    if correct_answer and correct_answer not in ("a", "b", "c", "d"):
+        return {"error": "correct_answer must be a, b, c, or d"}
+    payload = {
+        "subject": body.subject,
+        "chapter": body.chapter.strip() if body.chapter else None,
+        "question": body.question.strip(),
+        "option_a": body.option_a.strip(),
+        "option_b": body.option_b.strip(),
+        "option_c": body.option_c.strip(),
+        "option_d": body.option_d.strip(),
+        "correct_answer": correct_answer,
+        "year": body.year,
+        "class": body.class_,
+        "has_diagram": body.has_diagram,
+        "diagram_url": body.diagram_url
+    }
+    try:
+        response = http_requests.post(
+            f"{SUPABASE_URL}/rest/v1/pyq",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
+            json=payload
+        )
+        if response.status_code >= 400:
+            return {"error": response.text}
+        created = response.json()
+        return {"created": created[0] if created else None}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.post("/admin/pyq-diagram-upload")
+async def admin_pyq_diagram_upload(body: AdminDiagramUpload, _: None = Depends(verify_admin)):
+    try:
+        import base64, re
+        raw = base64.b64decode(body.data)
+        safe_name = re.sub(r'[^a-zA-Z0-9._-]', '_', body.filename)
+        path = f"{int(time.time())}_{safe_name}"
+        upload_resp = http_requests.post(
+            f"{SUPABASE_URL}/storage/v1/object/Q-Daigrams-BIO/{path}",
+            headers={
+                "apikey": SUPABASE_SERVICE_KEY,
+                "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+                "Content-Type": body.media_type
+            },
+            data=raw
+        )
+        if upload_resp.status_code >= 400:
+            return {"error": upload_resp.text}
+        public_url = f"{SUPABASE_URL}/storage/v1/object/public/Q-Daigrams-BIO/{path}"
+        return {"url": public_url}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/admin/pyq-classifier-data")
+async def admin_pyq_classifier_data(subject: str, _: None = Depends(verify_admin)):
+    if subject not in ("Biology", "Physics", "Chemistry"):
+        return {"error": "Invalid subject"}
+    try:
+        response = http_requests.get(
+            f"{SUPABASE_URL}/rest/v1/pyq",
+            headers=ADMIN_HEADERS,
+            params={
+                "subject": f"eq.{subject}",
+                "chapter": "not.is.null",
+                "is_active": "eq.true",
+                "select": "question,chapter,class",
+                "limit": 5000
+            }
+        )
+        rows = response.json()
+        return {"rows": rows}
     except Exception as e:
         return {"error": str(e)}
 

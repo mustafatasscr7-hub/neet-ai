@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<meta name="robots" content="noindex, nofollow"/>
+<title>Add PYQ — NEET-AI</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Inter', sans-serif; background: #0d0d0d; color: #ececec; min-height: 100vh; }
+
+  /* Password gate - matches admin-dashboard.html */
+  #gateOverlay { position: fixed; inset: 0; background: #0d0d0d; display: flex; align-items: center; justify-content: center; z-index: 999; }
+  .gate-box { background: #111; border: 1px solid #2a2a2a; border-radius: 14px; padding: 32px; width: 100%; max-width: 340px; text-align: center; }
+  .gate-box h1 { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
+  .gate-box p { font-size: 12px; color: #666; margin-bottom: 20px; }
+  .gate-box input { width: 100%; background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 8px; padding: 10px 14px; color: #ececec; font-size: 14px; font-family: 'Inter', sans-serif; outline: none; margin-bottom: 12px; }
+  .gate-box input:focus { border-color: #4f8ef7; }
+  .gate-box button { width: 100%; background: #4f8ef7; border: none; border-radius: 8px; padding: 10px; color: white; font-size: 13px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
+  .gate-box button:hover { background: #3b7de8; }
+  .gate-error { font-size: 12px; color: #ef4444; margin-top: 10px; min-height: 14px; }
+
+  #dashboard { display: none; max-width: 900px; margin: 0 auto; padding: 24px; }
+  .db-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+  .db-header h1 { font-size: 18px; font-weight: 700; }
+  .db-header h1 span { color: #4f8ef7; }
+  .db-header .links { display: flex; gap: 10px; }
+  .db-header a, .logout-btn { background: transparent; border: 1px solid #2a2a2a; color: #888; padding: 6px 14px; border-radius: 8px; font-size: 12px; cursor: pointer; font-family: 'Inter', sans-serif; text-decoration: none; }
+  .db-header a:hover, .logout-btn:hover { color: #ccc; border-color: #3a3a3a; }
+
+  .card { background: #111; border: 1px solid #1e1e1e; border-radius: 10px; padding: 18px; margin-bottom: 16px; }
+  .card h2 { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: #666; margin-bottom: 12px; }
+
+  .subject-tabs { display: flex; gap: 8px; margin-bottom: 4px; }
+  .subject-tab { flex: 1; background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 8px; padding: 10px; text-align: center; font-size: 13px; font-weight: 600; cursor: pointer; color: #888; }
+  .subject-tab.active { border-color: #4f8ef7; color: #4f8ef7; background: #4f8ef712; }
+
+  textarea, input[type="text"], input[type="number"], select {
+    width: 100%; background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 8px; padding: 10px 12px;
+    color: #ececec; font-size: 13px; font-family: 'Inter', sans-serif; outline: none; resize: vertical;
+  }
+  textarea:focus, input:focus, select:focus { border-color: #4f8ef7; }
+  label { display: block; font-size: 11px; color: #666; margin-bottom: 6px; margin-top: 12px; }
+  label:first-child { margin-top: 0; }
+
+  #pasteBox { min-height: 140px; }
+  #questionText { min-height: 90px; }
+
+  .options-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+
+  .chip-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; background: #0d0d12; border: 1px solid #2a2a35; border-radius: 100px; padding: 6px 12px; font-size: 12px; font-weight: 600; color: #ccc; cursor: pointer; }
+  .chip:hover { border-color: #4f8ef760; }
+  .chip.selected { border-color: #4f8ef7; background: #4f8ef720; color: #4f8ef7; }
+  .chip .sim { color: #666; font-weight: 400; font-size: 11px; }
+  .chip.selected .sim { color: #4f8ef7a0; }
+  .chip-empty { font-size: 12px; color: #555; }
+
+  .selected-chapter-box { margin-top: 10px; padding: 10px 12px; background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 8px; font-size: 13px; }
+  .selected-chapter-box.unset { color: #555; font-style: italic; }
+
+  .diagram-row { display: flex; align-items: center; gap: 14px; margin-top: 8px; }
+  #diagramPreview { display: none; max-width: 120px; max-height: 120px; border-radius: 8px; border: 1px solid #2a2a2a; }
+
+  .warning-box { background: #f9731612; border: 1px solid #f9731640; border-radius: 8px; padding: 12px; font-size: 12px; color: #f97316; margin-top: 12px; display: none; }
+  .block-box { background: #ef444412; border: 1px solid #ef444440; border-radius: 8px; padding: 12px; font-size: 12px; color: #ef4444; margin-top: 12px; display: none; }
+
+  .save-btn { width: 100%; background: #4f8ef7; border: none; border-radius: 8px; padding: 13px; color: white; font-size: 14px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; margin-top: 6px; }
+  .save-btn:hover { background: #3b7de8; }
+  .save-btn:disabled { background: #2a2a2a; color: #666; cursor: not-allowed; }
+  #saveStatus { font-size: 12px; text-align: center; margin-top: 10px; min-height: 14px; }
+
+  .hint { font-size: 11px; color: #555; margin-top: 4px; }
+  .classifier-status { font-size: 11px; color: #555; margin-top: 6px; }
+</style>
+</head>
+<body>
+
+<div id="gateOverlay">
+  <div class="gate-box">
+    <h1>PYQ Add Question</h1>
+    <p>Admin access required</p>
+    <input type="password" id="gatePassword" placeholder="Password" onkeydown="if(event.key==='Enter')verifyPassword()"/>
+    <button onclick="verifyPassword()">Enter</button>
+    <div class="gate-error" id="gateError"></div>
+  </div>
+</div>
+
+<div id="dashboard">
+  <div class="db-header">
+    <h1>Add <span>PYQ</span></h1>
+    <div class="links">
+      <a href="./admin-dashboard.html">Dashboard</a>
+      <button class="logout-btn" onclick="logout()">Log out</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Subject / Class</h2>
+    <div class="subject-tabs" id="subjectTabs">
+      <div class="subject-tab" data-subject="Biology" onclick="selectSubject('Biology')">Biology</div>
+      <div class="subject-tab" data-subject="Physics" onclick="selectSubject('Physics')">Physics</div>
+      <div class="subject-tab" data-subject="Chemistry" onclick="selectSubject('Chemistry')">Chemistry</div>
+    </div>
+    <div class="classifier-status" id="classifierStatus"></div>
+    <label>Class</label>
+    <select id="classSelect">
+      <option value="">Not set</option>
+      <option value="11">Class 11</option>
+      <option value="12">Class 12</option>
+    </select>
+    <div class="hint" id="classHint"></div>
+  </div>
+
+  <div class="card">
+    <h2>Paste question block</h2>
+    <textarea id="pasteBox" placeholder="Paste the raw question (with options, year, and answer key if present) straight from your source..."></textarea>
+    <div class="hint">Auto-parses on paste. Every field below stays editable before you save.</div>
+  </div>
+
+  <div class="card">
+    <h2>Question</h2>
+    <textarea id="questionText" placeholder="Question stem"></textarea>
+
+    <div class="options-grid">
+      <div>
+        <label>A</label>
+        <input type="text" id="optA" placeholder="Option A"/>
+      </div>
+      <div>
+        <label>B</label>
+        <input type="text" id="optB" placeholder="Option B"/>
+      </div>
+      <div>
+        <label>C</label>
+        <input type="text" id="optC" placeholder="Option C"/>
+      </div>
+      <div>
+        <label>D</label>
+        <input type="text" id="optD" placeholder="Option D"/>
+      </div>
+    </div>
+
+    <div class="row3">
+      <div>
+        <label>Year</label>
+        <input type="number" id="yearInput" placeholder="2023"/>
+      </div>
+      <div>
+        <label>Correct answer</label>
+        <select id="correctAnswer">
+          <option value="">Not set</option>
+          <option value="a">A</option>
+          <option value="b">B</option>
+          <option value="c">C</option>
+          <option value="d">D</option>
+        </select>
+      </div>
+      <div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Chapter</h2>
+    <div id="chapterSuggestions" class="chip-row"><span class="chip-empty">Paste a question to see suggestions, or pick manually below.</span></div>
+    <label>All chapters (manual override)</label>
+    <select id="manualChapterSelect" onchange="if(this.value) selectChapter(this.value)">
+      <option value="">— pick a chapter —</option>
+    </select>
+    <div class="selected-chapter-box unset" id="selectedChapterBox">No chapter selected yet</div>
+  </div>
+
+  <div class="card">
+    <h2>Diagram (optional)</h2>
+    <div class="diagram-row">
+      <input type="file" id="diagramInput" accept="image/*"/>
+      <img id="diagramPreview"/>
+      <button class="logout-btn" id="removeDiagramBtn" style="display:none;" onclick="removeDiagram()">Remove</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="block-box" id="blockBox"></div>
+    <div class="warning-box" id="warningBox"></div>
+    <button class="save-btn" id="saveBtn" onclick="saveQuestion()">Save question</button>
+    <div id="saveStatus"></div>
+  </div>
+</div>
+
+<script>
+  const API_BASE = 'https://neet-ai-production.up.railway.app';
+  let adminKey = sessionStorage.getItem('admin_key') || '';
+
+  function authHeaders(extra) {
+    return Object.assign({ 'X-Admin-Key': adminKey }, extra || {});
+  }
+
+  async function verifyPassword() {
+    const pw = document.getElementById('gatePassword').value;
+    const errEl = document.getElementById('gateError');
+    errEl.textContent = '';
+    try {
+      const res = await fetch(`${API_BASE}/admin/verify`, { method: 'POST', headers: authHeaders({ 'X-Admin-Key': pw }) });
+      if (res.ok) {
+        adminKey = pw;
+        sessionStorage.setItem('admin_key', adminKey);
+        enterDashboard();
+      } else if (res.status === 429) {
+        const data = await res.json().catch(() => ({}));
+        errEl.textContent = data.detail || 'Too many failed attempts. Try again later.';
+      } else {
+        errEl.textContent = 'Wrong password.';
+      }
+    } catch (e) {
+      errEl.textContent = 'Could not reach the server.';
+    }
+  }
+
+  function logout() {
+    adminKey = '';
+    sessionStorage.removeItem('admin_key');
+    document.getElementById('dashboard').style.display = 'none';
+    document.getElementById('gateOverlay').style.display = 'flex';
+    document.getElementById('gatePassword').value = '';
+  }
+
+  function enterDashboard() {
+    document.getElementById('gateOverlay').style.display = 'none';
+    document.getElementById('dashboard').style.display = 'block';
+    selectSubject(currentSubject);
+  }
+
+  // ---------- Subject / chapter / class state ----------
+  let currentSubject = 'Biology';
+  let selectedChapter = null;
+  const subjectPools = {}; // subject -> { rows: [...], classifier: {...}, loadedAt }
+
+  function selectSubject(subject) {
+    currentSubject = subject;
+    document.querySelectorAll('.subject-tab').forEach(t => t.classList.toggle('active', t.dataset.subject === subject));
+    selectedChapter = null;
+    renderSelectedChapter();
+    document.getElementById('chapterSuggestions').innerHTML = '<span class="chip-empty">Paste a question to see suggestions, or pick manually below.</span>';
+    loadSubjectPool(subject);
+  }
+
+  async function loadSubjectPool(subject) {
+    if (subjectPools[subject]) return subjectPools[subject];
+    const statusEl = document.getElementById('classifierStatus');
+    statusEl.textContent = 'Loading existing questions for ' + subject + '...';
+    try {
+      const res = await fetch(`${API_BASE}/admin/pyq-classifier-data?subject=${encodeURIComponent(subject)}`, { headers: authHeaders() });
+      const data = await res.json();
+      const rows = data.rows || [];
+      const classifier = buildClassifier(rows);
+      subjectPools[subject] = { rows, classifier };
+      statusEl.textContent = `${rows.length} tagged ${subject} questions loaded for suggestions/duplicate-check.`;
+      populateManualChapterDropdown(subject);
+      const pasted = document.getElementById('pasteBox').value.trim();
+      if (pasted) updateChapterSuggestions();
+      return subjectPools[subject];
+    } catch (e) {
+      statusEl.textContent = 'Could not load existing questions (' + e.message + ') — suggestions/duplicate-check unavailable.';
+      subjectPools[subject] = { rows: [], classifier: buildClassifier([]) };
+      return subjectPools[subject];
+    }
+  }
+
+  async function populateManualChapterDropdown(subject) {
+    const sel = document.getElementById('manualChapterSelect');
+    sel.innerHTML = '<option value="">— pick a chapter —</option>';
+    try {
+      const res = await fetch(`${API_BASE}/admin/pyq-chapters?subject=${encodeURIComponent(subject)}`, { headers: authHeaders() });
+      const data = await res.json();
+      (data.chapters || []).forEach(ch => {
+        const opt = document.createElement('option');
+        opt.value = ch;
+        opt.textContent = ch;
+        sel.appendChild(opt);
+      });
+    } catch (e) { /* manual dropdown just stays empty-ish; chips still work */ }
+  }
+
+  function selectChapter(chapter) {
+    selectedChapter = chapter;
+    renderSelectedChapter();
+    document.querySelectorAll('#chapterSuggestions .chip').forEach(c => c.classList.toggle('selected', c.dataset.chapter === chapter));
+    document.getElementById('manualChapterSelect').value = chapter;
+    applyClassAutoFill(chapter);
+  }
+
+  function renderSelectedChapter() {
+    const box = document.getElementById('selectedChapterBox');
+    if (selectedChapter) {
+      box.textContent = 'Selected: ' + selectedChapter;
+      box.classList.remove('unset');
+    } else {
+      box.textContent = 'No chapter selected yet';
+      box.classList.add('unset');
+    }
+  }
+
+  function applyClassAutoFill(chapter) {
+    const pool = subjectPools[currentSubject];
+    const hint = document.getElementById('classHint');
+    if (!pool) return;
+    const counts = pool.classifier.chapterClassCounts.get(chapter);
+    if (!counts || (counts[11] === 0 && counts[12] === 0)) {
+      hint.textContent = 'No class data on existing rows for this chapter — pick manually.';
+      return;
+    }
+    const majority = counts[11] >= counts[12] ? 11 : 12;
+    document.getElementById('classSelect').value = String(majority);
+    hint.textContent = `Auto-filled from existing rows (${counts[11]} at Class 11, ${counts[12]} at Class 12 for this chapter) — override if wrong.`;
+  }
+
+  // ---------- Paste parsing ----------
+  document.getElementById('pasteBox').addEventListener('paste', function() {
+    setTimeout(() => {
+      const parsed = parseQuestionBlock(document.getElementById('pasteBox').value);
+      document.getElementById('questionText').value = parsed.question;
+      document.getElementById('optA').value = parsed.options.a;
+      document.getElementById('optB').value = parsed.options.b;
+      document.getElementById('optC').value = parsed.options.c;
+      document.getElementById('optD').value = parsed.options.d;
+      if (parsed.year) document.getElementById('yearInput').value = parsed.year;
+      if (parsed.correctAnswer) document.getElementById('correctAnswer').value = parsed.correctAnswer;
+      updateChapterSuggestions();
+      hideDupWarnings();
+    }, 0);
+  });
+
+  function parseQuestionBlock(raw) {
+    let text = raw.replace(/\r\n/g, '\n').trim();
+
+    let year = null;
+    const yearMatch = text.match(/[\[\(]?\b(19|20)\d{2}\b[\]\)]?/);
+    if (yearMatch) {
+      year = parseInt(yearMatch[0].replace(/[^\d]/g, ''), 10);
+      text = text.replace(yearMatch[0], '');
+    }
+
+    let correctAnswer = null;
+    const ansMatch = text.match(/(?:Ans(?:wer)?|Correct\s*Answer)\s*[:\-]?\s*\(?([a-dA-D1-4])\)?/i);
+    if (ansMatch) {
+      correctAnswer = normalizeOptionKey(ansMatch[1]);
+      text = text.replace(ansMatch[0], '');
+    }
+
+    const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+    const options = { a: '', b: '', c: '', d: '' };
+    const questionLines = [];
+    const optionMarker = /^\(?([a-dA-D1-4])[\)\.]\s+(.*)$/;
+    let lastOptionKey = null;
+    let inOptions = false;
+
+    for (const line of lines) {
+      const m = line.match(optionMarker);
+      if (m) {
+        inOptions = true;
+        const key = normalizeOptionKey(m[1]);
+        if (key) { options[key] = m[2].trim(); lastOptionKey = key; }
+      } else if (inOptions && lastOptionKey) {
+        options[lastOptionKey] += ' ' + line;
+      } else {
+        questionLines.push(line);
+      }
+    }
+
+    let question = questionLines.join('\n').trim();
+    question = question.replace(/^(Q\.?\s*)?\d{1,3}[\.\)]\s*/i, '');
+
+    return { question, options, year, correctAnswer };
+  }
+
+  function normalizeOptionKey(raw) {
+    const c = raw.toLowerCase();
+    if ('abcd'.includes(c)) return c;
+    const numMap = { '1': 'a', '2': 'b', '3': 'c', '4': 'd' };
+    return numMap[c] || null;
+  }
+
+  // ---------- TF-IDF chapter classifier (client-side, no external calls) ----------
+  const STOPWORDS = new Set(['the','is','of','and','a','an','in','to','for','on','with','as','by','at','from','that','which','are','was','were','be','been','it','this','these','those','or','if','then','than','not','no','can','will','would','should','could','their','its','into','has','have','had','but','also','such','given','below','following','statement','statements','correct','answer','choose','options','option','both','true','false']);
+
+  function tokenize(text) {
+    return (text || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(w => w.length > 2 && !STOPWORDS.has(w));
+  }
+
+  function buildClassifier(rows) {
+    const docs = rows.map(r => ({ chapter: (r.chapter || '').trim(), class: r.class, tokens: tokenize(r.question) })).filter(d => d.chapter && d.tokens.length);
+    const df = new Map();
+    docs.forEach(d => { new Set(d.tokens).forEach(w => df.set(w, (df.get(w) || 0) + 1)); });
+    const N = docs.length;
+    const idf = new Map();
+    df.forEach((count, word) => idf.set(word, Math.log((N + 1) / (count + 1)) + 1));
+
+    const chapterTF = new Map();
+    const chapterClassCounts = new Map();
+    docs.forEach(d => {
+      if (!chapterTF.has(d.chapter)) chapterTF.set(d.chapter, new Map());
+      const tf = chapterTF.get(d.chapter);
+      d.tokens.forEach(w => tf.set(w, (tf.get(w) || 0) + 1));
+      if (d.class === 11 || d.class === 12) {
+        if (!chapterClassCounts.has(d.chapter)) chapterClassCounts.set(d.chapter, { 11: 0, 12: 0 });
+        chapterClassCounts.get(d.chapter)[d.class]++;
+      }
+    });
+
+    const chapterVectors = new Map();
+    chapterTF.forEach((tf, chapter) => {
+      const vec = new Map();
+      let normSq = 0;
+      tf.forEach((count, word) => {
+        const weight = count * (idf.get(word) || 0);
+        vec.set(word, weight);
+        normSq += weight * weight;
+      });
+      chapterVectors.set(chapter, { vec, norm: Math.sqrt(normSq) || 1 });
+    });
+
+    return { idf, chapterVectors, chapterClassCounts, docCount: N };
+  }
+
+  function suggestChapters(classifier, questionText, topN) {
+    const tokens = tokenize(questionText);
+    if (!tokens.length || !classifier.docCount) return [];
+    const tf = new Map();
+    tokens.forEach(w => tf.set(w, (tf.get(w) || 0) + 1));
+    const qVec = new Map();
+    let qNormSq = 0;
+    tf.forEach((count, word) => {
+      const weight = count * (classifier.idf.get(word) || 0);
+      if (weight > 0) { qVec.set(word, weight); qNormSq += weight * weight; }
+    });
+    const qNorm = Math.sqrt(qNormSq) || 1;
+
+    const scores = [];
+    classifier.chapterVectors.forEach(({ vec, norm }, chapter) => {
+      let dot = 0;
+      qVec.forEach((w, word) => { if (vec.has(word)) dot += w * vec.get(word); });
+      const sim = dot / (qNorm * norm);
+      if (sim > 0) scores.push({ chapter, sim });
+    });
+    scores.sort((a, b) => b.sim - a.sim);
+    return scores.slice(0, topN);
+  }
+
+  function updateChapterSuggestions() {
+    const pool = subjectPools[currentSubject];
+    const box = document.getElementById('chapterSuggestions');
+    const questionText = document.getElementById('questionText').value || document.getElementById('pasteBox').value;
+    if (!pool || !questionText.trim()) {
+      box.innerHTML = '<span class="chip-empty">Paste a question to see suggestions, or pick manually below.</span>';
+      return;
+    }
+    const suggestions = suggestChapters(pool.classifier, questionText, 3);
+    if (!suggestions.length) {
+      box.innerHTML = '<span class="chip-empty">No confident suggestion — pick manually below.</span>';
+      return;
+    }
+    box.innerHTML = suggestions.map(s => `
+      <span class="chip ${s.chapter === selectedChapter ? 'selected' : ''}" data-chapter="${escapeHtml(s.chapter)}" onclick="selectChapter('${escapeAttr(s.chapter)}')">
+        ${escapeHtml(s.chapter)} <span class="sim">${Math.round(s.sim * 100)}%</span>
+      </span>
+    `).join('');
+  }
+
+  function escapeHtml(s) { return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+  function escapeAttr(s) { return (s || '').replace(/'/g, "\\'"); }
+
+  document.getElementById('questionText').addEventListener('input', debounce(() => { updateChapterSuggestions(); hideDupWarnings(); }, 300));
+
+  function debounce(fn, ms) {
+    let t;
+    return function (...args) { clearTimeout(t); t = setTimeout(() => fn.apply(this, args), ms); };
+  }
+
+  // ---------- Duplicate detection ----------
+  function normalizeForCompare(text) { return (text || '').toLowerCase().replace(/\s+/g, ' ').trim(); }
+
+  function checkDuplicates(rows, newQuestionText) {
+    const normalizedNew = normalizeForCompare(newQuestionText);
+    const newTokens = new Set(tokenize(newQuestionText));
+    let exactMatch = null;
+    const similar = [];
+    rows.forEach(r => {
+      if (normalizeForCompare(r.question) === normalizedNew) { exactMatch = r; return; }
+      const existingTokens = new Set(tokenize(r.question));
+      if (!existingTokens.size || !newTokens.size) return;
+      let overlap = 0;
+      newTokens.forEach(t => { if (existingTokens.has(t)) overlap++; });
+      const ratio = overlap / Math.min(newTokens.size, existingTokens.size);
+      if (ratio >= 0.6) similar.push({ row: r, ratio });
+    });
+    similar.sort((a, b) => b.ratio - a.ratio);
+    return { exactMatch, similar: similar.slice(0, 3) };
+  }
+
+  function hideDupWarnings() {
+    document.getElementById('blockBox').style.display = 'none';
+    document.getElementById('warningBox').style.display = 'none';
+  }
+
+  // ---------- Diagram upload ----------
+  let pendingDiagramBase64 = null, pendingDiagramMediaType = null, pendingDiagramFilename = null;
+
+  document.getElementById('diagramInput').addEventListener('change', function (e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = function (ev) {
+      const dataUrl = ev.target.result;
+      pendingDiagramBase64 = dataUrl.split(',')[1];
+      pendingDiagramMediaType = file.type || 'image/png';
+      pendingDiagramFilename = file.name;
+      const img = document.getElementById('diagramPreview');
+      img.src = dataUrl;
+      img.style.display = 'block';
+      document.getElementById('removeDiagramBtn').style.display = 'inline-block';
+    };
+    reader.readAsDataURL(file);
+  });
+
+  function removeDiagram() {
+    pendingDiagramBase64 = null; pendingDiagramMediaType = null; pendingDiagramFilename = null;
+    document.getElementById('diagramInput').value = '';
+    document.getElementById('diagramPreview').style.display = 'none';
+    document.getElementById('removeDiagramBtn').style.display = 'none';
+  }
+
+  // ---------- Save ----------
+  async function saveQuestion() {
+    const statusEl = document.getElementById('saveStatus');
+    const blockBox = document.getElementById('blockBox');
+    const warningBox = document.getElementById('warningBox');
+    statusEl.textContent = '';
+    statusEl.style.color = '#888';
+    hideDupWarnings();
+
+    const question = document.getElementById('questionText').value.trim();
+    if (!question) { statusEl.textContent = 'Question text is required.'; statusEl.style.color = '#ef4444'; return; }
+    if (!selectedChapter) { statusEl.textContent = 'Pick a chapter first.'; statusEl.style.color = '#ef4444'; return; }
+
+    const pool = await loadSubjectPool(currentSubject);
+    const dup = checkDuplicates(pool.rows, question);
+    if (dup.exactMatch) {
+      blockBox.textContent = 'Blocked: an identical question already exists in this subject. Edit the pasted text or discard this one.';
+      blockBox.style.display = 'block';
+      return;
+    }
+    if (dup.similar.length) {
+      warningBox.innerHTML = 'Looks similar (' + Math.round(dup.similar[0].ratio * 100) + '% word overlap) to an existing question:<br>"' + escapeHtml(dup.similar[0].row.question.slice(0, 160)) + '..."';
+      warningBox.style.display = 'block';
+      if (!confirm('This question looks ' + Math.round(dup.similar[0].ratio * 100) + '% similar to an existing one. Save anyway?')) {
+        return;
+      }
+    }
+
+    const saveBtn = document.getElementById('saveBtn');
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Saving...';
+
+    try {
+      let diagramUrl = null, hasDiagram = false;
+      if (pendingDiagramBase64) {
+        saveBtn.textContent = 'Uploading diagram...';
+        const uploadRes = await fetch(`${API_BASE}/admin/pyq-diagram-upload`, {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ filename: pendingDiagramFilename, data: pendingDiagramBase64, media_type: pendingDiagramMediaType })
+        });
+        const uploadData = await uploadRes.json();
+        if (uploadData.error) throw new Error('Diagram upload failed: ' + uploadData.error);
+        diagramUrl = uploadData.url;
+        hasDiagram = true;
+      }
+
+      saveBtn.textContent = 'Saving...';
+      const classVal = document.getElementById('classSelect').value;
+      const yearVal = document.getElementById('yearInput').value;
+      const payload = {
+        subject: currentSubject,
+        chapter: selectedChapter,
+        question,
+        option_a: document.getElementById('optA').value.trim(),
+        option_b: document.getElementById('optB').value.trim(),
+        option_c: document.getElementById('optC').value.trim(),
+        option_d: document.getElementById('optD').value.trim(),
+        correct_answer: document.getElementById('correctAnswer').value || null,
+        year: yearVal ? parseInt(yearVal, 10) : null,
+        class: classVal ? parseInt(classVal, 10) : null,
+        has_diagram: hasDiagram,
+        diagram_url: diagramUrl
+      };
+
+      const res = await fetch(`${API_BASE}/admin/pyq-create`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+
+      statusEl.textContent = 'Saved (id: ' + data.created.id + '). Ready for the next one.';
+      statusEl.style.color = '#4ade80';
+      clearForNextQuestion();
+      delete subjectPools[currentSubject];
+      loadSubjectPool(currentSubject);
+    } catch (e) {
+      statusEl.textContent = 'Save failed: ' + e.message;
+      statusEl.style.color = '#ef4444';
+    } finally {
+      saveBtn.disabled = false;
+      saveBtn.textContent = 'Save question';
+    }
+  }
+
+  function clearForNextQuestion() {
+    document.getElementById('pasteBox').value = '';
+    document.getElementById('questionText').value = '';
+    document.getElementById('optA').value = '';
+    document.getElementById('optB').value = '';
+    document.getElementById('optC').value = '';
+    document.getElementById('optD').value = '';
+    document.getElementById('yearInput').value = '';
+    document.getElementById('correctAnswer').value = '';
+    removeDiagram();
+    document.getElementById('chapterSuggestions').innerHTML = '<span class="chip-empty">Paste a question to see suggestions, or pick manually below.</span>';
+    hideDupWarnings();
+    // subject / chapter / class deliberately left as-is
+  }
+
+  if (adminKey) enterDashboard();
+</script>
+</body>
+</html>
