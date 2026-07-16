@@ -1,0 +1,820 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<meta name="robots" content="noindex, nofollow"/>
+<title>PDF Review — NEET-AI Admin</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Inter', sans-serif; background: #0d0d0d; color: #ececec; min-height: 100vh; }
+
+  /* Password gate (same pattern as admin-dashboard.html) */
+  #gateOverlay { position: fixed; inset: 0; background: #0d0d0d; display: flex; align-items: center; justify-content: center; z-index: 999; }
+  .gate-box { background: #111; border: 1px solid #2a2a2a; border-radius: 14px; padding: 32px; width: 100%; max-width: 340px; text-align: center; }
+  .gate-box h1 { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
+  .gate-box p { font-size: 12px; color: #666; margin-bottom: 20px; }
+  .gate-box input { width: 100%; background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 8px; padding: 10px 14px; color: #ececec; font-size: 14px; font-family: 'Inter', sans-serif; outline: none; margin-bottom: 12px; }
+  .gate-box input:focus { border-color: #4f8ef7; }
+  .gate-box button { width: 100%; background: #4f8ef7; border: none; border-radius: 8px; padding: 10px; color: white; font-size: 13px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
+  .gate-box button:hover { background: #3b7de8; }
+  .gate-error { font-size: 12px; color: #ef4444; margin-top: 10px; min-height: 14px; }
+
+  #dashboard { display: none; max-width: 900px; margin: 0 auto; padding: 24px; }
+  .db-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+  .db-header h1 { font-size: 18px; font-weight: 700; }
+  .db-header h1 span { color: #4f8ef7; }
+  .logout-btn { background: transparent; border: 1px solid #2a2a2a; color: #888; padding: 6px 14px; border-radius: 8px; font-size: 12px; cursor: pointer; font-family: 'Inter', sans-serif; }
+  .logout-btn:hover { color: #ccc; border-color: #3a3a3a; }
+
+  .panel { background: #111; border: 1px solid #1e1e1e; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  .panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: #888; margin-bottom: 12px; }
+
+  .subject-picker { display: flex; gap: 10px; margin-bottom: 14px; }
+  .subject-btn { flex: 1; background: #0d0d0d; border: 1px solid #2a2a2a; color: #ccc; padding: 12px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; text-align: center; }
+  .subject-btn:hover { border-color: #4f8ef750; }
+  .subject-btn.active { border-color: #4f8ef7; background: #4f8ef712; color: #4f8ef7; }
+  .subject-btn .coverage { display: block; font-size: 10px; font-weight: 400; color: #666; margin-top: 3px; }
+
+  .upload-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .upload-row input[type="file"] { flex: 1; min-width: 200px; font-size: 12px; color: #888; }
+  .scan-btn { background: #4f8ef7; border: none; border-radius: 8px; padding: 10px 20px; color: white; font-size: 13px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
+  .scan-btn:hover:not(:disabled) { background: #3b7de8; }
+  .scan-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  #scanStatus { font-size: 12px; color: #4f8ef7; margin-top: 10px; display: none; }
+
+  #summaryBar { display: none; align-items: center; gap: 16px; flex-wrap: wrap; background: #111; border: 1px solid #1e1e1e; border-radius: 10px; padding: 14px 16px; margin-bottom: 16px; }
+  #summaryBar .stat { font-size: 12px; color: #aaa; }
+  #summaryBar .stat b { color: #ececec; font-size: 14px; }
+  #summaryBar .spacer { flex: 1; }
+  .action-btn { background: #1a1a1a; border: 1px solid #2a2a2a; color: #ececec; padding: 8px 14px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
+  .action-btn:hover { border-color: #4f8ef7; color: #4f8ef7; }
+  .action-btn.primary { background: #4f8ef7; border-color: #4f8ef7; color: white; }
+  .action-btn.primary:hover { background: #3b7de8; }
+
+  .q-block { background: #111; border: 1px solid #1e1e1e; border-radius: 10px; padding: 16px; margin-bottom: 14px; }
+  .q-block.is-saved { opacity: 0.55; }
+  .q-block-header { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+  .q-number { font-size: 13px; font-weight: 700; color: #4f8ef7; }
+  .q-diagram-badge { font-size: 11px; background: #f9731620; color: #f97316; padding: 2px 8px; border-radius: 20px; font-weight: 600; }
+  .q-saved-badge { font-size: 11px; background: #4ade8020; color: #4ade80; padding: 2px 8px; border-radius: 20px; font-weight: 600; }
+  .q-block-actions { margin-left: auto; display: flex; gap: 6px; }
+  .q-block-actions button { background: transparent; border: 1px solid #2a2a2a; color: #888; padding: 5px 10px; border-radius: 6px; font-size: 11px; cursor: pointer; font-family: 'Inter', sans-serif; }
+  .q-block-actions button:hover { border-color: #4f8ef7; color: #4f8ef7; }
+  .q-block-actions button.danger-link:hover { border-color: #ef4444; color: #ef4444; }
+
+  .q-field { margin-bottom: 10px; }
+  .q-field label { display: block; font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 5px; }
+  .q-field textarea, .q-field input[type="text"], .q-field input[type="number"], .q-field select {
+    width: 100%; background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 6px; padding: 8px 10px;
+    color: #ececec; font-size: 13px; font-family: 'Inter', sans-serif; outline: none; resize: vertical;
+  }
+  .q-field textarea:focus, .q-field input:focus, .q-field select:focus { border-color: #4f8ef7; }
+  .q-options-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .q-meta-grid { display: grid; grid-template-columns: 90px 90px 90px 1fr; gap: 10px; align-items: start; }
+  .q-meta-grid .checkbox-field { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; margin-top: 2px; }
+  .q-meta-grid .checkbox-field label { margin: 0; text-transform: none; font-size: 12px; color: #ccc; }
+  .q-suggestion-hint { font-size: 11px; color: #666; margin-top: 4px; }
+  .q-suggestion-hint.confident { color: #4ade80; }
+
+  .q-diagram-slot { margin-top: 10px; padding: 10px; border: 1px dashed #2a2a2a; border-radius: 8px; }
+  .q-diagram-slot img { max-width: 160px; max-height: 160px; border-radius: 6px; margin-top: 8px; display: block; }
+  .q-diagram-slot .diag-status { font-size: 11px; color: #666; margin-top: 6px; }
+
+  .q-dup-warning { font-size: 12px; margin-top: 10px; padding: 8px 10px; border-radius: 6px; display: none; }
+  .q-dup-warning.warn { display: block; background: #f9731620; color: #f97316; }
+  .q-dup-warning.block { display: block; background: #ef444420; color: #ef4444; }
+
+  .q-block-footer { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
+  .save-btn { background: #4f8ef7; border: none; border-radius: 6px; padding: 8px 18px; color: white; font-size: 12px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
+  .save-btn:hover:not(:disabled) { background: #3b7de8; }
+  .save-btn.confirm-again { background: #f97316; }
+  .save-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .q-source-page { font-size: 11px; color: #555; }
+
+  .empty-hint { text-align: center; padding: 40px; color: #555; font-size: 13px; }
+</style>
+</head>
+<body>
+
+<div id="gateOverlay">
+  <div class="gate-box">
+    <h1>PDF Review</h1>
+    <p>Internal tool — enter admin password</p>
+    <input type="password" id="gatePassword" placeholder="Password" autocomplete="off"/>
+    <button onclick="verifyPassword()">Enter</button>
+    <div class="gate-error" id="gateError"></div>
+  </div>
+</div>
+
+<div id="dashboard">
+  <div class="db-header">
+    <h1>NEET<span>-AI</span> PDF Review</h1>
+    <button class="logout-btn" onclick="logout()">Log out</button>
+  </div>
+
+  <div class="panel">
+    <h2>1. Choose subject</h2>
+    <div class="subject-picker" id="subjectPicker">
+      <button type="button" class="subject-btn" data-subject="Biology" onclick="selectSubject('Biology')">Biology<span class="coverage" id="coverage-Biology"></span></button>
+      <button type="button" class="subject-btn" data-subject="Physics" onclick="selectSubject('Physics')">Physics<span class="coverage" id="coverage-Physics"></span></button>
+      <button type="button" class="subject-btn" data-subject="Chemistry" onclick="selectSubject('Chemistry')">Chemistry<span class="coverage" id="coverage-Chemistry"></span></button>
+    </div>
+    <h2>2. Upload PDF</h2>
+    <div class="upload-row">
+      <input type="file" id="pdfFile" accept="application/pdf" onchange="updateScanButton()"/>
+      <button type="button" class="scan-btn" id="scanBtn" disabled onclick="scanPdf()">Scan PDF</button>
+    </div>
+    <div id="scanStatus"></div>
+  </div>
+
+  <div id="summaryBar">
+    <div class="stat"><b id="statQuestionCount">0</b> questions detected from <b id="statPageCount">0</b> pages</div>
+    <div class="stat"><b id="statDiagramCount">0</b> flagged with a diagram</div>
+    <div class="stat"><b id="statSavedCount">0</b> saved</div>
+    <div class="spacer"></div>
+    <button type="button" class="action-btn" onclick="addMissedQuestion()">+ Add Missed Question</button>
+    <button type="button" class="action-btn primary" onclick="saveAllReviewed()">Save All Reviewed</button>
+  </div>
+
+  <div id="blocksContainer"></div>
+</div>
+
+<script>
+  const API_BASE = 'https://neet-ai-production.up.railway.app';
+  let adminKey = sessionStorage.getItem('admin_key') || '';
+  let currentSubject = null;
+  let chapterList = [];       // [{name, count}] style not needed here - just names for the dropdown
+  let existingRows = [];      // {question, chapter, class} - all active rows for currentSubject
+  let classifier = null;
+  let blocks = [];            // in-memory question blocks for the current scan session
+  let blockIdSeq = 0;
+  const MIN_SUBJECT_ROWS_FOR_SUGGESTION = 15;
+  const MIN_CONFIDENCE_SCORE = 0.08;
+
+  function authHeaders(extra) {
+    return Object.assign({ 'X-Admin-Key': adminKey }, extra || {});
+  }
+
+  function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str == null ? '' : String(str);
+    return div.innerHTML;
+  }
+
+  // A non-OK response (404, 422, 500...) doesn't always have the app's own {error: "..."} shape
+  // (e.g. FastAPI's default 404 is {detail: "Not Found"}) - without this, those responses were
+  // silently treated as "success with no data" instead of a visible failure.
+  async function describeHttpError(res) {
+    try {
+      const body = await res.json();
+      return body.error || body.detail || `HTTP ${res.status}`;
+    } catch (e) {
+      return `HTTP ${res.status}`;
+    }
+  }
+
+  async function verifyPassword() {
+    const pw = document.getElementById('gatePassword').value;
+    const errEl = document.getElementById('gateError');
+    errEl.textContent = '';
+    try {
+      const res = await fetch(`${API_BASE}/admin/verify`, { method: 'POST', headers: authHeaders({ 'X-Admin-Key': pw }) });
+      if (res.status === 200) {
+        adminKey = pw;
+        sessionStorage.setItem('admin_key', adminKey);
+        enterDashboard();
+      } else if (res.status === 429) {
+        const data = await res.json().catch(() => ({}));
+        errEl.textContent = data.detail || 'Too many failed attempts. Try again later.';
+      } else {
+        errEl.textContent = 'Wrong password.';
+      }
+    } catch (e) {
+      errEl.textContent = 'Could not reach server.';
+    }
+  }
+
+  document.getElementById('gatePassword').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') verifyPassword();
+  });
+
+  function logout() {
+    sessionStorage.removeItem('admin_key');
+    adminKey = '';
+    document.getElementById('dashboard').style.display = 'none';
+    document.getElementById('gateOverlay').style.display = 'flex';
+    document.getElementById('gatePassword').value = '';
+  }
+
+  function enterDashboard() {
+    document.getElementById('gateOverlay').style.display = 'none';
+    document.getElementById('dashboard').style.display = 'block';
+  }
+
+  if (adminKey) enterDashboard();
+
+  // ---------------- Subject selection + data loading ----------------
+
+  async function selectSubject(subject) {
+    currentSubject = subject;
+    document.querySelectorAll('.subject-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.subject === subject));
+    blocks = [];
+    renderAllBlocks();
+    document.getElementById('summaryBar').style.display = 'none';
+    updateScanButton();
+
+    const scanBtn = document.getElementById('scanBtn');
+    scanBtn.disabled = true;
+
+    try {
+      const [chaptersRes, classifierRes] = await Promise.all([
+        fetch(`${API_BASE}/admin/pyq-chapters?subject=${encodeURIComponent(subject)}`, { headers: authHeaders() }),
+        fetch(`${API_BASE}/admin/pyq-classifier-data?subject=${encodeURIComponent(subject)}`, { headers: authHeaders() })
+      ]);
+      if (chaptersRes.status === 401 || classifierRes.status === 401) return logout();
+      if (!chaptersRes.ok || !classifierRes.ok) {
+        const detail = !chaptersRes.ok ? await describeHttpError(chaptersRes) : await describeHttpError(classifierRes);
+        alert('Could not load chapter/classifier data for ' + subject + ': ' + detail);
+        chapterList = []; existingRows = []; classifier = buildClassifier([]);
+        return;
+      }
+      const chaptersData = await chaptersRes.json();
+      const classifierData = await classifierRes.json();
+      chapterList = chaptersData.chapters || [];
+      existingRows = classifierData.rows || [];
+      classifier = buildClassifier(existingRows);
+      const coverageEl = document.getElementById('coverage-' + subject);
+      if (coverageEl) coverageEl.textContent = `${existingRows.filter(r => r.chapter).length}/${existingRows.length} chaptered`;
+    } catch (e) {
+      alert('Could not reach the server to load chapter/classifier data for ' + subject + '.');
+      chapterList = [];
+      existingRows = [];
+      classifier = buildClassifier([]);
+    }
+    updateScanButton();
+  }
+
+  function updateScanButton() {
+    const file = document.getElementById('pdfFile').files[0];
+    document.getElementById('scanBtn').disabled = !currentSubject || !file;
+  }
+
+  // ---------------- TF-IDF chapter/class suggestion ----------------
+
+  function tokenize(text) {
+    return (text || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter(w => w.length > 1);
+  }
+
+  function buildClassifier(rows) {
+    const chapterDocs = new Map();
+    const docFreq = new Map();
+    const chapterClassCounts = new Map();
+    const labeledRows = rows.filter(r => r.chapter);
+
+    labeledRows.forEach(row => {
+      const tokens = tokenize(row.question);
+      new Set(tokens).forEach(w => docFreq.set(w, (docFreq.get(w) || 0) + 1));
+      if (!chapterDocs.has(row.chapter)) chapterDocs.set(row.chapter, []);
+      chapterDocs.get(row.chapter).push(tokens);
+      if (!chapterClassCounts.has(row.chapter)) chapterClassCounts.set(row.chapter, {});
+      if (row.class != null) {
+        const counts = chapterClassCounts.get(row.chapter);
+        counts[row.class] = (counts[row.class] || 0) + 1;
+      }
+    });
+
+    const totalDocs = labeledRows.length;
+    const idf = new Map();
+    docFreq.forEach((df, word) => idf.set(word, Math.log((totalDocs + 1) / (df + 1)) + 1));
+
+    const chapterVectors = new Map();
+    chapterDocs.forEach((docsList, chapter) => {
+      const tf = new Map();
+      docsList.forEach(tokens => tokens.forEach(w => tf.set(w, (tf.get(w) || 0) + 1)));
+      const vec = new Map();
+      tf.forEach((count, word) => vec.set(word, count * (idf.get(word) || 0)));
+      chapterVectors.set(chapter, vec);
+    });
+
+    return { chapterVectors, idf, chapterClassCounts, totalDocs };
+  }
+
+  function vectorize(tokens, idf) {
+    const tf = new Map();
+    tokens.forEach(w => tf.set(w, (tf.get(w) || 0) + 1));
+    const vec = new Map();
+    tf.forEach((count, word) => { if (idf.has(word)) vec.set(word, count * idf.get(word)); });
+    return vec;
+  }
+
+  function cosineSim(vecA, vecB) {
+    let dot = 0, normA = 0, normB = 0;
+    vecA.forEach((val, key) => { normA += val * val; if (vecB.has(key)) dot += val * vecB.get(key); });
+    vecB.forEach(val => { normB += val * val; });
+    if (normA === 0 || normB === 0) return 0;
+    return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+  }
+
+  function suggestChapters(clf, questionText, topN) {
+    if (!clf || clf.totalDocs === 0) return [];
+    const qVec = vectorize(tokenize(questionText), clf.idf);
+    const scores = [];
+    clf.chapterVectors.forEach((vec, chapter) => scores.push({ chapter, score: cosineSim(qVec, vec) }));
+    scores.sort((a, b) => b.score - a.score);
+    return scores.slice(0, topN);
+  }
+
+  function suggestClass(clf, chapter) {
+    if (!clf) return null;
+    const counts = clf.chapterClassCounts.get(chapter);
+    if (!counts) return null;
+    let best = null, bestCount = 0, total = 0;
+    Object.keys(counts).forEach(cls => {
+      total += counts[cls];
+      if (counts[cls] > bestCount) { bestCount = counts[cls]; best = cls; }
+    });
+    if (!best || total < 3) return null;
+    return best;
+  }
+
+  function getChapterSuggestion(clf, questionText) {
+    if (!clf || clf.totalDocs < MIN_SUBJECT_ROWS_FOR_SUGGESTION) return { confident: false, suggestions: [] };
+    const ranked = suggestChapters(clf, questionText, 3);
+    if (ranked.length === 0 || ranked[0].score < MIN_CONFIDENCE_SCORE) return { confident: false, suggestions: ranked };
+    return { confident: true, suggestions: ranked };
+  }
+
+  // ---------------- Duplicate detection ----------------
+
+  function normalizeForCompare(text) {
+    return (text || '').toLowerCase().trim().replace(/\s+/g, ' ');
+  }
+
+  function checkDuplicates(rows, questionText, scopeChapter) {
+    const normalizedNew = normalizeForCompare(questionText);
+    const newWords = new Set(tokenize(questionText));
+    let exactMatch = null;
+    const similar = [];
+    rows.forEach(row => {
+      if (normalizeForCompare(row.question) === normalizedNew) { exactMatch = row; return; }
+      if (scopeChapter && row.chapter !== scopeChapter) return;
+      const existingWords = new Set(tokenize(row.question));
+      const intersection = [...newWords].filter(w => existingWords.has(w)).length;
+      const union = new Set([...newWords, ...existingWords]).size;
+      const overlap = union > 0 ? intersection / union : 0;
+      if (overlap >= 0.6) similar.push({ row, overlap });
+    });
+    return { exactMatch, similar };
+  }
+
+  // ---------------- Scan PDF ----------------
+
+  function fileToBase64(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result.split(',')[1]);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function scanPdf() {
+    const file = document.getElementById('pdfFile').files[0];
+    if (!file || !currentSubject) return;
+    const statusEl = document.getElementById('scanStatus');
+    const scanBtn = document.getElementById('scanBtn');
+    scanBtn.disabled = true;
+    statusEl.style.display = 'block';
+    statusEl.textContent = 'Scanning your PDF... this can take a while for many pages.';
+    try {
+      const b64 = await fileToBase64(file);
+      const res = await fetch(`${API_BASE}/admin/scan-pdf`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ subject: currentSubject, data: b64 })
+      });
+      if (res.status === 401) return logout();
+      if (!res.ok) { statusEl.textContent = 'Scan failed: ' + await describeHttpError(res); return; }
+      const data = await res.json();
+      if (data.error) { statusEl.textContent = 'Scan failed: ' + data.error; return; }
+      statusEl.style.display = 'none';
+      blocks = (data.questions || []).map(q => ({
+        id: 'b' + (blockIdSeq++),
+        question: q.question, option_a: q.option_a, option_b: q.option_b, option_c: q.option_c, option_d: q.option_d,
+        correct_answer: q.correct_answer || '', question_type: q.question_type || 'mcq',
+        has_diagram: !!q.has_diagram, diagram_url: null, year: q.year, source_page: q.source_page,
+        saved: false, savePending: false
+      }));
+      document.getElementById('statPageCount').textContent = data.pages_scanned || 0;
+      renderAllBlocks();
+      updateSummaryBar();
+      document.getElementById('summaryBar').style.display = 'flex';
+    } catch (e) {
+      statusEl.textContent = 'Scan failed — check connection and try again.';
+    } finally {
+      scanBtn.disabled = !currentSubject || !document.getElementById('pdfFile').files[0];
+    }
+  }
+
+  function updateSummaryBar() {
+    document.getElementById('statQuestionCount').textContent = blocks.length;
+    document.getElementById('statDiagramCount').textContent = blocks.filter(b => b.has_diagram).length;
+    document.getElementById('statSavedCount').textContent = blocks.filter(b => b.saved).length;
+  }
+
+  // ---------------- Block rendering ----------------
+
+  function buildChapterOptionsHtml(block) {
+    const suggestion = block._suggestion || { confident: false, suggestions: [] };
+    const suggestedChapter = suggestion.confident ? suggestion.suggestions[0].chapter : null;
+    let html = `<option value="">${suggestion.confident ? '— pick chapter —' : '— not enough data yet, pick manually —'}</option>`;
+    chapterList.forEach(name => {
+      const sel = name === suggestedChapter ? ' selected' : '';
+      html += `<option value="${escapeHtml(name)}"${sel}>${escapeHtml(name)}</option>`;
+    });
+    return html;
+  }
+
+  function blockTemplate(block, displayIndex) {
+    const b = block;
+    return `
+    <div class="q-block${b.saved ? ' is-saved' : ''}" id="block-${b.id}" data-id="${b.id}">
+      <div class="q-block-header">
+        <span class="q-number">Q${displayIndex}</span>
+        ${b.has_diagram ? '<span class="q-diagram-badge">Diagram</span>' : ''}
+        <span class="q-saved-badge" id="saved-badge-${b.id}" style="display:${b.saved ? 'inline-flex' : 'none'}">Saved</span>
+        <div class="q-block-actions">
+          <button type="button" onclick="mergeWithNext('${b.id}')" title="Merge this block with the next one">Merge next</button>
+          <button type="button" onclick="splitBlock('${b.id}')" title="Split into two separate questions">Split</button>
+          <button type="button" class="danger-link" onclick="removeBlock('${b.id}')">Remove</button>
+        </div>
+      </div>
+
+      <div class="q-field">
+        <label>Question</label>
+        <textarea id="q-text-${b.id}" rows="3" oninput="onQuestionTextInput('${b.id}')">${escapeHtml(b.question)}</textarea>
+      </div>
+
+      <div class="q-options-grid">
+        <div class="q-field"><label>Option A</label><input type="text" id="opt-a-${b.id}" value="${escapeHtml(b.option_a)}"/></div>
+        <div class="q-field"><label>Option B</label><input type="text" id="opt-b-${b.id}" value="${escapeHtml(b.option_b)}"/></div>
+        <div class="q-field"><label>Option C</label><input type="text" id="opt-c-${b.id}" value="${escapeHtml(b.option_c)}"/></div>
+        <div class="q-field"><label>Option D</label><input type="text" id="opt-d-${b.id}" value="${escapeHtml(b.option_d)}"/></div>
+      </div>
+
+      <div class="q-meta-grid">
+        <div class="q-field"><label>Answer</label><input type="text" maxlength="1" id="ans-${b.id}" value="${escapeHtml(b.correct_answer)}" placeholder="a/b/c/d"/></div>
+        <div class="q-field"><label>Year</label><input type="number" id="year-${b.id}" value="${b.year != null ? b.year : ''}"/></div>
+        <div class="q-field"><label>Class</label>
+          <select id="class-${b.id}">
+            <option value="">—</option>
+            <option value="11">11</option>
+            <option value="12">12</option>
+          </select>
+        </div>
+        <div class="q-field">
+          <label>Chapter</label>
+          <select id="chapter-${b.id}" onchange="onChapterChange('${b.id}')">${buildChapterOptionsHtml(b)}</select>
+          <div class="q-suggestion-hint" id="chapter-hint-${b.id}"></div>
+        </div>
+        <div class="q-field checkbox-field">
+          <input type="checkbox" id="hasdiagram-${b.id}" onchange="toggleDiagramSlot('${b.id}')" ${b.has_diagram ? 'checked' : ''}/>
+          <label for="hasdiagram-${b.id}">Has diagram</label>
+        </div>
+      </div>
+
+      <div class="q-diagram-slot" id="diagram-slot-${b.id}" style="display:${b.has_diagram ? 'block' : 'none'}">
+        <input type="file" accept="image/*" id="diagram-file-${b.id}" onchange="uploadDiagram('${b.id}')"/>
+        <div class="diag-status" id="diagram-status-${b.id}"></div>
+        <div id="diagram-preview-${b.id}"></div>
+      </div>
+
+      <div class="q-dup-warning" id="dup-warning-${b.id}"></div>
+
+      <div class="q-block-footer">
+        <button type="button" class="save-btn" id="save-btn-${b.id}" onclick="saveBlock('${b.id}')" ${b.saved ? 'disabled' : ''}>${b.saved ? 'Saved' : 'Save'}</button>
+        <span class="q-source-page">${b.source_page ? 'from page ' + b.source_page : 'manually added'}</span>
+      </div>
+    </div>`;
+  }
+
+  function renderAllBlocks() {
+    const container = document.getElementById('blocksContainer');
+    blocks.forEach(b => { b._suggestion = getChapterSuggestion(classifier, b.question); });
+    if (blocks.length === 0) {
+      container.innerHTML = '<div class="empty-hint">Upload and scan a PDF, or add a question manually, to get started.</div>';
+      return;
+    }
+    container.innerHTML = blocks.map((b, i) => blockTemplate(b, i + 1)).join('');
+    blocks.forEach(b => {
+      const classSel = document.getElementById('class-' + b.id);
+      if (classSel && b.class_ != null) classSel.value = String(b.class_);
+      applyChapterHint(b);
+    });
+  }
+
+  function applyChapterHint(block) {
+    const hintEl = document.getElementById('chapter-hint-' + block.id);
+    if (!hintEl) return;
+    const s = block._suggestion;
+    if (!s) return;
+    if (s.confident) {
+      hintEl.textContent = `Suggested from similar questions (score ${s.suggestions[0].score.toFixed(2)})`;
+      hintEl.classList.add('confident');
+      const classSel = document.getElementById('class-' + block.id);
+      if (classSel && !classSel.value) {
+        const cls = suggestClass(classifier, s.suggestions[0].chapter);
+        if (cls) classSel.value = cls;
+      }
+    } else {
+      hintEl.textContent = 'Not enough tagged data yet for a confident suggestion — pick manually.';
+      hintEl.classList.remove('confident');
+    }
+  }
+
+  function readBlockFromDom(id) {
+    return {
+      question: document.getElementById('q-text-' + id).value.trim(),
+      option_a: document.getElementById('opt-a-' + id).value.trim(),
+      option_b: document.getElementById('opt-b-' + id).value.trim(),
+      option_c: document.getElementById('opt-c-' + id).value.trim(),
+      option_d: document.getElementById('opt-d-' + id).value.trim(),
+      correct_answer: document.getElementById('ans-' + id).value.trim().toLowerCase(),
+      year: document.getElementById('year-' + id).value ? parseInt(document.getElementById('year-' + id).value, 10) : null,
+      class_: document.getElementById('class-' + id).value ? parseInt(document.getElementById('class-' + id).value, 10) : null,
+      chapter: document.getElementById('chapter-' + id).value || null,
+      has_diagram: document.getElementById('hasdiagram-' + id).checked
+    };
+  }
+
+  // ---------------- Block actions ----------------
+
+  function findBlockIndex(id) { return blocks.findIndex(b => b.id === id); }
+
+  function toggleDiagramSlot(id) {
+    const checked = document.getElementById('hasdiagram-' + id).checked;
+    document.getElementById('diagram-slot-' + id).style.display = checked ? 'block' : 'none';
+  }
+
+  async function uploadDiagram(id) {
+    const fileInput = document.getElementById('diagram-file-' + id);
+    const file = fileInput.files[0];
+    if (!file) return;
+    const statusEl = document.getElementById('diagram-status-' + id);
+    statusEl.textContent = 'Uploading...';
+    try {
+      const b64 = await fileToBase64(file);
+      const res = await fetch(`${API_BASE}/admin/pyq-diagram-upload`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ filename: file.name, data: b64, media_type: file.type || 'image/png' })
+      });
+      if (res.status === 401) return logout();
+      if (!res.ok) { statusEl.textContent = 'Upload failed: ' + await describeHttpError(res); return; }
+      const data = await res.json();
+      if (data.error) { statusEl.textContent = 'Upload failed: ' + data.error; return; }
+      const block = blocks[findBlockIndex(id)];
+      block.diagram_url = data.url;
+      statusEl.textContent = 'Uploaded';
+      document.getElementById('diagram-preview-' + id).innerHTML = `<img src="${escapeHtml(data.url)}">`;
+    } catch (e) {
+      statusEl.textContent = 'Upload failed — check connection.';
+    }
+  }
+
+  function onQuestionTextInput(id) {
+    clearTimeout(window['dupTimer' + id]);
+    window['dupTimer' + id] = setTimeout(() => runDuplicateCheck(id), 600);
+  }
+
+  function runDuplicateCheck(id) {
+    const idx = findBlockIndex(id);
+    if (idx === -1) return;
+    const text = document.getElementById('q-text-' + id).value;
+    if (!text.trim()) { document.getElementById('dup-warning-' + id).className = 'q-dup-warning'; return; }
+    const chapterSel = document.getElementById('chapter-' + id);
+    const scopeChapter = chapterSel ? chapterSel.value : null;
+    const result = checkDuplicates(existingRows, text, scopeChapter);
+    const warnEl = document.getElementById('dup-warning-' + id);
+    if (result.exactMatch) {
+      warnEl.textContent = 'This looks identical to an existing question in the bank — edit it or remove this block before saving.';
+      warnEl.className = 'q-dup-warning block';
+    } else if (result.similar.length > 0) {
+      warnEl.textContent = `This is ${Math.round(result.similar[0].overlap * 100)}% similar to an existing question in this chapter — double check it isn't a duplicate before saving.`;
+      warnEl.className = 'q-dup-warning warn';
+    } else {
+      warnEl.textContent = '';
+      warnEl.className = 'q-dup-warning';
+    }
+    blocks[idx]._dupChecked = true;
+  }
+
+  function onChapterChange(id) {
+    runDuplicateCheck(id);
+  }
+
+  function mergeWithNext(id) {
+    const idx = findBlockIndex(id);
+    if (idx === -1 || idx === blocks.length - 1) return;
+    if (!confirm('Merge this question with the next one? The next block will be removed.')) return;
+    const a = Object.assign(blocks[idx], readBlockFromDom(blocks[idx].id));
+    const b = Object.assign(blocks[idx + 1], readBlockFromDom(blocks[idx + 1].id));
+    const preferNonEmpty = (x, y) => (x === '' || x == null) ? y : x;
+    a.question = [a.question, b.question].filter(Boolean).join('\n');
+    a.option_a = preferNonEmpty(a.option_a, b.option_a);
+    a.option_b = preferNonEmpty(a.option_b, b.option_b);
+    a.option_c = preferNonEmpty(a.option_c, b.option_c);
+    a.option_d = preferNonEmpty(a.option_d, b.option_d);
+    a.correct_answer = preferNonEmpty(a.correct_answer, b.correct_answer);
+    a.year = a.year != null ? a.year : b.year;
+    a.class_ = a.class_ != null ? a.class_ : b.class_;
+    a.chapter = a.chapter || b.chapter;
+    a.has_diagram = a.has_diagram || b.has_diagram;
+    a.diagram_url = a.diagram_url || b.diagram_url;
+    blocks.splice(idx + 1, 1);
+    renderAllBlocks();
+    updateSummaryBar();
+  }
+
+  function splitBlock(id) {
+    const idx = findBlockIndex(id);
+    if (idx === -1) return;
+    const current = Object.assign(blocks[idx], readBlockFromDom(id));
+    const secondHalf = {
+      id: 'b' + (blockIdSeq++),
+      question: current.question, option_a: '', option_b: '', option_c: '', option_d: '',
+      correct_answer: '', question_type: current.question_type, has_diagram: false, diagram_url: null,
+      year: current.year, class_: current.class_, chapter: current.chapter, source_page: current.source_page,
+      saved: false, savePending: false
+    };
+    blocks.splice(idx + 1, 0, secondHalf);
+    renderAllBlocks();
+    updateSummaryBar();
+  }
+
+  function removeBlock(id) {
+    if (!confirm('Remove this question block?')) return;
+    const idx = findBlockIndex(id);
+    if (idx === -1) return;
+    blocks.splice(idx, 1);
+    renderAllBlocks();
+    updateSummaryBar();
+    document.getElementById('summaryBar').style.display = blocks.length ? 'flex' : 'none';
+  }
+
+  function addMissedQuestion() {
+    blocks.push({
+      id: 'b' + (blockIdSeq++), question: '', option_a: '', option_b: '', option_c: '', option_d: '',
+      correct_answer: '', question_type: 'mcq', has_diagram: false, diagram_url: null, year: null,
+      class_: null, chapter: null, source_page: null, saved: false, savePending: false
+    });
+    document.getElementById('summaryBar').style.display = 'flex';
+    renderAllBlocks();
+    updateSummaryBar();
+    const el = document.getElementById('blocksContainer');
+    el.scrollTop = el.scrollHeight;
+    window.scrollTo(0, document.body.scrollHeight);
+  }
+
+  // ---------------- Save ----------------
+
+  function buildCreatePayload(id) {
+    const fields = readBlockFromDom(id);
+    return Object.assign({ subject: currentSubject }, fields);
+  }
+
+  async function saveBlock(id) {
+    const idx = findBlockIndex(id);
+    if (idx === -1) return;
+    const block = blocks[idx];
+    const fields = readBlockFromDom(id);
+    const result = checkDuplicates(existingRows, fields.question, fields.chapter);
+    const btn = document.getElementById('save-btn-' + id);
+
+    if (result.exactMatch) {
+      const warnEl = document.getElementById('dup-warning-' + id);
+      warnEl.textContent = 'Cannot save — this is an exact duplicate of an existing question.';
+      warnEl.className = 'q-dup-warning block';
+      return;
+    }
+    if (result.similar.length > 0 && !block._dupConfirmed) {
+      block._dupConfirmed = true;
+      btn.textContent = 'Save anyway?';
+      btn.classList.add('confirm-again');
+      const warnEl = document.getElementById('dup-warning-' + id);
+      warnEl.textContent = `${Math.round(result.similar[0].overlap * 100)}% similar to an existing question — click again to save anyway.`;
+      warnEl.className = 'q-dup-warning warn';
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'Saving...';
+    try {
+      const payload = buildCreatePayload(id);
+      payload.diagram_url = block.diagram_url;
+      const res = await fetch(`${API_BASE}/admin/pyq-bulk-create`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ questions: [payload] })
+      });
+      if (res.status === 401) return logout();
+      if (!res.ok) {
+        btn.disabled = false;
+        btn.textContent = 'Save';
+        const warnEl = document.getElementById('dup-warning-' + id);
+        warnEl.textContent = 'Save failed: ' + await describeHttpError(res);
+        warnEl.className = 'q-dup-warning block';
+        return;
+      }
+      const data = await res.json();
+      if (data.error) {
+        btn.disabled = false;
+        btn.textContent = 'Save';
+        const warnEl = document.getElementById('dup-warning-' + id);
+        warnEl.textContent = 'Save failed: ' + data.error;
+        warnEl.className = 'q-dup-warning block';
+        return;
+      }
+      block.saved = true;
+      existingRows.push({ question: fields.question, chapter: fields.chapter, class: fields.class_ });
+      btn.textContent = 'Saved';
+      document.getElementById('saved-badge-' + id).style.display = 'inline-flex';
+      document.getElementById('block-' + id).classList.add('is-saved');
+      updateSummaryBar();
+    } catch (e) {
+      btn.disabled = false;
+      btn.textContent = 'Save';
+    }
+  }
+
+  async function saveAllReviewed() {
+    const unsaved = blocks.filter(b => !b.saved);
+    if (unsaved.length === 0) return;
+    const toSave = [];
+    const skipped = [];
+    let warnedCount = 0;
+    unsaved.forEach(b => {
+      const fields = readBlockFromDom(b.id);
+      if (!fields.question) { skipped.push(b.id); return; }
+      const result = checkDuplicates(existingRows, fields.question, fields.chapter);
+      if (result.exactMatch) { skipped.push(b.id); return; }
+      if (result.similar.length > 0) warnedCount++;
+      const payload = Object.assign({ subject: currentSubject }, fields);
+      payload.diagram_url = b.diagram_url;
+      toSave.push({ id: b.id, payload });
+    });
+
+    if (toSave.length === 0) {
+      alert('Nothing to save — every remaining block is either blank or an exact duplicate.');
+      return;
+    }
+
+    try {
+      const res = await fetch(`${API_BASE}/admin/pyq-bulk-create`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ questions: toSave.map(t => t.payload) })
+      });
+      if (res.status === 401) return logout();
+      if (!res.ok) { alert('Bulk save failed: ' + await describeHttpError(res)); return; }
+      const data = await res.json();
+      if (data.error) { alert('Bulk save failed: ' + data.error); return; }
+      toSave.forEach(t => {
+        const block = blocks[findBlockIndex(t.id)];
+        if (!block) return;
+        block.saved = true;
+        existingRows.push({ question: t.payload.question, chapter: t.payload.chapter, class: t.payload.class_ });
+        const btn = document.getElementById('save-btn-' + t.id);
+        if (btn) { btn.textContent = 'Saved'; btn.disabled = true; }
+        const badge = document.getElementById('saved-badge-' + t.id);
+        if (badge) badge.style.display = 'inline-flex';
+        const el = document.getElementById('block-' + t.id);
+        if (el) el.classList.add('is-saved');
+      });
+      updateSummaryBar();
+      let msg = `Saved ${toSave.length} question(s).`;
+      if (skipped.length) msg += ` Skipped ${skipped.length} (blank or exact duplicate).`;
+      if (warnedCount) msg += ` ${warnedCount} were saved despite a similarity warning — worth a second look.`;
+      alert(msg);
+    } catch (e) {
+      alert('Bulk save failed — check connection.');
+    }
+  }
+
+  // Read-only state accessors for automated testing only - nothing in the real UI uses this.
+  window.__test = {
+    get blocks() { return blocks; },
+    get chapterList() { return chapterList; },
+    get existingRows() { return existingRows; },
+    get classifier() { return classifier; },
+    get currentSubject() { return currentSubject; }
+  };
+</script>
+</body>
+</html>

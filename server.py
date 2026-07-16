@@ -1,11 +1,12 @@
 from fastapi import FastAPI, Header, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List
 import anthropic
 import requests
 import openai
+import base64
 from dotenv import load_dotenv
 import os
 load_dotenv()
@@ -31,6 +32,7 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "neetai-admin-2027")
 
 openai_client = openai.OpenAI(api_key=OPENAI_KEY)
 import requests as http_requests
+from process_pyq_vision import scan_pdf_bytes
 
 SYSTEM_PROMPT = """You are NEET-AI — an expert tutor for Indian medical entrance exam preparation.
 
@@ -135,6 +137,33 @@ class AdminPyqBulkUpdate(BaseModel):
     ids: List[str]
     chapter: Optional[str] = None
     is_active: Optional[bool] = None
+
+class ScanPdfRequest(BaseModel):
+    subject: str
+    data: str  # base64-encoded PDF bytes
+
+class DiagramUploadRequest(BaseModel):
+    filename: str
+    data: str  # base64-encoded image bytes
+    media_type: str = "image/png"
+
+class PyqQuestionCreate(BaseModel):
+    subject: str
+    chapter: Optional[str] = None
+    question: str
+    option_a: str
+    option_b: str
+    option_c: str
+    option_d: str
+    correct_answer: str = ""
+    question_type: str = "mcq"
+    year: Optional[int] = None
+    class_: Optional[int] = Field(None, alias="class")
+    has_diagram: bool = False
+    diagram_url: Optional[str] = None
+
+class PyqBulkCreate(BaseModel):
+    questions: List[PyqQuestionCreate]
 
 import time
 
@@ -835,6 +864,102 @@ async def admin_pyq_bulk_update(body: AdminPyqBulkUpdate, _: None = Depends(veri
         if response.status_code >= 400:
             return {"error": response.text}
         return {"updated_count": len(response.json())}
+    except Exception as e:
+        return {"error": str(e)}
+
+# ---------- Admin: PDF scan -> review -> save pipeline (admin-pdf-review.html) ----------
+
+@app.post("/admin/scan-pdf")
+async def admin_scan_pdf(req: ScanPdfRequest, _: None = Depends(verify_admin), __: None = Depends(rate_limiter(10, 300))):
+    if req.subject not in ("Biology", "Physics", "Chemistry"):
+        return {"error": "Invalid subject"}
+    try:
+        pdf_bytes = base64.b64decode(req.data)
+    except Exception:
+        return {"error": "Could not decode PDF data"}
+    try:
+        return scan_pdf_bytes(pdf_bytes, req.subject)
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/admin/pyq-classifier-data")
+async def admin_pyq_classifier_data(subject: str, _: None = Depends(verify_admin)):
+    if subject not in ("Biology", "Physics", "Chemistry"):
+        return {"error": "Invalid subject"}
+    try:
+        response = http_requests.get(
+            f"{SUPABASE_URL}/rest/v1/pyq",
+            headers=ADMIN_HEADERS,
+            params={
+                "subject": f"eq.{subject}",
+                "is_active": "eq.true",
+                "select": "question,chapter,class",
+                "limit": 3000
+            }
+        )
+        # Includes rows with no chapter yet too, so the frontend's exact-duplicate
+        # check can catch dupes against still-untagged rows. buildClassifier() itself
+        # skips rows with no chapter since they're useless as labeled training examples.
+        return {"rows": response.json()}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.post("/admin/pyq-diagram-upload")
+async def admin_pyq_diagram_upload(body: DiagramUploadRequest, _: None = Depends(verify_admin)):
+    try:
+        file_bytes = base64.b64decode(body.data)
+    except Exception:
+        return {"error": "Could not decode image data"}
+    import uuid
+    ext = body.filename.rsplit(".", 1)[-1] if "." in body.filename else "png"
+    path = f"{uuid.uuid4().hex}.{ext}"
+    try:
+        response = http_requests.post(
+            f"{SUPABASE_URL}/storage/v1/object/Q-Daigrams-BIO/{path}",
+            headers={
+                "apikey": SUPABASE_SERVICE_KEY,
+                "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+                "Content-Type": body.media_type
+            },
+            data=file_bytes
+        )
+        if response.status_code >= 400:
+            return {"error": response.text}
+        return {"url": f"{SUPABASE_URL}/storage/v1/object/public/Q-Daigrams-BIO/{path}"}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.post("/admin/pyq-bulk-create")
+async def admin_pyq_bulk_create(body: PyqBulkCreate, _: None = Depends(verify_admin)):
+    if not body.questions:
+        return {"error": "No questions provided"}
+    if any(q.subject not in ("Biology", "Physics", "Chemistry") for q in body.questions):
+        return {"error": "Invalid subject"}
+    payload = [{
+        "subject": q.subject,
+        "chapter": q.chapter,
+        "question": q.question,
+        "option_a": q.option_a,
+        "option_b": q.option_b,
+        "option_c": q.option_c,
+        "option_d": q.option_d,
+        "correct_answer": q.correct_answer,
+        "question_type": q.question_type,
+        "year": q.year,
+        "class": q.class_,
+        "has_diagram": q.has_diagram,
+        "diagram_url": q.diagram_url,
+        "is_active": True
+    } for q in body.questions]
+    try:
+        response = http_requests.post(
+            f"{SUPABASE_URL}/rest/v1/pyq",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
+            json=payload
+        )
+        if response.status_code >= 400:
+            return {"error": response.text}
+        return {"created": response.json()}
     except Exception as e:
         return {"error": str(e)}
 
