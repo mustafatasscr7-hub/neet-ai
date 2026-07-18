@@ -161,6 +161,10 @@ class PyqQuestionCreate(BaseModel):
     class_: Optional[int] = Field(None, alias="class")
     has_diagram: bool = False
     diagram_url: Optional[str] = None
+    option_a_diagram_url: Optional[str] = None
+    option_b_diagram_url: Optional[str] = None
+    option_c_diagram_url: Optional[str] = None
+    option_d_diagram_url: Optional[str] = None
 
 class PyqBulkCreate(BaseModel):
     questions: List[PyqQuestionCreate]
@@ -870,7 +874,9 @@ async def admin_pyq_bulk_update(body: AdminPyqBulkUpdate, _: None = Depends(veri
 # ---------- Admin: PDF scan -> review -> save pipeline (admin-pdf-review.html) ----------
 
 @app.post("/admin/scan-pdf")
-async def admin_scan_pdf(req: ScanPdfRequest, _: None = Depends(verify_admin), __: None = Depends(rate_limiter(10, 300))):
+def admin_scan_pdf(req: ScanPdfRequest, _: None = Depends(verify_admin), __: None = Depends(rate_limiter(10, 300))):
+    # Deliberately sync (not async def): FastAPI runs sync path functions in a thread pool,
+    # so this multi-second-to-multi-minute call doesn't block the event loop for other requests.
     if req.subject not in ("Biology", "Physics", "Chemistry"):
         return {"error": "Invalid subject"}
     try:
@@ -949,6 +955,10 @@ async def admin_pyq_bulk_create(body: PyqBulkCreate, _: None = Depends(verify_ad
         "class": q.class_,
         "has_diagram": q.has_diagram,
         "diagram_url": q.diagram_url,
+        "option_a_diagram_url": q.option_a_diagram_url,
+        "option_b_diagram_url": q.option_b_diagram_url,
+        "option_c_diagram_url": q.option_c_diagram_url,
+        "option_d_diagram_url": q.option_d_diagram_url,
         "is_active": True
     } for q in body.questions]
     try:
