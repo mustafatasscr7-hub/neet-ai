@@ -1161,6 +1161,7 @@
             <div class="option ${selectedAnswer === opt ? 'selected' : ''}" onclick="selectAnswer('${opt}')">
               <div class="option-label">${opt.toUpperCase()}</div>
               <div>${q['option_' + opt]}</div>
+              ${q['option_' + opt + '_diagram_url'] ? `<img src="${q['option_' + opt + '_diagram_url']}" style="max-width:100%;border-radius:6px;margin-top:8px;border:1px solid #2a2a2a;">` : ''}
             </div>
           ` : '').join('')}
         </div>

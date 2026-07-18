@@ -126,6 +126,7 @@
       <input type="file" id="pdfFile" accept="application/pdf" onchange="updateScanButton()"/>
       <button type="button" class="scan-btn" id="scanBtn" disabled onclick="scanPdf()">Scan PDF</button>
     </div>
+    <div id="scanBtnHint" style="font-size:11px;color:#666;margin-top:8px;">Pick a subject above and choose a PDF file to enable scanning.</div>
     <div id="scanStatus"></div>
   </div>
 
@@ -137,6 +138,8 @@
     <button type="button" class="action-btn" onclick="addMissedQuestion()">+ Add Missed Question</button>
     <button type="button" class="action-btn primary" onclick="saveAllReviewed()">Save All Reviewed</button>
   </div>
+
+  <div id="flaggedPagesBanner" style="display:none;background:#ef444415;border:1px solid #ef444450;border-radius:10px;padding:12px 14px;margin-bottom:16px;font-size:12px;color:#ef4444;"></div>
 
   <div id="blocksContainer"></div>
 </div>
@@ -150,8 +153,97 @@
   let classifier = null;
   let blocks = [];            // in-memory question blocks for the current scan session
   let blockIdSeq = 0;
+  let scanFilenameMatch = null; // {chapter, score, tied} from the last scanned PDF's filename, or null
   const MIN_SUBJECT_ROWS_FOR_SUGGESTION = 15;
   const MIN_CONFIDENCE_SCORE = 0.08;
+  const FILENAME_MATCH_THRESHOLD = 0.3;
+
+  // Same source of truth as pyqbank.html's neetSyllabus, kept in sync manually - used both to
+  // fill the chapter dropdown with every real chapter (not just already-tagged ones) and to
+  // deterministically resolve class from chapter name (curriculum is fixed, unlike historical data).
+  const NEET_SYLLABUS = {
+    Biology: {
+      11: ['The Living World', 'Biological Classification', 'Plant Kingdom', 'Animal Kingdom', 'Morphology of Flowering Plants', 'Anatomy of Flowering Plants', 'Structural Organisation in Animals', 'Cell: The Unit of Life', 'Biomolecules', 'Cell Cycle and Cell Division', 'Transport in Plants', 'Mineral Nutrition', 'Photosynthesis in Higher Plants', 'Respiration in Plants', 'Plant Growth and Development', 'Digestion and Absorption', 'Breathing and Exchange of Gases', 'Body Fluids and Circulation', 'Excretory Products and their Elimination', 'Locomotion and Movement', 'Neural Control and Coordination', 'Chemical Coordination and Integration'],
+      12: ['Reproduction in Organisms', 'Sexual Reproduction in Flowering Plants', 'Human Reproduction', 'Reproductive Health', 'Principles of Inheritance and Variation', 'Molecular Basis of Inheritance', 'Evolution', 'Human Health and Disease', 'Strategies for Enhancement in Food Production', 'Microbes in Human Welfare', 'Biotechnology: Principles and Processes', 'Biotechnology and its Applications', 'Organisms and Populations', 'Ecosystem', 'Biodiversity and Conservation', 'Environmental Issues']
+    },
+    Physics: {
+      11: ['Physical World', 'Units and Measurements', 'Motion in a Straight Line', 'Motion in a Plane', 'Laws of Motion', 'Work, Energy and Power', 'System of Particles and Rotational Motion', 'Gravitation', 'Mechanical Properties of Solids', 'Mechanical Properties of Fluids', 'Thermal Properties of Matter', 'Thermodynamics', 'Kinetic Theory', 'Oscillations', 'Waves'],
+      12: ['Electric Charges and Fields', 'Electrostatic Potential and Capacitance', 'Current Electricity', 'Moving Charges and Magnetism', 'Magnetism and Matter', 'Electromagnetic Induction', 'Alternating Current', 'Electromagnetic Waves', 'Ray Optics and Optical Instruments', 'Wave Optics', 'Dual Nature of Radiation and Matter', 'Atoms', 'Nuclei', 'Semiconductor Electronics']
+    },
+    Chemistry: {
+      11: ['Some Basic Concepts of Chemistry', 'Structure of Atom', 'Classification of Elements and Periodicity in Properties of Elements', 'Chemical Bonding and Molecular Structure', 'States of Matter: Gases and Liquids', 'Thermodynamics', 'Equilibrium', 'Redox Reactions', 'Hydrogen', 'The s-Block Elements (Alkali and Alkaline Earth Metals)', 'The p-Block Elements', 'Organic Chemistry: Some Basic Principles and Techniques', 'Hydrocarbons', 'Environmental Chemistry'],
+      12: ['The Solid State', 'Solutions', 'Electrochemistry', 'Chemical Kinetics', 'Surface Chemistry', 'General Principles and Processes of Isolation of Elements', 'The p-Block Elements', 'The d and f Block Elements', 'Coordination Compounds', 'Haloalkanes and Haloarenes', 'Alcohols, Phenols and Ethers', 'Aldehydes, Ketones and Carboxylic Acids', 'Amines', 'Biomolecules', 'Polymers', 'Chemistry in Everyday Life']
+    }
+  };
+
+  // Chapter names appearing in both 11 and 12 for a subject (e.g. Chemistry's "The p-Block
+  // Elements" spans both years) resolve to null here - deliberately ambiguous, not guessed.
+  function buildChapterToClass() {
+    const map = {};
+    Object.keys(NEET_SYLLABUS).forEach(subject => {
+      map[subject] = {};
+      const in11 = new Set(NEET_SYLLABUS[subject][11]);
+      const in12 = new Set(NEET_SYLLABUS[subject][12]);
+      new Set([...in11, ...in12]).forEach(chapter => {
+        map[subject][chapter] = (in11.has(chapter) && in12.has(chapter)) ? null : (in11.has(chapter) ? 11 : 12);
+      });
+    });
+    return map;
+  }
+  const CHAPTER_TO_CLASS = buildChapterToClass();
+
+  function allChaptersForSubject(subject) {
+    const syllabus = NEET_SYLLABUS[subject] ? [...NEET_SYLLABUS[subject][11], ...NEET_SYLLABUS[subject][12]] : [];
+    return Array.from(new Set([...syllabus, ...chapterList])).sort();
+  }
+
+  // Deterministic curriculum mapping takes priority over the historical-majority guess,
+  // since it's always correct when unambiguous, unlike a vote over possibly-sparse tagged data.
+  function resolveClassForChapter(subject, chapter) {
+    const fromSyllabus = CHAPTER_TO_CLASS[subject] && CHAPTER_TO_CLASS[subject][chapter];
+    if (fromSyllabus) return String(fromSyllabus);
+    return suggestClass(classifier, chapter);
+  }
+
+  // ---------------- Chapter-from-filename matching ----------------
+
+  function normalizeForFilenameMatch(text) {
+    return text
+      .replace(/\.pdf$/i, '')
+      .replace(/[_-]/g, ' ')
+      .replace(/[()]/g, ' ')
+      .replace(/\b(pyq|dpp|practice|practise|questions?|test|mock|nta|qp)\b/gi, ' ')
+      .replace(/[^a-zA-Z\s]/g, ' ')
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(w => w.length > 1);
+  }
+
+  function overlapScore(fileTokens, chapterTokens) {
+    const intersection = [...fileTokens].filter(w => chapterTokens.has(w)).length;
+    const union = new Set([...fileTokens, ...chapterTokens]).size;
+    return union > 0 ? intersection / union : 0;
+  }
+
+  // Tuned against real filenames from bio_pdfs_to_process/ - matches "Cell the Unit of Life -
+  // PYQ.pdf" style names correctly, and importantly does NOT force a guess for broad/combined
+  // files like "Diversity in Living Organism DPP.pdf" or generic ones like a full mock test.
+  function matchChapterFromFilename(filename, chapterNames) {
+    const fileTokens = new Set(normalizeForFilenameMatch(filename));
+    if (fileTokens.size === 0) return null;
+    let best = null, bestScore = 0, second = 0;
+    chapterNames.forEach(chapter => {
+      const chapterTokens = new Set(normalizeForFilenameMatch(chapter));
+      const score = overlapScore(fileTokens, chapterTokens);
+      if (score > bestScore) { second = bestScore; best = chapter; bestScore = score; }
+      else if (score > second) { second = score; }
+    });
+    if (!best) return null;
+    // A near-tie between two DIFFERENT chapters is a sign of ambiguity, not confidence
+    // (tiny epsilon guards against float rounding, e.g. 0.6 - 0.5 !== exactly 0.1 in JS).
+    const tied = (bestScore - second) < 0.1 - 1e-9;
+    return { chapter: best, score: bestScore, second, tied };
+  }
 
   function authHeaders(extra) {
     return Object.assign({ 'X-Admin-Key': adminKey }, extra || {});
@@ -221,8 +313,10 @@
     currentSubject = subject;
     document.querySelectorAll('.subject-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.subject === subject));
     blocks = [];
+    scanFilenameMatch = null;
     renderAllBlocks();
     document.getElementById('summaryBar').style.display = 'none';
+    document.getElementById('flaggedPagesBanner').style.display = 'none';
     updateScanButton();
 
     const scanBtn = document.getElementById('scanBtn');
@@ -236,8 +330,9 @@
       if (chaptersRes.status === 401 || classifierRes.status === 401) return logout();
       if (!chaptersRes.ok || !classifierRes.ok) {
         const detail = !chaptersRes.ok ? await describeHttpError(chaptersRes) : await describeHttpError(classifierRes);
-        alert('Could not load chapter/classifier data for ' + subject + ': ' + detail);
+        alert('Could not load chapter/classifier data for ' + subject + ' (' + detail + ') - you can still scan, but chapter suggestions and the manual dropdown will be empty.');
         chapterList = []; existingRows = []; classifier = buildClassifier([]);
+        updateScanButton();
         return;
       }
       const chaptersData = await chaptersRes.json();
@@ -259,6 +354,12 @@
   function updateScanButton() {
     const file = document.getElementById('pdfFile').files[0];
     document.getElementById('scanBtn').disabled = !currentSubject || !file;
+    const hintEl = document.getElementById('scanBtnHint');
+    if (!hintEl) return;
+    if (currentSubject && file) hintEl.textContent = '';
+    else if (!currentSubject && !file) hintEl.textContent = 'Pick a subject above and choose a PDF file to enable scanning.';
+    else if (!currentSubject) hintEl.textContent = 'Pick a subject above to enable scanning.';
+    else hintEl.textContent = 'Choose a PDF file to enable scanning.';
   }
 
   // ---------------- TF-IDF chapter/class suggestion ----------------
@@ -392,6 +493,7 @@
     scanBtn.disabled = true;
     statusEl.style.display = 'block';
     statusEl.textContent = 'Scanning your PDF... this can take a while for many pages.';
+    document.getElementById('flaggedPagesBanner').style.display = 'none';
     try {
       const b64 = await fileToBase64(file);
       const res = await fetch(`${API_BASE}/admin/scan-pdf`, {
@@ -404,17 +506,22 @@
       const data = await res.json();
       if (data.error) { statusEl.textContent = 'Scan failed: ' + data.error; return; }
       statusEl.style.display = 'none';
+      const filenameMatch = matchChapterFromFilename(file.name, allChaptersForSubject(currentSubject));
+      scanFilenameMatch = (filenameMatch && filenameMatch.score >= FILENAME_MATCH_THRESHOLD && !filenameMatch.tied) ? filenameMatch : null;
       blocks = (data.questions || []).map(q => ({
         id: 'b' + (blockIdSeq++),
         question: q.question, option_a: q.option_a, option_b: q.option_b, option_c: q.option_c, option_d: q.option_d,
         correct_answer: q.correct_answer || '', question_type: q.question_type || 'mcq',
-        has_diagram: !!q.has_diagram, diagram_url: null, year: q.year, source_page: q.source_page,
+        has_diagram: !!q.has_diagram, diagram_url: null,
+        option_a_diagram_url: null, option_b_diagram_url: null, option_c_diagram_url: null, option_d_diagram_url: null,
+        year: q.year, source_page: q.source_page, display_number: null,
         saved: false, savePending: false
       }));
       document.getElementById('statPageCount').textContent = data.pages_scanned || 0;
       renderAllBlocks();
       updateSummaryBar();
       document.getElementById('summaryBar').style.display = 'flex';
+      renderFlaggedPagesBanner(data.flagged_pages || []);
     } catch (e) {
       statusEl.textContent = 'Scan failed — check connection and try again.';
     } finally {
@@ -428,13 +535,25 @@
     document.getElementById('statSavedCount').textContent = blocks.filter(b => b.saved).length;
   }
 
+  function renderFlaggedPagesBanner(flaggedPages) {
+    const banner = document.getElementById('flaggedPagesBanner');
+    if (!flaggedPages || flaggedPages.length === 0) { banner.style.display = 'none'; return; }
+    banner.style.display = 'block';
+    banner.innerHTML = `<strong>${flaggedPages.length} page(s) skipped - extraction failed or possible scanned page:</strong><br>` +
+      flaggedPages.map(f => `Page ${f.page}: ${escapeHtml(f.reason)}`).join('<br>') +
+      `<br>These pages were NOT sent for question extraction and won't appear below - check them manually in the PDF and use "+ Add Missed Question" if needed.`;
+  }
+
   // ---------------- Block rendering ----------------
 
   function buildChapterOptionsHtml(block) {
     const suggestion = block._suggestion || { confident: false, suggestions: [] };
     const suggestedChapter = suggestion.confident ? suggestion.suggestions[0].chapter : null;
     let html = `<option value="">${suggestion.confident ? '— pick chapter —' : '— not enough data yet, pick manually —'}</option>`;
-    chapterList.forEach(name => {
+    // Every real NCERT chapter for this subject is selectable, not just ones that already have
+    // tagged rows - otherwise a confident filename/TF-IDF match to a never-before-tagged chapter
+    // would have no matching <option> to select at all.
+    allChaptersForSubject(currentSubject).forEach(name => {
       const sel = name === suggestedChapter ? ' selected' : '';
       html += `<option value="${escapeHtml(name)}"${sel}>${escapeHtml(name)}</option>`;
     });
@@ -446,7 +565,7 @@
     return `
     <div class="q-block${b.saved ? ' is-saved' : ''}" id="block-${b.id}" data-id="${b.id}">
       <div class="q-block-header">
-        <span class="q-number">Q${displayIndex}</span>
+        <span class="q-number">Q<input type="text" id="qnum-${b.id}" value="${escapeHtml(b.display_number != null ? b.display_number : String(displayIndex))}" onchange="setQNumber('${b.id}')" title="Edit to match the actual question number in the PDF, if it drifted from the auto count" style="width:34px;background:transparent;border:none;border-bottom:1px dashed #4f8ef780;color:#4f8ef7;font-weight:700;font-size:13px;font-family:'Inter',sans-serif;padding:0 0 1px 2px;"/></span>
         ${b.has_diagram ? '<span class="q-diagram-badge">Diagram</span>' : ''}
         <span class="q-saved-badge" id="saved-badge-${b.id}" style="display:${b.saved ? 'inline-flex' : 'none'}">Saved</span>
         <div class="q-block-actions">
@@ -485,14 +604,32 @@
         </div>
         <div class="q-field checkbox-field">
           <input type="checkbox" id="hasdiagram-${b.id}" onchange="toggleDiagramSlot('${b.id}')" ${b.has_diagram ? 'checked' : ''}/>
-          <label for="hasdiagram-${b.id}">Has diagram</label>
+          <label for="hasdiagram-${b.id}">Question has diagram</label>
+        </div>
+        <div class="q-field checkbox-field">
+          <input type="checkbox" id="optiondiagram-${b.id}" onchange="toggleOptionDiagramSlot('${b.id}')" ${hasAnyOptionDiagram(b) ? 'checked' : ''}/>
+          <label for="optiondiagram-${b.id}">Options have diagram</label>
         </div>
       </div>
 
       <div class="q-diagram-slot" id="diagram-slot-${b.id}" style="display:${b.has_diagram ? 'block' : 'none'}">
+        <label style="font-size:10px;color:#666;text-transform:uppercase;letter-spacing:0.04em;display:block;margin-bottom:5px;">Question diagram</label>
         <input type="file" accept="image/*" id="diagram-file-${b.id}" onchange="uploadDiagram('${b.id}')"/>
         <div class="diag-status" id="diagram-status-${b.id}"></div>
         <div id="diagram-preview-${b.id}"></div>
+      </div>
+
+      <div class="q-diagram-slot" id="option-diagram-slot-${b.id}" style="display:${hasAnyOptionDiagram(b) ? 'block' : 'none'}">
+        <label style="font-size:10px;color:#666;text-transform:uppercase;letter-spacing:0.04em;display:block;margin-bottom:8px;">Option diagrams (one image per option, upload only the ones that need it)</label>
+        <div class="q-options-grid">
+          ${['a', 'b', 'c', 'd'].map(opt => `
+          <div>
+            <label style="font-size:10px;color:#888;">Option ${opt.toUpperCase()}</label>
+            <input type="file" accept="image/*" id="opt-diagram-file-${opt}-${b.id}" onchange="uploadOptionDiagram('${b.id}', '${opt}')"/>
+            <div class="diag-status" id="opt-diagram-status-${opt}-${b.id}"></div>
+            <div id="opt-diagram-preview-${opt}-${b.id}">${b['option_' + opt + '_diagram_url'] ? `<img src="${escapeHtml(b['option_' + opt + '_diagram_url'])}">` : ''}</div>
+          </div>`).join('')}
+        </div>
       </div>
 
       <div class="q-dup-warning" id="dup-warning-${b.id}"></div>
@@ -506,7 +643,13 @@
 
   function renderAllBlocks() {
     const container = document.getElementById('blocksContainer');
-    blocks.forEach(b => { b._suggestion = getChapterSuggestion(classifier, b.question); });
+    blocks.forEach(b => {
+      // A confident whole-PDF filename match (e.g. "Cell the Unit of Life - PYQ.pdf") is a
+      // stronger signal than any one question's own TF-IDF match, so it takes priority.
+      b._suggestion = scanFilenameMatch
+        ? { confident: true, suggestions: [{ chapter: scanFilenameMatch.chapter, score: scanFilenameMatch.score }], fromFilename: true }
+        : getChapterSuggestion(classifier, b.question);
+    });
     if (blocks.length === 0) {
       container.innerHTML = '<div class="empty-hint">Upload and scan a PDF, or add a question manually, to get started.</div>';
       return;
@@ -525,11 +668,13 @@
     const s = block._suggestion;
     if (!s) return;
     if (s.confident) {
-      hintEl.textContent = `Suggested from similar questions (score ${s.suggestions[0].score.toFixed(2)})`;
+      hintEl.textContent = s.fromFilename
+        ? `Suggested from the PDF's filename (score ${s.suggestions[0].score.toFixed(2)})`
+        : `Suggested from similar questions (score ${s.suggestions[0].score.toFixed(2)})`;
       hintEl.classList.add('confident');
       const classSel = document.getElementById('class-' + block.id);
       if (classSel && !classSel.value) {
-        const cls = suggestClass(classifier, s.suggestions[0].chapter);
+        const cls = resolveClassForChapter(currentSubject, s.suggestions[0].chapter);
         if (cls) classSel.value = cls;
       }
     } else {
@@ -557,6 +702,13 @@
 
   function findBlockIndex(id) { return blocks.findIndex(b => b.id === id); }
 
+  function setQNumber(id) {
+    const idx = findBlockIndex(id);
+    if (idx === -1) return;
+    const val = document.getElementById('qnum-' + id).value.trim();
+    blocks[idx].display_number = val || null;
+  }
+
   function toggleDiagramSlot(id) {
     const checked = document.getElementById('hasdiagram-' + id).checked;
     document.getElementById('diagram-slot-' + id).style.display = checked ? 'block' : 'none';
@@ -583,6 +735,41 @@
       block.diagram_url = data.url;
       statusEl.textContent = 'Uploaded';
       document.getElementById('diagram-preview-' + id).innerHTML = `<img src="${escapeHtml(data.url)}">`;
+    } catch (e) {
+      statusEl.textContent = 'Upload failed — check connection.';
+    }
+  }
+
+  function hasAnyOptionDiagram(block) {
+    return !!(block.option_a_diagram_url || block.option_b_diagram_url || block.option_c_diagram_url || block.option_d_diagram_url);
+  }
+
+  function toggleOptionDiagramSlot(id) {
+    const checked = document.getElementById('optiondiagram-' + id).checked;
+    document.getElementById('option-diagram-slot-' + id).style.display = checked ? 'block' : 'none';
+  }
+
+  async function uploadOptionDiagram(id, opt) {
+    const fileInput = document.getElementById(`opt-diagram-file-${opt}-${id}`);
+    const file = fileInput.files[0];
+    if (!file) return;
+    const statusEl = document.getElementById(`opt-diagram-status-${opt}-${id}`);
+    statusEl.textContent = 'Uploading...';
+    try {
+      const b64 = await fileToBase64(file);
+      const res = await fetch(`${API_BASE}/admin/pyq-diagram-upload`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ filename: file.name, data: b64, media_type: file.type || 'image/png' })
+      });
+      if (res.status === 401) return logout();
+      if (!res.ok) { statusEl.textContent = 'Upload failed: ' + await describeHttpError(res); return; }
+      const data = await res.json();
+      if (data.error) { statusEl.textContent = 'Upload failed: ' + data.error; return; }
+      const block = blocks[findBlockIndex(id)];
+      block['option_' + opt + '_diagram_url'] = data.url;
+      statusEl.textContent = 'Uploaded';
+      document.getElementById(`opt-diagram-preview-${opt}-${id}`).innerHTML = `<img src="${escapeHtml(data.url)}">`;
     } catch (e) {
       statusEl.textContent = 'Upload failed — check connection.';
     }
@@ -616,6 +803,12 @@
   }
 
   function onChapterChange(id) {
+    const chapter = document.getElementById('chapter-' + id).value;
+    const classSel = document.getElementById('class-' + id);
+    if (chapter && classSel && !classSel.value) {
+      const cls = resolveClassForChapter(currentSubject, chapter);
+      if (cls) classSel.value = cls;
+    }
     runDuplicateCheck(id);
   }
 
@@ -637,6 +830,10 @@
     a.chapter = a.chapter || b.chapter;
     a.has_diagram = a.has_diagram || b.has_diagram;
     a.diagram_url = a.diagram_url || b.diagram_url;
+    a.option_a_diagram_url = a.option_a_diagram_url || b.option_a_diagram_url;
+    a.option_b_diagram_url = a.option_b_diagram_url || b.option_b_diagram_url;
+    a.option_c_diagram_url = a.option_c_diagram_url || b.option_c_diagram_url;
+    a.option_d_diagram_url = a.option_d_diagram_url || b.option_d_diagram_url;
     blocks.splice(idx + 1, 1);
     renderAllBlocks();
     updateSummaryBar();
@@ -650,7 +847,8 @@
       id: 'b' + (blockIdSeq++),
       question: current.question, option_a: '', option_b: '', option_c: '', option_d: '',
       correct_answer: '', question_type: current.question_type, has_diagram: false, diagram_url: null,
-      year: current.year, class_: current.class_, chapter: current.chapter, source_page: current.source_page,
+      option_a_diagram_url: null, option_b_diagram_url: null, option_c_diagram_url: null, option_d_diagram_url: null,
+      year: current.year, class_: current.class_, chapter: current.chapter, source_page: current.source_page, display_number: null,
       saved: false, savePending: false
     };
     blocks.splice(idx + 1, 0, secondHalf);
@@ -671,8 +869,9 @@
   function addMissedQuestion() {
     blocks.push({
       id: 'b' + (blockIdSeq++), question: '', option_a: '', option_b: '', option_c: '', option_d: '',
-      correct_answer: '', question_type: 'mcq', has_diagram: false, diagram_url: null, year: null,
-      class_: null, chapter: null, source_page: null, saved: false, savePending: false
+      correct_answer: '', question_type: 'mcq', has_diagram: false, diagram_url: null,
+      option_a_diagram_url: null, option_b_diagram_url: null, option_c_diagram_url: null, option_d_diagram_url: null,
+      year: null, class_: null, chapter: null, source_page: null, display_number: null, saved: false, savePending: false
     });
     document.getElementById('summaryBar').style.display = 'flex';
     renderAllBlocks();
@@ -718,6 +917,10 @@
     try {
       const payload = buildCreatePayload(id);
       payload.diagram_url = block.diagram_url;
+      payload.option_a_diagram_url = block.option_a_diagram_url;
+      payload.option_b_diagram_url = block.option_b_diagram_url;
+      payload.option_c_diagram_url = block.option_c_diagram_url;
+      payload.option_d_diagram_url = block.option_d_diagram_url;
       const res = await fetch(`${API_BASE}/admin/pyq-bulk-create`, {
         method: 'POST',
         headers: authHeaders({ 'Content-Type': 'application/json' }),
@@ -767,6 +970,10 @@
       if (result.similar.length > 0) warnedCount++;
       const payload = Object.assign({ subject: currentSubject }, fields);
       payload.diagram_url = b.diagram_url;
+      payload.option_a_diagram_url = b.option_a_diagram_url;
+      payload.option_b_diagram_url = b.option_b_diagram_url;
+      payload.option_c_diagram_url = b.option_c_diagram_url;
+      payload.option_d_diagram_url = b.option_d_diagram_url;
       toSave.push({ id: b.id, payload });
     });
 

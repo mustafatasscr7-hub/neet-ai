@@ -311,8 +311,9 @@ const { data, error } = await query;
 
      const opts = ['a','b','c','d'].map(opt => {
         if (!q['option_' + opt]) return '';
-        return `<div class="q-option" id="opt-${opt}" onclick="selectPyqOption('${opt}', '${q.correct_answer.toLowerCase().trim()}')"><strong>${opt.toUpperCase()})</strong> ${q['option_' + opt]}</div>`;
-      }).join(''); 
+        const optImg = q['option_' + opt + '_diagram_url'] ? `<img class="q-diagram-img" src="${q['option_' + opt + '_diagram_url']}">` : '';
+        return `<div class="q-option" id="opt-${opt}" onclick="selectPyqOption('${opt}', '${q.correct_answer.toLowerCase().trim()}')"><strong>${opt.toUpperCase()})</strong> ${q['option_' + opt]}${optImg}</div>`;
+      }).join('');
 
      
 
