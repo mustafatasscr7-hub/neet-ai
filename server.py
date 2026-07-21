@@ -9,6 +9,15 @@ import openai
 import base64
 from dotenv import load_dotenv
 import os
+import sys
+# Windows' default console codepage (cp1252) can't encode plenty of real content this app
+# handles -- Greek unit prefixes like μF, Hindi/Devanagari answers, etc. -- and an unhandled
+# UnicodeEncodeError from a bare print() crashes the request that triggered it. Only matters
+# locally (Linux containers default to UTF-8 already), but a crash here takes a streaming
+# response down mid-flight with no clean error to the client, so fix it at the source.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 load_dotenv()
 
 app = FastAPI()
@@ -115,6 +124,10 @@ class SolveRequest(BaseModel):
     option_d: str = ""
     correct_answer: str = ""
     language: str = "en"
+    user_id: str = ""
+
+class MergeGuestUsageRequest(BaseModel):
+    user_id: str
 
 class PersonalisedTestSelection(BaseModel):
     subject: str
@@ -137,6 +150,10 @@ class AdminPyqBulkUpdate(BaseModel):
     ids: List[str]
     chapter: Optional[str] = None
     is_active: Optional[bool] = None
+
+class SetUserPlanRequest(BaseModel):
+    user_id: str
+    plan: str  # "free" or "pro"
 
 class ScanPdfRequest(BaseModel):
     subject: str
@@ -235,6 +252,81 @@ ADMIN_HEADERS = {
     "apikey": SUPABASE_SERVICE_KEY,
     "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"
 }
+
+# ---------- Daily AI usage budget (per-user, resets at IST midnight) ----------
+from datetime import datetime, timezone, timedelta
+
+IST = timezone(timedelta(hours=5, minutes=30))  # fixed offset: India has no DST
+DAILY_TOKEN_BUDGET_FREE = 37000  # ~15 doubts/day at a ~60/40 Haiku/Sonnet blended mix
+
+def _ist_today() -> str:
+    return datetime.now(timezone.utc).astimezone(IST).date().isoformat()
+
+def get_user_plan(user_id: str) -> str:
+    if not user_id:
+        return "free"
+    try:
+        rows = http_requests.get(
+            f"{SUPABASE_URL}/rest/v1/user_plan", headers=ADMIN_HEADERS,
+            params={"user_id": f"eq.{user_id}", "select": "plan", "limit": 1}
+        ).json()
+        return rows[0]["plan"] if rows else "free"
+    except Exception:
+        return "free"
+
+DAILY_TOKEN_BUDGET_GUEST = 5000  # ~2 doubts/day -- deliberately tight vs. the logged-in free
+                                  # tier (15/day): the goal is to force a login, not to be a
+                                  # usable tier on its own
+
+def enforce_daily_budget(user_id: str, ip: str = ""):
+    if user_id:
+        if get_user_plan(user_id) != "free":
+            return  # paid = unlimited for now
+        rows = http_requests.get(
+            f"{SUPABASE_URL}/rest/v1/usage_log", headers=ADMIN_HEADERS,
+            params={"user_id": f"eq.{user_id}", "usage_date": f"eq.{_ist_today()}",
+                    "select": "tokens_used", "limit": 1}
+        ).json()
+        used = rows[0]["tokens_used"] if rows else 0
+        if used >= DAILY_TOKEN_BUDGET_FREE:
+            raise HTTPException(status_code=402, detail="Daily limit reached")
+        return
+    # Guest (no account): tracked by IP instead, in a separate table -- an IP is a much weaker
+    # identity than a user_id (shared behind NAT/campus wifi, changes on mobile networks), so
+    # this is approximate, not airtight. Good enough to nudge toward logging in, which is the
+    # actual goal here, not perfect anti-abuse.
+    if not ip:
+        return
+    rows = http_requests.get(
+        f"{SUPABASE_URL}/rest/v1/guest_usage_log", headers=ADMIN_HEADERS,
+        params={"ip": f"eq.{ip}", "usage_date": f"eq.{_ist_today()}",
+                "select": "tokens_used", "limit": 1}
+    ).json()
+    used = rows[0]["tokens_used"] if rows else 0
+    if used >= DAILY_TOKEN_BUDGET_GUEST:
+        raise HTTPException(status_code=402, detail="Guest limit reached — log in to continue")
+
+def log_token_usage(user_id: str, tokens: int, ip: str = ""):
+    # check-then-log (enforce_daily_budget then this) is not atomic -- a handful of concurrent
+    # requests from the same user could push them slightly over budget before the next request
+    # gets blocked. Accepted: bounded blast radius, cents of cost, no real money on the free
+    # tier yet. Revisit with row-locking/reserve-then-refund if paid gating starts protecting
+    # real revenue.
+    if tokens <= 0:
+        return
+    try:
+        if user_id:
+            http_requests.post(
+                f"{SUPABASE_URL}/rest/v1/rpc/increment_daily_usage", headers=ADMIN_HEADERS,
+                json={"p_user_id": user_id, "p_date": _ist_today(), "p_tokens": tokens}
+            )
+        elif ip:
+            http_requests.post(
+                f"{SUPABASE_URL}/rest/v1/rpc/increment_guest_usage", headers=ADMIN_HEADERS,
+                json={"p_ip": ip, "p_date": _ist_today(), "p_tokens": tokens}
+            )
+    except Exception:
+        pass  # never let logging failure break a response the student already received
 
 import hashlib
 
@@ -369,9 +461,8 @@ def get_student_context(user_id: str) -> str:
         "similar — just let it shape the answer naturally):\n" + "\n".join(parts)
     )
 
-def stream_response(text: str, history: list = [], images: list = [], pdf: str = None, answer_style: str = "detailed", student_name: str = "", language: str = "en", user_id: str = "", personalize: bool = True, skip_cache: bool = False):
+def stream_response(text: str, history: list = [], images: list = [], pdf: str = None, answer_style: str = "detailed", student_name: str = "", language: str = "en", user_id: str = "", personalize: bool = True, skip_cache: bool = False, ip: str = ""):
     images = (images or [])[:3]
-    print(f"stream_response called - text: {text[:50]}, images: {len(images)}")
     import hashlib
     # Personalized answers are specific to this student and must never be served from —
     # or written to — the shared answer cache, which is keyed only on question text.
@@ -464,9 +555,26 @@ def stream_response(text: str, history: list = [], images: list = [], pdf: str =
             messages=messages
         ) as stream:
             full_answer = ""
-            for text_chunk in stream.text_stream:
-                full_answer += text_chunk
-                yield text_chunk
+            try:
+                for text_chunk in stream.text_stream:
+                    full_answer += text_chunk
+                    yield text_chunk
+            finally:
+                # Reliably logs on normal completion (verified live). Does NOT reliably fire on
+                # early client disconnect: this is a sync generator, and Starlette runs sync
+                # StreamingResponse iterators inside a thread-pool wrapper, so disconnect-driven
+                # GeneratorExit can't interrupt an in-flight blocking call the way it would for a
+                # native async generator -- confirmed empirically (aborting a stream mid-way did
+                # not trigger this finally block). Anthropic still bills for tokens generated
+                # before the abort, so aborted/partial streams are a known, accepted under-count.
+                # Not worth an async-generator rewrite of this path for a cosmetic edge case with
+                # no real money on the free tier yet -- same reasoning as the check-then-log race
+                # in log_token_usage() above.
+                try:
+                    usage = stream.get_final_message().usage
+                    log_token_usage(user_id, usage.input_tokens + usage.output_tokens, ip)
+                except Exception:
+                    pass
             if not images and not pdf and use_shared_cache:
                 http_requests.post(
                     f"{SUPABASE_URL}/rest/v1/answer_cache",
@@ -478,7 +586,9 @@ def stream_response(text: str, history: list = [], images: list = [], pdf: str =
         yield f"Error: {str(e)}"
 
 @app.post("/solve")
-async def solve_question(req: SolveRequest, _: None = Depends(rate_limiter(15, 60))):
+async def solve_question(req: SolveRequest, request: Request, _: None = Depends(rate_limiter(15, 60))):
+    ip = _client_ip(request)
+    enforce_daily_budget(req.user_id, ip)
     client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
     lang_instruction = "\n5. Respond ONLY in Hindi (Devanagari script) — every word in Hindi, no English words or Hinglish mixing. The ONLY exceptions are LaTeX/KaTeX math notation, chemical formulas/symbols, and units, which stay exactly as-is." if req.language == "hi" else ""
     message = client.messages.create(
@@ -511,6 +621,7 @@ Rules:
             {"role": "user", "content": f"Solve this NEET question:\n\nQuestion: {req.question}\n\nA) {req.option_a}\nB) {req.option_b}\nC) {req.option_c}\nD) {req.option_d}\n\nCorrect Answer: {req.correct_answer}"}
         ]
     )
+    log_token_usage(req.user_id, message.usage.input_tokens + message.usage.output_tokens, ip)
     return {"solution": message.content[0].text}
 
 
@@ -543,14 +654,18 @@ async def send_otp(req: PhoneOtpRequest, _: None = Depends(rate_limiter(3, 600))
     return {"success": True}
 
 @app.post("/chat")
-async def chat(message: Message, _: None = Depends(rate_limiter(15, 60))):
+async def chat(message: Message, request: Request, _: None = Depends(rate_limiter(15, 60))):
+    ip = _client_ip(request)
+    enforce_daily_budget(message.user_id, ip)
     return StreamingResponse(
-       stream_response(message.text, message.history, message.images, message.pdf, message.answer_style, message.student_name, message.language, message.user_id, message.personalize, message.skip_cache),
+       stream_response(message.text, message.history, message.images, message.pdf, message.answer_style, message.student_name, message.language, message.user_id, message.personalize, message.skip_cache, ip),
         media_type="text/plain"
     )
 
 @app.post("/title")
-async def generate_title(message: Message, _: None = Depends(rate_limiter(15, 60))):
+async def generate_title(message: Message, request: Request, _: None = Depends(rate_limiter(15, 60))):
+    ip = _client_ip(request)
+    enforce_daily_budget(message.user_id, ip)
     client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
     title_lang = "entirely in Hindi (Devanagari script) — every word in Hindi, no English words mixed in" if message.language == "hi" else "in English"
     response = client.messages.create(
@@ -559,7 +674,48 @@ async def generate_title(message: Message, _: None = Depends(rate_limiter(15, 60
         system=f"Generate a short 3-5 word title {title_lang} for this NEET question. Return ONLY the title. No punctuation. No extra words.",
         messages=[{"role": "user", "content": message.text}]
     )
+    log_token_usage(message.user_id, response.usage.input_tokens + response.usage.output_tokens, ip)
     return {"title": response.content[0].text}
+
+# Guests have no Supabase session, so they can't use RLS to read their own usage row the way a
+# logged-in user does (auth.uid() is null for anonymous requests) -- this endpoint is the only
+# way a guest's remaining count can be shown, computed from the server's own view of their IP.
+@app.get("/guest-usage-status")
+async def guest_usage_status(request: Request):
+    ip = _client_ip(request)
+    rows = http_requests.get(
+        f"{SUPABASE_URL}/rest/v1/guest_usage_log", headers=ADMIN_HEADERS,
+        params={"ip": f"eq.{ip}", "usage_date": f"eq.{_ist_today()}", "select": "tokens_used", "limit": 1}
+    ).json()
+    used = rows[0]["tokens_used"] if rows else 0
+    return {"tokens_used": used, "budget": DAILY_TOKEN_BUDGET_GUEST}
+
+# Called once a session exists (see chat.html on load): folds today's guest usage from this
+# browser's IP into the now-known user's usage_log, so logging in right after exhausting the
+# guest budget doesn't grant a second, separate allowance on top of the real free-tier one.
+# Zeroes the guest row after merging so a repeat call (page refresh, multiple tabs) doesn't
+# double-count -- safe to call on every page load, not just the first one after login.
+@app.post("/merge-guest-usage")
+async def merge_guest_usage(req: MergeGuestUsageRequest, request: Request):
+    if not req.user_id:
+        return {"merged": 0}
+    ip = _client_ip(request)
+    today = _ist_today()
+    try:
+        rows = http_requests.get(
+            f"{SUPABASE_URL}/rest/v1/guest_usage_log", headers=ADMIN_HEADERS,
+            params={"ip": f"eq.{ip}", "usage_date": f"eq.{today}", "select": "tokens_used", "limit": 1}
+        ).json()
+        tokens = rows[0]["tokens_used"] if rows else 0
+        if tokens > 0:
+            log_token_usage(req.user_id, tokens)
+            http_requests.patch(
+                f"{SUPABASE_URL}/rest/v1/guest_usage_log", headers=ADMIN_HEADERS,
+                params={"ip": f"eq.{ip}", "usage_date": f"eq.{today}"}, json={"tokens_used": 0}
+            )
+        return {"merged": tokens}
+    except Exception as e:
+        return {"merged": 0, "error": str(e)}
 
 @app.post("/pyq")
 async def get_pyq(message: Message, _: None = Depends(rate_limiter(15, 60))):
@@ -737,6 +893,24 @@ def _admin_count(params):
 @app.post("/admin/verify")
 async def admin_verify(_: None = Depends(verify_admin)):
     return {"ok": True}
+
+# Manual stand-in for what a Razorpay success webhook will do automatically later: flip
+# `plan` to "pro" on payment, back to "free" on cancellation/expiry. For now, set by hand.
+@app.post("/admin/set-user-plan")
+async def admin_set_user_plan(req: SetUserPlanRequest, _: None = Depends(verify_admin)):
+    if req.plan not in ("free", "pro"):
+        return {"error": "plan must be 'free' or 'pro'"}
+    try:
+        resp = http_requests.post(
+            f"{SUPABASE_URL}/rest/v1/user_plan",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates"},
+            json={"user_id": req.user_id, "plan": req.plan, "updated_at": datetime.now(timezone.utc).isoformat()}
+        )
+        if resp.status_code >= 400:
+            return {"error": resp.text}
+        return {"success": True}
+    except Exception as e:
+        return {"error": str(e)}
 
 @app.get("/admin/pyq-stats")
 async def admin_pyq_stats(_: None = Depends(verify_admin)):

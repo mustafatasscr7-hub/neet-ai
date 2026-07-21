@@ -482,9 +482,12 @@
 
     <div class="input-area" id="inputArea" style="display:none">
 <div class="input-wrapper">
+       <div id="usageWarning" style="display:none;padding:6px;margin-bottom:6px;font-size:11px;color:#888;text-align:center;">
+          <span data-i18n="chat.doubtsLeftWarning">Doubts left today</span>
+        </div>
        <div id="limitBanner" style="display:none;border-bottom:1px solid #1e1e1e;padding:10px 6px;margin-bottom:6px;align-items:center;justify-content:space-between;gap:12px;">
-          <span style="font-size:12px;color:#666;" data-i18n="chat.dailyLimitReached">⚡ Daily limit reached — resets at midnight</span>
-          <button onclick="alert('Subscription coming soon!')" style="background:linear-gradient(135deg,#4f8ef7,#7c3aed);border:none;color:white;padding:5px 14px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;font-family:Inter,sans-serif;white-space:nowrap;flex-shrink:0;" data-i18n="chat.upgradeToPro">Upgrade to Pro →</button>
+          <span id="limitBannerText" style="font-size:12px;color:#666;" data-i18n="chat.dailyLimitReached">⚡ Daily limit reached — resets at midnight</span>
+          <button id="limitBannerBtn" onclick="window.location.href='./pricing.html'" style="background:linear-gradient(135deg,#4f8ef7,#7c3aed);border:none;color:white;padding:5px 14px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;font-family:Inter,sans-serif;white-space:nowrap;flex-shrink:0;" data-i18n="chat.upgradeToPro">Upgrade to Pro →</button>
         </div>
         <div id="attachment-preview-inner"></div>
         <div class="input-row">
@@ -526,6 +529,7 @@
   <script>
     const SUPABASE_URL = 'https://hvhnfttrfouajlyhvunq.supabase.co'
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh2aG5mdHRyZm91YWpseWh2dW5xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg5NDI1NTIsImV4cCI6MjA5NDUxODU1Mn0.8RaSu5yiTpQCEUGKrFO2y6oiRXSqdBehIz933j9Z7WA'
+    const API_BASE = 'https://neet-ai-production.up.railway.app'
     const { createClient } = supabase
     const client = createClient(SUPABASE_URL, SUPABASE_KEY)
     async function updateStreak() {
@@ -1053,11 +1057,22 @@ let selectedImages = [];
               solDiv.style.display = 'block';
               solDiv.innerHTML = '<span class="muted-text">AI is solving this question...</span>';
               try {
-                const res = await fetch('https://neet-ai-production.up.railway.app/solve', {
+                const { data: { session } } = await client.auth.getSession();
+                const res = await fetch(`${API_BASE}/solve`, {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ question: q.question, option_a: q.option_a, option_b: q.option_b, option_c: q.option_c, option_d: q.option_d, correct_answer: q.correct_answer, language: getLang() })
+                  body: JSON.stringify({ question: q.question, option_a: q.option_a, option_b: q.option_b, option_c: q.option_c, option_d: q.option_d, correct_answer: q.correct_answer, language: getLang(), user_id: session?.user?.id || '' })
                 });
+                if (res.status === 402) {
+                  const guest = !session;
+                  const link = guest ? './login.html' : './pricing.html';
+                  solDiv.innerHTML = `<span style="color:#ef4444;">${t('chat', guest ? 'guestLimitReachedMessage' : 'limitReachedMessage')} <a href="${link}">${t('chat', guest ? 'login' : 'upgradeToPro')}</a></span>`;
+                  solBtn.textContent = '💡 Show Solution';
+                  solBtn.disabled = false;
+                  refreshUsageBanner();
+                  return;
+                }
+                if (!res.ok) throw new Error('solve failed');
                 const data = await res.json();
                 solDiv.innerHTML = parseWithMath(data.solution);
                 solved = true;
@@ -1172,7 +1187,7 @@ let selectedImages = [];
             pyqBtn.disabled = true;
             pyqBtn.innerHTML = '⏳ Searching PYQs...';
             try {
-              const res = await fetch('https://neet-ai-production.up.railway.app/pyq', {
+              const res = await fetch(`${API_BASE}/pyq`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ text: userQuestion })
@@ -1513,7 +1528,7 @@ function plainTextFromMarkdown(text) {
 
       let title = firstMessage.substring(0, 35) + '...';
       try {
-        const res = await fetch('https://neet-ai-production.up.railway.app/title', {
+        const res = await fetch(`${API_BASE}/title`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text: firstMessage, language: getLang() })
@@ -1610,44 +1625,109 @@ function plainTextFromMarkdown(text) {
       showWelcome();
     });
 
+    // Daily usage banner: reads usage_log/user_plan directly (RLS allows reading only your own
+    // rows) for display purposes only -- real enforcement is server-side in server.py, so this
+    // can't be used to bypass anything, it just decides what to show.
+    const DAILY_TOKEN_BUDGET_FREE = 37000;  // must match server.py's constant
+    const DAILY_TOKEN_BUDGET_GUEST = 5000; // must match server.py's constant
+    const AVG_TOKENS_PER_DOUBT = 2440;     // rough display-only estimate, not the real enforcement
+    const WARNING_THRESHOLD_DOUBTS = 3;
+
+    function getISTDateString() {
+      // Fixed +5:30 offset (India has no DST) -- must mirror server.py's IST math exactly,
+      // NOT plain toISOString().split('T')[0] (that's UTC date, not IST date).
+      const IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000;
+      return new Date(Date.now() + IST_OFFSET_MS).toISOString().split('T')[0];
+    }
+
+    function setSendEnabled(enabled) {
+      const btn = document.getElementById('sendBtn');
+      if (!btn) return;
+      btn.disabled = !enabled;
+      btn.style.opacity = enabled ? '' : '0.4';
+      btn.style.cursor = enabled ? '' : 'not-allowed';
+    }
+
+    // Shared by both the logged-in and guest paths below: same thresholds, different budget
+    // number and different call-to-action on the hard-block banner (login vs upgrade).
+    function applyUsageDisplay(used, budget, isGuest) {
+      const warningEl = document.getElementById('usageWarning');
+      const limitEl = document.getElementById('limitBanner');
+      const limitText = document.getElementById('limitBannerText');
+      const limitBtn = document.getElementById('limitBannerBtn');
+
+      if (used >= budget) {
+        limitText.textContent = t('chat', isGuest ? 'guestLimitReached' : 'dailyLimitReached');
+        limitBtn.textContent = t('chat', isGuest ? 'login' : 'upgradeToPro');
+        limitBtn.onclick = function() { window.location.href = isGuest ? './login.html' : './pricing.html'; };
+        limitEl.style.display = 'flex';
+        warningEl.style.display = 'none';
+        setSendEnabled(false);
+        return;
+      }
+
+      const doubtsLeft = Math.floor((budget - used) / AVG_TOKENS_PER_DOUBT);
+      limitEl.style.display = 'none';
+      setSendEnabled(true);
+      if (doubtsLeft <= WARNING_THRESHOLD_DOUBTS) {
+        warningEl.querySelector('span').textContent = t('chat', 'doubtsLeftWarning').replace('{n}', localizeNum(doubtsLeft));
+        warningEl.style.display = 'block';
+      } else {
+        warningEl.style.display = 'none';
+      }
+    }
+
+    // Folds any guest usage from this browser's IP into the now-logged-in user's budget for
+    // today, so exhausting the guest limit and then logging in doesn't grant a second, separate
+    // allowance on top of the real free-tier one. Safe to call on every page load (idempotent --
+    // the server zeroes the guest row after the first successful merge).
+    async function mergeGuestUsage(userId) {
+      try {
+        await fetch(`${API_BASE}/merge-guest-usage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_id: userId })
+        });
+      } catch (e) { /* best-effort -- a failed merge just means refreshUsageBanner reflects pre-merge state */ }
+    }
+
+    async function refreshUsageBanner() {
+      const warningEl = document.getElementById('usageWarning');
+      const limitEl = document.getElementById('limitBanner');
+      const { data: { session } } = await client.auth.getSession();
+
+      if (!session) {
+        // No account, so no RLS-scoped row to read directly -- ask the server, which knows the
+        // real connecting IP (the only identity a guest has here).
+        try {
+          const res = await fetch(`${API_BASE}/guest-usage-status`);
+          const data = await res.json();
+          applyUsageDisplay(data.tokens_used || 0, data.budget || DAILY_TOKEN_BUDGET_GUEST, true);
+        } catch (e) {
+          warningEl.style.display = 'none'; limitEl.style.display = 'none'; setSendEnabled(true);
+        }
+        return;
+      }
+
+      const { data: planRow } = await client.from('user_plan').select('plan').eq('user_id', session.user.id).single();
+      if (planRow && planRow.plan && planRow.plan !== 'free') {
+        warningEl.style.display = 'none';
+        limitEl.style.display = 'none';
+        setSendEnabled(true);
+        return;
+      }
+
+      const { data: usageRow } = await client.from('usage_log').select('tokens_used')
+        .eq('user_id', session.user.id).eq('usage_date', getISTDateString()).single();
+      const used = usageRow ? usageRow.tokens_used : 0;
+      applyUsageDisplay(used, DAILY_TOKEN_BUDGET_FREE, false);
+    }
+
  async function sendMessage() {
       if (isStreaming) return;
       const text = input.value.trim();
       if (!text && selectedImages.length === 0 && !selectedPDF) return;
 
-      // Check usage limit
-      const { data: { session } } = await client.auth.getSession();
-      if (session) {
-        const today = new Date().toISOString().split('T')[0];
-        const { data: usage } = await client.from('usage_limits')
-          .select('message_count')
-          .eq('user_id', session.user.id)
-          .eq('reset_date', today)
-          .single();
-
-        const FREE_LIMIT = 999;
-        const count = usage ? usage.message_count : 0;
-
-        if (count >= FREE_LIMIT) {
-
-          document.getElementById('limitBanner').style.display = 'flex';
-          document.getElementById('sendBtn').disabled = true;
-          document.getElementById('sendBtn').style.opacity = '0.4';
-          document.getElementById('sendBtn').style.cursor = 'not-allowed';
-          return;
-        }
-
-        // Increment count
-        if (usage) {
-          await client.from('usage_limits')
-            .update({ message_count: count + 1 })
-            .eq('user_id', session.user.id)
-            .eq('reset_date', today);
-        } else {
-          await client.from('usage_limits')
-            .insert({ user_id: session.user.id, message_count: 1, reset_date: today });
-        }
-      }
       const welcome = document.getElementById('welcome');
       if (welcome) welcome.remove();
       inputArea.style.display = 'block';
@@ -1718,7 +1798,7 @@ function plainTextFromMarkdown(text) {
           requestBody.pdf = options.pdf;
         }
 
-        const response = await fetch('https://neet-ai-production.up.railway.app/chat', {
+        const response = await fetch(`${API_BASE}/chat`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(requestBody),
@@ -1726,6 +1806,21 @@ function plainTextFromMarkdown(text) {
         });
 
         if (typingRow.parentNode === chatWindow) chatWindow.removeChild(typingRow);
+
+        if (!response.ok) {
+          if (response.status === 402) {
+            await refreshUsageBanner();
+            addMessageRow('ai', t('chat', session ? 'limitReachedMessage' : 'guestLimitReachedMessage'));
+          } else {
+            addMessageRow('ai', 'Something went wrong. Please try again.');
+          }
+          isStreaming = false;
+          streamController = null;
+          document.getElementById('sendIcon').style.display = 'block';
+          document.getElementById('stopIcon').style.display = 'none';
+          scrollBottom();
+          return;
+        }
 
         const aiIndex = currentConversation.length;
         const aiRow = document.createElement('div');
@@ -1771,7 +1866,7 @@ function plainTextFromMarkdown(text) {
           pyqBtn.disabled = true;
           pyqBtn.innerHTML = '⏳ Searching PYQs...';
           try {
-            const res = await fetch('https://neet-ai-production.up.railway.app/pyq', {
+            const res = await fetch(`${API_BASE}/pyq`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ text: questionText })
@@ -1801,6 +1896,7 @@ function plainTextFromMarkdown(text) {
         if (sessionAfter && conv && conv.supabaseId) {
           await client.from('chats').update({ messages: currentConversation }).eq('id', conv.supabaseId).eq('user_id', sessionAfter.user.id);
         }
+        refreshUsageBanner();
 
       } catch (error) {
         if (error.name !== 'AbortError') {
@@ -1824,6 +1920,7 @@ function plainTextFromMarkdown(text) {
         const name = user.user_metadata.full_name || user.email;
         const initial = name[0].toUpperCase();
         document.querySelector('.profile-name').textContent = name;
+        mergeGuestUsage(user.id).then(refreshUsageBanner);
         updateStreak().then(() => {
   client.from('user_streaks').select('current_streak').eq('user_id', user.id).single().then(({ data }) => {
     if (data && data.current_streak > 0) {
@@ -2323,7 +2420,7 @@ function openSettings() {
 
    
    setInterval(() => {
-  fetch('https://neet-ai-production.up.railway.app/health').catch(() => {});
+  fetch(`${API_BASE}/health`).catch(() => {});
 }, 300000);
 
   </script>

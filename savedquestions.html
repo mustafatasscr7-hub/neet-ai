@@ -216,11 +216,21 @@
       solDiv.style.display = 'block';
       solDiv.innerHTML = `<span style="color:#888;">${t('pyqbank','aiSolving')}</span>`;
       try {
+        const { data: { session } } = await client.auth.getSession();
         const res = await fetch('https://neet-ai-production.up.railway.app/solve', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ question: q.question, option_a: q.option_a, option_b: q.option_b, option_c: q.option_c, option_d: q.option_d, correct_answer: q.correct_answer, language: getLang() })
+          body: JSON.stringify({ question: q.question, option_a: q.option_a, option_b: q.option_b, option_c: q.option_c, option_d: q.option_d, correct_answer: q.correct_answer, language: getLang(), user_id: session?.user?.id || '' })
         });
+        if (res.status === 402) {
+          const guest = !session;
+          const link = guest ? './login.html' : './pricing.html';
+          solDiv.innerHTML = `<span style="color:#ef4444;">${t('chat', guest ? 'guestLimitReachedMessage' : 'limitReachedMessage')} <a href="${link}">${t('chat', guest ? 'login' : 'upgradeToPro')}</a></span>`;
+          btn.textContent = t('pyqbank','showSolution');
+          btn.disabled = false;
+          return;
+        }
+        if (!res.ok) throw new Error('solve failed');
         const data = await res.json();
         solDiv.innerHTML = parseWithMath(data.solution);
         btn.textContent = t('pyqbank','hideSolution');
