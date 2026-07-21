@@ -257,7 +257,9 @@ ADMIN_HEADERS = {
 from datetime import datetime, timezone, timedelta
 
 IST = timezone(timedelta(hours=5, minutes=30))  # fixed offset: India has no DST
-DAILY_TOKEN_BUDGET_FREE = 37000  # ~15 doubts/day at a ~60/40 Haiku/Sonnet blended mix
+DAILY_TOKEN_BUDGET_FREE = 20000  # ~8 doubts/day blended, ~4 if all heavy Sonnet numericals --
+                                  # lowered from 37000 after real heavy usage showed the blended
+                                  # average understates worst-case cost per user
 
 def _ist_today() -> str:
     return datetime.now(timezone.utc).astimezone(IST).date().isoformat()

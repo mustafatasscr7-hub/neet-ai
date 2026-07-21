@@ -1628,7 +1628,7 @@ function plainTextFromMarkdown(text) {
     // Daily usage banner: reads usage_log/user_plan directly (RLS allows reading only your own
     // rows) for display purposes only -- real enforcement is server-side in server.py, so this
     // can't be used to bypass anything, it just decides what to show.
-    const DAILY_TOKEN_BUDGET_FREE = 37000;  // must match server.py's constant
+    const DAILY_TOKEN_BUDGET_FREE = 20000;  // must match server.py's constant
     const DAILY_TOKEN_BUDGET_GUEST = 5000; // must match server.py's constant
     const AVG_TOKENS_PER_DOUBT = 2440;     // rough display-only estimate, not the real enforcement
     const WARNING_THRESHOLD_DOUBTS = 3;
@@ -1640,6 +1640,21 @@ function plainTextFromMarkdown(text) {
       return new Date(Date.now() + IST_OFFSET_MS).toISOString().split('T')[0];
     }
 
+    function getMsUntilISTMidnight() {
+      const IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000;
+      const shiftedNow = new Date(Date.now() + IST_OFFSET_MS); // IST wall-clock, read via UTC getters
+      const msSinceISTMidnight = shiftedNow.getUTCHours() * 3600000 + shiftedNow.getUTCMinutes() * 60000
+        + shiftedNow.getUTCSeconds() * 1000 + shiftedNow.getUTCMilliseconds();
+      return 86400000 - msSinceISTMidnight;
+    }
+
+    function formatCountdown(ms) {
+      const totalMinutes = Math.max(0, Math.floor(ms / 60000));
+      const hours = Math.floor(totalMinutes / 60);
+      const minutes = totalMinutes % 60;
+      return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
+    }
+
     function setSendEnabled(enabled) {
       const btn = document.getElementById('sendBtn');
       if (!btn) return;
@@ -1649,15 +1664,26 @@ function plainTextFromMarkdown(text) {
     }
 
     // Shared by both the logged-in and guest paths below: same thresholds, different budget
-    // number and different call-to-action on the hard-block banner (login vs upgrade).
+    // number and different call-to-action on the hard-block banner (login vs upgrade). Caches
+    // its inputs so the countdown ticker (below) can re-render just the time remaining every
+    // minute without re-fetching usage data that hasn't actually changed.
+    let usageDisplayState = null;
     function applyUsageDisplay(used, budget, isGuest) {
+      usageDisplayState = { used, budget, isGuest };
+      renderUsageDisplay();
+    }
+
+    function renderUsageDisplay() {
+      if (!usageDisplayState) return;
+      const { used, budget, isGuest } = usageDisplayState;
       const warningEl = document.getElementById('usageWarning');
       const limitEl = document.getElementById('limitBanner');
       const limitText = document.getElementById('limitBannerText');
       const limitBtn = document.getElementById('limitBannerBtn');
+      const countdown = t('chat', 'resetsIn').replace('{time}', formatCountdown(getMsUntilISTMidnight()));
 
       if (used >= budget) {
-        limitText.textContent = t('chat', isGuest ? 'guestLimitReached' : 'dailyLimitReached');
+        limitText.textContent = t('chat', isGuest ? 'guestLimitReached' : 'dailyLimitReached') + ' — ' + countdown;
         limitBtn.textContent = t('chat', isGuest ? 'login' : 'upgradeToPro');
         limitBtn.onclick = function() { window.location.href = isGuest ? './login.html' : './pricing.html'; };
         limitEl.style.display = 'flex';
@@ -1670,12 +1696,17 @@ function plainTextFromMarkdown(text) {
       limitEl.style.display = 'none';
       setSendEnabled(true);
       if (doubtsLeft <= WARNING_THRESHOLD_DOUBTS) {
-        warningEl.querySelector('span').textContent = t('chat', 'doubtsLeftWarning').replace('{n}', localizeNum(doubtsLeft));
+        warningEl.querySelector('span').textContent = t('chat', 'doubtsLeftWarning').replace('{n}', localizeNum(doubtsLeft)) + ' — ' + countdown;
         warningEl.style.display = 'block';
       } else {
         warningEl.style.display = 'none';
       }
     }
+
+    // Ticks the countdown text every minute without touching usage data -- only the token
+    // counts change on real API calls (already handled by refreshUsageBanner() call sites),
+    // the reset time just counts down on its own.
+    setInterval(renderUsageDisplay, 60000);
 
     // Folds any guest usage from this browser's IP into the now-logged-in user's budget for
     // today, so exhausting the guest limit and then logging in doesn't grant a second, separate
