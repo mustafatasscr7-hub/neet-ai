@@ -62,6 +62,10 @@ openai_client = openai.OpenAI(api_key=OPENAI_KEY)
 # ~0.2-0.3s, then establishing that fresh connection to Anthropic's API added another 1-2s+ on
 # top, sometimes far more), on top of whatever Anthropic's own response time actually is.
 anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
+# Async client used only for the complexity-classification call below -- that call needs to
+# genuinely run concurrently with the NCERT/student-context fetch (asyncio.gather), and the
+# sync client would block the event loop for its duration if awaited naively.
+anthropic_async_client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_KEY)
 import requests as http_requests
 from process_pyq_vision import scan_pdf_bytes
 
@@ -197,6 +201,7 @@ class PyqQuestionCreate(BaseModel):
     correct_answer: str = ""
     question_type: str = "mcq"
     year: Optional[int] = None
+    source_tag: Optional[str] = None
     class_: Optional[int] = Field(None, alias="class")
     has_diagram: bool = False
     diagram_url: Optional[str] = None
@@ -504,6 +509,41 @@ async def get_student_context(user_id: str) -> str:
 async def _empty_str():
     return ""
 
+async def _return_true():
+    return True
+
+CLASSIFIER_FALLBACK_KEYWORDS = ["explain", "compare", "solve", "mechanism", "difference", "derive", "describe", "elaborate", "distinguish", "why", "how does", "what happens", "process of", "steps", "diagram"]
+
+async def classify_complexity(text: str) -> bool:
+    """True routes to Sonnet, False to Haiku. Runs inside the same asyncio.gather as the
+    NCERT/student-context fetch (see stream_response), so this adds ~zero wall-clock time in
+    the common case rather than stacking an extra round-trip in front of the real answer.
+    Replaces the old keyword/length heuristic as the primary signal -- real chat history
+    showed length alone was a bad proxy: any multiple-choice-formatted question exceeds 12
+    words purely from listing 4 options, regardless of whether the underlying problem is a
+    one-step calculation or a genuine multi-concept trap. Falls back to that old heuristic
+    only if this classification call itself errors, rather than defaulting every failure onto
+    the more expensive model."""
+    try:
+        message = await anthropic_async_client.messages.create(
+            model="claude-haiku-4-5",
+            max_tokens=5,
+            system=(
+                "You are a routing classifier for NEET exam doubts. Decide SIMPLE or COMPLEX:\n"
+                "SIMPLE = a single direct formula or fact with no unusual edge case, even if "
+                "the question text itself is long (e.g. padded with multiple-choice options).\n"
+                "COMPLEX = needs multi-step derivation, combines multiple concepts, OR is a "
+                "known trap/exception a student could easily get wrong with a naive approach "
+                "(e.g. sign conventions, specific-distance optics behavior, reaction exceptions).\n"
+                "Respond with ONLY one word: simple or complex."
+            ),
+            messages=[{"role": "user", "content": text[:1500]}]
+        )
+        answer = message.content[0].text.strip().lower()
+        return "complex" in answer
+    except Exception:
+        return any(kw in text.lower() for kw in CLASSIFIER_FALLBACK_KEYWORDS) or len(text.split()) > 12
+
 async def stream_response(text: str, history: list = [], images: list = [], pdf: str = None, answer_style: str = "detailed", student_name: str = "", language: str = "en", user_id: str = "", personalize: bool = True, skip_cache: bool = False, ip: str = ""):
     images = (images or [])[:3]
     import hashlib
@@ -528,10 +568,14 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
         if cached:
             yield cached[0]["answer"]
             return
-    # Student context doesn't depend on the NCERT search (or vice versa) -- run them
-    # concurrently via asyncio.gather instead of stacking their latency sequentially.
+    # Student context, NCERT search, and model-complexity classification are all independent
+    # of each other -- run them concurrently instead of stacking their latency sequentially.
+    # Image/PDF attachments always get Sonnet: the classifier only sees text, and interpreting
+    # an attached diagram/handwritten problem warrants the stronger model regardless of how
+    # little text comes with it, so skip the classification call entirely in that case.
     student_context_coro = get_student_context(user_id) if (personalize and user_id) else _empty_str()
-    results, student_context = await asyncio.gather(search_ncert(text), student_context_coro)
+    complexity_coro = _return_true() if (images or pdf) else classify_complexity(text)
+    results, student_context, is_complex = await asyncio.gather(search_ncert(text), student_context_coro, complexity_coro)
 
     if results:
         context = "\n\n".join([
@@ -585,8 +629,6 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
     else:
         messages.append({"role": "user", "content": user_message})
     try:
-        complex_keywords = ["explain", "compare", "solve", "mechanism", "difference", "derive", "describe", "elaborate", "distinguish", "why", "how does", "what happens", "process of", "steps", "diagram"]
-        is_complex = any(kw in text.lower() for kw in complex_keywords) or len(text.split()) > 12
         selected_model = "claude-sonnet-4-5" if is_complex else "claude-haiku-4-5"
         import sys
         print(f"MODEL SELECTED: {selected_model}", flush=True)
@@ -1186,6 +1228,7 @@ async def admin_pyq_bulk_create(body: PyqBulkCreate, _: None = Depends(verify_ad
         "correct_answer": q.correct_answer,
         "question_type": q.question_type,
         "year": q.year,
+        "source_tag": q.source_tag,
         "class": q.class_,
         "has_diagram": q.has_diagram,
         "diagram_url": q.diagram_url,

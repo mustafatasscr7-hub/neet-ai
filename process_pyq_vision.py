@@ -26,7 +26,14 @@ For EACH complete question visible on this page, extract:
 - option_a, option_b, option_c, option_d (exact text of each option)
 - question_type: one of "mcq", "match_column", "assertion_reason", "statement_based"
 - has_diagram: true if the question references a figure, diagram, image, or shows a chemical structure/graph/apparatus, otherwise false
-- year (if a NEET year tag like [NEET-2024] appears directly next to this question, else null)
+- year (the 4-digit exam year, extracted from any bracketed exam-source tag near this question
+  regardless of exact wording or exam name -- e.g. [NEET-2024], [NEET 2018], [AIPMT 1990],
+  [AIPMT Screening 2008], [Re-NEET 2024] all count. Extract just the year as an integer. If no
+  such tag appears, use null -- do not guess a year from context.)
+- source_tag (the FULL exam-source tag text near this question, verbatim, without the brackets
+  -- e.g. "AIPMT 1990", "NEET 2018", "AIPMT Screening 2008", "Re-NEET 2024". This is the same
+  tag `year` was extracted from, just kept in full instead of reduced to a number. If no such
+  tag appears, use null.)
 
 Do NOT guess or infer a chapter name - that is handled separately. Do NOT attempt to determine the correct answer, even if you can solve the question - leave that to a human reviewer.
 
@@ -43,7 +50,8 @@ Return ONLY a JSON array, no other text. Example:
     "option_d": "...",
     "question_type": "mcq",
     "has_diagram": false,
-    "year": 2024
+    "year": 2024,
+    "source_tag": "AIPMT Screening 2008"
   }}
 ]
 """
@@ -123,7 +131,14 @@ For EACH complete question in this text, extract:
 - option_a, option_b, option_c, option_d (exact text of each option)
 - question_type: one of "mcq", "match_column", "assertion_reason", "statement_based"
 - has_diagram: true only if the {DIAGRAM_MARKER} marker is positioned within or immediately next to THIS question, otherwise false
-- year (if a NEET year tag like [NEET-2024] appears directly next to this question, else null)
+- year (the 4-digit exam year, extracted from any bracketed exam-source tag near this question
+  regardless of exact wording or exam name -- e.g. [NEET-2024], [NEET 2018], [AIPMT 1990],
+  [AIPMT Screening 2008], [Re-NEET 2024] all count. Extract just the year as an integer. If no
+  such tag appears, use null -- do not guess a year from context.)
+- source_tag (the FULL exam-source tag text near this question, verbatim, without the brackets
+  -- e.g. "AIPMT 1990", "NEET 2018", "AIPMT Screening 2008", "Re-NEET 2024". This is the same
+  tag `year` was extracted from, just kept in full instead of reduced to a number. If no such
+  tag appears, use null.)
 
 Do NOT guess or infer a chapter name - that is handled separately. Do NOT attempt to determine
 the correct answer, even if an answer key or answer text appears elsewhere in this text or you
@@ -142,7 +157,8 @@ Return ONLY a JSON array, no other text. Example:
     "option_d": "...",
     "question_type": "mcq",
     "has_diagram": false,
-    "year": 2024
+    "year": 2024,
+    "source_tag": "AIPMT Screening 2008"
   }}
 ]
 
@@ -273,6 +289,7 @@ def scan_pdf_bytes(pdf_bytes, subject, max_workers=5):
                 "question_type": q.get("question_type", "mcq"),
                 "has_diagram": bool(q.get("has_diagram", False)),
                 "year": q.get("year"),
+                "source_tag": q.get("source_tag"),
                 "source_page": page_num
             })
     flagged_pages.sort(key=lambda f: f["page"])
@@ -294,6 +311,7 @@ def insert_question(q, subject="Biology"):
         "question_type": q.get("question_type", "mcq"),
         "chapter": q.get("chapter"),
         "year": q.get("year"),
+        "source_tag": q.get("source_tag"),
         "subject": subject,
         "has_diagram": q.get("has_diagram", False),
         "is_active": True

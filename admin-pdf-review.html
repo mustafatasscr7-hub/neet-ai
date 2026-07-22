@@ -52,6 +52,7 @@
   .action-btn:hover { border-color: #4f8ef7; color: #4f8ef7; }
   .action-btn.primary { background: #4f8ef7; border-color: #4f8ef7; color: white; }
   .action-btn.primary:hover { background: #3b7de8; }
+  .action-btn.danger:hover { border-color: #ef4444; color: #ef4444; }
 
   .q-block { background: #111; border: 1px solid #1e1e1e; border-radius: 10px; padding: 16px; margin-bottom: 14px; }
   .q-block.is-saved { opacity: 0.55; }
@@ -135,6 +136,7 @@
     <div class="stat"><b id="statDiagramCount">0</b> flagged with a diagram</div>
     <div class="stat"><b id="statSavedCount">0</b> saved</div>
     <div class="spacer"></div>
+    <button type="button" class="action-btn danger" onclick="clearAllBlocks()">Clear All</button>
     <button type="button" class="action-btn" onclick="addMissedQuestion()">+ Add Missed Question</button>
     <button type="button" class="action-btn primary" onclick="saveAllReviewed()">Save All Reviewed</button>
   </div>
@@ -590,6 +592,7 @@
       <div class="q-meta-grid">
         <div class="q-field"><label>Answer</label><input type="text" maxlength="1" id="ans-${b.id}" value="${escapeHtml(b.correct_answer)}" placeholder="a/b/c/d"/></div>
         <div class="q-field"><label>Year</label><input type="number" id="year-${b.id}" value="${b.year != null ? b.year : ''}"/></div>
+        <div class="q-field"><label>Source tag</label><input type="text" id="source-tag-${b.id}" value="${escapeHtml(b.source_tag || '')}" placeholder="e.g. AIPMT Screening 2008"/></div>
         <div class="q-field"><label>Class</label>
           <select id="class-${b.id}">
             <option value="">—</option>
@@ -692,6 +695,7 @@
       option_d: document.getElementById('opt-d-' + id).value.trim(),
       correct_answer: document.getElementById('ans-' + id).value.trim().toLowerCase(),
       year: document.getElementById('year-' + id).value ? parseInt(document.getElementById('year-' + id).value, 10) : null,
+      source_tag: document.getElementById('source-tag-' + id).value.trim() || null,
       class_: document.getElementById('class-' + id).value ? parseInt(document.getElementById('class-' + id).value, 10) : null,
       chapter: document.getElementById('chapter-' + id).value || null,
       has_diagram: document.getElementById('hasdiagram-' + id).checked
@@ -864,6 +868,20 @@
     renderAllBlocks();
     updateSummaryBar();
     document.getElementById('summaryBar').style.display = blocks.length ? 'flex' : 'none';
+  }
+
+  function clearAllBlocks() {
+    if (blocks.length === 0) return;
+    const unsavedCount = blocks.filter(b => !b.saved).length;
+    const msg = unsavedCount > 0
+      ? `Clear all ${blocks.length} question block(s)? ${unsavedCount} of them are not saved yet and will be lost.`
+      : `Clear all ${blocks.length} question block(s)?`;
+    if (!confirm(msg)) return;
+    blocks = [];
+    renderAllBlocks();
+    updateSummaryBar();
+    document.getElementById('summaryBar').style.display = 'none';
+    document.getElementById('flaggedPagesBanner').style.display = 'none';
   }
 
   function addMissedQuestion() {
