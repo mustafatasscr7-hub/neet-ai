@@ -1047,7 +1047,9 @@ const TRANSLATIONS = {
     en: {
       headerTitle: 'PYQ Bank',
       pageTitle: 'PYQ Bank',
+      pageSubtitle: 'Practice previous year questions by subject, class, and chapter',
       clickToBrowse: 'Click to browse',
+      questionsAvailable: '{n} Questions',
       classWord: 'Class',
       qsSuffix: 'Qs',
       comingSoon: 'Coming soon',
@@ -1070,7 +1072,9 @@ const TRANSLATIONS = {
     hi: {
       headerTitle: 'PYQ बैंक',
       pageTitle: 'PYQ बैंक',
+      pageSubtitle: 'विषय, कक्षा और अध्याय के अनुसार पिछले वर्ष के प्रश्नों का अभ्यास करें',
       clickToBrowse: 'ब्राउज़ करने के लिए क्लिक करें',
+      questionsAvailable: '{n} प्रश्न',
       classWord: 'कक्षा',
       qsSuffix: 'प्रश्न',
       comingSoon: 'जल्द आ रहा है',

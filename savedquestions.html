@@ -76,7 +76,10 @@
     .sol-btn:hover { background: #a78bfa20; }
     .del-btn { background: transparent; border: 1px solid #ef4444; color: #ef4444; padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 12px; font-family: 'Inter', sans-serif; transition: all 0.2s; }
     .del-btn:hover { background: #ef444420; }
-    .sol-div { display: none; margin-top: 12px; padding: 12px; background: #1a1a2e; border-radius: 6px; border: 1px solid #3a3a5e; color: #c4c4c4; line-height: 1.7; font-size: 13px; }
+    .sol-div { display: none; margin-top: 12px; padding: 12px; background: #1a1a2e; border-radius: 6px; border: 1px solid #3a3a5e; color: #c4c4c4; line-height: 1.7; font-size: 13px; overflow-x: auto; word-wrap: break-word; }
+    .sol-div ul, .sol-div ol { margin: 0; padding-left: 20px; }
+    .sol-div p { margin: 0 0 8px 0; }
+    .sol-div p:last-child { margin-bottom: 0; }
 
     .loading { text-align: center; padding: 60px; color: #555; }
     .spinner { width: 32px; height: 32px; border: 3px solid #1e1e1e; border-top-color: #4f8ef7; border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 16px; }
@@ -123,6 +126,7 @@
   <script>
     const SUPABASE_URL = 'https://hvhnfttrfouajlyhvunq.supabase.co';
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh2aG5mdHRyZm91YWpseWh2dW5xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg5NDI1NTIsImV4cCI6MjA5NDUxODU1Mn0.8RaSu5yiTpQCEUGKrFO2y6oiRXSqdBehIz933j9Z7WA';
+    const API_BASE = 'https://neet-ai-production.up.railway.app';
     const { createClient } = supabase;
     const client = createClient(SUPABASE_URL, SUPABASE_KEY);
 
@@ -139,6 +143,45 @@
         try { return katex.renderToString(math.trim(), { displayMode: false, throwOnError: false }); } catch(e) { return _; }
       });
       return DOMPurify.sanitize(marked.parse(html));
+    }
+
+    // Same boundary-safe streaming render used in chat.html/pyqbank.html: render everything
+    // up to the last complete KaTeX/markdown boundary through the real pipeline, show the
+    // still-open trailing fragment as escaped plain text so raw "$$"/"**" never flashes
+    // mid-stream. Keep this as one throttled full-write, not a split-node caching scheme.
+    function findSafeRenderBoundary(text) {
+      let i = 0;
+      let lastSafe = 0;
+      let inDisplay = false, inInline = false, inBold = false;
+      while (i < text.length) {
+        if (!inInline && !inBold && text.startsWith('$$', i)) {
+          inDisplay = !inDisplay;
+          i += 2;
+        } else if (!inDisplay && !inBold && text[i] === '$') {
+          inInline = !inInline;
+          i += 1;
+        } else if (!inDisplay && !inInline && text.startsWith('**', i)) {
+          inBold = !inBold;
+          i += 2;
+        } else {
+          i += 1;
+        }
+        if (!inDisplay && !inInline && !inBold) lastSafe = i;
+      }
+      return lastSafe;
+    }
+
+    function escapeStreamingTail(text) {
+      return text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/\n/g, '<br>');
+    }
+
+    function renderStreamingText(el, fullText) {
+      const safeLen = findSafeRenderBoundary(fullText);
+      el.innerHTML = parseWithMath(fullText.slice(0, safeLen)) + escapeStreamingTail(fullText.slice(safeLen));
     }
 
     function formatDate(iso) {
@@ -217,7 +260,7 @@
       solDiv.innerHTML = `<span style="color:#888;">${t('pyqbank','aiSolving')}</span>`;
       try {
         const { data: { session } } = await client.auth.getSession();
-        const res = await fetch('https://neet-ai-production.up.railway.app/solve', {
+        const res = await fetch(`${API_BASE}/solve`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ question: q.question, option_a: q.option_a, option_b: q.option_b, option_c: q.option_c, option_d: q.option_d, correct_answer: q.correct_answer, language: getLang(), user_id: session?.user?.id || '' })
@@ -231,8 +274,27 @@
           return;
         }
         if (!res.ok) throw new Error('solve failed');
-        const data = await res.json();
-        solDiv.innerHTML = parseWithMath(data.solution);
+        solDiv.innerHTML = '';
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let fullText = '';
+        let lastRenderTime = 0;
+        const RENDER_THROTTLE_MS = 100;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const chunk = decoder.decode(value);
+          for (let ci = 0; ci < chunk.length; ci++) {
+            fullText += chunk[ci];
+            const now = Date.now();
+            if (now - lastRenderTime >= RENDER_THROTTLE_MS) {
+              renderStreamingText(solDiv, fullText);
+              lastRenderTime = now;
+            }
+            await new Promise(r => setTimeout(r, 1));
+          }
+        }
+        solDiv.innerHTML = parseWithMath(fullText);
         btn.textContent = t('pyqbank','hideSolution');
         btn.disabled = false;
       } catch(e) {
