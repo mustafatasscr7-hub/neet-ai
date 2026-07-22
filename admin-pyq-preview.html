@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta name="robots" content="noindex, nofollow"/>
+  <title>PYQ Preview — NEET-AI</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Inter', sans-serif; background: #0d0d0d; color: #ececec; min-height: 100vh; }
+
+    /* Password gate -- same pattern as admin-dashboard.html / admin-pdf-review.html */
+    #gateOverlay { position: fixed; inset: 0; background: #0d0d0d; display: flex; align-items: center; justify-content: center; z-index: 999; }
+    .gate-box { background: #111; border: 1px solid #2a2a2a; border-radius: 14px; padding: 32px; width: 100%; max-width: 340px; text-align: center; }
+    .gate-box h1 { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
+    .gate-box p { font-size: 12px; color: #666; margin-bottom: 20px; }
+    .gate-box input { width: 100%; background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 8px; padding: 10px 14px; color: #ececec; font-size: 14px; font-family: 'Inter', sans-serif; outline: none; margin-bottom: 12px; }
+    .gate-box input:focus { border-color: #4f8ef7; }
+    .gate-box button { width: 100%; background: #4f8ef7; border: none; border-radius: 8px; padding: 10px; color: white; font-size: 13px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
+    .gate-box button:hover { background: #3b7de8; }
+    .gate-error { font-size: 12px; color: #ef4444; margin-top: 10px; min-height: 14px; }
+
+    #dashboard { display: none; max-width: 900px; margin: 0 auto; padding: 24px; }
+    .db-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+    .db-header h1 { font-size: 18px; font-weight: 700; }
+    .db-header h1 span { color: #4f8ef7; }
+    .db-header p { font-size: 12px; color: #666; margin-top: 2px; }
+    .logout-btn { background: transparent; border: 1px solid #2a2a2a; color: #888; padding: 6px 14px; border-radius: 8px; font-size: 12px; cursor: pointer; font-family: 'Inter', sans-serif; }
+    .logout-btn:hover { color: #ccc; border-color: #3a3a3a; }
+
+    .filter-bar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 16px; background: #111; border: 1px solid #1e1e1e; border-radius: 10px; padding: 12px; }
+    .filter-bar select, .filter-bar input[type="text"] {
+      background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 8px; padding: 8px 12px;
+      color: #ececec; font-size: 13px; font-family: 'Inter', sans-serif; outline: none;
+    }
+    .filter-bar select:focus, .filter-bar input:focus { border-color: #4f8ef7; }
+    .filter-bar input[type="text"] { flex: 1; min-width: 200px; }
+    .filter-bar label.check-label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #888; white-space: nowrap; cursor: pointer; }
+    .result-count { font-size: 12px; color: #666; width: 100%; }
+
+    /* Question card -- copied from pyqbank.html's own styling so this is a faithful preview,
+       not just a similar-looking one. */
+    .question-card { background: #111; border: 1px solid #1e1e1e; border-radius: 12px; padding: 20px; margin-bottom: 12px; }
+    .q-meta { font-size: 11px; color: #555; margin-bottom: 10px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    .q-year { color: #4f8ef7; font-weight: 600; }
+    .q-text { font-size: 14px; color: #ececec; line-height: 1.7; margin-bottom: 16px; }
+    .q-options { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
+    .q-option { padding: 10px 14px; border-radius: 8px; font-size: 13px; background: #1a1a1a; color: #888; border: 1px solid #2a2a2a; display: flex; gap: 10px; }
+    .q-option.correct { background: #4ade8020; border-color: #4ade80; color: #4ade80; }
+    .q-diagram-img { max-width: 100%; border-radius: 8px; margin: 12px 0; border: 1px solid #2a2a2a; display: block; }
+
+    /* Admin-only extras -- not part of pyqbank.html's own styling */
+    .q-admin-bar { display: flex; align-items: center; gap: 8px; margin-top: 14px; padding-top: 14px; border-top: 1px dashed #2a2a2a; flex-wrap: wrap; }
+    .q-admin-id { font-size: 10px; color: #444; font-family: monospace; }
+    .q-flag { font-size: 11px; padding: 3px 9px; border-radius: 20px; font-weight: 600; background: #ef444420; color: #ef4444; }
+    .q-inactive-flag { font-size: 11px; padding: 3px 9px; border-radius: 20px; font-weight: 600; background: #66666620; color: #888; }
+    .q-delete-btn { background: transparent; border: 1px solid #ef4444; color: #ef4444; padding: 5px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; font-family: 'Inter', sans-serif; margin-left: auto; }
+    .q-delete-btn:hover { background: #ef444420; }
+
+    .pagination { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 16px; }
+    .pagination button { background: #1a1a1a; border: 1px solid #2a2a2a; color: #ececec; padding: 6px 14px; border-radius: 6px; font-size: 12px; cursor: pointer; font-family: 'Inter', sans-serif; }
+    .pagination button:hover:not(:disabled) { border-color: #4f8ef7; color: #4f8ef7; }
+    .pagination button:disabled { opacity: 0.3; cursor: not-allowed; }
+    .pagination .page-info { font-size: 12px; color: #666; }
+
+    .loading-text, .empty-text { text-align: center; padding: 40px; color: #555; font-size: 13px; }
+  </style>
+</head>
+<body>
+
+  <div id="gateOverlay">
+    <div class="gate-box">
+      <h1>PYQ Preview</h1>
+      <p>Internal tool — enter admin password</p>
+      <input type="password" id="gatePassword" placeholder="Password" autocomplete="off"/>
+      <button onclick="verifyPassword()">Enter</button>
+      <div class="gate-error" id="gateError"></div>
+    </div>
+  </div>
+
+  <div id="dashboard">
+    <div class="db-header">
+      <div>
+        <h1>NEET<span>-AI</span> PYQ Preview</h1>
+        <p>Shows questions exactly as students see them on PYQ Bank -- for checking uploads, not editing.</p>
+      </div>
+      <button class="logout-btn" onclick="logout()">Log out</button>
+    </div>
+
+    <div class="filter-bar">
+      <select id="filterSubject" onchange="onSubjectChange()">
+        <option value="">All Subjects</option>
+        <option value="Biology">Biology</option>
+        <option value="Physics">Physics</option>
+        <option value="Chemistry">Chemistry</option>
+      </select>
+      <select id="filterChapter" onchange="onFilterChange()">
+        <option value="">All Chapters</option>
+      </select>
+      <input type="text" id="filterSearch" placeholder="Search question text..." oninput="onSearchInput()"/>
+      <label class="check-label"><input type="checkbox" id="filterDiagram" onchange="onFilterChange()"/> Only with uploaded diagram</label>
+      <div class="result-count" id="resultCount"></div>
+    </div>
+
+    <div id="resultsArea"><div class="loading-text">Loading...</div></div>
+
+    <div class="pagination">
+      <button id="prevPageBtn" onclick="changePage(-1)">← Prev</button>
+      <span class="page-info" id="pageInfo">Page 1</span>
+      <button id="nextPageBtn" onclick="changePage(1)">Next →</button>
+    </div>
+  </div>
+
+  <script>
+    const API_BASE = 'https://neet-ai-production.up.railway.app';
+    let adminKey = sessionStorage.getItem('admin_key') || '';
+    let currentPage = 1;
+    let totalRows = 0;
+    let currentRows = [];
+
+    function authHeaders(extra) {
+      return Object.assign({ 'X-Admin-Key': adminKey }, extra || {});
+    }
+
+    async function verifyPassword() {
+      const pw = document.getElementById('gatePassword').value;
+      const errEl = document.getElementById('gateError');
+      errEl.textContent = '';
+      try {
+        const res = await fetch(`${API_BASE}/admin/verify`, { method: 'POST', headers: authHeaders({ 'X-Admin-Key': pw }) });
+        if (res.status === 200) {
+          adminKey = pw;
+          sessionStorage.setItem('admin_key', adminKey);
+          enterDashboard();
+        } else if (res.status === 429) {
+          const data = await res.json().catch(() => ({}));
+          errEl.textContent = data.detail || 'Too many failed attempts. Try again later.';
+        } else {
+          errEl.textContent = 'Wrong password.';
+        }
+      } catch (e) {
+        errEl.textContent = 'Could not reach server.';
+      }
+    }
+
+    document.getElementById('gatePassword').addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') verifyPassword();
+    });
+
+    function logout() {
+      sessionStorage.removeItem('admin_key');
+      adminKey = '';
+      document.getElementById('dashboard').style.display = 'none';
+      document.getElementById('gateOverlay').style.display = 'flex';
+      document.getElementById('gatePassword').value = '';
+    }
+
+    async function enterDashboard() {
+      document.getElementById('gateOverlay').style.display = 'none';
+      document.getElementById('dashboard').style.display = 'block';
+      loadResults();
+    }
+
+    async function onSubjectChange() {
+      const subject = document.getElementById('filterSubject').value;
+      const chapterSel = document.getElementById('filterChapter');
+      chapterSel.innerHTML = '<option value="">All Chapters</option>';
+      if (subject) {
+        try {
+          const res = await fetch(`${API_BASE}/admin/pyq-chapters?subject=${encodeURIComponent(subject)}`, { headers: authHeaders() });
+          const data = await res.json();
+          (data.chapters || []).forEach(ch => {
+            const opt = document.createElement('option');
+            opt.value = ch;
+            opt.textContent = ch;
+            chapterSel.appendChild(opt);
+          });
+        } catch (e) {}
+      }
+      currentPage = 1;
+      loadResults();
+    }
+
+    function onFilterChange() {
+      currentPage = 1;
+      loadResults();
+    }
+
+    let searchDebounce = null;
+    function onSearchInput() {
+      clearTimeout(searchDebounce);
+      searchDebounce = setTimeout(() => { currentPage = 1; loadResults(); }, 400);
+    }
+
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str == null ? '' : String(str);
+      return div.innerHTML;
+    }
+
+    // Same math rendering as pyqbank.html -- questions/options containing $...$ KaTeX markup
+    // (e.g. chemical formulas) need this to actually look right, not just show raw text.
+    function parseWithMath(text) {
+      if (!text) return '';
+      let html = text;
+      html = html.replace(/\$\$([^$]+)\$\$/g, function(_, math) {
+        try { return '<div style="text-align:center;margin:8px 0;">' + katex.renderToString(math.trim(), { displayMode: true, throwOnError: false }) + '</div>'; } catch(e) { return _; }
+      });
+      html = html.replace(/\$([^$\n]+)\$/g, function(_, math) {
+        try { return katex.renderToString(math.trim(), { displayMode: false, throwOnError: false }); } catch(e) { return _; }
+      });
+      return DOMPurify.sanitize(marked.parse(html));
+    }
+
+    async function loadResults() {
+      const area = document.getElementById('resultsArea');
+      area.innerHTML = '<div class="loading-text">Loading...</div>';
+
+      const params = new URLSearchParams();
+      const subject = document.getElementById('filterSubject').value;
+      const chapter = document.getElementById('filterChapter').value;
+      const search = document.getElementById('filterSearch').value.trim();
+      const onlyDiagram = document.getElementById('filterDiagram').checked;
+      if (subject) params.set('subject', subject);
+      if (chapter) params.set('chapter', chapter);
+      if (search) params.set('search', search);
+      if (onlyDiagram) params.set('with_uploaded_diagram', 'true');
+      params.set('page', currentPage);
+      params.set('sort_by', 'created_at');
+      params.set('sort_dir', 'desc');
+      params.set('full', 'true');
+
+      try {
+        const res = await fetch(`${API_BASE}/admin/pyq-search?${params.toString()}`, { headers: authHeaders() });
+        if (res.status === 401) return logout();
+        const data = await res.json();
+        if (data.error) {
+          area.innerHTML = `<div class="empty-text">Error: ${escapeHtml(data.error)}</div>`;
+          return;
+        }
+        currentRows = data.rows || [];
+        totalRows = data.total || 0;
+        renderResults();
+        renderPagination();
+        document.getElementById('resultCount').textContent = `${totalRows} matching row${totalRows === 1 ? '' : 's'}`;
+      } catch (e) {
+        area.innerHTML = '<div class="empty-text">Could not reach server.</div>';
+      }
+    }
+
+    function computeFlags(q) {
+      const flags = [];
+      if (!q.correct_answer || !['a', 'b', 'c', 'd'].includes(q.correct_answer.toLowerCase().trim())) {
+        flags.push('No valid correct answer set');
+      }
+      if (!q.chapter || !q.chapter.trim()) {
+        flags.push('No chapter tagged');
+      }
+      const hasAnyUploadedDiagram = !!(q.diagram_url || q.option_a_diagram_url || q.option_b_diagram_url || q.option_c_diagram_url || q.option_d_diagram_url);
+      if (q.has_diagram && !hasAnyUploadedDiagram) {
+        flags.push('Diagram expected but none uploaded');
+      }
+      return flags;
+    }
+
+    function renderResults() {
+      const area = document.getElementById('resultsArea');
+      if (currentRows.length === 0) {
+        area.innerHTML = '<div class="empty-text">No rows match these filters.</div>';
+        return;
+      }
+      area.innerHTML = currentRows.map(q => {
+        const correctLetter = (q.correct_answer || '').toLowerCase().trim();
+        const opts = ['a', 'b', 'c', 'd'].map(opt => {
+          if (!q['option_' + opt]) return '';
+          const isCorrect = opt === correctLetter;
+          const optImg = q['option_' + opt + '_diagram_url'] ? `<img class="q-diagram-img" src="${escapeHtml(q['option_' + opt + '_diagram_url'])}">` : '';
+          return `<div class="q-option${isCorrect ? ' correct' : ''}"><strong>${opt.toUpperCase()})</strong> <span>${parseWithMath(q['option_' + opt])}${optImg}</span></div>`;
+        }).join('');
+        const flags = computeFlags(q);
+        return `
+          <div class="question-card">
+            <div class="q-meta">
+              <span class="q-year">${q.year || ''}</span>
+              <span>${escapeHtml(q.subject || '')}</span>
+              ${q.chapter ? `<span>${escapeHtml(q.chapter)}</span>` : ''}
+              ${q.source_tag ? `<span>${escapeHtml(q.source_tag)}</span>` : ''}
+              ${!q.is_active ? '<span class="q-inactive-flag">Inactive</span>' : ''}
+            </div>
+            <div class="q-text">${parseWithMath(q.question)}</div>
+            ${q.diagram_url ? `<img class="q-diagram-img" src="${escapeHtml(q.diagram_url)}">` : ''}
+            <div class="q-options">${opts}</div>
+            <div class="q-admin-bar">
+              <span class="q-admin-id">${escapeHtml(q.id)}</span>
+              ${flags.map(f => `<span class="q-flag">${escapeHtml(f)}</span>`).join('')}
+              <button class="q-delete-btn" onclick="deleteQuestion('${q.id}')">🗑 Delete</button>
+            </div>
+          </div>`;
+      }).join('');
+    }
+
+    async function deleteQuestion(id) {
+      if (!confirm('Permanently delete this question from Supabase? This cannot be undone from here.')) return;
+      try {
+        const res = await fetch(`${API_BASE}/admin/pyq-delete/${id}`, { method: 'DELETE', headers: authHeaders() });
+        if (res.status === 401) return logout();
+        const data = await res.json();
+        if (data.error) { alert('Delete failed: ' + data.error); return; }
+        currentRows = currentRows.filter(r => r.id !== id);
+        totalRows = Math.max(0, totalRows - 1);
+        renderResults();
+        renderPagination();
+        document.getElementById('resultCount').textContent = `${totalRows} matching row${totalRows === 1 ? '' : 's'}`;
+      } catch (e) {
+        alert('Delete failed — check connection.');
+      }
+    }
+
+    function renderPagination() {
+      const totalPages = Math.max(1, Math.ceil(totalRows / 50));
+      document.getElementById('pageInfo').textContent = `Page ${currentPage} of ${totalPages}`;
+      document.getElementById('prevPageBtn').disabled = currentPage <= 1;
+      document.getElementById('nextPageBtn').disabled = currentPage >= totalPages;
+    }
+
+    function changePage(delta) {
+      const totalPages = Math.max(1, Math.ceil(totalRows / 50));
+      const next = currentPage + delta;
+      if (next < 1 || next > totalPages) return;
+      currentPage = next;
+      loadResults();
+    }
+
+    if (adminKey) {
+      enterDashboard();
+    }
+  </script>
+</body>
+</html>

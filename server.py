@@ -980,7 +980,7 @@ def health():
 
 # ---------- Admin: PYQ data management (admin-dashboard.html only, not linked from any student page) ----------
 
-ADMIN_SORT_COLUMNS = {"id", "subject", "chapter", "question", "correct_answer", "is_active", "year"}
+ADMIN_SORT_COLUMNS = {"id", "subject", "chapter", "question", "correct_answer", "is_active", "year", "created_at"}
 
 def _admin_count(params):
     resp = http_requests.get(
@@ -1055,9 +1055,11 @@ async def admin_pyq_search(
     chapter: str = None,
     search: str = None,
     is_active: str = None,
+    with_uploaded_diagram: str = None,
     page: int = 1,
     sort_by: str = "id",
     sort_dir: str = "asc",
+    full: bool = False,
     _: None = Depends(verify_admin)
 ):
     try:
@@ -1067,8 +1069,18 @@ async def admin_pyq_search(
         sort_col = sort_by if sort_by in ADMIN_SORT_COLUMNS else "id"
         sort_direction = "desc" if sort_dir == "desc" else "asc"
 
+        # full=true is used by the question-preview tool, which needs everything a student would
+        # actually see (options, diagrams, source tag) -- the plain-table admin dashboard doesn't
+        # use any of that, so its requests stay on the smaller default select.
+        select_fields = (
+            "id,subject,chapter,question,option_a,option_b,option_c,option_d,correct_answer,"
+            "is_active,year,source_tag,class,has_diagram,diagram_url,option_a_diagram_url,"
+            "option_b_diagram_url,option_c_diagram_url,option_d_diagram_url,created_at"
+            if full else
+            "id,subject,chapter,question,correct_answer,is_active,year"
+        )
         params = {
-            "select": "id,subject,chapter,question,correct_answer,is_active,year",
+            "select": select_fields,
             "order": f"{sort_col}.{sort_direction}",
             "limit": page_size,
             "offset": offset
@@ -1079,6 +1091,17 @@ async def admin_pyq_search(
             params["chapter"] = f"eq.{chapter}"
         if is_active in ("true", "false"):
             params["is_active"] = f"eq.{is_active}"
+        if with_uploaded_diagram == "true":
+            # An actually-uploaded image, not just the AI's has_diagram guess from extraction --
+            # that flag just means "this looked like it needed one," independent of whether
+            # anyone's uploaded the image yet. neq. (not equal to empty string) rather than
+            # not.is.null: some rows have '' instead of NULL for a never-uploaded slot, and
+            # NULL <> '' is not TRUE in SQL's 3-valued logic, so neq. alone excludes both.
+            params["or"] = (
+                "(diagram_url.neq.,option_a_diagram_url.neq.,"
+                "option_b_diagram_url.neq.,option_c_diagram_url.neq.,"
+                "option_d_diagram_url.neq.)"
+            )
         if search:
             params["question"] = f"ilike.*{search}*"
 
@@ -1144,6 +1167,29 @@ async def admin_pyq_bulk_update(body: AdminPyqBulkUpdate, _: None = Depends(veri
         if response.status_code >= 400:
             return {"error": response.text}
         return {"updated_count": len(response.json())}
+    except Exception as e:
+        return {"error": str(e)}
+
+# Real, permanent delete -- not a soft is_active=false toggle. saved_questions and
+# personalised_test_sets both reference pyq.id directly, so a deleted row can leave a dangling
+# reference there (saved_questions keeps its own copy of the text so it still displays fine;
+# a personalised test would just quietly serve one fewer question than originally seeded).
+# Accepted for a single, deliberate, admin-initiated cleanup -- re-extracting and re-uploading a
+# corrected version afterward is the intended workflow, not editing in place.
+@app.delete("/admin/pyq-delete/{pyq_id}")
+async def admin_pyq_delete(pyq_id: str, _: None = Depends(verify_admin)):
+    try:
+        response = http_requests.delete(
+            f"{SUPABASE_URL}/rest/v1/pyq",
+            headers={**ADMIN_HEADERS, "Prefer": "return=representation"},
+            params={"id": f"eq.{pyq_id}"}
+        )
+        if response.status_code >= 400:
+            return {"error": response.text}
+        deleted = response.json()
+        if not deleted:
+            return {"error": "Row not found"}
+        return {"success": True}
     except Exception as e:
         return {"error": str(e)}
 
