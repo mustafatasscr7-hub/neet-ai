@@ -794,8 +794,8 @@
     const result = checkDuplicates(existingRows, text, scopeChapter);
     const warnEl = document.getElementById('dup-warning-' + id);
     if (result.exactMatch) {
-      warnEl.textContent = 'This looks identical to an existing question in the bank — edit it or remove this block before saving.';
-      warnEl.className = 'q-dup-warning block';
+      warnEl.textContent = 'This looks identical to an existing question in the bank — you can still save it (click Save twice), then clean it up later if it really is a duplicate.';
+      warnEl.className = 'q-dup-warning warn';
     } else if (result.similar.length > 0) {
       warnEl.textContent = `This is ${Math.round(result.similar[0].overlap * 100)}% similar to an existing question in this chapter — double check it isn't a duplicate before saving.`;
       warnEl.className = 'q-dup-warning warn';
@@ -914,10 +914,13 @@
     const result = checkDuplicates(existingRows, fields.question, fields.chapter);
     const btn = document.getElementById('save-btn-' + id);
 
-    if (result.exactMatch) {
+    if (result.exactMatch && !block._dupConfirmed) {
+      block._dupConfirmed = true;
+      btn.textContent = 'Save anyway?';
+      btn.classList.add('confirm-again');
       const warnEl = document.getElementById('dup-warning-' + id);
-      warnEl.textContent = 'Cannot save — this is an exact duplicate of an existing question.';
-      warnEl.className = 'q-dup-warning block';
+      warnEl.textContent = 'This is an exact duplicate of an existing question — click again to save anyway.';
+      warnEl.className = 'q-dup-warning warn';
       return;
     }
     if (result.similar.length > 0 && !block._dupConfirmed) {
@@ -980,12 +983,13 @@
     const toSave = [];
     const skipped = [];
     let warnedCount = 0;
+    let dupCount = 0;
     unsaved.forEach(b => {
       const fields = readBlockFromDom(b.id);
       if (!fields.question) { skipped.push(b.id); return; }
       const result = checkDuplicates(existingRows, fields.question, fields.chapter);
-      if (result.exactMatch) { skipped.push(b.id); return; }
-      if (result.similar.length > 0) warnedCount++;
+      if (result.exactMatch) dupCount++;
+      else if (result.similar.length > 0) warnedCount++;
       const payload = Object.assign({ subject: currentSubject }, fields);
       payload.diagram_url = b.diagram_url;
       payload.option_a_diagram_url = b.option_a_diagram_url;
@@ -996,7 +1000,7 @@
     });
 
     if (toSave.length === 0) {
-      alert('Nothing to save — every remaining block is either blank or an exact duplicate.');
+      alert('Nothing to save — every remaining block is blank.');
       return;
     }
 
@@ -1024,7 +1028,8 @@
       });
       updateSummaryBar();
       let msg = `Saved ${toSave.length} question(s).`;
-      if (skipped.length) msg += ` Skipped ${skipped.length} (blank or exact duplicate).`;
+      if (skipped.length) msg += ` Skipped ${skipped.length} blank block(s).`;
+      if (dupCount) msg += ` ${dupCount} were exact duplicates of existing questions — saved anyway, delete the extras later.`;
       if (warnedCount) msg += ` ${warnedCount} were saved despite a similarity warning — worth a second look.`;
       alert(msg);
     } catch (e) {
