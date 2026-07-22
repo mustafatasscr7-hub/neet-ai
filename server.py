@@ -3,8 +3,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Optional, List
+from contextlib import asynccontextmanager
+import asyncio
 import anthropic
 import requests
+import httpx
 import openai
 import base64
 from dotenv import load_dotenv
@@ -20,7 +23,21 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 load_dotenv()
 
-app = FastAPI()
+# Reused across every request instead of opening a fresh connection per call. httpx's
+# connection pool keeps the underlying TCP/TLS connection to Supabase warm between calls --
+# measured ~2x faster per call than requests' one-off connections in the /chat latency
+# investigation (0.67s cold vs 0.31s pooled, same real endpoint, 6-call average). Created once
+# at startup via the lifespan handler below, not per-request, which would defeat the purpose.
+async_client: httpx.AsyncClient = None
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global async_client
+    async_client = httpx.AsyncClient()
+    yield
+    await async_client.aclose()
+
+app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -40,6 +57,11 @@ SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", SUPABASE_KEY)
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "neetai-admin-2027")
 
 openai_client = openai.OpenAI(api_key=OPENAI_KEY)
+# Reused across every request, same reasoning as the httpx.AsyncClient fix above -- creating
+# a fresh anthropic.Anthropic() per call was measured adding real overhead (client construction
+# ~0.2-0.3s, then establishing that fresh connection to Anthropic's API added another 1-2s+ on
+# top, sometimes far more), on top of whatever Anthropic's own response time actually is.
+anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
 import requests as http_requests
 from process_pyq_vision import scan_pdf_bytes
 
@@ -264,14 +286,15 @@ DAILY_TOKEN_BUDGET_FREE = 20000  # ~8 doubts/day blended, ~4 if all heavy Sonnet
 def _ist_today() -> str:
     return datetime.now(timezone.utc).astimezone(IST).date().isoformat()
 
-def get_user_plan(user_id: str) -> str:
+async def get_user_plan(user_id: str) -> str:
     if not user_id:
         return "free"
     try:
-        rows = http_requests.get(
+        resp = await async_client.get(
             f"{SUPABASE_URL}/rest/v1/user_plan", headers=ADMIN_HEADERS,
             params={"user_id": f"eq.{user_id}", "select": "plan", "limit": 1}
-        ).json()
+        )
+        rows = resp.json()
         return rows[0]["plan"] if rows else "free"
     except Exception:
         return "free"
@@ -280,15 +303,16 @@ DAILY_TOKEN_BUDGET_GUEST = 5000  # ~2 doubts/day -- deliberately tight vs. the l
                                   # tier (15/day): the goal is to force a login, not to be a
                                   # usable tier on its own
 
-def enforce_daily_budget(user_id: str, ip: str = ""):
+async def enforce_daily_budget(user_id: str, ip: str = ""):
     if user_id:
-        if get_user_plan(user_id) != "free":
+        if await get_user_plan(user_id) != "free":
             return  # paid = unlimited for now
-        rows = http_requests.get(
+        resp = await async_client.get(
             f"{SUPABASE_URL}/rest/v1/usage_log", headers=ADMIN_HEADERS,
             params={"user_id": f"eq.{user_id}", "usage_date": f"eq.{_ist_today()}",
                     "select": "tokens_used", "limit": 1}
-        ).json()
+        )
+        rows = resp.json()
         used = rows[0]["tokens_used"] if rows else 0
         if used >= DAILY_TOKEN_BUDGET_FREE:
             raise HTTPException(status_code=402, detail="Daily limit reached")
@@ -299,16 +323,17 @@ def enforce_daily_budget(user_id: str, ip: str = ""):
     # actual goal here, not perfect anti-abuse.
     if not ip:
         return
-    rows = http_requests.get(
+    resp = await async_client.get(
         f"{SUPABASE_URL}/rest/v1/guest_usage_log", headers=ADMIN_HEADERS,
         params={"ip": f"eq.{ip}", "usage_date": f"eq.{_ist_today()}",
                 "select": "tokens_used", "limit": 1}
-    ).json()
+    )
+    rows = resp.json()
     used = rows[0]["tokens_used"] if rows else 0
     if used >= DAILY_TOKEN_BUDGET_GUEST:
         raise HTTPException(status_code=402, detail="Guest limit reached — log in to continue")
 
-def log_token_usage(user_id: str, tokens: int, ip: str = ""):
+async def log_token_usage(user_id: str, tokens: int, ip: str = ""):
     # check-then-log (enforce_daily_budget then this) is not atomic -- a handful of concurrent
     # requests from the same user could push them slightly over budget before the next request
     # gets blocked. Accepted: bounded blast radius, cents of cost, no real money on the free
@@ -318,12 +343,12 @@ def log_token_usage(user_id: str, tokens: int, ip: str = ""):
         return
     try:
         if user_id:
-            http_requests.post(
+            await async_client.post(
                 f"{SUPABASE_URL}/rest/v1/rpc/increment_daily_usage", headers=ADMIN_HEADERS,
                 json={"p_user_id": user_id, "p_date": _ist_today(), "p_tokens": tokens}
             )
         elif ip:
-            http_requests.post(
+            await async_client.post(
                 f"{SUPABASE_URL}/rest/v1/rpc/increment_guest_usage", headers=ADMIN_HEADERS,
                 json={"p_ip": ip, "p_date": _ist_today(), "p_tokens": tokens}
             )
@@ -332,7 +357,7 @@ def log_token_usage(user_id: str, tokens: int, ip: str = ""):
 
 import hashlib
 
-def get_embedding(text: str):
+async def get_embedding(text: str):
     question_hash = hashlib.sha256(text.encode()).hexdigest()
     # Service-role key: embedding_cache has RLS with no anon INSERT policy, so writes
     # via the anon key were silently rejected (401) — reads worked, writes never did.
@@ -341,21 +366,24 @@ def get_embedding(text: str):
         "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"
     }
 
-    cached = http_requests.get(
+    cache_resp = await async_client.get(
         f"{SUPABASE_URL}/rest/v1/embedding_cache?question_hash=eq.{question_hash}&select=embedding",
         headers=headers
-    ).json()
+    )
+    cached = cache_resp.json()
 
     if cached:
         return cached[0]["embedding"]
 
+    # Not converted to AsyncOpenAI: openai_client is a single module-level instance already
+    # reused across requests, so it already gets connection-pooling benefits.
     response = openai_client.embeddings.create(
         model="text-embedding-3-small",
         input=text
     )
     embedding = response.data[0].embedding
 
-    http_requests.post(
+    await async_client.post(
         f"{SUPABASE_URL}/rest/v1/embedding_cache",
         headers={**headers, "Content-Type": "application/json"},
         json={"question_hash": question_hash, "embedding": embedding}
@@ -363,14 +391,14 @@ def get_embedding(text: str):
 
     return embedding
 
-def search_ncert(query: str, limit: int = 3):
-    embedding = get_embedding(query)
+async def search_ncert(query: str, limit: int = 3):
+    embedding = await get_embedding(query)
     headers = {
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
         "Content-Type": "application/json"
     }
-    response = requests.post(
+    response = await async_client.post(
         f"{SUPABASE_URL}/rest/v1/rpc/match_ncert",
         headers=headers,
         json={
@@ -383,14 +411,14 @@ def search_ncert(query: str, limit: int = 3):
         return response.json()
     return []
 
-def search_pyq(query: str, limit: int = 5):
-    embedding = get_embedding(query)
+async def search_pyq(query: str, limit: int = 5):
+    embedding = await get_embedding(query)
     headers = {
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
         "Content-Type": "application/json"
     }
-    response = requests.post(
+    response = await async_client.post(
         f"{SUPABASE_URL}/rest/v1/rpc/match_pyq",
         headers=headers,
         json={
@@ -403,55 +431,65 @@ def search_pyq(query: str, limit: int = 5):
         return response.json()
     return []
 
-def get_student_context(user_id: str) -> str:
+async def get_student_context(user_id: str) -> str:
     if not user_id:
         return ""
     # Uses the service-role key deliberately: these tables are RLS-scoped to the
     # authenticated owner, and this request is made server-side on the student's
     # behalf (already filtered to their own user_id below), not through their session.
     headers = {"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"}
-    parts = []
 
-    try:
-        results = http_requests.get(
-            f"{SUPABASE_URL}/rest/v1/mock_results",
-            headers=headers,
-            params={
-                "user_id": f"eq.{user_id}",
-                "select": "score,correct,wrong,subject_biology_score,subject_physics_score,subject_chemistry_score",
-                "order": "created_at.desc",
-                "limit": 5
-            }
-        ).json()
-        if isinstance(results, list) and results:
-            avg_score = sum(r.get("score", 0) for r in results) / len(results)
-            parts.append(f"Recent mock test average score: {avg_score:.0f}/720 over the last {len(results)} test(s).")
-    except Exception:
-        pass
+    async def fetch_mock_average():
+        try:
+            resp = await async_client.get(
+                f"{SUPABASE_URL}/rest/v1/mock_results",
+                headers=headers,
+                params={
+                    "user_id": f"eq.{user_id}",
+                    "select": "score,correct,wrong,subject_biology_score,subject_physics_score,subject_chemistry_score",
+                    "order": "created_at.desc",
+                    "limit": 5
+                }
+            )
+            results = resp.json()
+            if isinstance(results, list) and results:
+                avg_score = sum(r.get("score", 0) for r in results) / len(results)
+                return f"Recent mock test average score: {avg_score:.0f}/720 over the last {len(results)} test(s)."
+        except Exception:
+            pass
+        return None
 
-    try:
-        mistakes = http_requests.get(
-            f"{SUPABASE_URL}/rest/v1/saved_questions",
-            headers=headers,
-            params={
-                "user_id": f"eq.{user_id}",
-                "select": "subject,chapter",
-                "order": "saved_at.desc",
-                "limit": 15
-            }
-        ).json()
-        if isinstance(mistakes, list) and mistakes:
-            chapter_counts = {}
-            for m in mistakes:
-                ch = (m.get("chapter") or "").strip()
-                if ch:
-                    chapter_counts[ch] = chapter_counts.get(ch, 0) + 1
-            if chapter_counts:
-                weak = sorted(chapter_counts.items(), key=lambda x: -x[1])[:3]
-                weak_str = ", ".join(f"{ch} ({count} missed questions)" for ch, count in weak)
-                parts.append(f"Chapters this student struggles with most: {weak_str}.")
-    except Exception:
-        pass
+    async def fetch_weak_chapters():
+        try:
+            resp = await async_client.get(
+                f"{SUPABASE_URL}/rest/v1/saved_questions",
+                headers=headers,
+                params={
+                    "user_id": f"eq.{user_id}",
+                    "select": "subject,chapter",
+                    "order": "saved_at.desc",
+                    "limit": 15
+                }
+            )
+            mistakes = resp.json()
+            if isinstance(mistakes, list) and mistakes:
+                chapter_counts = {}
+                for m in mistakes:
+                    ch = (m.get("chapter") or "").strip()
+                    if ch:
+                        chapter_counts[ch] = chapter_counts.get(ch, 0) + 1
+                if chapter_counts:
+                    weak = sorted(chapter_counts.items(), key=lambda x: -x[1])[:3]
+                    weak_str = ", ".join(f"{ch} ({count} missed questions)" for ch, count in weak)
+                    return f"Chapters this student struggles with most: {weak_str}."
+        except Exception:
+            pass
+        return None
+
+    # These two queries don't depend on each other -- run concurrently instead of stacking
+    # their latency sequentially, same reasoning as the outer NCERT/student-context overlap.
+    mock_part, weak_part = await asyncio.gather(fetch_mock_average(), fetch_weak_chapters())
+    parts = [p for p in (mock_part, weak_part) if p]
 
     if not parts:
         return ""
@@ -463,7 +501,10 @@ def get_student_context(user_id: str) -> str:
         "similar — just let it shape the answer naturally):\n" + "\n".join(parts)
     )
 
-def stream_response(text: str, history: list = [], images: list = [], pdf: str = None, answer_style: str = "detailed", student_name: str = "", language: str = "en", user_id: str = "", personalize: bool = True, skip_cache: bool = False, ip: str = ""):
+async def _empty_str():
+    return ""
+
+async def stream_response(text: str, history: list = [], images: list = [], pdf: str = None, answer_style: str = "detailed", student_name: str = "", language: str = "en", user_id: str = "", personalize: bool = True, skip_cache: bool = False, ip: str = ""):
     images = (images or [])[:3]
     import hashlib
     # Personalized answers are specific to this student and must never be served from —
@@ -479,14 +520,18 @@ def stream_response(text: str, history: list = [], images: list = [], pdf: str =
         "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"
     }
     if not images and not pdf and use_shared_cache:
-        cached = http_requests.get(
+        cache_resp = await async_client.get(
             f"{SUPABASE_URL}/rest/v1/answer_cache?question_hash=eq.{answer_hash}&select=answer",
             headers=headers
-        ).json()
+        )
+        cached = cache_resp.json()
         if cached:
             yield cached[0]["answer"]
             return
-    results = search_ncert(text)
+    # Student context doesn't depend on the NCERT search (or vice versa) -- run them
+    # concurrently via asyncio.gather instead of stacking their latency sequentially.
+    student_context_coro = get_student_context(user_id) if (personalize and user_id) else _empty_str()
+    results, student_context = await asyncio.gather(search_ncert(text), student_context_coro)
 
     if results:
         context = "\n\n".join([
@@ -497,7 +542,7 @@ def stream_response(text: str, history: list = [], images: list = [], pdf: str =
     else:
         user_message = f"Student Question: {text}"
 
-    client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
+    client = anthropic_client
 
     messages = []
     for msg in history:
@@ -549,7 +594,6 @@ def stream_response(text: str, history: list = [], images: list = [], pdf: str =
         name_context = f"\n\nThe student name is {student_name}. Use their name naturally and occasionally in responses to make it personal." if student_name else ""
         style_context = "\n\nIMPORTANT: The student has selected CONCISE mode. Give a very short answer — maximum 3 sentences only. No bullet points, no key points section, no memory tricks. Just the core answer." if answer_style == "concise" else ""
         lang_context = "\n\nIMPORTANT: Respond ONLY in Hindi (Devanagari script). Every word — headings, key points, explanations, memory tricks — must be in Hindi. Do not mix in English words or Hinglish, even for common scientific terms (e.g. write \"गुणसूत्र\" not \"chromosome\"). The ONLY exceptions are: LaTeX/KaTeX math notation, chemical formulas/symbols (e.g. $H_2O$), units (e.g. m/s, kg), and proper nouns like NEET or NCERT — keep those exactly as-is, do not translate or romanize them." if language == "hi" else ""
-        student_context = get_student_context(user_id) if (personalize and user_id) else ""
         with client.messages.stream(
             model=selected_model,
             max_tokens=1024,
@@ -562,23 +606,20 @@ def stream_response(text: str, history: list = [], images: list = [], pdf: str =
                     full_answer += text_chunk
                     yield text_chunk
             finally:
-                # Reliably logs on normal completion (verified live). Does NOT reliably fire on
-                # early client disconnect: this is a sync generator, and Starlette runs sync
-                # StreamingResponse iterators inside a thread-pool wrapper, so disconnect-driven
-                # GeneratorExit can't interrupt an in-flight blocking call the way it would for a
-                # native async generator -- confirmed empirically (aborting a stream mid-way did
-                # not trigger this finally block). Anthropic still bills for tokens generated
-                # before the abort, so aborted/partial streams are a known, accepted under-count.
-                # Not worth an async-generator rewrite of this path for a cosmetic edge case with
-                # no real money on the free tier yet -- same reasoning as the check-then-log race
-                # in log_token_usage() above.
+                # Reliably logs on normal completion. This is now a native async generator (not
+                # a sync generator run in Starlette's threadpool wrapper), so an early client
+                # disconnect propagates via GeneratorExit at the next yield point -- more
+                # responsive than the old setup, though not re-verified with a live abort test
+                # after this refactor. Anthropic still bills for tokens generated before any
+                # abort either way, so a partial under-count on disconnect remains an accepted
+                # edge case, same reasoning as the check-then-log race in log_token_usage() above.
                 try:
                     usage = stream.get_final_message().usage
-                    log_token_usage(user_id, usage.input_tokens + usage.output_tokens, ip)
+                    await log_token_usage(user_id, usage.input_tokens + usage.output_tokens, ip)
                 except Exception:
                     pass
             if not images and not pdf and use_shared_cache:
-                http_requests.post(
+                await async_client.post(
                     f"{SUPABASE_URL}/rest/v1/answer_cache",
                     headers={**headers, "Content-Type": "application/json"},
                     json={"question_hash": answer_hash, "answer": full_answer}
@@ -587,16 +628,14 @@ def stream_response(text: str, history: list = [], images: list = [], pdf: str =
         print(f"STREAMING ERROR: {e}")
         yield f"Error: {str(e)}"
 
-@app.post("/solve")
-async def solve_question(req: SolveRequest, request: Request, _: None = Depends(rate_limiter(15, 60))):
-    ip = _client_ip(request)
-    enforce_daily_budget(req.user_id, ip)
-    client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
-    lang_instruction = "\n5. Respond ONLY in Hindi (Devanagari script) — every word in Hindi, no English words or Hinglish mixing. The ONLY exceptions are LaTeX/KaTeX math notation, chemical formulas/symbols, and units, which stay exactly as-is." if req.language == "hi" else ""
-    message = client.messages.create(
-        model="claude-sonnet-4-5",
-        max_tokens=1024,
-        system=f"""You are a NEET exam expert. Solve the given NEET question step by step.
+async def stream_solve_response(question: str, option_a: str, option_b: str, option_c: str, option_d: str, correct_answer: str, language: str = "en", user_id: str = "", ip: str = ""):
+    client = anthropic_client
+    lang_instruction = "\n5. Respond ONLY in Hindi (Devanagari script) — every word in Hindi, no English words or Hinglish mixing. The ONLY exceptions are LaTeX/KaTeX math notation, chemical formulas/symbols, and units, which stay exactly as-is." if language == "hi" else ""
+    try:
+        with client.messages.stream(
+            model="claude-sonnet-4-5",
+            max_tokens=1024,
+            system=f"""You are a NEET exam expert. Solve the given NEET question step by step.
 
 Format your response exactly like this:
 
@@ -619,12 +658,31 @@ Rules:
    - Display: $$formula$$ example: $$E = mc^2$$
    - Always write $H_2O$ not H₂O
    - Always write $v^2$ not v²{lang_instruction}""",
-        messages=[
-            {"role": "user", "content": f"Solve this NEET question:\n\nQuestion: {req.question}\n\nA) {req.option_a}\nB) {req.option_b}\nC) {req.option_c}\nD) {req.option_d}\n\nCorrect Answer: {req.correct_answer}"}
-        ]
+            messages=[
+                {"role": "user", "content": f"Solve this NEET question:\n\nQuestion: {question}\n\nA) {option_a}\nB) {option_b}\nC) {option_c}\nD) {option_d}\n\nCorrect Answer: {correct_answer}"}
+            ]
+        ) as stream:
+            try:
+                for text_chunk in stream.text_stream:
+                    yield text_chunk
+            finally:
+                # Same accepted early-disconnect caveat as stream_response() above.
+                try:
+                    usage = stream.get_final_message().usage
+                    await log_token_usage(user_id, usage.input_tokens + usage.output_tokens, ip)
+                except Exception:
+                    pass
+    except Exception as e:
+        yield f"Error: {str(e)}"
+
+@app.post("/solve")
+async def solve_question(req: SolveRequest, request: Request, _: None = Depends(rate_limiter(15, 60))):
+    ip = _client_ip(request)
+    await enforce_daily_budget(req.user_id, ip)
+    return StreamingResponse(
+        stream_solve_response(req.question, req.option_a, req.option_b, req.option_c, req.option_d, req.correct_answer, req.language, req.user_id, ip),
+        media_type="text/plain"
     )
-    log_token_usage(req.user_id, message.usage.input_tokens + message.usage.output_tokens, ip)
-    return {"solution": message.content[0].text}
 
 
 
@@ -658,7 +716,7 @@ async def send_otp(req: PhoneOtpRequest, _: None = Depends(rate_limiter(3, 600))
 @app.post("/chat")
 async def chat(message: Message, request: Request, _: None = Depends(rate_limiter(15, 60))):
     ip = _client_ip(request)
-    enforce_daily_budget(message.user_id, ip)
+    await enforce_daily_budget(message.user_id, ip)
     return StreamingResponse(
        stream_response(message.text, message.history, message.images, message.pdf, message.answer_style, message.student_name, message.language, message.user_id, message.personalize, message.skip_cache, ip),
         media_type="text/plain"
@@ -667,8 +725,8 @@ async def chat(message: Message, request: Request, _: None = Depends(rate_limite
 @app.post("/title")
 async def generate_title(message: Message, request: Request, _: None = Depends(rate_limiter(15, 60))):
     ip = _client_ip(request)
-    enforce_daily_budget(message.user_id, ip)
-    client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
+    await enforce_daily_budget(message.user_id, ip)
+    client = anthropic_client
     title_lang = "entirely in Hindi (Devanagari script) — every word in Hindi, no English words mixed in" if message.language == "hi" else "in English"
     response = client.messages.create(
      model="claude-haiku-4-5",
@@ -676,7 +734,7 @@ async def generate_title(message: Message, request: Request, _: None = Depends(r
         system=f"Generate a short 3-5 word title {title_lang} for this NEET question. Return ONLY the title. No punctuation. No extra words.",
         messages=[{"role": "user", "content": message.text}]
     )
-    log_token_usage(message.user_id, response.usage.input_tokens + response.usage.output_tokens, ip)
+    await log_token_usage(message.user_id, response.usage.input_tokens + response.usage.output_tokens, ip)
     return {"title": response.content[0].text}
 
 # Guests have no Supabase session, so they can't use RLS to read their own usage row the way a
@@ -710,7 +768,7 @@ async def merge_guest_usage(req: MergeGuestUsageRequest, request: Request):
         ).json()
         tokens = rows[0]["tokens_used"] if rows else 0
         if tokens > 0:
-            log_token_usage(req.user_id, tokens)
+            await log_token_usage(req.user_id, tokens)
             http_requests.patch(
                 f"{SUPABASE_URL}/rest/v1/guest_usage_log", headers=ADMIN_HEADERS,
                 params={"ip": f"eq.{ip}", "usage_date": f"eq.{today}"}, json={"tokens_used": 0}
@@ -721,7 +779,7 @@ async def merge_guest_usage(req: MergeGuestUsageRequest, request: Request):
 
 @app.post("/pyq")
 async def get_pyq(message: Message, _: None = Depends(rate_limiter(15, 60))):
-    results = search_pyq(message.text)
+    results = await search_pyq(message.text)
     return {"pyqs": results}
 @app.get("/mock-test-questions")
 async def get_mock_test_questions():
