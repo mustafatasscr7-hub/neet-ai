@@ -76,6 +76,8 @@
     .dup-badge.moderate { background: #66666625; color: #999; }
     .dup-dismiss-btn { background: transparent; border: 1px solid #2a2a2a; color: #888; padding: 5px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; font-family: 'Inter', sans-serif; }
     .dup-dismiss-btn:hover { border-color: #4ade80; color: #4ade80; }
+    .dup-delete-both-btn { background: transparent; border: 1px solid #ef4444; color: #ef4444; padding: 5px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
+    .dup-delete-both-btn:hover { background: #ef444420; }
     .dup-columns { display: flex; gap: 12px; flex-wrap: wrap; }
     .dup-columns .question-card { flex: 1; min-width: 280px; margin-bottom: 0; }
 
@@ -411,7 +413,10 @@
           <div class="dup-pair">
             <div class="dup-pair-header">
               <span class="dup-badge ${badgeClass}">${label}</span>
-              <button type="button" class="dup-dismiss-btn" onclick="dismissDuplicate('${p.a}', '${p.b}')">Not a duplicate — don't show again</button>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                <button type="button" class="dup-dismiss-btn" onclick="dismissDuplicate('${p.a}', '${p.b}')">Not a duplicate — don't show again</button>
+                <button type="button" class="dup-delete-both-btn" onclick="deleteBothInPair('${p.a}', '${p.b}')">🗑 Delete both</button>
+              </div>
             </div>
             <div class="dup-columns">
               ${questionCardHtml(a)}
@@ -439,27 +444,54 @@
       }
     }
 
-    async function deleteQuestion(id) {
-      if (!confirm('Permanently delete this question from Supabase? This cannot be undone from here.')) return;
+    // Shared by deleteQuestion and deleteBothInPair -- no confirm() dialog and no state
+    // mutation of its own, since the two callers need different confirm wording and different
+    // post-delete bookkeeping (single row vs a pair, normal view vs duplicates view).
+    async function deleteOneQuietly(id) {
       try {
         const res = await fetch(`${API_BASE}/admin/pyq-delete/${id}`, { method: 'DELETE', headers: authHeaders() });
-        if (res.status === 401) return logout();
-        if (!res.ok) { alert('Delete failed: ' + await describeHttpError(res)); return; }
+        if (res.status === 401) return { error: 'unauthorized' };
+        if (!res.ok) return { error: await describeHttpError(res) };
         const data = await res.json();
-        if (data.error) { alert('Delete failed: ' + data.error); return; }
-        if (duplicatesMode) {
-          delete duplicateRowsMap[id];
-          duplicatePairs = duplicatePairs.filter(p => p.a !== id && p.b !== id);
-          renderDuplicatePairs(document.getElementById('filterSubject').value);
-        } else {
-          currentRows = currentRows.filter(r => r.id !== id);
-          totalRows = Math.max(0, totalRows - 1);
-          renderResults();
-          renderPagination();
-          document.getElementById('resultCount').textContent = `${totalRows} matching row${totalRows === 1 ? '' : 's'}`;
-        }
+        return data.error ? { error: data.error } : { success: true };
       } catch (e) {
-        alert('Delete failed — check connection.');
+        return { error: 'Could not reach server.' };
+      }
+    }
+
+    async function deleteBothInPair(idA, idB) {
+      if (!confirm('Permanently delete BOTH of these questions from Supabase? This cannot be undone from here.')) return;
+      const [resultA, resultB] = await Promise.all([deleteOneQuietly(idA), deleteOneQuietly(idB)]);
+      if (resultA.error === 'unauthorized' || resultB.error === 'unauthorized') return logout();
+      if (!resultA.error) {
+        delete duplicateRowsMap[idA];
+        duplicatePairs = duplicatePairs.filter(p => p.a !== idA && p.b !== idA);
+      }
+      if (!resultB.error) {
+        delete duplicateRowsMap[idB];
+        duplicatePairs = duplicatePairs.filter(p => p.a !== idB && p.b !== idB);
+      }
+      if (resultA.error || resultB.error) {
+        alert('One or both deletes failed: ' + [resultA.error, resultB.error].filter(Boolean).join(' / '));
+      }
+      renderDuplicatePairs(document.getElementById('filterSubject').value);
+    }
+
+    async function deleteQuestion(id) {
+      if (!confirm('Permanently delete this question from Supabase? This cannot be undone from here.')) return;
+      const result = await deleteOneQuietly(id);
+      if (result.error === 'unauthorized') return logout();
+      if (result.error) { alert('Delete failed: ' + result.error); return; }
+      if (duplicatesMode) {
+        delete duplicateRowsMap[id];
+        duplicatePairs = duplicatePairs.filter(p => p.a !== id && p.b !== id);
+        renderDuplicatePairs(document.getElementById('filterSubject').value);
+      } else {
+        currentRows = currentRows.filter(r => r.id !== id);
+        totalRows = Math.max(0, totalRows - 1);
+        renderResults();
+        renderPagination();
+        document.getElementById('resultCount').textContent = `${totalRows} matching row${totalRows === 1 ? '' : 's'}`;
       }
     }
 
