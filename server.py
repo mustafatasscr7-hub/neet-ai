@@ -1410,6 +1410,21 @@ def admin_pyq_duplicates(threshold: float = 0.5, _: None = Depends(verify_admin)
                 break
             offset += page_size
 
+        # Pairs an admin has already looked at and confirmed aren't real duplicates shouldn't
+        # keep coming back on every future scan. Table may not exist yet (pre-migration) -- treat
+        # that the same as "nothing dismissed" rather than failing the whole scan over it.
+        dismissed = set()
+        try:
+            dismissed_resp = http_requests.get(
+                f"{SUPABASE_URL}/rest/v1/pyq_dismissed_duplicates",
+                headers=ADMIN_HEADERS,
+                params={"select": "id_a,id_b", "limit": 10000}
+            )
+            if dismissed_resp.status_code < 400:
+                dismissed = set((d["id_a"], d["id_b"]) for d in dismissed_resp.json())
+        except Exception:
+            pass
+
         by_subject = {}
         for r in all_rows:
             by_subject.setdefault(r["subject"], []).append(r)
@@ -1439,12 +1454,37 @@ def admin_pyq_duplicates(threshold: float = 0.5, _: None = Depends(verify_admin)
                     union = len(tokens_a | tokens_b)
                     overlap = intersection / union if union else 0
                     if overlap >= threshold:
+                        pair_key = tuple(sorted([row_a["id"], row_b["id"]]))
+                        if pair_key in dismissed:
+                            continue
                         rows_by_id[row_a["id"]] = row_a
                         rows_by_id[row_b["id"]] = row_b
                         pairs.append({"a": row_a["id"], "b": row_b["id"], "overlap": round(overlap, 3), "exact": overlap >= 0.999})
 
         pairs.sort(key=lambda p: p["overlap"], reverse=True)
         return {"rows": rows_by_id, "pairs": pairs, "rows_scanned": len(all_rows), "threshold": threshold}
+    except Exception as e:
+        return {"error": str(e)}
+
+class DismissDuplicateRequest(BaseModel):
+    id_a: str
+    id_b: str
+
+@app.post("/admin/pyq-dismiss-duplicate")
+def admin_pyq_dismiss_duplicate(req: DismissDuplicateRequest, _: None = Depends(verify_admin)):
+    try:
+        # Canonical (smaller id first) ordering -- the scan doesn't guarantee which order a pair
+        # comes back in, so without this the same pair could get dismissed twice under (A,B) and
+        # (B,A) and still show up again.
+        ordered = sorted([req.id_a, req.id_b])
+        response = http_requests.post(
+            f"{SUPABASE_URL}/rest/v1/pyq_dismissed_duplicates",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates"},
+            json={"id_a": ordered[0], "id_b": ordered[1]}
+        )
+        if response.status_code >= 400:
+            return {"error": response.text}
+        return {"success": True}
     except Exception as e:
         return {"error": str(e)}
 

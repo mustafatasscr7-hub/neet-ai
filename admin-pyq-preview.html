@@ -69,10 +69,13 @@
     .q-delete-btn:hover { background: #ef444420; }
 
     .dup-pair { margin-bottom: 24px; border: 1px solid #1e1e1e; border-radius: 12px; padding: 14px; background: #0a0a0a; }
-    .dup-badge { display: inline-block; font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 20px; margin-bottom: 10px; }
+    .dup-pair-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+    .dup-badge { display: inline-block; font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 20px; }
     .dup-badge.exact { background: #ef444425; color: #ef4444; }
     .dup-badge.high { background: #f59e0b25; color: #f59e0b; }
     .dup-badge.moderate { background: #66666625; color: #999; }
+    .dup-dismiss-btn { background: transparent; border: 1px solid #2a2a2a; color: #888; padding: 5px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; font-family: 'Inter', sans-serif; }
+    .dup-dismiss-btn:hover { border-color: #4ade80; color: #4ade80; }
     .dup-columns { display: flex; gap: 12px; flex-wrap: wrap; }
     .dup-columns .question-card { flex: 1; min-width: 280px; margin-bottom: 0; }
 
@@ -406,13 +409,34 @@
         const label = p.exact ? `${pct}% match — likely exact duplicate` : `${pct}% match`;
         return `
           <div class="dup-pair">
-            <span class="dup-badge ${badgeClass}">${label}</span>
+            <div class="dup-pair-header">
+              <span class="dup-badge ${badgeClass}">${label}</span>
+              <button type="button" class="dup-dismiss-btn" onclick="dismissDuplicate('${p.a}', '${p.b}')">Not a duplicate — don't show again</button>
+            </div>
             <div class="dup-columns">
               ${questionCardHtml(a)}
               ${questionCardHtml(b)}
             </div>
           </div>`;
       }).join('');
+    }
+
+    async function dismissDuplicate(idA, idB) {
+      try {
+        const res = await fetch(`${API_BASE}/admin/pyq-dismiss-duplicate`, {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ id_a: idA, id_b: idB })
+        });
+        if (res.status === 401) return logout();
+        if (!res.ok) { alert('Could not dismiss: ' + await describeHttpError(res)); return; }
+        const data = await res.json();
+        if (data.error) { alert('Could not dismiss: ' + data.error); return; }
+        duplicatePairs = duplicatePairs.filter(p => !((p.a === idA && p.b === idB) || (p.a === idB && p.b === idA)));
+        renderDuplicatePairs(document.getElementById('filterSubject').value);
+      } catch (e) {
+        alert('Could not reach server.');
+      }
     }
 
     async function deleteQuestion(id) {
