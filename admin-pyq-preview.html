@@ -65,8 +65,33 @@
     .q-admin-id { font-size: 10px; color: #444; font-family: monospace; }
     .q-flag { font-size: 11px; padding: 3px 9px; border-radius: 20px; font-weight: 600; background: #ef444420; color: #ef4444; }
     .q-inactive-flag { font-size: 11px; padding: 3px 9px; border-radius: 20px; font-weight: 600; background: #66666620; color: #888; }
-    .q-delete-btn { background: transparent; border: 1px solid #ef4444; color: #ef4444; padding: 5px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; font-family: 'Inter', sans-serif; margin-left: auto; }
+    .q-delete-btn { background: transparent; border: 1px solid #ef4444; color: #ef4444; padding: 5px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; font-family: 'Inter', sans-serif; }
     .q-delete-btn:hover { background: #ef444420; }
+    .q-edit-btn { background: transparent; border: 1px solid #2a2a2a; color: #888; padding: 5px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; font-family: 'Inter', sans-serif; margin-left: auto; }
+    .q-edit-btn:hover { border-color: #4f8ef7; color: #4f8ef7; }
+
+    /* Edit form -- shown in place of the read-only card while a question is being edited */
+    .q-edit-field { margin-bottom: 10px; }
+    .q-edit-field label { display: block; font-size: 11px; color: #888; margin-bottom: 4px; }
+    .q-edit-field textarea, .q-edit-field input, .q-edit-field select {
+      width: 100%; background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 6px;
+      padding: 8px 10px; color: #ececec; font-size: 13px; font-family: 'Inter', sans-serif; outline: none; resize: vertical;
+    }
+    .q-edit-field textarea { overflow: hidden; }
+    .q-edit-field textarea:focus, .q-edit-field input:focus, .q-edit-field select:focus { border-color: #4f8ef7; }
+    .q-edit-row { display: flex; gap: 10px; flex-wrap: wrap; }
+    .q-edit-row .q-edit-field { flex: 1; min-width: 120px; }
+    .q-edit-active-check { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #888; margin-bottom: 14px; cursor: pointer; }
+    .q-save-btn { background: #4f8ef7; border: none; color: white; padding: 5px 14px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; margin-left: auto; }
+    .q-save-btn:hover { background: #3b7de8; }
+
+    /* Diagram upload widgets inside the edit form -- same visual pattern as admin-pdf-review.html */
+    .diag-paste-zone { border: 1px dashed #333; border-radius: 6px; padding: 6px 8px; }
+    .diag-paste-zone:focus { outline: none; border-color: #4f8ef7; }
+    .diag-paste-hint { font-size: 10px; color: #555; margin-top: 4px; }
+    .edit-diagram-status { font-size: 11px; color: #666; margin-top: 6px; }
+    .edit-diagram-status.error { color: #ef4444; }
+    .q-diagram-edit-slot .q-diagram-img { max-width: 200px; }
 
     .dup-pair { margin-bottom: 24px; border: 1px solid #1e1e1e; border-radius: 12px; padding: 14px; background: #0a0a0a; }
     .dup-pair-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
@@ -146,6 +171,9 @@
     let duplicatesMode = false;
     let duplicatePairs = [];
     let duplicateRowsMap = {};
+    let editingIds = new Set();
+    let editDrafts = {}; // id -> pending diagram_url / option_a-d_diagram_url while a card is being edited
+    let chapterCacheBySubject = {}; // subject -> [chapter names], for the edit form's chapter datalist
 
     function authHeaders(extra) {
       return Object.assign({ 'X-Admin-Key': adminKey }, extra || {});
@@ -241,6 +269,41 @@
       return div.innerHTML;
     }
 
+    function autoResizeTextarea(el) {
+      el.style.height = 'auto';
+      el.style.height = el.scrollHeight + 'px';
+    }
+
+    function fileToBase64(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result.split(',')[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    }
+
+    function extractImageFromClipboard(event) {
+      const items = event.clipboardData && event.clipboardData.items;
+      if (!items) return null;
+      for (const item of items) {
+        if (item.type && item.type.startsWith('image/')) return item.getAsFile();
+      }
+      return null;
+    }
+
+    async function getChaptersForSubject(subject) {
+      if (chapterCacheBySubject[subject]) return chapterCacheBySubject[subject];
+      try {
+        const res = await fetch(`${API_BASE}/admin/pyq-chapters?subject=${encodeURIComponent(subject)}`, { headers: authHeaders() });
+        const data = await res.json();
+        chapterCacheBySubject[subject] = data.chapters || [];
+      } catch (e) {
+        chapterCacheBySubject[subject] = [];
+      }
+      return chapterCacheBySubject[subject];
+    }
+
     // Same math rendering as pyqbank.html -- questions/options containing $...$ KaTeX markup
     // (e.g. chemical formulas) need this to actually look right, not just show raw text.
     function parseWithMath(text) {
@@ -295,6 +358,227 @@
       }
     }
 
+    // ---------------- Edit form: diagram upload/paste/remove ----------------
+    // The same question can appear twice on screen at once in duplicates view (once per pair
+    // it matches), so these never use document.getElementById -- always scoped via the actual
+    // clicked/pasted-into element, otherwise a second on-screen copy of the same question would
+    // silently update the wrong instance's preview.
+
+    async function uploadImageFileForEdit(file, statusEl, onSuccess) {
+      if (!file) return;
+      statusEl.textContent = 'Uploading...';
+      statusEl.className = 'edit-diagram-status';
+      try {
+        const b64 = await fileToBase64(file);
+        const res = await fetch(`${API_BASE}/admin/pyq-diagram-upload`, {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ filename: file.name || 'pasted-image.png', data: b64, media_type: file.type || 'image/png' })
+        });
+        if (res.status === 401) return logout();
+        if (!res.ok) { statusEl.textContent = 'Upload failed: ' + await describeHttpError(res); statusEl.className = 'edit-diagram-status error'; return; }
+        const data = await res.json();
+        if (data.error) { statusEl.textContent = 'Upload failed: ' + data.error; statusEl.className = 'edit-diagram-status error'; return; }
+        onSuccess(data.url);
+      } catch (e) {
+        statusEl.textContent = 'Upload failed -- check connection.';
+        statusEl.className = 'edit-diagram-status error';
+      }
+    }
+
+    async function uploadEditDiagram(inputEl, id, field) {
+      const file = inputEl.files[0];
+      if (!file) return;
+      const slot = inputEl.closest('.q-diagram-edit-slot');
+      const statusEl = slot.querySelector('.edit-diagram-status');
+      await uploadImageFileForEdit(file, statusEl, (url) => {
+        editDrafts[id][field] = url;
+        rerenderCurrentView();
+      });
+    }
+
+    async function handleEditDiagramPaste(event, id, field) {
+      const file = extractImageFromClipboard(event);
+      if (!file) return;
+      event.preventDefault();
+      const slot = event.currentTarget.closest('.q-diagram-edit-slot');
+      const statusEl = slot.querySelector('.edit-diagram-status');
+      await uploadImageFileForEdit(file, statusEl, (url) => {
+        editDrafts[id][field] = url;
+        rerenderCurrentView();
+      });
+    }
+
+    function removeEditDiagram(id, field) {
+      editDrafts[id][field] = null;
+      rerenderCurrentView();
+    }
+
+    function editDiagramSlotHtml(id, field, label) {
+      const url = editDrafts[id] ? editDrafts[id][field] : null;
+      return `
+        <div class="q-edit-field q-diagram-edit-slot">
+          <label>${label}</label>
+          ${url ? `
+            <img class="q-diagram-img" src="${escapeHtml(url)}">
+            <div><button type="button" class="q-edit-btn" onclick="removeEditDiagram('${id}', '${field}')">✕ Remove photo</button></div>
+          ` : `
+            <div class="diag-paste-zone" tabindex="0" onpaste="handleEditDiagramPaste(event, '${id}', '${field}')">
+              <input type="file" accept="image/*" onchange="uploadEditDiagram(this, '${id}', '${field}')"/>
+              <div class="diag-paste-hint">or click here and paste (Ctrl+V) an image</div>
+            </div>
+            <div class="edit-diagram-status"></div>
+          `}
+        </div>`;
+    }
+
+    // Keeps the diagram upload widgets collapsed until asked for -- matches admin-pdf-review.html's
+    // "Question has diagram" / "Options have diagram" checkboxes, rather than always showing all
+    // 5 upload slots even for questions that never need one. Only hides/shows; never clears
+    // already-uploaded data, so an accidental uncheck can't silently lose an image on save.
+    function toggleEditSlot(checkboxEl, selector) {
+      const card = checkboxEl.closest('.question-card');
+      const slot = card.querySelector(selector);
+      if (slot) slot.style.display = checkboxEl.checked ? 'block' : 'none';
+    }
+
+    // ---------------- Edit form: the form itself ----------------
+
+    function editFormHtml(q) {
+      const correctLetter = (q.correct_answer || '').toLowerCase().trim();
+      const chapters = chapterCacheBySubject[q.subject] || [];
+      const datalistId = `chapters-${q.subject.replace(/\s+/g, '_')}`;
+      const draft = editDrafts[q.id] || {};
+      const hasStemDiagram = !!draft.diagram_url;
+      const hasAnyOptionDiagram = !!(draft.option_a_diagram_url || draft.option_b_diagram_url || draft.option_c_diagram_url || draft.option_d_diagram_url);
+      return `
+        <div class="question-card">
+          <div class="q-meta">
+            <span class="q-year">${q.year || ''}</span>
+            <span>${escapeHtml(q.subject || '')}</span>
+            ${q.chapter ? `<span>${escapeHtml(q.chapter)}</span>` : ''}
+          </div>
+          <div class="q-edit-field"><label>Question</label><textarea data-field="question" rows="3" oninput="autoResizeTextarea(this)">${escapeHtml(q.question)}</textarea></div>
+          <label class="q-edit-active-check"><input type="checkbox" onchange="toggleEditSlot(this, '.q-diagram-group-stem')" ${hasStemDiagram ? 'checked' : ''}/> Question has diagram</label>
+          <div class="q-diagram-group-stem" style="display:${hasStemDiagram ? 'block' : 'none'}">
+            ${editDiagramSlotHtml(q.id, 'diagram_url', 'Question diagram')}
+          </div>
+          <div class="q-edit-field"><label>Option A</label><textarea data-field="option_a" rows="1" oninput="autoResizeTextarea(this)">${escapeHtml(q.option_a || '')}</textarea></div>
+          <div class="q-edit-field"><label>Option B</label><textarea data-field="option_b" rows="1" oninput="autoResizeTextarea(this)">${escapeHtml(q.option_b || '')}</textarea></div>
+          <div class="q-edit-field"><label>Option C</label><textarea data-field="option_c" rows="1" oninput="autoResizeTextarea(this)">${escapeHtml(q.option_c || '')}</textarea></div>
+          <div class="q-edit-field"><label>Option D</label><textarea data-field="option_d" rows="1" oninput="autoResizeTextarea(this)">${escapeHtml(q.option_d || '')}</textarea></div>
+          <label class="q-edit-active-check"><input type="checkbox" onchange="toggleEditSlot(this, '.q-diagram-group-options')" ${hasAnyOptionDiagram ? 'checked' : ''}/> Options have diagram</label>
+          <div class="q-diagram-group-options" style="display:${hasAnyOptionDiagram ? 'block' : 'none'}">
+            ${editDiagramSlotHtml(q.id, 'option_a_diagram_url', 'Option A diagram')}
+            ${editDiagramSlotHtml(q.id, 'option_b_diagram_url', 'Option B diagram')}
+            ${editDiagramSlotHtml(q.id, 'option_c_diagram_url', 'Option C diagram')}
+            ${editDiagramSlotHtml(q.id, 'option_d_diagram_url', 'Option D diagram')}
+          </div>
+          <div class="q-edit-row">
+            <div class="q-edit-field">
+              <label>Correct answer</label>
+              <select data-field="correct_answer">
+                <option value="">--</option>
+                <option value="a" ${correctLetter === 'a' ? 'selected' : ''}>A</option>
+                <option value="b" ${correctLetter === 'b' ? 'selected' : ''}>B</option>
+                <option value="c" ${correctLetter === 'c' ? 'selected' : ''}>C</option>
+                <option value="d" ${correctLetter === 'd' ? 'selected' : ''}>D</option>
+              </select>
+            </div>
+            <div class="q-edit-field"><label>Year</label><input type="number" data-field="year" value="${q.year != null ? q.year : ''}"></div>
+            <div class="q-edit-field"><label>Source tag</label><input type="text" data-field="source_tag" value="${escapeHtml(q.source_tag || '')}"></div>
+          </div>
+          <div class="q-edit-field">
+            <label>Chapter</label>
+            <input type="text" data-field="chapter" value="${escapeHtml(q.chapter || '')}" list="${datalistId}">
+            <datalist id="${datalistId}">${chapters.map(c => `<option value="${escapeHtml(c)}">`).join('')}</datalist>
+          </div>
+          <label class="q-edit-active-check"><input type="checkbox" data-field="is_active" ${q.is_active ? 'checked' : ''}/> Active</label>
+          <div class="q-admin-bar">
+            <span class="q-admin-id">${escapeHtml(q.id)}</span>
+            <button type="button" class="q-edit-btn" onclick="cancelEdit('${q.id}')">Cancel</button>
+            <button type="button" class="q-save-btn" onclick="saveEdit('${q.id}', this)">Save</button>
+          </div>
+        </div>`;
+    }
+
+    function rerenderCurrentView() {
+      if (duplicatesMode) {
+        renderDuplicatePairs(document.getElementById('filterSubject').value);
+      } else {
+        renderResults();
+      }
+    }
+
+    async function startEdit(id) {
+      const q = currentRows.find(r => r.id === id) || duplicateRowsMap[id];
+      if (!q) return;
+      editingIds.add(id);
+      editDrafts[id] = {
+        diagram_url: q.diagram_url,
+        option_a_diagram_url: q.option_a_diagram_url,
+        option_b_diagram_url: q.option_b_diagram_url,
+        option_c_diagram_url: q.option_c_diagram_url,
+        option_d_diagram_url: q.option_d_diagram_url
+      };
+      await getChaptersForSubject(q.subject);
+      rerenderCurrentView();
+    }
+
+    function cancelEdit(id) {
+      editingIds.delete(id);
+      delete editDrafts[id];
+      rerenderCurrentView();
+    }
+
+    async function saveEdit(id, btnEl) {
+      const card = btnEl.closest('.question-card');
+      const getVal = (name) => card.querySelector(`[data-field="${name}"]`).value;
+      const draft = editDrafts[id] || {};
+      const payload = Object.assign({
+        question: getVal('question').trim(),
+        option_a: getVal('option_a').trim(),
+        option_b: getVal('option_b').trim(),
+        option_c: getVal('option_c').trim(),
+        option_d: getVal('option_d').trim(),
+        correct_answer: getVal('correct_answer'),
+        chapter: getVal('chapter').trim() || null,
+        year: getVal('year') ? parseInt(getVal('year'), 10) : null,
+        source_tag: getVal('source_tag').trim() || null,
+        is_active: card.querySelector('[data-field="is_active"]').checked
+      }, draft);
+      const originalLabel = btnEl.textContent;
+      btnEl.disabled = true;
+      btnEl.textContent = 'Saving...';
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 20000);
+      try {
+        const res = await fetch(`${API_BASE}/admin/pyq-update/${id}`, {
+          method: 'PATCH',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify(payload),
+          signal: controller.signal
+        });
+        if (res.status === 401) return logout();
+        if (!res.ok) { alert('Save failed: ' + await describeHttpError(res)); btnEl.disabled = false; btnEl.textContent = originalLabel; return; }
+        const data = await res.json();
+        if (data.error) { alert('Save failed: ' + data.error); btnEl.disabled = false; btnEl.textContent = originalLabel; return; }
+        const updated = data.updated;
+        const idx = currentRows.findIndex(r => r.id === id);
+        if (idx !== -1) currentRows[idx] = Object.assign({}, currentRows[idx], updated);
+        if (duplicateRowsMap[id]) duplicateRowsMap[id] = Object.assign({}, duplicateRowsMap[id], updated);
+        editingIds.delete(id);
+        delete editDrafts[id];
+        rerenderCurrentView();
+      } catch (e) {
+        alert(e.name === 'AbortError' ? 'Timed out waiting for the server -- check your connection and try again.' : 'Could not reach server.');
+        btnEl.disabled = false;
+        btnEl.textContent = originalLabel;
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    }
+
     function computeFlags(q) {
       const flags = [];
       if (!q.correct_answer || !['a', 'b', 'c', 'd'].includes(q.correct_answer.toLowerCase().trim())) {
@@ -311,6 +595,7 @@
     }
 
     function questionCardHtml(q) {
+      if (editingIds.has(q.id)) return editFormHtml(q);
       const correctLetter = (q.correct_answer || '').toLowerCase().trim();
       const opts = ['a', 'b', 'c', 'd'].map(opt => {
         if (!q['option_' + opt]) return '';
@@ -334,7 +619,8 @@
           <div class="q-admin-bar">
             <span class="q-admin-id">${escapeHtml(q.id)}</span>
             ${flags.map(f => `<span class="q-flag">${escapeHtml(f)}</span>`).join('')}
-            <button class="q-delete-btn" onclick="deleteQuestion('${q.id}')">🗑 Delete</button>
+            <button class="q-edit-btn" onclick="startEdit('${q.id}')">✏️ Edit</button>
+            <button class="q-delete-btn" onclick="deleteQuestion('${q.id}', this)">🗑 Delete</button>
           </div>
         </div>`;
     }
@@ -346,6 +632,7 @@
         return;
       }
       area.innerHTML = currentRows.map(questionCardHtml).join('');
+      area.querySelectorAll('.q-edit-field textarea').forEach(autoResizeTextarea);
     }
 
     async function toggleDuplicatesView() {
@@ -414,8 +701,8 @@
             <div class="dup-pair-header">
               <span class="dup-badge ${badgeClass}">${label}</span>
               <div style="display:flex;gap:8px;flex-wrap:wrap;">
-                <button type="button" class="dup-dismiss-btn" onclick="dismissDuplicate('${p.a}', '${p.b}')">Not a duplicate — don't show again</button>
-                <button type="button" class="dup-delete-both-btn" onclick="deleteBothInPair('${p.a}', '${p.b}')">🗑 Delete both</button>
+                <button type="button" class="dup-dismiss-btn" onclick="dismissDuplicate('${p.a}', '${p.b}', this)">Not a duplicate — don't show again</button>
+                <button type="button" class="dup-delete-both-btn" onclick="deleteBothInPair('${p.a}', '${p.b}', this)">🗑 Delete both</button>
               </div>
             </div>
             <div class="dup-columns">
@@ -424,43 +711,62 @@
             </div>
           </div>`;
       }).join('');
+      area.querySelectorAll('.q-edit-field textarea').forEach(autoResizeTextarea);
     }
 
-    async function dismissDuplicate(idA, idB) {
+    async function dismissDuplicate(idA, idB, btnEl) {
+      const originalLabel = btnEl ? btnEl.textContent : null;
+      if (btnEl) { btnEl.disabled = true; btnEl.textContent = 'Saving...'; }
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 20000);
       try {
         const res = await fetch(`${API_BASE}/admin/pyq-dismiss-duplicate`, {
           method: 'POST',
           headers: authHeaders({ 'Content-Type': 'application/json' }),
-          body: JSON.stringify({ id_a: idA, id_b: idB })
+          body: JSON.stringify({ id_a: idA, id_b: idB }),
+          signal: controller.signal
         });
         if (res.status === 401) return logout();
-        if (!res.ok) { alert('Could not dismiss: ' + await describeHttpError(res)); return; }
+        if (!res.ok) { alert('Could not dismiss: ' + await describeHttpError(res)); if (btnEl) { btnEl.disabled = false; btnEl.textContent = originalLabel; } return; }
         const data = await res.json();
-        if (data.error) { alert('Could not dismiss: ' + data.error); return; }
+        if (data.error) { alert('Could not dismiss: ' + data.error); if (btnEl) { btnEl.disabled = false; btnEl.textContent = originalLabel; } return; }
         duplicatePairs = duplicatePairs.filter(p => !((p.a === idA && p.b === idB) || (p.a === idB && p.b === idA)));
         renderDuplicatePairs(document.getElementById('filterSubject').value);
       } catch (e) {
-        alert('Could not reach server.');
+        alert(e.name === 'AbortError' ? 'Timed out waiting for the server -- check your connection and try again.' : 'Could not reach server.');
+        if (btnEl) { btnEl.disabled = false; btnEl.textContent = originalLabel; }
+      } finally {
+        clearTimeout(timeoutId);
       }
     }
 
     // Shared by deleteQuestion and deleteBothInPair -- no confirm() dialog and no state
     // mutation of its own, since the two callers need different confirm wording and different
     // post-delete bookkeeping (single row vs a pair, normal view vs duplicates view).
+    // A hard timeout is included because plain fetch() never times out on its own -- a stalled
+    // connection (cold Railway instance, dropped mobile network, etc.) used to leave the button
+    // waiting forever with no error and no success, which looked like "nothing happened."
     async function deleteOneQuietly(id) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 20000);
       try {
-        const res = await fetch(`${API_BASE}/admin/pyq-delete/${id}`, { method: 'DELETE', headers: authHeaders() });
+        const res = await fetch(`${API_BASE}/admin/pyq-delete/${id}`, { method: 'DELETE', headers: authHeaders(), signal: controller.signal });
         if (res.status === 401) return { error: 'unauthorized' };
         if (!res.ok) return { error: await describeHttpError(res) };
         const data = await res.json();
         return data.error ? { error: data.error } : { success: true };
       } catch (e) {
+        if (e.name === 'AbortError') return { error: 'Timed out waiting for the server -- check your connection and try again.' };
         return { error: 'Could not reach server.' };
+      } finally {
+        clearTimeout(timeoutId);
       }
     }
 
-    async function deleteBothInPair(idA, idB) {
+    async function deleteBothInPair(idA, idB, btnEl) {
       if (!confirm('Permanently delete BOTH of these questions from Supabase? This cannot be undone from here.')) return;
+      const originalLabel = btnEl ? btnEl.textContent : null;
+      if (btnEl) { btnEl.disabled = true; btnEl.textContent = 'Deleting...'; }
       const [resultA, resultB] = await Promise.all([deleteOneQuietly(idA), deleteOneQuietly(idB)]);
       if (resultA.error === 'unauthorized' || resultB.error === 'unauthorized') return logout();
       if (!resultA.error) {
@@ -473,15 +779,22 @@
       }
       if (resultA.error || resultB.error) {
         alert('One or both deletes failed: ' + [resultA.error, resultB.error].filter(Boolean).join(' / '));
+        if (btnEl) { btnEl.disabled = false; btnEl.textContent = originalLabel; }
       }
       renderDuplicatePairs(document.getElementById('filterSubject').value);
     }
 
-    async function deleteQuestion(id) {
+    async function deleteQuestion(id, btnEl) {
       if (!confirm('Permanently delete this question from Supabase? This cannot be undone from here.')) return;
+      const originalLabel = btnEl ? btnEl.textContent : null;
+      if (btnEl) { btnEl.disabled = true; btnEl.textContent = 'Deleting...'; }
       const result = await deleteOneQuietly(id);
       if (result.error === 'unauthorized') return logout();
-      if (result.error) { alert('Delete failed: ' + result.error); return; }
+      if (result.error) {
+        alert('Delete failed: ' + result.error);
+        if (btnEl) { btnEl.disabled = false; btnEl.textContent = originalLabel; }
+        return;
+      }
       if (duplicatesMode) {
         delete duplicateRowsMap[id];
         duplicatePairs = duplicatePairs.filter(p => p.a !== id && p.b !== id);

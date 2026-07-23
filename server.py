@@ -171,6 +171,19 @@ class AdminPyqUpdate(BaseModel):
     chapter: Optional[str] = None
     correct_answer: Optional[str] = None
     is_active: Optional[bool] = None
+    question: Optional[str] = None
+    option_a: Optional[str] = None
+    option_b: Optional[str] = None
+    option_c: Optional[str] = None
+    option_d: Optional[str] = None
+    year: Optional[int] = None
+    source_tag: Optional[str] = None
+    class_: Optional[int] = Field(None, alias="class")
+    diagram_url: Optional[str] = None
+    option_a_diagram_url: Optional[str] = None
+    option_b_diagram_url: Optional[str] = None
+    option_c_diagram_url: Optional[str] = None
+    option_d_diagram_url: Optional[str] = None
 
 class AdminPyqBulkUpdate(BaseModel):
     ids: List[str]
@@ -1128,13 +1141,42 @@ async def admin_pyq_update(pyq_id: str, body: AdminPyqUpdate, _: None = Depends(
         update_fields["correct_answer"] = body.correct_answer
     if body.is_active is not None:
         update_fields["is_active"] = body.is_active
+    if body.question is not None:
+        update_fields["question"] = body.question
+    if body.option_a is not None:
+        update_fields["option_a"] = body.option_a
+    if body.option_b is not None:
+        update_fields["option_b"] = body.option_b
+    if body.option_c is not None:
+        update_fields["option_c"] = body.option_c
+    if body.option_d is not None:
+        update_fields["option_d"] = body.option_d
+    if body.year is not None:
+        update_fields["year"] = body.year
+    if body.source_tag is not None:
+        update_fields["source_tag"] = body.source_tag
+    if body.class_ is not None:
+        update_fields["class"] = body.class_
+    # Diagram fields need to distinguish "not sent" from "sent as null" -- removing a photo in
+    # the edit form means explicitly clearing the URL, and `is not None` would silently ignore
+    # that. model_fields_set has whatever keys were actually present in the request JSON.
+    for diagram_field in ("diagram_url", "option_a_diagram_url", "option_b_diagram_url",
+                           "option_c_diagram_url", "option_d_diagram_url"):
+        if diagram_field in body.model_fields_set:
+            update_fields[diagram_field] = getattr(body, diagram_field)
     if not update_fields:
         return {"error": "No fields to update"}
     try:
-        response = http_requests.patch(
+        # async_client, not the blocking http_requests used elsewhere -- same reasoning as the
+        # /admin/pyq-delete fix: this is async def, so a blocking call here stalls the whole
+        # server's event loop, and this endpoint is now called from the PYQ Preview edit form
+        # right alongside delete/duplicate-scan traffic on the same page.
+        response = await async_client.patch(
             f"{SUPABASE_URL}/rest/v1/pyq",
             headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
-            params={"id": f"eq.{pyq_id}", "select": "id,subject,chapter,question,correct_answer,is_active,year"},
+            params={"id": f"eq.{pyq_id}", "select": "id,subject,chapter,question,option_a,option_b,option_c,"
+                    "option_d,correct_answer,is_active,year,source_tag,class,has_diagram,diagram_url,"
+                    "option_a_diagram_url,option_b_diagram_url,option_c_diagram_url,option_d_diagram_url,created_at"},
             json=update_fields
         )
         if response.status_code >= 400:
@@ -1179,8 +1221,14 @@ async def admin_pyq_bulk_update(body: AdminPyqBulkUpdate, _: None = Depends(veri
 # corrected version afterward is the intended workflow, not editing in place.
 @app.delete("/admin/pyq-delete/{pyq_id}")
 async def admin_pyq_delete(pyq_id: str, _: None = Depends(verify_admin)):
+    # Uses the shared httpx.AsyncClient (already set up for /chat) instead of the blocking
+    # `requests` library other admin endpoints use -- this one's async def, so a synchronous
+    # call here would stall the whole event loop, and every other in-flight request with it,
+    # for as long as Supabase takes to respond. Directly relevant here: this endpoint gets
+    # called from the duplicate-finder UI, sometimes right after a several-second-long
+    # /admin/pyq-duplicates scan, when the server is otherwise busiest.
     try:
-        response = http_requests.delete(
+        response = await async_client.delete(
             f"{SUPABASE_URL}/rest/v1/pyq",
             headers={**ADMIN_HEADERS, "Prefer": "return=representation"},
             params={"id": f"eq.{pyq_id}"}
