@@ -1106,19 +1106,41 @@ async def admin_pyq_search(
             params["chapter"] = f"eq.{chapter}"
         if is_active in ("true", "false"):
             params["is_active"] = f"eq.{is_active}"
+        # Both filters below are OR-groups across the same 4-5 columns, and both need to be
+        # applyable at once (e.g. searching while also filtering to uploaded-diagram rows) --
+        # collected as separate or(...) groups and combined via and=() at the end instead of
+        # each just assigning params["or"], which would let the second one silently clobber
+        # the first if both filters were active together.
+        or_groups = []
         if with_uploaded_diagram == "true":
             # An actually-uploaded image, not just the AI's has_diagram guess from extraction --
             # that flag just means "this looked like it needed one," independent of whether
             # anyone's uploaded the image yet. neq. (not equal to empty string) rather than
             # not.is.null: some rows have '' instead of NULL for a never-uploaded slot, and
             # NULL <> '' is not TRUE in SQL's 3-valued logic, so neq. alone excludes both.
-            params["or"] = (
-                "(diagram_url.neq.,option_a_diagram_url.neq.,"
+            or_groups.append(
+                "or(diagram_url.neq.,option_a_diagram_url.neq.,"
                 "option_b_diagram_url.neq.,option_c_diagram_url.neq.,"
                 "option_d_diagram_url.neq.)"
             )
         if search:
-            params["question"] = f"ilike.*{search}*"
+            # Previously only checked `question`, so searching for a term that's only in one
+            # of the options (very common -- e.g. a specific answer choice) silently returned
+            # nothing. Quoting the value is required, not cosmetic: an unquoted comma or
+            # parenthesis in the search term breaks PostgREST's or=() parsing entirely (400
+            # error) since those characters are also this list's own separators/grouping.
+            safe_search = search.replace("\\", "\\\\").replace('"', '\\"')
+            or_groups.append(
+                f'or(question.ilike."*{safe_search}*",'
+                f'option_a.ilike."*{safe_search}*",'
+                f'option_b.ilike."*{safe_search}*",'
+                f'option_c.ilike."*{safe_search}*",'
+                f'option_d.ilike."*{safe_search}*")'
+            )
+        if len(or_groups) == 1:
+            params["or"] = "(" + or_groups[0][3:]  # strip the "or(" wrapper, top-level or= wants bare (...)
+        elif len(or_groups) > 1:
+            params["and"] = "(" + ",".join(or_groups) + ")"
 
         response = http_requests.get(
             f"{SUPABASE_URL}/rest/v1/pyq",
