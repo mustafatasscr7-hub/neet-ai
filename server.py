@@ -202,6 +202,7 @@ class PyqQuestionCreate(BaseModel):
     question_type: str = "mcq"
     year: Optional[int] = None
     source_tag: Optional[str] = None
+    source_pdf_filename: Optional[str] = None
     class_: Optional[int] = Field(None, alias="class")
     has_diagram: bool = False
     diagram_url: Optional[str] = None
@@ -1263,27 +1264,36 @@ async def admin_pyq_bulk_create(body: PyqBulkCreate, _: None = Depends(verify_ad
         return {"error": "No questions provided"}
     if any(q.subject not in ("Biology", "Physics", "Chemistry") for q in body.questions):
         return {"error": "Invalid subject"}
-    payload = [{
-        "subject": q.subject,
-        "chapter": q.chapter,
-        "question": q.question,
-        "option_a": q.option_a,
-        "option_b": q.option_b,
-        "option_c": q.option_c,
-        "option_d": q.option_d,
-        "correct_answer": q.correct_answer,
-        "question_type": q.question_type,
-        "year": q.year,
-        "source_tag": q.source_tag,
-        "class": q.class_,
-        "has_diagram": q.has_diagram,
-        "diagram_url": q.diagram_url,
-        "option_a_diagram_url": q.option_a_diagram_url,
-        "option_b_diagram_url": q.option_b_diagram_url,
-        "option_c_diagram_url": q.option_c_diagram_url,
-        "option_d_diagram_url": q.option_d_diagram_url,
-        "is_active": True
-    } for q in body.questions]
+    payload = []
+    for q in body.questions:
+        item = {
+            "subject": q.subject,
+            "chapter": q.chapter,
+            "question": q.question,
+            "option_a": q.option_a,
+            "option_b": q.option_b,
+            "option_c": q.option_c,
+            "option_d": q.option_d,
+            "correct_answer": q.correct_answer,
+            "question_type": q.question_type,
+            "year": q.year,
+            "source_tag": q.source_tag,
+            "class": q.class_,
+            "has_diagram": q.has_diagram,
+            "diagram_url": q.diagram_url,
+            "option_a_diagram_url": q.option_a_diagram_url,
+            "option_b_diagram_url": q.option_b_diagram_url,
+            "option_c_diagram_url": q.option_c_diagram_url,
+            "option_d_diagram_url": q.option_d_diagram_url,
+            "is_active": True
+        }
+        # Only included when present, not unconditionally like the other fields above -- this
+        # column needs a manual `alter table` before it exists, and PostgREST rejects an insert
+        # that even mentions an unknown column (with null or otherwise), so omitting the key
+        # entirely keeps every save working before that migration is run, not just this feature.
+        if q.source_pdf_filename:
+            item["source_pdf_filename"] = q.source_pdf_filename
+        payload.append(item)
     try:
         response = http_requests.post(
             f"{SUPABASE_URL}/rest/v1/pyq",
@@ -1293,6 +1303,49 @@ async def admin_pyq_bulk_create(body: PyqBulkCreate, _: None = Depends(verify_ad
         if response.status_code >= 400:
             return {"error": response.text}
         return {"created": response.json()}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/admin/pdf-upload-history")
+def admin_pdf_upload_history(_: None = Depends(verify_admin)):
+    # Grouped here in Python rather than a Postgres view/RPC function -- PostgREST has no GROUP
+    # BY, and at this scale (a handful of PDFs a day) pulling the raw rows and aggregating here
+    # avoids asking for a second manual SQL step beyond the one new column.
+    try:
+        response = http_requests.get(
+            f"{SUPABASE_URL}/rest/v1/pyq",
+            headers=ADMIN_HEADERS,
+            params={
+                "select": "source_pdf_filename,subject,created_at",
+                # neq. (not equal to empty string) rather than not.is.null -- same reasoning as
+                # the with_uploaded_diagram filter above: NULL <> '' isn't TRUE in SQL, so this
+                # one condition excludes both a never-set column and an empty-string one.
+                "source_pdf_filename": "neq.",
+                "order": "created_at.desc",
+                "limit": 5000
+            }
+        )
+        if response.status_code >= 400:
+            return {"error": response.text}
+        rows = response.json()
+        by_filename = {}
+        for r in rows:
+            name = r.get("source_pdf_filename")
+            if not name:
+                continue
+            entry = by_filename.setdefault(name, {
+                "filename": name, "subjects": set(), "question_count": 0,
+                "first_uploaded": r["created_at"], "last_uploaded": r["created_at"]
+            })
+            entry["subjects"].add(r.get("subject"))
+            entry["question_count"] += 1
+            entry["first_uploaded"] = min(entry["first_uploaded"], r["created_at"])
+            entry["last_uploaded"] = max(entry["last_uploaded"], r["created_at"])
+        result = sorted(
+            ({**e, "subjects": sorted(s for s in e["subjects"] if s)} for e in by_filename.values()),
+            key=lambda e: e["last_uploaded"], reverse=True
+        )
+        return {"pdfs": result}
     except Exception as e:
         return {"error": str(e)}
 
