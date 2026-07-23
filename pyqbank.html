@@ -602,9 +602,12 @@ const { data, error } = await query;
       const q = data[i];
 
      const opts = ['a','b','c','d'].map(opt => {
-        if (!q['option_' + opt]) return '';
+        // Some questions have diagram-only options (no text at all, e.g. "which diagram is
+        // correct") -- skipping whenever text is empty hid the option (and its diagram)
+        // entirely. Only skip when there's truly nothing to show either way.
+        if (!q['option_' + opt] && !q['option_' + opt + '_diagram_url']) return '';
         const optImg = q['option_' + opt + '_diagram_url'] ? `<img class="q-diagram-img" src="${q['option_' + opt + '_diagram_url']}">` : '';
-        return `<div class="q-option" id="opt-${opt}" onclick="selectPyqOption('${opt}', '${q.correct_answer.toLowerCase().trim()}')"><strong>${opt.toUpperCase()})</strong> ${q['option_' + opt]}${optImg}</div>`;
+        return `<div class="q-option" id="opt-${opt}" onclick="selectPyqOption('${opt}', '${q.correct_answer.toLowerCase().trim()}')"><strong>${opt.toUpperCase()})</strong> ${parseWithMath(q['option_' + opt])}${optImg}</div>`;
       }).join('');
 
      
@@ -627,7 +630,7 @@ document.getElementById('mainContent').innerHTML = `
             <span>${subjectName(q.subject) || ''}</span>
             ${q.chapter ? `<span>${chapterName(q.chapter)}</span>` : ''}
           </div>
-         <div class="q-text">${q.question}</div>
+         <div class="q-text">${parseWithMath(q.question)}</div>
 ${q.diagram_url ? `<img class="q-diagram-img" src="${q.diagram_url}">` : ''}
           <div class="q-options">${opts}</div>
           <div class="q-actions">
@@ -685,6 +688,11 @@ ${q.diagram_url ? `<img class="q-diagram-img" src="${q.diagram_url}">` : ''}
         option_b: q.option_b,
         option_c: q.option_c,
         option_d: q.option_d,
+        diagram_url: q.diagram_url,
+        option_a_diagram_url: q.option_a_diagram_url,
+        option_b_diagram_url: q.option_b_diagram_url,
+        option_c_diagram_url: q.option_c_diagram_url,
+        option_d_diagram_url: q.option_d_diagram_url,
         correct_answer: q.correct_answer,
         subject: q.subject,
         chapter: q.chapter,
@@ -784,6 +792,11 @@ ${q.diagram_url ? `<img class="q-diagram-img" src="${q.diagram_url}">` : ''}
         option_b: q.option_b,
         option_c: q.option_c,
         option_d: q.option_d,
+        diagram_url: q.diagram_url,
+        option_a_diagram_url: q.option_a_diagram_url,
+        option_b_diagram_url: q.option_b_diagram_url,
+        option_c_diagram_url: q.option_c_diagram_url,
+        option_d_diagram_url: q.option_d_diagram_url,
         correct_answer: q.correct_answer,
         subject: q.subject,
         chapter: q.chapter,

@@ -807,7 +807,9 @@
       if (editingIds.has(q.id)) return editFormHtml(q);
       const correctLetter = (q.correct_answer || '').toLowerCase().trim();
       const opts = ['a', 'b', 'c', 'd'].map(opt => {
-        if (!q['option_' + opt]) return '';
+        // Some questions have diagram-only options (no text at all) -- skipping whenever
+        // text is empty hid the option (and its diagram) entirely.
+        if (!q['option_' + opt] && !q['option_' + opt + '_diagram_url']) return '';
         const isCorrect = opt === correctLetter;
         const optImg = q['option_' + opt + '_diagram_url'] ? `<img class="q-diagram-img" src="${escapeHtml(q['option_' + opt + '_diagram_url'])}">` : '';
         return `<div class="q-option${isCorrect ? ' correct' : ''}"><strong>${opt.toUpperCase()})</strong> <span>${parseWithMath(q['option_' + opt])}${optImg}</span></div>`;

@@ -220,6 +220,7 @@
     .q-option { padding: 6px 10px; border-radius: 6px; font-size: 12px; background: #1a1a1a; color: #888; border: 1px solid #2a2a2a; }
     .q-option.correct-ans { background: #4ade8020; border-color: #4ade80; color: #4ade80; }
     .q-option.wrong-ans { background: #ef444420; border-color: #ef4444; color: #ef4444; }
+    .q-diagram-img { max-width: 100%; border-radius: 8px; margin: 12px 0; border: 1px solid #2a2a2a; display: block; }
     .q-status { font-size: 11px; font-weight: 600; }
     .q-status.correct { color: #4ade80; }
     .q-status.wrong { color: #ef4444; }
@@ -378,6 +379,7 @@
     body.light-mode .q-meta { color: #7a7a85 !important; }
     body.light-mode .q-text { color: #222228 !important; }
     body.light-mode .q-option { background: #ffffff !important; color: #55555f !important; border-color: #d5d5dd !important; }
+    body.light-mode .q-diagram-img { border-color: #e3e3ea !important; }
     body.light-mode .q-status.skipped { color: #7a7a85 !important; }
     body.light-mode .no-results { color: #7a7a85 !important; }
     body.light-mode div[style*="color:#555;margin-bottom:8px"] { color: #7a7a85 !important; }
@@ -1346,7 +1348,7 @@
         <div class="question-text">${formatQuestionText(q.question)}</div>
         ${q.diagram_url ? `<img src="${q.diagram_url}" style="max-width:100%;border-radius:8px;margin:12px 0;border:1px solid #2a2a2a;">` : ''}
         <div class="options" id="optionsContainer">
-          ${['a','b','c','d'].map(opt => q['option_' + opt] ? `
+          ${['a','b','c','d'].map(opt => (q['option_' + opt] || q['option_' + opt + '_diagram_url']) ? `
             <div class="option ${selectedAnswer === opt ? 'selected' : ''}" onclick="selectAnswer('${opt}')">
               <div class="option-label">${opt.toUpperCase()}</div>
               <div>${q['option_' + opt]}</div>
@@ -1419,6 +1421,11 @@
         option_b: q.option_b,
         option_c: q.option_c,
         option_d: q.option_d,
+        diagram_url: q.diagram_url,
+        option_a_diagram_url: q.option_a_diagram_url,
+        option_b_diagram_url: q.option_b_diagram_url,
+        option_c_diagram_url: q.option_c_diagram_url,
+        option_d_diagram_url: q.option_d_diagram_url,
         correct_answer: q.correct_answer,
         subject: q.subject,
         chapter: q.chapter,
@@ -1494,6 +1501,11 @@
             option_b: q.option_b,
             option_c: q.option_c,
             option_d: q.option_d,
+            diagram_url: q.diagram_url,
+            option_a_diagram_url: q.option_a_diagram_url,
+            option_b_diagram_url: q.option_b_diagram_url,
+            option_c_diagram_url: q.option_c_diagram_url,
+            option_d_diagram_url: q.option_d_diagram_url,
             correct_answer: q.correct_answer,
             subject: q.subject,
             chapter: q.chapter,
@@ -1610,11 +1622,14 @@
         const correctAns = q.correct_answer ? q.correct_answer.toLowerCase().trim() : null;
         const userAns = q.userAnswer ? q.userAnswer.toLowerCase().trim() : null;
         const opts = ['a','b','c','d'].map(opt => {
-          if (!q['option_' + opt]) return '';
+          // Some questions have diagram-only options (no text at all) -- skipping whenever
+          // text is empty hid the option (and its diagram) entirely.
+          if (!q['option_' + opt] && !q['option_' + opt + '_diagram_url']) return '';
           let cls = 'q-option';
           if (opt === correctAns) cls += ' correct-ans';
           if (opt === userAns && opt !== correctAns) cls += ' wrong-ans';
-          return `<div class="${cls}">${opt.toUpperCase()}) ${q['option_' + opt]}</div>`;
+          const optImg = q['option_' + opt + '_diagram_url'] ? `<img class="q-diagram-img" src="${escapeHtml(q['option_' + opt + '_diagram_url'])}">` : '';
+          return `<div class="${cls}">${opt.toUpperCase()}) ${q['option_' + opt]}${optImg}</div>`;
         }).join('');
 
         const statusText = q.status === 'correct' ? t('mockresults','statusCorrect') : q.status === 'wrong' ? t('mockresults','statusWrong') : t('mockresults','statusSkipped');
@@ -1626,6 +1641,7 @@
             <span class="q-status ${q.status}">${statusText}</span>
           </div>
           <div class="q-text">${applySpecialFormattingOnly_ML(q.question)}</div>
+          ${q.diagram_url ? `<img class="q-diagram-img" src="${escapeHtml(q.diagram_url)}">` : ''}
           <div class="q-options">${opts}</div>
           ${q.userAnswer ? `<div style="font-size:11px;color:#555;margin-bottom:8px;">${t('mockresults','yourAnswer')} ${q.userAnswer?.toUpperCase()}</div>` : ''}
           <button id="review-save-${i}" onclick="saveFromReview(${i}, '${filter}')" style="background:transparent;border:1px solid #f97316;color:#f97316;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:11px;font-family:Inter,sans-serif;margin-top:4px;">${t('mockresults','saveQuestion')}</button>
@@ -1647,6 +1663,11 @@
         option_b: q.option_b,
         option_c: q.option_c,
         option_d: q.option_d,
+        diagram_url: q.diagram_url,
+        option_a_diagram_url: q.option_a_diagram_url,
+        option_b_diagram_url: q.option_b_diagram_url,
+        option_c_diagram_url: q.option_c_diagram_url,
+        option_d_diagram_url: q.option_d_diagram_url,
         correct_answer: q.correct_answer,
         subject: q.subject,
         chapter: q.chapter,
