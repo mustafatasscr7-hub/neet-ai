@@ -168,6 +168,7 @@ class PersonalisedCatalogStartRequest(BaseModel):
     test_number: int
 
 class AdminPyqUpdate(BaseModel):
+    subject: Optional[str] = None
     chapter: Optional[str] = None
     correct_answer: Optional[str] = None
     is_active: Optional[bool] = None
@@ -1134,7 +1135,11 @@ async def admin_pyq_search(
 
 @app.patch("/admin/pyq-update/{pyq_id}")
 async def admin_pyq_update(pyq_id: str, body: AdminPyqUpdate, _: None = Depends(verify_admin)):
+    if body.subject is not None and body.subject not in ("Biology", "Physics", "Chemistry"):
+        return {"error": "Invalid subject"}
     update_fields = {}
+    if body.subject is not None:
+        update_fields["subject"] = body.subject
     if body.chapter is not None:
         update_fields["chapter"] = body.chapter
     if body.correct_answer is not None:

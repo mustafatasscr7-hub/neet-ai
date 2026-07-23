@@ -61,6 +61,11 @@
     .match-list-item { padding: 3px 0; }
     .match-list-item p { margin: 0; display: inline; }
     .match-list-trailer { margin-top: 8px; }
+    /* Assertion-Reason / Statement I-II -- each part on its own line instead of one paragraph. */
+    .ar-intro { margin-bottom: 8px; }
+    .ar-part { margin-bottom: 6px; }
+    .ar-part p { margin: 0; display: inline; }
+    .ar-trailer { margin-top: 8px; }
     .q-options { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
     .q-option { padding: 10px 14px; border-radius: 8px; font-size: 13px; background: #1a1a1a; color: #888; border: 1px solid #2a2a2a; display: flex; gap: 10px; }
     .q-option.correct { background: #4ade8020; border-color: #4ade80; color: #4ade80; }
@@ -410,10 +415,76 @@
 
     // Same math rendering as pyqbank.html -- questions/options containing $...$ KaTeX markup
     // (e.g. chemical formulas) need this to actually look right, not just show raw text.
+    // ---------------- Assertion-Reason / Statement I-II formatting ----------------
+    // Detects "Given below are two statements: Assertion (A): ... Reason (R): ..." (or
+    // "Statement I: ... Statement II: ...") style questions and breaks them into separate
+    // lines (intro, each labelled part, trailer) instead of one dense paragraph. Falls back
+    // to this file's normal rendering whenever fewer than 2 distinct markers are found.
+    const AR_MARKER_RE = /\b(?:assertion\s*\(?\s*[a-z]?\s*\)?|reason\s*\(?\s*[a-z]?\s*\)?|statements?\s*[-\s]*(?:[ivx]{1,3}|[a-h]|\d{1,2}))\s*:/gi;
+
+    function findAssertionReasonParts_AR(text) {
+      const markers = [];
+      let m;
+      AR_MARKER_RE.lastIndex = 0;
+      while ((m = AR_MARKER_RE.exec(text)) !== null) {
+        markers.push({ start: m.index, end: m.index + m[0].length, label: m[0] });
+      }
+      if (markers.length < 2) return null;
+
+      // Same phenomenon as the Match-List parser's intro-vs-header problem: the intro
+      // sentence itself often says "...the other is labelled as Reason (R):", which reads
+      // identically to a real marker. A real question never labels two parts with the same
+      // marker, so when one repeats, keep only its LAST occurrence (closest to the real
+      // content) and drop the earlier one as an intro mention.
+      const lastByKind = new Map();
+      markers.forEach(mk => {
+        const kind = mk.label.toLowerCase().replace(/[^a-z0-9]/g, '');
+        lastByKind.set(kind, mk);
+      });
+      const dedupedMarkers = Array.from(lastByKind.values()).sort((a, b) => a.start - b.start);
+      if (dedupedMarkers.length < 2) return null;
+
+      const intro = text.slice(0, dedupedMarkers[0].start).trim();
+
+      const afterLastMarker = text.slice(dedupedMarkers[dedupedMarkers.length - 1].end);
+      // "In the light of the above statements," almost always precedes "choose/select/
+      // identify" in the same sentence -- catching it here too keeps that whole sentence
+      // together as the trailer instead of splitting it mid-clause.
+      const trailerMatch = afterLastMarker.match(/\b(in the light of|choose|select|identify)\b/i);
+      let trailer = '';
+      let lastPartEnd = text.length;
+      if (trailerMatch) {
+        trailer = afterLastMarker.slice(trailerMatch.index).trim();
+        lastPartEnd = dedupedMarkers[dedupedMarkers.length - 1].end + trailerMatch.index;
+      }
+
+      const parts = [];
+      for (let i = 0; i < dedupedMarkers.length; i++) {
+        const end = i + 1 < dedupedMarkers.length ? dedupedMarkers[i + 1].start : lastPartEnd;
+        const partText = text.slice(dedupedMarkers[i].start, end).trim();
+        if (partText) parts.push(partText);
+      }
+      if (parts.length < 2) return null;
+
+      return { intro, parts, trailer };
+    }
+
+    function renderAssertionReasonHtml_AR(text, formatFn) {
+      if (!text) return null;
+      const parsed = findAssertionReasonParts_AR(text);
+      if (!parsed) return null;
+      const partsHtml = parsed.parts.map(p => `<div class="ar-part">${formatFn(p)}</div>`).join('');
+      return (parsed.intro ? `<div class="ar-intro">${formatFn(parsed.intro)}</div>` : '')
+        + partsHtml
+        + (parsed.trailer ? `<div class="ar-trailer">${formatFn(parsed.trailer)}</div>` : '');
+    }
+
     function parseWithMath(text) {
       if (!text) return '';
       const matchListHtml = renderMatchListHtml_ML(text, parseWithMathInner);
       if (matchListHtml !== null) return matchListHtml;
+      const arHtml = renderAssertionReasonHtml_AR(text, parseWithMathInner);
+      if (arHtml !== null) return arHtml;
       return parseWithMathInner(text);
     }
 
@@ -555,10 +626,27 @@
 
     // ---------------- Edit form: the form itself ----------------
 
+    function chapterOptionsHtml(chapters, selectedChapter) {
+      return '<option value="">-- none --</option>' + chapters.map(c =>
+        `<option value="${escapeHtml(c)}"${c === selectedChapter ? ' selected' : ''}>${escapeHtml(c)}</option>`
+      ).join('');
+    }
+
+    async function onEditSubjectChange(selectEl) {
+      const newSubject = selectEl.value;
+      const card = selectEl.closest('.question-card');
+      const chapterSelect = card.querySelector('[data-field="chapter"]');
+      const chapters = await getChaptersForSubject(newSubject);
+      // Resets to blank rather than trying to guess a match -- chapters are subject-specific,
+      // so a chapter name that made sense under the old (possibly wrong) subject usually
+      // won't under the new one, and silently carrying it over would just create a new
+      // mistagged row instead of fixing one.
+      chapterSelect.innerHTML = chapterOptionsHtml(chapters, null);
+    }
+
     function editFormHtml(q) {
       const correctLetter = (q.correct_answer || '').toLowerCase().trim();
       const chapters = chapterCacheBySubject[q.subject] || [];
-      const datalistId = `chapters-${q.subject.replace(/\s+/g, '_')}`;
       const draft = editDrafts[q.id] || {};
       const hasStemDiagram = !!draft.diagram_url;
       const hasAnyOptionDiagram = !!(draft.option_a_diagram_url || draft.option_b_diagram_url || draft.option_c_diagram_url || draft.option_d_diagram_url);
@@ -599,10 +687,19 @@
             <div class="q-edit-field"><label>Year</label><input type="number" data-field="year" value="${q.year != null ? q.year : ''}"></div>
             <div class="q-edit-field"><label>Source tag</label><input type="text" data-field="source_tag" value="${escapeHtml(q.source_tag || '')}"></div>
           </div>
-          <div class="q-edit-field">
-            <label>Chapter</label>
-            <input type="text" data-field="chapter" value="${escapeHtml(q.chapter || '')}" list="${datalistId}">
-            <datalist id="${datalistId}">${chapters.map(c => `<option value="${escapeHtml(c)}">`).join('')}</datalist>
+          <div class="q-edit-row">
+            <div class="q-edit-field">
+              <label>Subject</label>
+              <select data-field="subject" onchange="onEditSubjectChange(this)">
+                <option value="Biology" ${q.subject === 'Biology' ? 'selected' : ''}>Biology</option>
+                <option value="Physics" ${q.subject === 'Physics' ? 'selected' : ''}>Physics</option>
+                <option value="Chemistry" ${q.subject === 'Chemistry' ? 'selected' : ''}>Chemistry</option>
+              </select>
+            </div>
+            <div class="q-edit-field">
+              <label>Chapter</label>
+              <select data-field="chapter">${chapterOptionsHtml(chapters, q.chapter)}</select>
+            </div>
           </div>
           <label class="q-edit-active-check"><input type="checkbox" data-field="is_active" ${q.is_active ? 'checked' : ''}/> Active</label>
           <div class="q-admin-bar">
@@ -647,6 +744,7 @@
       const getVal = (name) => card.querySelector(`[data-field="${name}"]`).value;
       const draft = editDrafts[id] || {};
       const payload = Object.assign({
+        subject: getVal('subject'),
         question: getVal('question').trim(),
         option_a: getVal('option_a').trim(),
         option_b: getVal('option_b').trim(),
