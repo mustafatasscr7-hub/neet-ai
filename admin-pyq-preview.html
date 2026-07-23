@@ -41,7 +41,13 @@
     .filter-bar select:focus, .filter-bar input:focus { border-color: #4f8ef7; }
     .filter-bar input[type="text"] { flex: 1; min-width: 200px; }
     .filter-bar label.check-label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #888; white-space: nowrap; cursor: pointer; }
+    .filter-bar select:disabled, .filter-bar input:disabled { opacity: 0.4; cursor: not-allowed; }
     .result-count { font-size: 12px; color: #666; width: 100%; }
+    .result-note { font-size: 11px; color: #666; width: 100%; margin-top: -4px; }
+
+    .dup-toggle-btn { background: #1a1a1a; border: 1px solid #2a2a2a; color: #ececec; padding: 8px 14px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; white-space: nowrap; }
+    .dup-toggle-btn:hover { border-color: #4f8ef7; color: #4f8ef7; }
+    .dup-toggle-btn.active { background: #4f8ef7; border-color: #4f8ef7; color: white; }
 
     /* Question card -- copied from pyqbank.html's own styling so this is a faithful preview,
        not just a similar-looking one. */
@@ -61,6 +67,14 @@
     .q-inactive-flag { font-size: 11px; padding: 3px 9px; border-radius: 20px; font-weight: 600; background: #66666620; color: #888; }
     .q-delete-btn { background: transparent; border: 1px solid #ef4444; color: #ef4444; padding: 5px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; font-family: 'Inter', sans-serif; margin-left: auto; }
     .q-delete-btn:hover { background: #ef444420; }
+
+    .dup-pair { margin-bottom: 24px; border: 1px solid #1e1e1e; border-radius: 12px; padding: 14px; background: #0a0a0a; }
+    .dup-badge { display: inline-block; font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 20px; margin-bottom: 10px; }
+    .dup-badge.exact { background: #ef444425; color: #ef4444; }
+    .dup-badge.high { background: #f59e0b25; color: #f59e0b; }
+    .dup-badge.moderate { background: #66666625; color: #999; }
+    .dup-columns { display: flex; gap: 12px; flex-wrap: wrap; }
+    .dup-columns .question-card { flex: 1; min-width: 280px; margin-bottom: 0; }
 
     .pagination { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 16px; }
     .pagination button { background: #1a1a1a; border: 1px solid #2a2a2a; color: #ececec; padding: 6px 14px; border-radius: 6px; font-size: 12px; cursor: pointer; font-family: 'Inter', sans-serif; }
@@ -104,12 +118,14 @@
       </select>
       <input type="text" id="filterSearch" placeholder="Search question text..." oninput="onSearchInput()"/>
       <label class="check-label"><input type="checkbox" id="filterDiagram" onchange="onFilterChange()"/> Only with uploaded diagram</label>
+      <button type="button" id="dupToggleBtn" class="dup-toggle-btn" onclick="toggleDuplicatesView()">🔁 Find Duplicates (50%+)</button>
       <div class="result-count" id="resultCount"></div>
+      <div class="result-note" id="resultNote"></div>
     </div>
 
     <div id="resultsArea"><div class="loading-text">Loading...</div></div>
 
-    <div class="pagination">
+    <div class="pagination" id="paginationBar">
       <button id="prevPageBtn" onclick="changePage(-1)">← Prev</button>
       <span class="page-info" id="pageInfo">Page 1</span>
       <button id="nextPageBtn" onclick="changePage(1)">Next →</button>
@@ -122,9 +138,24 @@
     let currentPage = 1;
     let totalRows = 0;
     let currentRows = [];
+    let duplicatesMode = false;
+    let duplicatePairs = [];
+    let duplicateRowsMap = {};
 
     function authHeaders(extra) {
       return Object.assign({ 'X-Admin-Key': adminKey }, extra || {});
+    }
+
+    // A 404 (e.g. an endpoint that hasn't been deployed yet) comes back as FastAPI's own
+    // {"detail": "Not Found"} shape, not this app's usual {"error": ...} -- without checking
+    // res.ok first, that silently fell through as "no rows" instead of a visible error.
+    async function describeHttpError(res) {
+      try {
+        const body = await res.json();
+        return body.error || body.detail || `HTTP ${res.status}`;
+      } catch (e) {
+        return `HTTP ${res.status}`;
+      }
     }
 
     async function verifyPassword() {
@@ -183,11 +214,13 @@
         } catch (e) {}
       }
       currentPage = 1;
+      if (duplicatesMode) { renderDuplicatePairs(subject); return; }
       loadResults();
     }
 
     function onFilterChange() {
       currentPage = 1;
+      if (duplicatesMode) { renderDuplicatePairs(document.getElementById('filterSubject').value); return; }
       loadResults();
     }
 
@@ -238,6 +271,10 @@
       try {
         const res = await fetch(`${API_BASE}/admin/pyq-search?${params.toString()}`, { headers: authHeaders() });
         if (res.status === 401) return logout();
+        if (!res.ok) {
+          area.innerHTML = `<div class="empty-text">Error: ${escapeHtml(await describeHttpError(res))}</div>`;
+          return;
+        }
         const data = await res.json();
         if (data.error) {
           area.innerHTML = `<div class="empty-text">Error: ${escapeHtml(data.error)}</div>`;
@@ -268,37 +305,111 @@
       return flags;
     }
 
+    function questionCardHtml(q) {
+      const correctLetter = (q.correct_answer || '').toLowerCase().trim();
+      const opts = ['a', 'b', 'c', 'd'].map(opt => {
+        if (!q['option_' + opt]) return '';
+        const isCorrect = opt === correctLetter;
+        const optImg = q['option_' + opt + '_diagram_url'] ? `<img class="q-diagram-img" src="${escapeHtml(q['option_' + opt + '_diagram_url'])}">` : '';
+        return `<div class="q-option${isCorrect ? ' correct' : ''}"><strong>${opt.toUpperCase()})</strong> <span>${parseWithMath(q['option_' + opt])}${optImg}</span></div>`;
+      }).join('');
+      const flags = computeFlags(q);
+      return `
+        <div class="question-card">
+          <div class="q-meta">
+            <span class="q-year">${q.year || ''}</span>
+            <span>${escapeHtml(q.subject || '')}</span>
+            ${q.chapter ? `<span>${escapeHtml(q.chapter)}</span>` : ''}
+            ${q.source_tag ? `<span>${escapeHtml(q.source_tag)}</span>` : ''}
+            ${!q.is_active ? '<span class="q-inactive-flag">Inactive</span>' : ''}
+          </div>
+          <div class="q-text">${parseWithMath(q.question)}</div>
+          ${q.diagram_url ? `<img class="q-diagram-img" src="${escapeHtml(q.diagram_url)}">` : ''}
+          <div class="q-options">${opts}</div>
+          <div class="q-admin-bar">
+            <span class="q-admin-id">${escapeHtml(q.id)}</span>
+            ${flags.map(f => `<span class="q-flag">${escapeHtml(f)}</span>`).join('')}
+            <button class="q-delete-btn" onclick="deleteQuestion('${q.id}')">🗑 Delete</button>
+          </div>
+        </div>`;
+    }
+
     function renderResults() {
       const area = document.getElementById('resultsArea');
       if (currentRows.length === 0) {
         area.innerHTML = '<div class="empty-text">No rows match these filters.</div>';
         return;
       }
-      area.innerHTML = currentRows.map(q => {
-        const correctLetter = (q.correct_answer || '').toLowerCase().trim();
-        const opts = ['a', 'b', 'c', 'd'].map(opt => {
-          if (!q['option_' + opt]) return '';
-          const isCorrect = opt === correctLetter;
-          const optImg = q['option_' + opt + '_diagram_url'] ? `<img class="q-diagram-img" src="${escapeHtml(q['option_' + opt + '_diagram_url'])}">` : '';
-          return `<div class="q-option${isCorrect ? ' correct' : ''}"><strong>${opt.toUpperCase()})</strong> <span>${parseWithMath(q['option_' + opt])}${optImg}</span></div>`;
-        }).join('');
-        const flags = computeFlags(q);
+      area.innerHTML = currentRows.map(questionCardHtml).join('');
+    }
+
+    async function toggleDuplicatesView() {
+      duplicatesMode = !duplicatesMode;
+      document.getElementById('dupToggleBtn').classList.toggle('active', duplicatesMode);
+      document.getElementById('filterChapter').disabled = duplicatesMode;
+      document.getElementById('filterSearch').disabled = duplicatesMode;
+      document.getElementById('filterDiagram').disabled = duplicatesMode;
+      document.getElementById('paginationBar').style.display = duplicatesMode ? 'none' : 'flex';
+      document.getElementById('resultNote').textContent = duplicatesMode
+        ? 'Comparing question + option text, ignoring common exam phrasing (\"which of the following\", \"given below\", etc). Review each pair before deleting -- a high match score is a strong hint, not a guarantee.'
+        : '';
+      if (duplicatesMode) {
+        await loadDuplicates();
+      } else {
+        loadResults();
+      }
+    }
+
+    async function loadDuplicates() {
+      const area = document.getElementById('resultsArea');
+      area.innerHTML = '<div class="loading-text">Scanning the whole active question bank for duplicates... this takes several seconds.</div>';
+      document.getElementById('resultCount').textContent = '';
+      try {
+        const res = await fetch(`${API_BASE}/admin/pyq-duplicates?threshold=0.5`, { headers: authHeaders() });
+        if (res.status === 401) return logout();
+        if (!res.ok) {
+          area.innerHTML = `<div class="empty-text">Error: ${escapeHtml(await describeHttpError(res))}</div>`;
+          return;
+        }
+        const data = await res.json();
+        if (data.error) {
+          area.innerHTML = `<div class="empty-text">Error: ${escapeHtml(data.error)}</div>`;
+          return;
+        }
+        duplicatePairs = data.pairs || [];
+        duplicateRowsMap = data.rows || {};
+        renderDuplicatePairs(document.getElementById('filterSubject').value);
+      } catch (e) {
+        area.innerHTML = '<div class="empty-text">Could not reach server.</div>';
+      }
+    }
+
+    function renderDuplicatePairs(subjectFilter) {
+      const area = document.getElementById('resultsArea');
+      let pairs = duplicatePairs;
+      if (subjectFilter) {
+        pairs = pairs.filter(p => {
+          const a = duplicateRowsMap[p.a], b = duplicateRowsMap[p.b];
+          return a && b && a.subject === subjectFilter && b.subject === subjectFilter;
+        });
+      }
+      document.getElementById('resultCount').textContent = `${pairs.length} duplicate pair${pairs.length === 1 ? '' : 's'} found (50%+ match)`;
+      if (pairs.length === 0) {
+        area.innerHTML = '<div class="empty-text">No duplicate pairs found.</div>';
+        return;
+      }
+      area.innerHTML = pairs.map(p => {
+        const a = duplicateRowsMap[p.a], b = duplicateRowsMap[p.b];
+        if (!a || !b) return '';
+        const pct = Math.round(p.overlap * 100);
+        const badgeClass = p.exact ? 'exact' : (p.overlap >= 0.75 ? 'high' : 'moderate');
+        const label = p.exact ? `${pct}% match — likely exact duplicate` : `${pct}% match`;
         return `
-          <div class="question-card">
-            <div class="q-meta">
-              <span class="q-year">${q.year || ''}</span>
-              <span>${escapeHtml(q.subject || '')}</span>
-              ${q.chapter ? `<span>${escapeHtml(q.chapter)}</span>` : ''}
-              ${q.source_tag ? `<span>${escapeHtml(q.source_tag)}</span>` : ''}
-              ${!q.is_active ? '<span class="q-inactive-flag">Inactive</span>' : ''}
-            </div>
-            <div class="q-text">${parseWithMath(q.question)}</div>
-            ${q.diagram_url ? `<img class="q-diagram-img" src="${escapeHtml(q.diagram_url)}">` : ''}
-            <div class="q-options">${opts}</div>
-            <div class="q-admin-bar">
-              <span class="q-admin-id">${escapeHtml(q.id)}</span>
-              ${flags.map(f => `<span class="q-flag">${escapeHtml(f)}</span>`).join('')}
-              <button class="q-delete-btn" onclick="deleteQuestion('${q.id}')">🗑 Delete</button>
+          <div class="dup-pair">
+            <span class="dup-badge ${badgeClass}">${label}</span>
+            <div class="dup-columns">
+              ${questionCardHtml(a)}
+              ${questionCardHtml(b)}
             </div>
           </div>`;
       }).join('');
@@ -309,13 +420,20 @@
       try {
         const res = await fetch(`${API_BASE}/admin/pyq-delete/${id}`, { method: 'DELETE', headers: authHeaders() });
         if (res.status === 401) return logout();
+        if (!res.ok) { alert('Delete failed: ' + await describeHttpError(res)); return; }
         const data = await res.json();
         if (data.error) { alert('Delete failed: ' + data.error); return; }
-        currentRows = currentRows.filter(r => r.id !== id);
-        totalRows = Math.max(0, totalRows - 1);
-        renderResults();
-        renderPagination();
-        document.getElementById('resultCount').textContent = `${totalRows} matching row${totalRows === 1 ? '' : 's'}`;
+        if (duplicatesMode) {
+          delete duplicateRowsMap[id];
+          duplicatePairs = duplicatePairs.filter(p => p.a !== id && p.b !== id);
+          renderDuplicatePairs(document.getElementById('filterSubject').value);
+        } else {
+          currentRows = currentRows.filter(r => r.id !== id);
+          totalRows = Math.max(0, totalRows - 1);
+          renderResults();
+          renderPagination();
+          document.getElementById('resultCount').textContent = `${totalRows} matching row${totalRows === 1 ? '' : 's'}`;
+        }
       } catch (e) {
         alert('Delete failed — check connection.');
       }

@@ -1349,6 +1349,105 @@ def admin_pdf_upload_history(_: None = Depends(verify_admin)):
     except Exception as e:
         return {"error": str(e)}
 
+import re
+
+# Common exam-phrasing scaffolding that shows up in unrelated MCQs alike ("which of the
+# following is correct", "given below are two statements") -- left in, a plain word-overlap
+# ratio flags totally different questions as 50%+ similar on structure alone. Roman numerals
+# included since "Statement I / Statement II" list markers are the same kind of noise.
+DUP_CHECK_STOPWORDS = {
+    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+    "of", "to", "in", "on", "at", "by", "for", "with", "from", "and", "or",
+    "not", "no", "this", "that", "these", "those", "it", "its", "as",
+    "which", "one", "following", "correct", "correctly", "incorrect",
+    "statement", "statements", "given", "below", "above", "true", "false",
+    "select", "choose", "regarding", "about", "consider", "identify",
+    "list", "lists", "match", "matching", "column", "columns", "answer", "answers",
+    "option", "options", "only", "most", "appropriate", "light",
+    "ii", "iii", "iv", "vi", "vii", "viii"
+}
+
+def _tokenize_for_dup_check(text):
+    words = re.sub(r"[^a-z0-9\s]", " ", (text or "").lower()).split()
+    return set(w for w in words if len(w) > 1 and w not in DUP_CHECK_STOPWORDS)
+
+@app.get("/admin/pyq-duplicates")
+def admin_pyq_duplicates(threshold: float = 0.5, _: None = Depends(verify_admin)):
+    # Deliberately sync (not async def), same reasoning as /admin/scan-pdf: this is a
+    # multi-second CPU-bound sweep (pairwise comparison within each subject), and FastAPI runs
+    # sync path functions in a thread pool so it doesn't block the event loop for other requests.
+    # Scoped per-subject (never compares across Biology/Physics/Chemistry) but NOT per-chapter --
+    # chapter tagging can drift or be missing entirely, and a real duplicate should still be
+    # caught even if the two copies ended up tagged to slightly different chapters.
+    try:
+        # PostgREST caps a single response at its server-side max-rows setting (1000 here)
+        # regardless of the `limit` we ask for, so a table with 2000+ active rows silently came
+        # back truncated until this loop was added -- page through with offset until a page
+        # comes back short of the page size, which means it was the last one.
+        all_rows = []
+        page_size = 1000
+        offset = 0
+        while True:
+            response = http_requests.get(
+                f"{SUPABASE_URL}/rest/v1/pyq",
+                headers=ADMIN_HEADERS,
+                params={
+                    "select": "id,subject,chapter,question,option_a,option_b,option_c,option_d,"
+                              "correct_answer,is_active,year,source_tag,class,has_diagram,"
+                              "diagram_url,option_a_diagram_url,option_b_diagram_url,"
+                              "option_c_diagram_url,option_d_diagram_url,created_at",
+                    "is_active": "eq.true",
+                    "order": "id",
+                    "limit": page_size,
+                    "offset": offset
+                }
+            )
+            if response.status_code >= 400:
+                return {"error": response.text}
+            page = response.json()
+            all_rows.extend(page)
+            if len(page) < page_size:
+                break
+            offset += page_size
+
+        by_subject = {}
+        for r in all_rows:
+            by_subject.setdefault(r["subject"], []).append(r)
+
+        rows_by_id = {}
+        pairs = []
+        for subject_rows in by_subject.values():
+            # Question text alone isn't enough for "Match List I/II" or "Identify the incorrect
+            # pair" style stems -- the stem is nearly content-free, and the actual distinguishing
+            # material (which items, which pairing) lives entirely in the four options.
+            tokenized = [(r, _tokenize_for_dup_check(" ".join(filter(None, [
+                r.get("question"), r.get("option_a"), r.get("option_b"),
+                r.get("option_c"), r.get("option_d")
+            ])))) for r in subject_rows]
+            n = len(tokenized)
+            for i in range(n):
+                row_a, tokens_a = tokenized[i]
+                if not tokens_a:
+                    continue
+                for j in range(i + 1, n):
+                    row_b, tokens_b = tokenized[j]
+                    if not tokens_b:
+                        continue
+                    intersection = len(tokens_a & tokens_b)
+                    if intersection == 0:
+                        continue
+                    union = len(tokens_a | tokens_b)
+                    overlap = intersection / union if union else 0
+                    if overlap >= threshold:
+                        rows_by_id[row_a["id"]] = row_a
+                        rows_by_id[row_b["id"]] = row_b
+                        pairs.append({"a": row_a["id"], "b": row_b["id"], "overlap": round(overlap, 3), "exact": overlap >= 0.999})
+
+        pairs.sort(key=lambda p: p["overlap"], reverse=True)
+        return {"rows": rows_by_id, "pairs": pairs, "rows_scanned": len(all_rows), "threshold": threshold}
+    except Exception as e:
+        return {"error": str(e)}
+
 if __name__ == "__main__":
     import uvicorn
     import os
