@@ -70,6 +70,14 @@
     .q-meta { font-size: 11px; color: #555; margin-bottom: 10px; display: flex; gap: 12px; }
     .q-year { color: #4f8ef7; font-weight: 600; }
     .q-text { font-size: 14px; color: #ececec; line-height: 1.7; margin-bottom: 16px; }
+    /* Match List-I/List-II columns -- color inherits from .q-text's own color (incl. its
+       light-mode override), only layout needs setting here. */
+    .match-list-preamble { margin-bottom: 8px; }
+    .match-list-cols { display: flex; gap: 16px; margin: 8px 0; flex-wrap: wrap; }
+    .match-list-col { flex: 1; min-width: 140px; }
+    .match-list-item { padding: 3px 0; }
+    .match-list-item p { margin: 0; display: inline; }
+    .match-list-trailer { margin-top: 8px; }
     .q-options { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
     .q-option { padding: 10px 14px; border-radius: 8px; font-size: 13px; background: #1a1a1a; color: #888; border: 1px solid #2a2a2a; display: flex; gap: 10px; cursor: pointer; transition: all 0.15s ease; }
     .q-option:hover { background: #222; border-color: #3a3a3a; color: #ccc; transform: translateX(2px); }
@@ -212,7 +220,112 @@
       }
     };
 
+    // ---------------- Match List-I / List-II formatting ----------------
+    // Detects "Match List-I with List-II" style questions and lays the two lists out as
+    // side-by-side columns instead of one long wall of text. Only kicks in when parsing is
+    // unambiguous (both lists found, equal item counts) -- anything less confident falls back
+    // to this file's normal rendering untouched, rather than risk mangling a question.
+    function findListMarkers_ML(text) {
+      // These questions consistently mention "List I ... List II" TWICE: once in the intro
+      // sentence, again as the literal column header right before the real items. Taking the
+      // LAST "List I" and the first "List II" after it skips the intro and lands on the pair
+      // that actually precedes the content. [-–—\s] covers plain hyphen plus en-dash/em-dash,
+      // which PDF extraction frequently substitutes for a typeset dash.
+      const re = /(list|column)\s*[-–—\s]*\b(I{1,2})\b/gi;
+      let m;
+      const iPositions = [], iiPositions = [];
+      while ((m = re.exec(text)) !== null) {
+        const roman = m[2].toUpperCase();
+        const entry = { start: m.index, end: m.index + m[0].length };
+        if (roman === 'I') iPositions.push(entry); else iiPositions.push(entry);
+      }
+      if (iPositions.length === 0 || iiPositions.length === 0) return null;
+      const lastI = iPositions[iPositions.length - 1];
+      const firstIIAfter = iiPositions.find(p => p.start > lastI.start);
+      if (!firstIIAfter) return null;
+      return { listIStart: lastI.start, listIEnd: lastI.end, listIIEnd: firstIIAfter.end };
+    }
+
+    // Single unified pass rather than "split the List-I block, then the List-II block"
+    // separately -- some questions lay items out sequentially (all of List-I, then all of
+    // List-II), many interleave them row by row ("(A) M Phase (I) Proteins... (B) G2 Phase
+    // (II) Inactive phase..."). Finding every marker of both types in one pass and bucketing
+    // by which type each one was handles both layouts without needing to know which one a
+    // given question uses.
+    const MATCH_LIST_ITEM_RE = /\(\s*([a-hA-H])\s*\)|\(\s*([ivxIVX]{1,4})\s*\)|(?:^|\s)([a-hA-H]|\d{1,2})\.(?=\s|$)|(?:^|\s)([ivxIVX]{1,4})\.(?=\s|$)/g;
+
+    function findItemMarkers_ML(content) {
+      const markers = [];
+      let m;
+      MATCH_LIST_ITEM_RE.lastIndex = 0;
+      while ((m = MATCH_LIST_ITEM_RE.exec(content)) !== null) {
+        const type = (m[1] !== undefined || m[3] !== undefined) ? 'A' : 'B';
+        const leadingSpace = /^\s/.test(m[0]) ? 1 : 0;
+        markers.push({ start: m.index + leadingSpace, type });
+      }
+      return markers;
+    }
+
+    // A few source questions repeat "List-II:" (sometimes with a bracketed annotation, e.g.
+    // "List-II [Stage of...]:") a second time after the real header pair -- an extraction
+    // duplication artifact, not real content. It doesn't match any item marker, so it silently
+    // glues onto whatever the last real item happened to be without this cleanup.
+    function stripTrailingListArtifact_ML(itemText) {
+      return itemText.replace(/\s*[;,.]?\s*(list|column)\s*[-–—\s]*I{1,2}\s*(\[[^\]]*\])?\s*:?\s*$/i, '').trim();
+    }
+
+    function parseMatchList_ML(text) {
+      const markers = findListMarkers_ML(text);
+      if (!markers) return null;
+      let content = text.slice(markers.listIEnd);
+      // Cut off a trailing instruction sentence ("Choose the correct answer...") before item
+      // splitting -- otherwise it glues onto whatever the last real item happens to be.
+      const trailerMatch = content.match(/\b(choose|select|identify)\b/i);
+      let trailer = '';
+      if (trailerMatch) {
+        trailer = content.slice(trailerMatch.index).trim();
+        content = content.slice(0, trailerMatch.index);
+      }
+      const itemMarkers = findItemMarkers_ML(content);
+      if (itemMarkers.length === 0) return null;
+      const itemsI = [], itemsII = [];
+      for (let i = 0; i < itemMarkers.length; i++) {
+        const start = itemMarkers[i].start;
+        const end = i + 1 < itemMarkers.length ? itemMarkers[i + 1].start : content.length;
+        const itemText = stripTrailingListArtifact_ML(content.slice(start, end).trim());
+        if (!itemText) continue;
+        (itemMarkers[i].type === 'A' ? itemsI : itemsII).push(itemText);
+      }
+      // Equal counts required -- an imbalance means the parse is confused (a stray "(A)"/"(B)"
+      // matched inside ordinary text, a source question genuinely missing an item, etc.), and a
+      // mismatched pair of columns would be actively misleading rather than merely unhelpful.
+      if (itemsI.length === 0 || itemsII.length === 0 || itemsI.length !== itemsII.length) return null;
+      return { preamble: text.slice(0, markers.listIStart).trim(), itemsI, itemsII, trailer };
+    }
+
+    // formatFn renders one piece of text (preamble/item/trailer) using whatever this file
+    // already uses for question text -- KaTeX+Markdown on some pages, plain on others -- so
+    // Match-List columns look consistent with the rest of that page's own formatting.
+    // Returns null (not a fallback string) when the text isn't confidently a Match-List
+    // question, so callers know to run their own normal formatting instead.
+    function renderMatchListHtml_ML(text, formatFn) {
+      if (!text) return null;
+      const parsed = parseMatchList_ML(text);
+      if (!parsed) return null;
+      const colHtml = items => items.map(item => `<div class="match-list-item">${formatFn(item)}</div>`).join('');
+      return (parsed.preamble ? `<div class="match-list-preamble">${formatFn(parsed.preamble)}</div>` : '')
+        + `<div class="match-list-cols"><div class="match-list-col">${colHtml(parsed.itemsI)}</div><div class="match-list-col">${colHtml(parsed.itemsII)}</div></div>`
+        + (parsed.trailer ? `<div class="match-list-trailer">${formatFn(parsed.trailer)}</div>` : '');
+    }
+
     function parseWithMath(text) {
+      if (!text) return '';
+      const matchListHtml = renderMatchListHtml_ML(text, parseWithMathInner);
+      if (matchListHtml !== null) return matchListHtml;
+      return parseWithMathInner(text);
+    }
+
+    function parseWithMathInner(text) {
       if (!text) return '';
       let html = text;
       html = html.replace(/\$\$([^$]+)\$\$/g, function(_, math) {
