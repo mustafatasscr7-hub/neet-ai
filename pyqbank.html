@@ -578,7 +578,7 @@ function handleBack() {
         <div class="loading"><div class="spinner"></div>${t('pyqbank','loadingQuestions')}</div>
       `;
 
-      let query = client.from('pyq').select('*').eq('subject', subject).eq('class', classNum).eq('chapter', chapter).eq('is_active', true);
+      let query = client.from('pyq').select('*').eq('subject', subject).eq('chapter', chapter).eq('is_active', true);
 if (yearFilter) query = query.eq('year', yearFilter);
 const { data, error } = await query;
 
@@ -705,7 +705,7 @@ ${q.diagram_url ? `<img class="q-diagram-img" src="${q.diagram_url}">` : ''}
       
 
      async function filterByYear(year, subject, classNum, chapter) {
-  let query = client.from('pyq').select('*').eq('subject', subject).eq('class', classNum).eq('chapter', chapter).eq('is_active', true);
+  let query = client.from('pyq').select('*').eq('subject', subject).eq('chapter', chapter).eq('is_active', true);
   if (year) query = query.eq('year', parseInt(year));
   const { data } = await query;
   if (data && data.length > 0) {
