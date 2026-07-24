@@ -185,6 +185,7 @@ class AdminPyqUpdate(BaseModel):
     option_b_diagram_url: Optional[str] = None
     option_c_diagram_url: Optional[str] = None
     option_d_diagram_url: Optional[str] = None
+    reviewed: Optional[bool] = None
 
 class AdminPyqBulkUpdate(BaseModel):
     ids: List[str]
@@ -1071,6 +1072,7 @@ async def admin_pyq_search(
     search: str = None,
     is_active: str = None,
     with_uploaded_diagram: str = None,
+    reviewed: str = None,
     page: int = 1,
     sort_by: str = "id",
     sort_dir: str = "asc",
@@ -1090,7 +1092,7 @@ async def admin_pyq_search(
         select_fields = (
             "id,subject,chapter,question,option_a,option_b,option_c,option_d,correct_answer,"
             "is_active,year,source_tag,class,has_diagram,diagram_url,option_a_diagram_url,"
-            "option_b_diagram_url,option_c_diagram_url,option_d_diagram_url,created_at"
+            "option_b_diagram_url,option_c_diagram_url,option_d_diagram_url,reviewed,created_at"
             if full else
             "id,subject,chapter,question,correct_answer,is_active,year"
         )
@@ -1106,6 +1108,8 @@ async def admin_pyq_search(
             params["chapter"] = f"eq.{chapter}"
         if is_active in ("true", "false"):
             params["is_active"] = f"eq.{is_active}"
+        if reviewed in ("true", "false"):
+            params["reviewed"] = f"eq.{reviewed}"
         # Both filters below are OR-groups across the same 4-5 columns, and both need to be
         # applyable at once (e.g. searching while also filtering to uploaded-diagram rows) --
         # collected as separate or(...) groups and combined via and=() at the end instead of
@@ -1184,6 +1188,8 @@ async def admin_pyq_update(pyq_id: str, body: AdminPyqUpdate, _: None = Depends(
         update_fields["source_tag"] = body.source_tag
     if body.class_ is not None:
         update_fields["class"] = body.class_
+    if body.reviewed is not None:
+        update_fields["reviewed"] = body.reviewed
     # Diagram fields need to distinguish "not sent" from "sent as null" -- removing a photo in
     # the edit form means explicitly clearing the URL, and `is not None` would silently ignore
     # that. model_fields_set has whatever keys were actually present in the request JSON.
@@ -1203,7 +1209,7 @@ async def admin_pyq_update(pyq_id: str, body: AdminPyqUpdate, _: None = Depends(
             headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
             params={"id": f"eq.{pyq_id}", "select": "id,subject,chapter,question,option_a,option_b,option_c,"
                     "option_d,correct_answer,is_active,year,source_tag,class,has_diagram,diagram_url,"
-                    "option_a_diagram_url,option_b_diagram_url,option_c_diagram_url,option_d_diagram_url,created_at"},
+                    "option_a_diagram_url,option_b_diagram_url,option_c_diagram_url,option_d_diagram_url,reviewed,created_at"},
             json=update_fields
         )
         if response.status_code >= 400:

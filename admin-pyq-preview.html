@@ -85,6 +85,8 @@
     .q-delete-btn:hover { background: #ef444420; }
     .q-edit-btn { background: transparent; border: 1px solid #2a2a2a; color: #888; padding: 5px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; font-family: 'Inter', sans-serif; margin-left: auto; }
     .q-edit-btn:hover { border-color: #4f8ef7; color: #4f8ef7; }
+    .q-approve-btn { background: #4ade80; border: none; color: white; padding: 5px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
+    .q-approve-btn:hover { background: #3ecf75; }
 
     /* Edit form -- shown in place of the read-only card while a question is being edited */
     .q-edit-field { margin-bottom: 10px; }
@@ -165,6 +167,11 @@
       <input type="text" id="filterSearch" placeholder="Search question text..." oninput="onSearchInput()"/>
       <label class="check-label"><input type="checkbox" id="filterDiagram" onchange="onFilterChange()"/> Only with uploaded diagram</label>
       <button type="button" id="dupToggleBtn" class="dup-toggle-btn" onclick="toggleDuplicatesView()">🔁 Find Duplicates (50%+)</button>
+      <button type="button" id="reviewToggleBtn" class="dup-toggle-btn" onclick="toggleReviewMode()">📋 Review Queue</button>
+      <select id="reviewSortOrder" onchange="onFilterChange()" style="display:none">
+        <option value="asc">Oldest uploaded first</option>
+        <option value="desc">Newest uploaded first</option>
+      </select>
       <div class="result-count" id="resultCount"></div>
       <div class="result-note" id="resultNote"></div>
     </div>
@@ -185,6 +192,7 @@
     let totalRows = 0;
     let currentRows = [];
     let duplicatesMode = false;
+    let reviewMode = false;
     let duplicatePairs = [];
     let duplicateRowsMap = {};
     let editingIds = new Set();
@@ -585,9 +593,10 @@
       if (chapter) params.set('chapter', chapter);
       if (search) params.set('search', search);
       if (onlyDiagram) params.set('with_uploaded_diagram', 'true');
+      if (reviewMode) params.set('reviewed', 'false');
       params.set('page', currentPage);
       params.set('sort_by', 'created_at');
-      params.set('sort_dir', 'desc');
+      params.set('sort_dir', reviewMode ? document.getElementById('reviewSortOrder').value : 'desc');
       params.set('full', 'true');
 
       try {
@@ -606,10 +615,16 @@
         totalRows = data.total || 0;
         renderResults();
         renderPagination();
-        document.getElementById('resultCount').textContent = `${totalRows} matching row${totalRows === 1 ? '' : 's'}`;
+        updateResultCountText();
       } catch (e) {
         area.innerHTML = '<div class="empty-text">Could not reach server.</div>';
       }
+    }
+
+    function updateResultCountText() {
+      document.getElementById('resultCount').textContent = reviewMode
+        ? `${totalRows} question${totalRows === 1 ? '' : 's'} awaiting review`
+        : `${totalRows} matching row${totalRows === 1 ? '' : 's'}`;
     }
 
     // ---------------- Edit form: diagram upload/paste/remove ----------------
@@ -903,6 +918,7 @@
             <span class="q-admin-id">${escapeHtml(q.id)}</span>
             ${flags.map(f => `<span class="q-flag">${escapeHtml(f)}</span>`).join('')}
             <button class="q-edit-btn" onclick="startEdit('${q.id}')">✏️ Edit</button>
+            ${reviewMode ? `<button class="q-approve-btn" onclick="approveQuestion('${q.id}', this)">✅ Approve</button>` : ''}
             <button class="q-delete-btn" onclick="deleteQuestion('${q.id}', this)">🗑 Delete</button>
           </div>
         </div>`;
@@ -920,6 +936,7 @@
 
     async function toggleDuplicatesView() {
       duplicatesMode = !duplicatesMode;
+      if (duplicatesMode && reviewMode) { reviewMode = false; setReviewModeUi(); }
       document.getElementById('dupToggleBtn').classList.toggle('active', duplicatesMode);
       document.getElementById('filterChapter').disabled = duplicatesMode;
       document.getElementById('filterSearch').disabled = duplicatesMode;
@@ -933,6 +950,33 @@
       } else {
         loadResults();
       }
+    }
+
+    // Just the DOM side-effects of a reviewMode change, shared by toggleReviewMode (where the
+    // state flip already happened) and toggleDuplicatesView (which force-turns reviewMode off
+    // without wanting its own loadResults/loadDuplicates call -- toggleDuplicatesView triggers
+    // its own fetch right after).
+    function setReviewModeUi() {
+      document.getElementById('reviewToggleBtn').classList.toggle('active', reviewMode);
+      document.getElementById('reviewSortOrder').style.display = reviewMode ? 'inline-block' : 'none';
+      document.getElementById('resultNote').textContent = reviewMode
+        ? 'Newly uploaded questions awaiting a first check. Edit if something needs fixing, then Approve to clear it from this queue for good.'
+        : '';
+    }
+
+    function toggleReviewMode() {
+      reviewMode = !reviewMode;
+      if (reviewMode && duplicatesMode) {
+        duplicatesMode = false;
+        document.getElementById('dupToggleBtn').classList.remove('active');
+        document.getElementById('filterChapter').disabled = false;
+        document.getElementById('filterSearch').disabled = false;
+        document.getElementById('filterDiagram').disabled = false;
+        document.getElementById('paginationBar').style.display = 'flex';
+      }
+      setReviewModeUi();
+      currentPage = 1;
+      loadResults();
     }
 
     async function loadDuplicates() {
@@ -1087,7 +1131,40 @@
         totalRows = Math.max(0, totalRows - 1);
         renderResults();
         renderPagination();
-        document.getElementById('resultCount').textContent = `${totalRows} matching row${totalRows === 1 ? '' : 's'}`;
+        updateResultCountText();
+      }
+    }
+
+    // Marks a question as reviewed -- doesn't touch its content, just takes it off this list
+    // for good (reviewMode's fetch filters to reviewed=false, same removal pattern as delete).
+    async function approveQuestion(id, btnEl) {
+      const originalLabel = btnEl.textContent;
+      btnEl.disabled = true;
+      btnEl.textContent = 'Approving...';
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 20000);
+      try {
+        const res = await fetch(`${API_BASE}/admin/pyq-update/${id}`, {
+          method: 'PATCH',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ reviewed: true }),
+          signal: controller.signal
+        });
+        if (res.status === 401) return logout();
+        if (!res.ok) { alert('Approve failed: ' + await describeHttpError(res)); btnEl.disabled = false; btnEl.textContent = originalLabel; return; }
+        const data = await res.json();
+        if (data.error) { alert('Approve failed: ' + data.error); btnEl.disabled = false; btnEl.textContent = originalLabel; return; }
+        currentRows = currentRows.filter(r => r.id !== id);
+        totalRows = Math.max(0, totalRows - 1);
+        renderResults();
+        renderPagination();
+        updateResultCountText();
+      } catch (e) {
+        alert(e.name === 'AbortError' ? 'Timed out waiting for the server -- check your connection and try again.' : 'Could not reach server.');
+        btnEl.disabled = false;
+        btnEl.textContent = originalLabel;
+      } finally {
+        clearTimeout(timeoutId);
       }
     }
 
