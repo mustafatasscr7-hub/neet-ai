@@ -199,6 +199,19 @@
     let editDrafts = {}; // id -> pending diagram_url / option_a-d_diagram_url while a card is being edited
     let chapterCacheBySubject = {}; // subject -> [chapter names], for the edit form's chapter datalist
 
+    // Full canonical NCERT chapter list per subject (Class 11 + 12 combined, same source list
+    // pyqbank.html's picker uses) -- merged into the edit form's dropdown below because the
+    // data-driven /admin/pyq-chapters list only ever returns chapters that already have at least
+    // one row, so a chapter with zero PYQs uploaded so far could never be selected there without
+    // this, even though it's a perfectly valid chapter to tag a question into. "The p-Block
+    // Elements" is a real NCERT chapter in both class 11 and 12 -- listed once here since this
+    // dropdown doesn't distinguish class, only the chapter string being assigned.
+    const CANONICAL_CHAPTERS = {
+      Biology: ['The Living World', 'Biological Classification', 'Plant Kingdom', 'Animal Kingdom', 'Morphology of Flowering Plants', 'Anatomy of Flowering Plants', 'Structural Organisation in Animals', 'Cell: The Unit of Life', 'Biomolecules', 'Cell Cycle and Cell Division', 'Transport in Plants', 'Mineral Nutrition', 'Photosynthesis in Higher Plants', 'Respiration in Plants', 'Plant Growth and Development', 'Digestion and Absorption', 'Breathing and Exchange of Gases', 'Body Fluids and Circulation', 'Excretory Products and their Elimination', 'Locomotion and Movement', 'Neural Control and Coordination', 'Chemical Coordination and Integration', 'Reproduction in Organisms', 'Sexual Reproduction in Flowering Plants', 'Human Reproduction', 'Reproductive Health', 'Principles of Inheritance and Variation', 'Molecular Basis of Inheritance', 'Evolution', 'Human Health and Disease', 'Strategies for Enhancement in Food Production', 'Microbes in Human Welfare', 'Biotechnology: Principles and Processes', 'Biotechnology and its Applications', 'Organisms and Populations', 'Ecosystem', 'Biodiversity and Conservation', 'Environmental Issues'],
+      Physics: ['Physical World', 'Units and Measurements', 'Motion in a Straight Line', 'Motion in a Plane', 'Laws of Motion', 'Work, Energy and Power', 'System of Particles and Rotational Motion', 'Gravitation', 'Mechanical Properties of Solids', 'Mechanical Properties of Fluids', 'Thermal Properties of Matter', 'Thermodynamics', 'Kinetic Theory', 'Oscillations', 'Waves', 'Electric Charges and Fields', 'Electrostatic Potential and Capacitance', 'Current Electricity', 'Moving Charges and Magnetism', 'Magnetism and Matter', 'Electromagnetic Induction', 'Alternating Current', 'Electromagnetic Waves', 'Ray Optics and Optical Instruments', 'Wave Optics', 'Dual Nature of Radiation and Matter', 'Atoms', 'Nuclei', 'Semiconductor Electronics'],
+      Chemistry: ['Some Basic Concepts of Chemistry', 'Structure of Atom', 'Classification of Elements and Periodicity in Properties of Elements', 'Chemical Bonding and Molecular Structure', 'States of Matter: Gases and Liquids', 'Thermodynamics', 'Equilibrium', 'Redox Reactions', 'Hydrogen', 'The s-Block Elements (Alkali and Alkaline Earth Metals)', 'The p-Block Elements', 'Organic Chemistry: Some Basic Principles and Techniques', 'Hydrocarbons', 'Environmental Chemistry', 'The Solid State', 'Solutions', 'Electrochemistry', 'Chemical Kinetics', 'Surface Chemistry', 'General Principles and Processes of Isolation of Elements', 'The d and f Block Elements', 'Coordination Compounds', 'Haloalkanes and Haloarenes', 'Alcohols, Phenols and Ethers', 'Aldehydes, Ketones and Carboxylic Acids', 'Amines', 'Biomolecules', 'Polymers', 'Chemistry in Everyday Life']
+    };
+
     function authHeaders(extra) {
       return Object.assign({ 'X-Admin-Key': adminKey }, extra || {});
     }
@@ -318,13 +331,16 @@
 
     async function getChaptersForSubject(subject) {
       if (chapterCacheBySubject[subject]) return chapterCacheBySubject[subject];
+      const canonical = CANONICAL_CHAPTERS[subject] || [];
+      let extra = [];
       try {
         const res = await fetch(`${API_BASE}/admin/pyq-chapters?subject=${encodeURIComponent(subject)}`, { headers: authHeaders() });
         const data = await res.json();
-        chapterCacheBySubject[subject] = data.chapters || [];
-      } catch (e) {
-        chapterCacheBySubject[subject] = [];
-      }
+        // Anything the DB actually has that isn't in the canonical list -- keeps a genuine
+        // outlier selectable/visible instead of silently disappearing behind the static list.
+        extra = (data.chapters || []).filter(name => !canonical.includes(name));
+      } catch (e) {}
+      chapterCacheBySubject[subject] = canonical.concat(extra);
       return chapterCacheBySubject[subject];
     }
 
