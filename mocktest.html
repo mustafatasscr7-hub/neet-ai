@@ -37,6 +37,10 @@
     .ar-intro { margin-bottom: 8px; }
     .ar-part { margin-bottom: 6px; }
     .ar-trailer { margin-top: 8px; }
+    /* Sequential steps ((i)/(ii)/(iii)... or (a)/(b)/(c)... or (1)/(2)/(3)...) -- one item per line. */
+    .seq-list-preamble { margin-bottom: 8px; }
+    .seq-list-items { margin: 8px 0; }
+    .seq-list-item { padding: 3px 0; }
 
     .options { display: flex; flex-direction: column; gap: 10px; margin-bottom: 28px; }
     .option { padding: 14px 18px; border-radius: 10px; border: 1px solid #2a2a2a; background: #111; cursor: pointer; font-size: 14px; color: #ccc; transition: all 0.2s; display: flex; align-items: center; gap: 12px; }
@@ -443,12 +447,79 @@ function renderAssertionReasonHtml_AR(text, formatFn) {
     + (parsed.trailer ? `<div class="ar-trailer">${formatFn(parsed.trailer)}</div>` : '');
 }
 
+// ---------------- Sequential steps / ordered-list formatting ----------------
+// Detects a stem that lists several (i)/(ii)/(iii)... or (a)/(b)/(c)... or (1)/(2)/(3)...
+// items run together in one paragraph (e.g. "correct sequence of steps is (i) ... (ii) ...
+// (iii) ...") and breaks them into one item per line, same spirit as Match-List/AR above.
+// Requires markers strictly consecutive from the first one in their family (i,ii,iii,... or
+// a,b,c,... or 1,2,3,...), at least 3 of them -- a single incidental "(a)" elsewhere in the
+// stem (or a chemical formula like "(NH4)2SO4") shouldn't be mistaken for the start of a list.
+const SEQ_ITEM_RE = /\(\s*([a-hA-H])\s*\)|\(\s*([ivxIVX]{1,4})\s*\)|\(\s*(\d{1,2})\s*\)/g;
+const SEQ_ROMAN_ORDER = ['i','ii','iii','iv','v','vi','vii','viii','ix','x','xi','xii'];
+
+function seqMarkerOrder_SEQ(raw, family) {
+  if (family === 'alpha') return raw.toLowerCase().charCodeAt(0) - 97;
+  if (family === 'digit') return parseInt(raw, 10) - 1;
+  return SEQ_ROMAN_ORDER.indexOf(raw.toLowerCase());
+}
+
+function findSequenceMarkers_SEQ(text) {
+  const all = [];
+  let m;
+  SEQ_ITEM_RE.lastIndex = 0;
+  while ((m = SEQ_ITEM_RE.exec(text)) !== null) {
+    const family = m[1] ? 'alpha' : (m[2] ? 'roman' : 'digit');
+    const raw = m[1] || m[2] || m[3];
+    all.push({ start: m.index, family, order: seqMarkerOrder_SEQ(raw, family) });
+  }
+  if (all.length < 3) return null;
+
+  const counts = {};
+  all.forEach(mk => { counts[mk.family] = (counts[mk.family] || 0) + 1; });
+  const dominant = Object.keys(counts).reduce((a, b) => counts[a] >= counts[b] ? a : b);
+  const chain = all.filter(mk => mk.family === dominant);
+
+  for (let i = 0; i < chain.length; i++) {
+    if (chain[i].order !== i) return null;
+  }
+  return chain.length >= 3 ? chain : null;
+}
+
+function parseSequenceList_SEQ(text) {
+  const markers = findSequenceMarkers_SEQ(text);
+  if (!markers) return null;
+  const preamble = text.slice(0, markers[0].start).trim();
+  const items = [];
+  for (let i = 0; i < markers.length; i++) {
+    const end = i + 1 < markers.length ? markers[i + 1].start : text.length;
+    const itemText = text.slice(markers[i].start, end).trim();
+    if (itemText) items.push(itemText);
+  }
+  if (items.length < 3) return null;
+  // Guards against a compact answer-option like "(i) -> (ii) -> (iii)" (a scrambled/
+  // identity-order ordering CHOICE, not a real list of steps) -- real steps always have
+  // actual words after the marker; a bare marker/arrow chain never does.
+  const hasRealContent = items.some(item => /[a-zA-Z]{2,}/.test(item.replace(SEQ_ITEM_RE, '')));
+  return hasRealContent ? { preamble, items } : null;
+}
+
+function renderSequenceListHtml_SEQ(text, formatFn) {
+  if (!text) return null;
+  const parsed = parseSequenceList_SEQ(text);
+  if (!parsed) return null;
+  const itemsHtml = parsed.items.map(item => `<div class="seq-list-item">${formatFn(item)}</div>`).join('');
+  return (parsed.preamble ? `<div class="seq-list-preamble">${formatFn(parsed.preamble)}</div>` : '')
+    + `<div class="seq-list-items">${itemsHtml}</div>`;
+}
+
 function formatQuestionText(text) {
   if (!text) return '';
   const matchListHtml = renderMatchListHtml_ML(text, formatQuestionTextInner);
   if (matchListHtml !== null) return matchListHtml;
   const arHtml = renderAssertionReasonHtml_AR(text, formatQuestionTextInner);
   if (arHtml !== null) return arHtml;
+  const seqHtml = renderSequenceListHtml_SEQ(text, formatQuestionTextInner);
+  if (seqHtml !== null) return seqHtml;
   return formatQuestionTextInner(text);
 }
 
