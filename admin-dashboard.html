@@ -29,6 +29,32 @@
     .logout-btn { background: transparent; border: 1px solid #2a2a2a; color: #888; padding: 6px 14px; border-radius: 8px; font-size: 12px; cursor: pointer; font-family: 'Inter', sans-serif; }
     .logout-btn:hover { color: #ccc; border-color: #3a3a3a; }
 
+    /* View tabs */
+    .view-tabs { display: flex; gap: 4px; background: #111; border: 1px solid #1e1e1e; border-radius: 8px; padding: 3px; }
+    .view-tab { background: transparent; border: none; color: #888; padding: 6px 14px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; display: flex; align-items: center; gap: 6px; }
+    .view-tab:hover { color: #ccc; }
+    .view-tab.active { background: #4f8ef7; color: white; }
+    .reports-badge { background: #ef4444; color: white; font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 10px; min-width: 16px; text-align: center; }
+    .view-tab.active .reports-badge { background: rgba(255,255,255,0.25); }
+
+    /* Reported Questions view */
+    .report-group-card { background: #111; border: 1px solid #1e1e1e; border-radius: 10px; padding: 16px; margin-bottom: 12px; }
+    .report-group-header { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+    .report-count-badge { background: #ef444420; color: #ef4444; font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 20px; white-space: nowrap; }
+    .report-reasons-list { display: flex; gap: 6px; flex-wrap: wrap; }
+    .report-reason-chip { background: #1a1a1a; border: 1px solid #2a2a2a; color: #888; font-size: 11px; padding: 2px 8px; border-radius: 12px; }
+    .report-group-meta { font-size: 11px; color: #555; margin-bottom: 8px; }
+    .report-group-question { font-size: 13px; color: #ccc; margin-bottom: 10px; line-height: 1.5; }
+    .report-group-notes { font-size: 12px; color: #999; background: #0d0d0d; border-radius: 6px; padding: 8px 10px; margin-bottom: 10px; }
+    .report-group-notes div { padding: 2px 0; }
+    .report-group-actions { display: flex; gap: 8px; }
+    .report-resolve-btn { background: #4ade80; border: none; color: #0a0a0a; padding: 6px 14px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
+    .report-resolve-btn:hover { background: #3fcc70; }
+    .report-resolve-btn:disabled { opacity: 0.6; cursor: default; }
+    .report-open-editor-link { background: transparent; border: 1px solid #2a2a2a; color: #888; padding: 6px 14px; border-radius: 6px; font-size: 12px; cursor: pointer; font-family: 'Inter', sans-serif; text-decoration: none; display: inline-flex; align-items: center; }
+    .report-open-editor-link:hover { border-color: #4f8ef7; color: #4f8ef7; }
+    .report-deleted-note { color: #ef4444; font-style: italic; font-size: 12px; margin-bottom: 10px; }
+
     /* Stats */
     .stats-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 20px; }
     .stat-card { background: #111; border: 1px solid #1e1e1e; border-radius: 10px; padding: 16px; }
@@ -121,9 +147,16 @@
   <div id="dashboard">
     <div class="db-header">
       <h1>NEET<span>-AI</span> PYQ Admin</h1>
-      <button class="logout-btn" onclick="logout()">Log out</button>
+      <div style="display:flex;gap:10px;align-items:center;">
+        <div class="view-tabs">
+          <button type="button" id="tabAllQuestions" class="view-tab active" onclick="switchView('questions')">All Questions</button>
+          <button type="button" id="tabReports" class="view-tab" onclick="switchView('reports')">Reported Questions<span id="reportsBadge" class="reports-badge" style="display:none;"></span></button>
+        </div>
+        <button class="logout-btn" onclick="logout()">Log out</button>
+      </div>
     </div>
 
+    <div id="questionsView">
     <div class="stats-row">
       <div class="stat-card"><div class="num" id="statTotalActive">–</div><div class="label">Total Active Rows</div></div>
       <div class="stat-card warn"><div class="num" id="statEmptyAnswer">–</div><div class="label">Missing correct_answer</div></div>
@@ -182,6 +215,14 @@
       <span class="page-info" id="pageInfo">Page 1</span>
       <button id="nextPageBtn" onclick="changePage(1)">Next →</button>
     </div>
+    </div>
+
+    <div id="reportsView" style="display:none;">
+      <div class="filter-bar">
+        <div class="result-count" id="reportsCount"></div>
+      </div>
+      <div id="reportsArea"><div class="loading-text">Loading...</div></div>
+    </div>
   </div>
 
   <script>
@@ -237,6 +278,7 @@
       document.getElementById('dashboard').style.display = 'block';
       loadStats();
       loadResults();
+      refreshReportsBadge();
     }
 
     async function loadStats() {
@@ -492,6 +534,116 @@
       if (next < 1 || next > totalPages) return;
       currentPage = next;
       loadResults();
+    }
+
+    // ---------------- Reported Questions ----------------
+    let reportGroups = [];
+
+    const REPORT_REASON_LABELS = {
+      wrong_answer: 'Wrong answer marked',
+      unclear: 'Question unclear / incomplete',
+      diagram_issue: 'Diagram missing or broken',
+      duplicate: 'Duplicate question',
+      other: 'Other'
+    };
+
+    function switchView(view) {
+      document.getElementById('tabAllQuestions').classList.toggle('active', view === 'questions');
+      document.getElementById('tabReports').classList.toggle('active', view === 'reports');
+      document.getElementById('questionsView').style.display = view === 'questions' ? 'block' : 'none';
+      document.getElementById('reportsView').style.display = view === 'reports' ? 'block' : 'none';
+      if (view === 'reports') loadReports();
+    }
+
+    async function refreshReportsBadge() {
+      try {
+        const res = await fetch(`${API_BASE}/admin/question-reports?resolved=false`, { headers: authHeaders() });
+        if (res.status === 401) return;
+        const data = await res.json();
+        const count = (data.groups || []).length;
+        const badge = document.getElementById('reportsBadge');
+        if (count > 0) { badge.textContent = count; badge.style.display = 'inline-block'; }
+        else { badge.style.display = 'none'; }
+      } catch (e) {}
+    }
+
+    async function loadReports() {
+      const area = document.getElementById('reportsArea');
+      area.innerHTML = '<div class="loading-text">Loading...</div>';
+      document.getElementById('reportsCount').textContent = '';
+      try {
+        const res = await fetch(`${API_BASE}/admin/question-reports?resolved=false`, { headers: authHeaders() });
+        if (res.status === 401) return logout();
+        const data = await res.json();
+        if (data.error) {
+          area.innerHTML = `<div class="loading-text">Error: ${escapeHtml(data.error)}</div>`;
+          return;
+        }
+        reportGroups = data.groups || [];
+        document.getElementById('reportsCount').textContent = `${reportGroups.length} question${reportGroups.length === 1 ? '' : 's'} with unresolved reports`;
+        renderReports();
+      } catch (e) {
+        area.innerHTML = '<div class="loading-text">Could not reach server.</div>';
+      }
+    }
+
+    function renderReports() {
+      const area = document.getElementById('reportsArea');
+      if (reportGroups.length === 0) {
+        area.innerHTML = '<div class="loading-text">No unresolved reports.</div>';
+        return;
+      }
+      // Sorted by count descending server-side already; kept stable here across re-renders.
+      area.innerHTML = reportGroups.map(g => {
+        const q = g.question;
+        const reasonsHtml = Object.entries(g.reasons)
+          .sort((a, b) => b[1] - a[1])
+          .map(([reason, count]) => `<span class="report-reason-chip">${escapeHtml(REPORT_REASON_LABELS[reason] || reason)} × ${count}</span>`)
+          .join('');
+        const notesHtml = g.notes.length > 0
+          ? `<div class="report-group-notes">${g.notes.map(n => `<div>"${escapeHtml(n)}"</div>`).join('')}</div>`
+          : '';
+        const qSnippet = q ? (q.question || '').slice(0, 220) + ((q.question || '').length > 220 ? '…' : '') : '';
+        const questionHtml = q
+          ? `<div class="report-group-meta">${escapeHtml(q.subject || '')}${q.chapter ? ' • ' + escapeHtml(q.chapter) : ''}${q.is_active === false ? ' • INACTIVE' : ''}</div>
+             <div class="report-group-question">${escapeHtml(qSnippet)}</div>`
+          : `<div class="report-deleted-note">This question no longer exists (already deleted).</div>`;
+        return `
+          <div class="report-group-card">
+            <div class="report-group-header">
+              <span class="report-count-badge">${g.count} report${g.count === 1 ? '' : 's'}</span>
+              <div class="report-reasons-list">${reasonsHtml}</div>
+            </div>
+            ${questionHtml}
+            ${notesHtml}
+            <div class="report-group-actions">
+              <button type="button" class="report-resolve-btn" onclick="resolveReportGroup('${g.pyq_id}', this)">Mark Resolved</button>
+              ${q ? `<a class="report-open-editor-link" href="./admin-pyq-preview.html?id=${encodeURIComponent(g.pyq_id)}" target="_blank" rel="noopener">Open in PYQ editor →</a>` : ''}
+            </div>
+          </div>`;
+      }).join('');
+    }
+
+    async function resolveReportGroup(pyqId, btnEl) {
+      const originalLabel = btnEl.textContent;
+      btnEl.disabled = true;
+      btnEl.textContent = 'Resolving...';
+      try {
+        const res = await fetch(`${API_BASE}/admin/question-reports/${pyqId}/resolve`, {
+          method: 'PATCH', headers: authHeaders()
+        });
+        if (res.status === 401) return logout();
+        const data = await res.json();
+        if (data.error) { alert('Failed: ' + data.error); btnEl.disabled = false; btnEl.textContent = originalLabel; return; }
+        reportGroups = reportGroups.filter(g => g.pyq_id !== pyqId);
+        document.getElementById('reportsCount').textContent = `${reportGroups.length} question${reportGroups.length === 1 ? '' : 's'} with unresolved reports`;
+        renderReports();
+        refreshReportsBadge();
+      } catch (e) {
+        alert('Could not reach server.');
+        btnEl.disabled = false;
+        btnEl.textContent = originalLabel;
+      }
     }
 
     if (adminKey) {

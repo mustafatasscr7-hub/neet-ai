@@ -67,7 +67,28 @@
 
     /* Questions */
     .question-card { background: #111; border: 1px solid #1e1e1e; border-radius: 12px; padding: 20px; margin-bottom: 12px; }
-    .q-meta { font-size: 11px; color: #555; margin-bottom: 10px; display: flex; gap: 12px; }
+    .q-meta { font-size: 11px; color: #555; margin-bottom: 10px; display: flex; gap: 12px; align-items: center; }
+
+    /* Report-a-question: subtle flag icon, low visibility until hovered, and its popup */
+    .report-flag-btn { background: none; border: none; cursor: pointer; display: inline-flex; align-items: center; opacity: 0.35; padding: 2px 4px; margin-left: auto; transition: opacity 0.15s, transform 0.15s; }
+    .report-flag-btn:hover, .report-flag-btn:focus-visible { opacity: 1; transform: scale(1.15); }
+    .report-popup { position: fixed; z-index: 2000; background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 10px; padding: 12px; width: 220px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); font-size: 12px; }
+    .report-popup-title { font-weight: 600; margin-bottom: 8px; color: #ececec; }
+    .report-reason-row { display: flex; align-items: center; gap: 6px; padding: 4px 0; color: #ccc; cursor: pointer; font-size: 12px; }
+    .report-reason-row input { cursor: pointer; }
+    .report-note { width: 100%; background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 6px; padding: 6px 8px; color: #ececec; font-size: 12px; font-family: 'Inter', sans-serif; margin: 6px 0; resize: vertical; }
+    .report-popup-error { color: #ef4444; font-size: 11px; min-height: 14px; margin: 4px 0; }
+    .report-popup-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
+    .report-cancel-btn { background: transparent; border: 1px solid #2a2a2a; color: #888; padding: 5px 10px; border-radius: 6px; font-size: 11px; cursor: pointer; font-family: 'Inter', sans-serif; }
+    .report-submit-btn { background: #ef4444; border: none; color: white; padding: 5px 12px; border-radius: 6px; font-size: 11px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
+    .report-submit-btn:hover { background: #dc2626; }
+    .report-submit-btn:disabled { opacity: 0.6; cursor: default; }
+    .report-popup-thanks { text-align: center; padding: 8px 4px; color: #4ade80; font-weight: 600; }
+    body.light-mode .report-popup { background: #ffffff !important; border-color: #e3e3ea !important; box-shadow: 0 8px 24px rgba(0,0,0,0.12) !important; }
+    body.light-mode .report-popup-title { color: #0d0d0d !important; }
+    body.light-mode .report-reason-row { color: #33333d !important; }
+    body.light-mode .report-note { background: #f7f7fa !important; border-color: #e3e3ea !important; color: #0d0d0d !important; }
+    body.light-mode .report-cancel-btn { border-color: #e3e3ea !important; color: #7a7a85 !important; }
     .q-year { color: #4f8ef7; font-weight: 600; }
     .q-text { font-size: 14px; color: #ececec; line-height: 1.7; margin-bottom: 16px; }
     /* Match List-I/List-II columns -- color inherits from .q-text's own color (incl. its
@@ -457,6 +478,106 @@
         + `<div class="seq-list-items">${itemsHtml}</div>`;
     }
 
+    // ---------------- Report a question ----------------
+    // Small flag icon on each card opens an anchored popup (not a full modal -- this is meant
+    // to be quick) with a fixed set of reasons. The popup is appended to document.body rather
+    // than nested inside the card's own HTML, since every render here replaces a parent's
+    // innerHTML wholesale and would otherwise destroy an open popup out from under itself.
+    const REPORT_REASONS = [
+      { value: 'wrong_answer', label: 'Wrong answer marked' },
+      { value: 'unclear', label: 'Question unclear / incomplete' },
+      { value: 'diagram_issue', label: 'Diagram missing or broken' },
+      { value: 'duplicate', label: 'Duplicate question' },
+      { value: 'other', label: 'Other' }
+    ];
+
+    function reportFlagBtnHtml(pyqId) {
+      return `<button type="button" class="report-flag-btn" title="Report a problem with this question" onclick="event.stopPropagation(); openReportPopup('${pyqId}', this)"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><polygon points="12,3 22,21 2,21" fill="#ef4444" stroke="#ef4444" stroke-width="2.5" stroke-linejoin="round"/><rect x="10.8" y="9" width="2.4" height="6.5" rx="1.2" fill="#fff"/><circle cx="12" cy="18" r="1.3" fill="#fff"/></svg></button>`;
+    }
+
+    function closeReportPopup() {
+      const existing = document.getElementById('reportPopup');
+      if (existing) existing.remove();
+      document.removeEventListener('click', reportPopupOutsideClick, true);
+    }
+
+    function reportPopupOutsideClick(e) {
+      const popup = document.getElementById('reportPopup');
+      if (popup && !popup.contains(e.target)) closeReportPopup();
+    }
+
+    function toggleReportNote(radioEl) {
+      const note = document.getElementById('reportNote');
+      if (note) note.style.display = radioEl.value === 'other' ? 'block' : 'none';
+    }
+
+    function openReportPopup(pyqId, btnEl) {
+      closeReportPopup();
+      const popup = document.createElement('div');
+      popup.id = 'reportPopup';
+      popup.className = 'report-popup';
+      popup.innerHTML = `
+        <div class="report-popup-title">Report a problem</div>
+        ${REPORT_REASONS.map(r => `
+          <label class="report-reason-row">
+            <input type="radio" name="reportReason" value="${r.value}" onchange="toggleReportNote(this)"/> ${r.label}
+          </label>`).join('')}
+        <textarea class="report-note" id="reportNote" placeholder="Optional note..." style="display:none;" rows="2"></textarea>
+        <div class="report-popup-error" id="reportError"></div>
+        <div class="report-popup-actions">
+          <button type="button" class="report-cancel-btn" onclick="closeReportPopup()">Cancel</button>
+          <button type="button" class="report-submit-btn" onclick="submitReport('${pyqId}', this)">Submit</button>
+        </div>`;
+      document.body.appendChild(popup);
+      const rect = btnEl.getBoundingClientRect();
+      const popupRect = popup.getBoundingClientRect();
+      let left = Math.max(8, Math.min(rect.right - popupRect.width, document.documentElement.clientWidth - popupRect.width - 8));
+      let top = Math.min(rect.bottom + 6, document.documentElement.clientHeight - popupRect.height - 8);
+      popup.style.left = left + 'px';
+      popup.style.top = top + 'px';
+      document.addEventListener('click', reportPopupOutsideClick, true);
+    }
+
+    async function submitReport(pyqId, btnEl) {
+      const popup = document.getElementById('reportPopup');
+      const selected = popup.querySelector('input[name="reportReason"]:checked');
+      const errEl = document.getElementById('reportError');
+      if (!selected) { errEl.textContent = 'Pick a reason first.'; return; }
+      errEl.textContent = '';
+      const note = document.getElementById('reportNote').value.trim();
+      btnEl.disabled = true;
+      btnEl.textContent = 'Submitting...';
+      const { data: { session } } = await client.auth.getSession();
+      if (!session) {
+        errEl.textContent = 'Please log in to report a question.';
+        btnEl.disabled = false; btnEl.textContent = 'Submit';
+        return;
+      }
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
+      try {
+        const res = await fetch(`${API_BASE}/report-question`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pyq_id: pyqId, user_id: session.user.id, reason: selected.value, optional_note: note }),
+          signal: controller.signal
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.error) {
+          errEl.textContent = data.detail || data.error || 'Could not submit -- try again.';
+          btnEl.disabled = false; btnEl.textContent = 'Submit';
+          return;
+        }
+        popup.innerHTML = '<div class="report-popup-thanks">✓ Reported, thank you</div>';
+        setTimeout(closeReportPopup, 1600);
+      } catch (e) {
+        errEl.textContent = e.name === 'AbortError' ? 'Timed out -- try again.' : 'Could not reach server.';
+        btnEl.disabled = false; btnEl.textContent = 'Submit';
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    }
+
     function parseWithMath(text) {
       if (!text) return '';
       const matchListHtml = renderMatchListHtml_ML(text, parseWithMathInner);
@@ -701,6 +822,7 @@ document.getElementById('mainContent').innerHTML = `
             <span class="q-year">${localizeNum(q.year || '')}</span>
             <span>${subjectName(q.subject) || ''}</span>
             ${q.chapter ? `<span>${chapterName(q.chapter)}</span>` : ''}
+            ${reportFlagBtnHtml(q.id)}
           </div>
          <div class="q-text">${parseWithMath(q.question)}</div>
 ${q.diagram_url ? `<img class="q-diagram-img" src="${q.diagram_url}">` : ''}

@@ -264,7 +264,37 @@
     async function enterDashboard() {
       document.getElementById('gateOverlay').style.display = 'none';
       document.getElementById('dashboard').style.display = 'block';
-      loadResults();
+      const urlId = new URLSearchParams(window.location.search).get('id');
+      if (urlId) {
+        await loadSingleQuestionFromUrl(urlId);
+      } else {
+        loadResults();
+      }
+    }
+
+    // Deep link from admin-dashboard.html's Reported Questions view ("Open in PYQ editor") --
+    // fetches just that one row and jumps straight into its edit form, skipping the normal
+    // filtered/paginated list entirely.
+    async function loadSingleQuestionFromUrl(id) {
+      const area = document.getElementById('resultsArea');
+      area.innerHTML = '<div class="loading-text">Loading...</div>';
+      try {
+        const res = await fetch(`${API_BASE}/admin/pyq-search?id=${encodeURIComponent(id)}&full=true`, { headers: authHeaders() });
+        if (res.status === 401) return logout();
+        const data = await res.json();
+        if (data.error || !data.rows || data.rows.length === 0) {
+          area.innerHTML = '<div class="empty-text">Could not find that question (it may have been deleted).</div>';
+          return;
+        }
+        currentRows = data.rows;
+        totalRows = data.rows.length;
+        document.getElementById('paginationBar').style.display = 'none';
+        document.getElementById('resultNote').textContent = 'Opened directly from a report link.';
+        document.getElementById('resultCount').textContent = '1 question (opened via direct link)';
+        await startEdit(data.rows[0].id);
+      } catch (e) {
+        area.innerHTML = '<div class="empty-text">Could not reach server.</div>';
+      }
     }
 
     async function onSubjectChange() {

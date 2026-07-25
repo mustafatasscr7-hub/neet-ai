@@ -155,6 +155,12 @@ class SolveRequest(BaseModel):
 class MergeGuestUsageRequest(BaseModel):
     user_id: str
 
+class ReportQuestionRequest(BaseModel):
+    pyq_id: str
+    user_id: str
+    reason: str
+    optional_note: str = ""
+
 class PersonalisedTestSelection(BaseModel):
     subject: str
     chapters: list = []
@@ -297,7 +303,7 @@ ADMIN_HEADERS = {
 }
 
 # ---------- Daily AI usage budget (per-user, resets at IST midnight) ----------
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date
 
 IST = timezone(timedelta(hours=5, minutes=30))  # fixed offset: India has no DST
 DAILY_TOKEN_BUDGET_FREE = 20000  # ~8 doubts/day blended, ~4 if all heavy Sonnet numericals --
@@ -835,6 +841,48 @@ async def merge_guest_usage(req: MergeGuestUsageRequest, request: Request):
     except Exception as e:
         return {"merged": 0, "error": str(e)}
 
+REPORT_REASONS = {"wrong_answer", "unclear", "diagram_issue", "duplicate", "other"}
+MAX_REPORTS_PER_DAY = 20
+
+def _ist_today_start_utc_iso() -> str:
+    # datetime.min.time() (not a bare `time` import) deliberately -- `time` the module is
+    # already imported above for rate_limiter's time.time() calls, and `from datetime import
+    # time` would silently shadow it.
+    today = date.fromisoformat(_ist_today())
+    ist_midnight = datetime.combine(today, datetime.min.time(), tzinfo=IST)
+    return ist_midnight.astimezone(timezone.utc).isoformat()
+
+# Logged-in students only (need to know who, both to prevent spam and to rate-limit) -- the
+# generic per-IP rate_limiter below guards against rapid-fire bursts, this endpoint's own
+# per-user daily count enforces the actual 20/day business rule on top of that.
+@app.post("/report-question")
+async def report_question(req: ReportQuestionRequest, _: None = Depends(rate_limiter(20, 60))):
+    if not req.user_id:
+        raise HTTPException(status_code=401, detail="Please log in to report a question.")
+    if req.reason not in REPORT_REASONS:
+        return {"error": "Invalid reason"}
+    try:
+        today_rows = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/question_reports", headers=ADMIN_HEADERS,
+            params={"user_id": f"eq.{req.user_id}", "created_at": f"gte.{_ist_today_start_utc_iso()}",
+                    "select": "id", "limit": MAX_REPORTS_PER_DAY}
+        )
+        if len(today_rows.json()) >= MAX_REPORTS_PER_DAY:
+            raise HTTPException(status_code=429, detail="You've reached today's report limit. Try again tomorrow.")
+        note = (req.optional_note or "").strip()[:500] or None
+        response = await async_client.post(
+            f"{SUPABASE_URL}/rest/v1/question_reports",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=minimal"},
+            json={"pyq_id": req.pyq_id, "user_id": req.user_id, "reason": req.reason, "optional_note": note}
+        )
+        if response.status_code >= 400:
+            return {"error": response.text}
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return {"error": str(e)}
+
 @app.post("/pyq")
 async def get_pyq(message: Message, _: None = Depends(rate_limiter(15, 60))):
     results = await search_pyq(message.text)
@@ -1067,6 +1115,7 @@ async def admin_pyq_chapters(subject: str, _: None = Depends(verify_admin)):
 
 @app.get("/admin/pyq-search")
 async def admin_pyq_search(
+    id: str = None,
     subject: str = None,
     chapter: str = None,
     search: str = None,
@@ -1102,6 +1151,11 @@ async def admin_pyq_search(
             "limit": page_size,
             "offset": offset
         }
+        # Direct id lookup (used by the "jump to this question" link from Reported Questions)
+        # overrides every other filter -- the point is fetching one exact row, not narrowing
+        # a search.
+        if id:
+            params["id"] = f"eq.{id}"
         if subject in ("Biology", "Physics", "Chemistry"):
             params["subject"] = f"eq.{subject}"
         if chapter:
@@ -1566,6 +1620,84 @@ def admin_pyq_dismiss_duplicate(req: DismissDuplicateRequest, _: None = Depends(
         if response.status_code >= 400:
             return {"error": response.text}
         return {"success": True}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/admin/question-reports")
+async def admin_question_reports(resolved: str = "false", _: None = Depends(verify_admin)):
+    try:
+        # Same 1000-row PostgREST cap as /admin/pyq-duplicates -- page through until a page
+        # comes back short, otherwise a busy report queue would silently truncate.
+        all_reports = []
+        page_size = 1000
+        offset = 0
+        resolved_filter = "eq.true" if resolved == "true" else "eq.false"
+        while True:
+            response = await async_client.get(
+                f"{SUPABASE_URL}/rest/v1/question_reports",
+                headers=ADMIN_HEADERS,
+                params={
+                    "resolved": resolved_filter,
+                    "select": "id,pyq_id,user_id,reason,optional_note,created_at",
+                    "order": "created_at.desc",
+                    "limit": page_size,
+                    "offset": offset
+                }
+            )
+            page = response.json()
+            all_reports.extend(page)
+            if len(page) < page_size:
+                break
+            offset += page_size
+
+        # Grouped by pyq_id in Python -- PostgREST has no GROUP BY, same reasoning as
+        # /admin/pdf-upload-history's per-filename aggregation.
+        groups_by_pyq = {}
+        for r in all_reports:
+            pid = r["pyq_id"]
+            g = groups_by_pyq.setdefault(pid, {
+                "pyq_id": pid, "count": 0, "reasons": {}, "notes": [], "latest_report_at": r["created_at"]
+            })
+            g["count"] += 1
+            g["reasons"][r["reason"]] = g["reasons"].get(r["reason"], 0) + 1
+            if r["optional_note"]:
+                g["notes"].append(r["optional_note"])
+            if r["created_at"] > g["latest_report_at"]:
+                g["latest_report_at"] = r["created_at"]
+
+        pyq_ids = list(groups_by_pyq.keys())
+        questions_by_id = {}
+        for i in range(0, len(pyq_ids), 200):
+            chunk = pyq_ids[i:i + 200]
+            resp = await async_client.get(
+                f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
+                params={"id": f"in.({','.join(chunk)})",
+                        "select": "id,subject,chapter,question,correct_answer,is_active"}
+            )
+            for row in resp.json():
+                questions_by_id[row["id"]] = row
+
+        groups = []
+        for pid, g in groups_by_pyq.items():
+            g["question"] = questions_by_id.get(pid)  # None if the question was since deleted
+            groups.append(g)
+        groups.sort(key=lambda g: g["count"], reverse=True)
+        return {"groups": groups}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.patch("/admin/question-reports/{pyq_id}/resolve")
+async def admin_resolve_question_reports(pyq_id: str, _: None = Depends(verify_admin)):
+    try:
+        response = await async_client.patch(
+            f"{SUPABASE_URL}/rest/v1/question_reports",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
+            params={"pyq_id": f"eq.{pyq_id}", "resolved": "eq.false"},
+            json={"resolved": True}
+        )
+        if response.status_code >= 400:
+            return {"error": response.text}
+        return {"success": True, "resolved_count": len(response.json())}
     except Exception as e:
         return {"error": str(e)}
 
