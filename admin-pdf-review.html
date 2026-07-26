@@ -6,6 +6,9 @@
 <meta name="robots" content="noindex, nofollow"/>
 <title>PDF Review — NEET-AI Admin</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mathlive@0.110.0/mathlive.min.js"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: 'Inter', sans-serif; background: #0d0d0d; color: #ececec; min-height: 100vh; }
@@ -68,6 +71,12 @@
 
   .q-field { margin-bottom: 10px; }
   .q-field label { display: block; font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 5px; }
+  .q-field-label-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 5px; }
+  .q-field-label-row label { margin-bottom: 0; }
+  .formula-btn { background: transparent; border: 1px solid #2a2a2a; color: #888; padding: 2px 8px; border-radius: 5px; font-size: 10px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; white-space: nowrap; }
+  .formula-btn:hover { border-color: #4f8ef7; color: #4f8ef7; }
+  .math-preview { margin-top: 6px; padding: 8px 10px; background: #0d0d0d; border: 1px dashed #2a2a2a; border-radius: 6px; font-size: 13px; color: #ececec; overflow-x: auto; display: none; }
+  .math-preview .katex-display { margin: 4px 0; }
   .q-field textarea, .q-field input[type="text"], .q-field input[type="number"], .q-field select {
     width: 100%; background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 6px; padding: 8px 10px;
     color: #ececec; font-size: 13px; font-family: 'Inter', sans-serif; outline: none; resize: vertical;
@@ -102,6 +111,18 @@
   .q-source-page { font-size: 11px; color: #555; }
 
   .empty-hint { text-align: center; padding: 40px; color: #555; font-size: 13px; }
+
+  /* Formula editor modal (MathLive) - one shared instance, opened by any field's "Formula" button */
+  #formulaModalOverlay { display: none; position: fixed; inset: 0; background: #000000a0; z-index: 950; align-items: center; justify-content: center; }
+  .formula-modal-box { background: #111; border: 1px solid #2a2a2a; border-radius: 14px; padding: 24px; width: 100%; max-width: 480px; }
+  .formula-modal-box h2 { font-size: 14px; }
+  .formula-modal-hint { font-size: 11px; color: #666; margin-top: 10px; }
+  #formulaMathfieldHost { background: #fff; border-radius: 8px; padding: 10px; }
+  #formulaMathfield { width: 100%; min-height: 44px; font-size: 20px; }
+  /* MathLive's on-screen keyboard defaults to z-index 105, well below our modal overlay's 950
+     -- it was rendering visible-but-unclickable (buried under the overlay's own click layer)
+     until this was raised above it. */
+  :root { --keyboard-zindex: 960; }
 </style>
 </head>
 <body>
@@ -122,6 +143,22 @@
     <div style="display:flex;gap:8px;">
       <button class="logout-btn" onclick="openPdfHistory()">Processed PDFs</button>
       <button class="logout-btn" onclick="logout()">Log out</button>
+    </div>
+  </div>
+
+  <div id="formulaModalOverlay">
+    <div class="formula-modal-box">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+        <h2>Insert Formula</h2>
+        <button type="button" class="action-btn" onclick="closeFormulaEditor()">Cancel</button>
+      </div>
+      <div id="formulaMathfieldHost">
+        <math-field id="formulaMathfield"></math-field>
+      </div>
+      <div class="formula-modal-hint">Build your formula visually — fractions, superscripts, subscripts, brackets, etc. It's inserted as <code>$$...$$</code> at your cursor, into the field you opened this from.</div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px;">
+        <button type="button" class="action-btn primary" onclick="confirmFormulaInsert()">Insert</button>
+      </div>
     </div>
   </div>
 
@@ -627,15 +664,32 @@
       </div>
 
       <div class="q-field">
-        <label>Question</label>
-        <textarea id="q-text-${b.id}" rows="3" oninput="onQuestionTextInput('${b.id}'); autoResizeTextarea(this)">${escapeHtml(b.question)}</textarea>
+        <div class="q-field-label-row"><label>Question</label><button type="button" class="formula-btn" onclick="openFormulaEditor('q-text-${b.id}')">∑ Formula</button></div>
+        <textarea id="q-text-${b.id}" rows="3" oninput="onQuestionTextInput('${b.id}'); autoResizeTextarea(this); updateMathPreview('q-text-${b.id}')">${escapeHtml(b.question)}</textarea>
+        <div class="math-preview" id="q-text-${b.id}-preview"></div>
       </div>
 
       <div class="q-options-grid">
-        <div class="q-field"><label>Option A</label><textarea id="opt-a-${b.id}" rows="1" oninput="autoResizeTextarea(this)">${escapeHtml(b.option_a)}</textarea></div>
-        <div class="q-field"><label>Option B</label><textarea id="opt-b-${b.id}" rows="1" oninput="autoResizeTextarea(this)">${escapeHtml(b.option_b)}</textarea></div>
-        <div class="q-field"><label>Option C</label><textarea id="opt-c-${b.id}" rows="1" oninput="autoResizeTextarea(this)">${escapeHtml(b.option_c)}</textarea></div>
-        <div class="q-field"><label>Option D</label><textarea id="opt-d-${b.id}" rows="1" oninput="autoResizeTextarea(this)">${escapeHtml(b.option_d)}</textarea></div>
+        <div class="q-field">
+          <div class="q-field-label-row"><label>Option A</label><button type="button" class="formula-btn" onclick="openFormulaEditor('opt-a-${b.id}')">∑ Formula</button></div>
+          <textarea id="opt-a-${b.id}" rows="1" oninput="autoResizeTextarea(this); updateMathPreview('opt-a-${b.id}')">${escapeHtml(b.option_a)}</textarea>
+          <div class="math-preview" id="opt-a-${b.id}-preview"></div>
+        </div>
+        <div class="q-field">
+          <div class="q-field-label-row"><label>Option B</label><button type="button" class="formula-btn" onclick="openFormulaEditor('opt-b-${b.id}')">∑ Formula</button></div>
+          <textarea id="opt-b-${b.id}" rows="1" oninput="autoResizeTextarea(this); updateMathPreview('opt-b-${b.id}')">${escapeHtml(b.option_b)}</textarea>
+          <div class="math-preview" id="opt-b-${b.id}-preview"></div>
+        </div>
+        <div class="q-field">
+          <div class="q-field-label-row"><label>Option C</label><button type="button" class="formula-btn" onclick="openFormulaEditor('opt-c-${b.id}')">∑ Formula</button></div>
+          <textarea id="opt-c-${b.id}" rows="1" oninput="autoResizeTextarea(this); updateMathPreview('opt-c-${b.id}')">${escapeHtml(b.option_c)}</textarea>
+          <div class="math-preview" id="opt-c-${b.id}-preview"></div>
+        </div>
+        <div class="q-field">
+          <div class="q-field-label-row"><label>Option D</label><button type="button" class="formula-btn" onclick="openFormulaEditor('opt-d-${b.id}')">∑ Formula</button></div>
+          <textarea id="opt-d-${b.id}" rows="1" oninput="autoResizeTextarea(this); updateMathPreview('opt-d-${b.id}')">${escapeHtml(b.option_d)}</textarea>
+          <div class="math-preview" id="opt-d-${b.id}-preview"></div>
+        </div>
       </div>
 
       <div class="q-meta-grid">
@@ -726,6 +780,93 @@
     // their content is -- size them once here so existing text is fully visible immediately,
     // not just after the admin types something and triggers the oninput handler.
     container.querySelectorAll('.q-field textarea').forEach(autoResizeTextarea);
+    // Same reasoning for the math preview -- render once on paint so a formula that's already
+    // in the scanned text (or from a previous edit) shows immediately, not just after the next
+    // keystroke in that field.
+    container.querySelectorAll('.q-field textarea').forEach(t => updateMathPreview(t.id));
+  }
+
+  // ---------------- Formula editor (MathLive) ----------------
+
+  // One shared <math-field> instance for all fields, not one per field -- remembers which
+  // textarea + cursor position it was opened for, so "Insert" always lands in the right spot
+  // regardless of which of the 5 "∑ Formula" buttons triggered it.
+  let formulaEditorTarget = null; // { fieldId, selectionStart, selectionEnd }
+
+  function openFormulaEditor(fieldId) {
+    const textarea = document.getElementById(fieldId);
+    if (!textarea) return;
+    formulaEditorTarget = {
+      fieldId,
+      selectionStart: textarea.selectionStart,
+      selectionEnd: textarea.selectionEnd
+    };
+    const mf = document.getElementById('formulaMathfield');
+    mf.value = '';
+    document.getElementById('formulaModalOverlay').style.display = 'flex';
+    setTimeout(() => mf.focus(), 50);
+  }
+
+  function closeFormulaEditor() {
+    document.getElementById('formulaModalOverlay').style.display = 'none';
+    formulaEditorTarget = null;
+  }
+
+  function confirmFormulaInsert() {
+    if (!formulaEditorTarget) return;
+    const { fieldId, selectionStart, selectionEnd } = formulaEditorTarget;
+    const textarea = document.getElementById(fieldId);
+    const latex = document.getElementById('formulaMathfield').value.trim();
+    if (!textarea || !latex) { closeFormulaEditor(); return; }
+    const insertText = '$$' + latex + '$$';
+    const current = textarea.value;
+    textarea.value = current.slice(0, selectionStart) + insertText + current.slice(selectionEnd);
+    const newCursorPos = selectionStart + insertText.length;
+    textarea.focus();
+    textarea.setSelectionRange(newCursorPos, newCursorPos);
+    autoResizeTextarea(textarea);
+    updateMathPreview(fieldId);
+    // Keep in-memory duplicate-check state in sync with a manually-inserted formula, same as
+    // any other typed edit to the question textarea (options don't feed the dup checker).
+    if (fieldId.startsWith('q-text-')) onQuestionTextInput(fieldId.replace('q-text-', ''));
+    closeFormulaEditor();
+  }
+
+  // ---------------- Live math preview ----------------
+
+  // Splits on $$...$$ (display) and $...$ (inline) same as chat.html's parseWithMath, but
+  // renders the plain-text segments escaped (not through marked) -- this admin tool's fields
+  // are raw question/option text, never markdown, so a lighter parse is enough here.
+  function renderMathPreviewHtml(text) {
+    const parts = [];
+    let lastIndex = 0;
+    const re = /\$\$([^$]+)\$\$|\$([^$\n]+)\$/g;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      if (m.index > lastIndex) parts.push({ type: 'text', value: text.slice(lastIndex, m.index) });
+      parts.push(m[1] !== undefined ? { type: 'display', value: m[1].trim() } : { type: 'inline', value: m[2].trim() });
+      lastIndex = re.lastIndex;
+    }
+    if (lastIndex < text.length) parts.push({ type: 'text', value: text.slice(lastIndex) });
+
+    return parts.map(p => {
+      if (p.type === 'text') return escapeHtml(p.value);
+      try {
+        return katex.renderToString(p.value, { displayMode: p.type === 'display', throwOnError: false });
+      } catch (e) {
+        return escapeHtml(p.type === 'display' ? '$$' + p.value + '$$' : '$' + p.value + '$');
+      }
+    }).join('');
+  }
+
+  function updateMathPreview(fieldId) {
+    const textarea = document.getElementById(fieldId);
+    const previewEl = document.getElementById(fieldId + '-preview');
+    if (!textarea || !previewEl) return;
+    const text = textarea.value;
+    if (!text.trim()) { previewEl.innerHTML = ''; previewEl.style.display = 'none'; return; }
+    previewEl.innerHTML = renderMathPreviewHtml(text);
+    previewEl.style.display = 'block';
   }
 
   function autoResizeTextarea(el) {
