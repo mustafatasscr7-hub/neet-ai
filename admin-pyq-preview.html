@@ -142,6 +142,19 @@
     .dup-columns { display: flex; gap: 12px; flex-wrap: wrap; }
     .dup-columns .question-card { flex: 1; min-width: 280px; margin-bottom: 0; }
 
+    /* Reported Questions view */
+    .report-wrap { margin-bottom: 20px; border: 1px solid #1e1e1e; border-radius: 12px; padding: 14px; background: #0a0a0a; }
+    .report-header { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+    .report-count-badge { background: #ef444420; color: #ef4444; font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 20px; white-space: nowrap; }
+    .report-reasons-list { display: flex; gap: 6px; flex-wrap: wrap; }
+    .report-reason-chip { background: #1a1a1a; border: 1px solid #2a2a2a; color: #888; font-size: 11px; padding: 2px 8px; border-radius: 12px; }
+    .report-notes { font-size: 12px; color: #999; background: #0d0d0d; border-radius: 6px; padding: 8px 10px; margin-bottom: 10px; }
+    .report-notes div { padding: 2px 0; }
+    .report-resolve-btn { background: #4ade80; border: none; color: #0a0a0a; padding: 6px 14px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
+    .report-resolve-btn:hover { background: #3fcc70; }
+    .report-resolve-btn:disabled { opacity: 0.6; cursor: default; }
+    .report-deleted-note { color: #ef4444; font-style: italic; font-size: 12px; padding: 10px 0; }
+
     .pagination { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 16px; }
     .pagination button { background: #1a1a1a; border: 1px solid #2a2a2a; color: #ececec; padding: 6px 14px; border-radius: 6px; font-size: 12px; cursor: pointer; font-family: 'Inter', sans-serif; }
     .pagination button:hover:not(:disabled) { border-color: #4f8ef7; color: #4f8ef7; }
@@ -202,6 +215,7 @@
       <label class="check-label"><input type="checkbox" id="filterDiagram" onchange="onFilterChange()"/> Only with uploaded diagram</label>
       <button type="button" id="dupToggleBtn" class="dup-toggle-btn" onclick="toggleDuplicatesView()">🔁 Find Duplicates (50%+)</button>
       <button type="button" id="reviewToggleBtn" class="dup-toggle-btn" onclick="toggleReviewMode()">📋 Review Queue</button>
+      <button type="button" id="reportsToggleBtn" class="dup-toggle-btn" onclick="toggleReportsView()">🚩 Reported</button>
       <select id="reviewSortOrder" onchange="onFilterChange()" style="display:none">
         <option value="asc">Oldest uploaded first</option>
         <option value="desc">Newest uploaded first</option>
@@ -227,8 +241,11 @@
     let currentRows = [];
     let duplicatesMode = false;
     let reviewMode = false;
+    let reportsMode = false;
     let duplicatePairs = [];
     let duplicateRowsMap = {};
+    let reportGroups = [];
+    let reportedRowsMap = {}; // pyq_id -> full row, for editing a reported question in place
     let editingIds = new Set();
     let editDrafts = {}; // id -> pending diagram_url / option_a-d_diagram_url while a card is being edited
     let chapterCacheBySubject = {}; // subject -> [chapter names], for the edit form's chapter datalist
@@ -955,13 +972,15 @@
     function rerenderCurrentView() {
       if (duplicatesMode) {
         renderDuplicatePairs(document.getElementById('filterSubject').value);
+      } else if (reportsMode) {
+        renderReportedQuestions();
       } else {
         renderResults();
       }
     }
 
     async function startEdit(id) {
-      const q = currentRows.find(r => r.id === id) || duplicateRowsMap[id];
+      const q = currentRows.find(r => r.id === id) || duplicateRowsMap[id] || reportedRowsMap[id];
       if (!q) return;
       editingIds.add(id);
       editDrafts[id] = {
@@ -1018,6 +1037,7 @@
         const idx = currentRows.findIndex(r => r.id === id);
         if (idx !== -1) currentRows[idx] = Object.assign({}, currentRows[idx], updated);
         if (duplicateRowsMap[id]) duplicateRowsMap[id] = Object.assign({}, duplicateRowsMap[id], updated);
+        if (reportedRowsMap[id]) reportedRowsMap[id] = Object.assign({}, reportedRowsMap[id], updated);
         editingIds.delete(id);
         delete editDrafts[id];
         rerenderCurrentView();
@@ -1089,9 +1109,26 @@
       area.querySelectorAll('.q-edit-field textarea').forEach(autoResizeTextarea);
     }
 
+    // Duplicates / Review Queue / Reported are mutually exclusive views sharing the same
+    // filter bar and results area -- this resets every mode's own UI side-effects before
+    // whichever toggle function activates its own, so a 3-way combination never leaves a
+    // stale "active" button or disabled filter behind from whatever was on before it.
+    function resetModeToggleUi() {
+      document.getElementById('dupToggleBtn').classList.remove('active');
+      document.getElementById('reviewToggleBtn').classList.remove('active');
+      document.getElementById('reportsToggleBtn').classList.remove('active');
+      document.getElementById('reviewSortOrder').style.display = 'none';
+      document.getElementById('filterChapter').disabled = false;
+      document.getElementById('filterSearch').disabled = false;
+      document.getElementById('filterDiagram').disabled = false;
+      document.getElementById('paginationBar').style.display = 'flex';
+    }
+
     async function toggleDuplicatesView() {
       duplicatesMode = !duplicatesMode;
-      if (duplicatesMode && reviewMode) { reviewMode = false; setReviewModeUi(); }
+      reviewMode = false;
+      reportsMode = false;
+      resetModeToggleUi();
       document.getElementById('dupToggleBtn').classList.toggle('active', duplicatesMode);
       document.getElementById('filterChapter').disabled = duplicatesMode;
       document.getElementById('filterSearch').disabled = duplicatesMode;
@@ -1107,31 +1144,121 @@
       }
     }
 
-    // Just the DOM side-effects of a reviewMode change, shared by toggleReviewMode (where the
-    // state flip already happened) and toggleDuplicatesView (which force-turns reviewMode off
-    // without wanting its own loadResults/loadDuplicates call -- toggleDuplicatesView triggers
-    // its own fetch right after).
-    function setReviewModeUi() {
+    function toggleReviewMode() {
+      reviewMode = !reviewMode;
+      duplicatesMode = false;
+      reportsMode = false;
+      resetModeToggleUi();
       document.getElementById('reviewToggleBtn').classList.toggle('active', reviewMode);
       document.getElementById('reviewSortOrder').style.display = reviewMode ? 'inline-block' : 'none';
       document.getElementById('resultNote').textContent = reviewMode
         ? 'Newly uploaded questions awaiting a first check. Edit if something needs fixing, then Approve to clear it from this queue for good.'
         : '';
-    }
-
-    function toggleReviewMode() {
-      reviewMode = !reviewMode;
-      if (reviewMode && duplicatesMode) {
-        duplicatesMode = false;
-        document.getElementById('dupToggleBtn').classList.remove('active');
-        document.getElementById('filterChapter').disabled = false;
-        document.getElementById('filterSearch').disabled = false;
-        document.getElementById('filterDiagram').disabled = false;
-        document.getElementById('paginationBar').style.display = 'flex';
-      }
-      setReviewModeUi();
       currentPage = 1;
       loadResults();
+    }
+
+    async function toggleReportsView() {
+      reportsMode = !reportsMode;
+      duplicatesMode = false;
+      reviewMode = false;
+      resetModeToggleUi();
+      document.getElementById('reportsToggleBtn').classList.toggle('active', reportsMode);
+      document.getElementById('filterChapter').disabled = reportsMode;
+      document.getElementById('filterSearch').disabled = reportsMode;
+      document.getElementById('filterDiagram').disabled = reportsMode;
+      document.getElementById('paginationBar').style.display = reportsMode ? 'none' : 'flex';
+      document.getElementById('resultNote').textContent = reportsMode
+        ? 'Questions with unresolved student reports. Fix and Save, or Mark Resolved if the report doesn\'t need a content change.'
+        : '';
+      if (reportsMode) {
+        await loadReportedQuestions();
+      } else {
+        loadResults();
+      }
+    }
+
+    async function loadReportedQuestions() {
+      const area = document.getElementById('resultsArea');
+      area.innerHTML = '<div class="loading-text">Loading reported questions...</div>';
+      document.getElementById('resultCount').textContent = '';
+      try {
+        const res = await fetch(`${API_BASE}/admin/question-reports?resolved=false`, { headers: authHeaders() });
+        if (res.status === 401) return logout();
+        if (!res.ok) {
+          area.innerHTML = `<div class="empty-text">Error: ${escapeHtml(await describeHttpError(res))}</div>`;
+          return;
+        }
+        const data = await res.json();
+        if (data.error) {
+          area.innerHTML = `<div class="empty-text">Error: ${escapeHtml(data.error)}</div>`;
+          return;
+        }
+        reportGroups = data.groups || [];
+        reportedRowsMap = {};
+        reportGroups.forEach(g => { if (g.question) reportedRowsMap[g.pyq_id] = g.question; });
+        renderReportedQuestions();
+      } catch (e) {
+        area.innerHTML = '<div class="empty-text">Could not reach server.</div>';
+      }
+    }
+
+    const REPORT_REASON_LABELS = {
+      wrong_answer: 'Wrong answer', unclear: 'Unclear wording', diagram_issue: 'Diagram issue',
+      duplicate: 'Duplicate', other: 'Other'
+    };
+
+    function renderReportedQuestions() {
+      const area = document.getElementById('resultsArea');
+      document.getElementById('resultCount').textContent = `${reportGroups.length} question${reportGroups.length === 1 ? '' : 's'} with unresolved reports`;
+      if (reportGroups.length === 0) {
+        area.innerHTML = '<div class="empty-text">No unresolved reports.</div>';
+        return;
+      }
+      area.innerHTML = reportGroups.map(g => {
+        const reasonsHtml = Object.entries(g.reasons || {})
+          .map(([reason, count]) => `<span class="report-reason-chip">${escapeHtml(REPORT_REASON_LABELS[reason] || reason)} × ${count}</span>`)
+          .join('');
+        const notesHtml = (g.notes || []).length
+          ? `<div class="report-notes">${g.notes.map(n => `<div>"${escapeHtml(n)}"</div>`).join('')}</div>`
+          : '';
+        const bodyHtml = g.question
+          ? questionCardHtml(g.question)
+          : '<div class="report-deleted-note">This question no longer exists (already deleted).</div>';
+        return `
+          <div class="report-wrap">
+            <div class="report-header">
+              <span class="report-count-badge">${g.count} report${g.count === 1 ? '' : 's'}</span>
+              <div class="report-reasons-list">${reasonsHtml}</div>
+              <button type="button" class="report-resolve-btn" onclick="resolveReportGroup('${g.pyq_id}', this)">Mark Resolved</button>
+            </div>
+            ${notesHtml}
+            ${bodyHtml}
+          </div>`;
+      }).join('');
+      area.querySelectorAll('.q-edit-field textarea').forEach(autoResizeTextarea);
+    }
+
+    async function resolveReportGroup(pyqId, btnEl) {
+      const originalLabel = btnEl.textContent;
+      btnEl.disabled = true;
+      btnEl.textContent = 'Resolving...';
+      try {
+        const res = await fetch(`${API_BASE}/admin/question-reports/${pyqId}/resolve`, {
+          method: 'PATCH', headers: authHeaders()
+        });
+        if (res.status === 401) return logout();
+        if (!res.ok) { alert('Could not resolve: ' + await describeHttpError(res)); btnEl.disabled = false; btnEl.textContent = originalLabel; return; }
+        const data = await res.json();
+        if (data.error) { alert('Could not resolve: ' + data.error); btnEl.disabled = false; btnEl.textContent = originalLabel; return; }
+        reportGroups = reportGroups.filter(g => g.pyq_id !== pyqId);
+        delete reportedRowsMap[pyqId];
+        renderReportedQuestions();
+      } catch (e) {
+        alert('Could not reach server.');
+        btnEl.disabled = false;
+        btnEl.textContent = originalLabel;
+      }
     }
 
     async function loadDuplicates() {
@@ -1281,6 +1408,10 @@
         delete duplicateRowsMap[id];
         duplicatePairs = duplicatePairs.filter(p => p.a !== id && p.b !== id);
         renderDuplicatePairs(document.getElementById('filterSubject').value);
+      } else if (reportsMode) {
+        delete reportedRowsMap[id];
+        reportGroups = reportGroups.filter(g => g.pyq_id !== id);
+        renderReportedQuestions();
       } else {
         currentRows = currentRows.filter(r => r.id !== id);
         totalRows = Math.max(0, totalRows - 1);

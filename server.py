@@ -1673,8 +1673,14 @@ async def admin_question_reports(resolved: str = "false", _: None = Depends(veri
             chunk = pyq_ids[i:i + 200]
             resp = await async_client.get(
                 f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
+                # Same full field set as /admin/pyq-search's full=true -- admin-pyq-preview.html
+                # renders and edits these rows in place (options, diagrams, year, source tag),
+                # not just a text snippet, so the partial select used to leave those blank.
                 params={"id": f"in.({','.join(chunk)})",
-                        "select": "id,subject,chapter,question,correct_answer,is_active"}
+                        "select": "id,subject,chapter,question,option_a,option_b,option_c,option_d,"
+                                   "correct_answer,is_active,year,source_tag,class,has_diagram,"
+                                   "diagram_url,option_a_diagram_url,option_b_diagram_url,"
+                                   "option_c_diagram_url,option_d_diagram_url,reviewed,created_at"}
             )
             for row in resp.json():
                 questions_by_id[row["id"]] = row
