@@ -410,11 +410,13 @@ async def get_embedding(text: str):
     )
     embedding = response.data[0].embedding
 
-    await async_client.post(
+    # Fire-and-forget: nothing downstream needs this write to finish before the embedding
+    # can be used, so awaiting it here only added latency to the critical path for no reason.
+    asyncio.create_task(async_client.post(
         f"{SUPABASE_URL}/rest/v1/embedding_cache",
         headers={**headers, "Content-Type": "application/json"},
         json={"question_hash": question_hash, "embedding": embedding}
-    )
+    ))
 
     return embedding
 
