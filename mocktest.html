@@ -874,12 +874,23 @@ async function saveQuestionFromMock(index) {
           <h2 style="font-size:24px;font-weight:700;color:#fff;margin-bottom:8px;">Preparing your test...</h2>
           <p style="color:#555;font-size:14px;margin-bottom:32px;">Loading 180 questions</p>
           <div style="width:200px;height:4px;background:#1a1a1a;border-radius:4px;margin:0 auto;overflow:hidden;">
-            <div id="loadBar" style="height:100%;width:0%;background:#4f8ef7;border-radius:4px;transition:width 2.5s ease;"></div>
+            <div id="loadBar" style="height:100%;width:0%;background:#4f8ef7;border-radius:4px;transition:width 0.25s linear;"></div>
           </div>
           <p style="color:#333;font-size:12px;margin-top:16px;" id="loadingDots">Please wait</p>
         </div>
       `;
-      setTimeout(() => { document.getElementById('loadBar').style.width = '100%'; }, 100);
+      // Asymptotic fill instead of a fixed-duration CSS transition -- the old version animated
+      // to 100% on its own 2.5s clock with zero connection to whether the fetch had actually
+      // finished, so it either sat frozen at "100%" for several extra real seconds on a slow
+      // connection, or the screen vanished mid-fill on a fast one. This creeps toward (never
+      // reaches) 92% at a rate that only slows down, and only ever jumps to the true 100% once
+      // loadQuestions() actually resolves -- so the bar can never lie about being done.
+      const loadBar = document.getElementById('loadBar');
+      let pct = 0;
+      const progressInterval = setInterval(() => {
+        pct += (92 - pct) * 0.06;
+        loadBar.style.width = pct.toFixed(1) + '%';
+      }, 150);
       let dots = 0;
       const dotsInterval = setInterval(() => {
         dots = (dots + 1) % 4;
@@ -887,10 +898,12 @@ async function saveQuestionFromMock(index) {
         if (el) el.textContent = 'Please wait' + '.'.repeat(dots);
       }, 500);
       loadQuestions().then(() => {
+        clearInterval(progressInterval);
         clearInterval(dotsInterval);
+        loadBar.style.width = '100%';
         setTimeout(() => {
           document.getElementById('startScreen').style.display = 'none';
-        }, 500);
+        }, 400);
       });
     }
   </script>
