@@ -10,6 +10,7 @@
   <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mathlive@0.110.0/mathlive.min.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: 'Inter', sans-serif; background: #0d0d0d; color: #ececec; min-height: 100vh; }
@@ -97,6 +98,23 @@
     }
     .q-edit-field textarea { overflow: hidden; }
     .q-edit-field textarea:focus, .q-edit-field input:focus, .q-edit-field select:focus { border-color: #4f8ef7; }
+    .q-edit-label-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+    .q-edit-label-row label { margin-bottom: 0; }
+    .formula-btn { background: transparent; border: 1px solid #2a2a2a; color: #888; padding: 2px 8px; border-radius: 5px; font-size: 10px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; white-space: nowrap; }
+    .formula-btn:hover { border-color: #4f8ef7; color: #4f8ef7; }
+    .edit-math-preview { margin-top: 6px; padding: 8px 10px; background: #0d0d0d; border: 1px dashed #2a2a2a; border-radius: 6px; font-size: 13px; color: #ececec; overflow-x: auto; display: none; }
+    .edit-math-preview .katex-display { margin: 4px 0; }
+
+    /* Formula editor modal (MathLive) -- one shared instance, opened by any field's "Formula" button */
+    #formulaModalOverlay { display: none; position: fixed; inset: 0; background: #000000a0; z-index: 950; align-items: center; justify-content: center; }
+    .formula-modal-box { background: #111; border: 1px solid #2a2a2a; border-radius: 14px; padding: 24px; width: 100%; max-width: 480px; }
+    .formula-modal-box h2 { font-size: 14px; }
+    .formula-modal-hint { font-size: 11px; color: #666; margin-top: 10px; }
+    #formulaMathfieldHost { background: #fff; border-radius: 8px; padding: 10px; }
+    #formulaMathfield { width: 100%; min-height: 44px; font-size: 20px; }
+    /* MathLive's on-screen keyboard defaults to z-index 105, below our modal's 950 -- without
+       this it renders visible-but-unclickable, buried under the overlay's own click layer. */
+    :root { --keyboard-zindex: 960; }
     .q-edit-row { display: flex; gap: 10px; flex-wrap: wrap; }
     .q-edit-row .q-edit-field { flex: 1; min-width: 120px; }
     .q-edit-active-check { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #888; margin-bottom: 14px; cursor: pointer; }
@@ -142,6 +160,22 @@
       <input type="password" id="gatePassword" placeholder="Password" autocomplete="off"/>
       <button onclick="verifyPassword()">Enter</button>
       <div class="gate-error" id="gateError"></div>
+    </div>
+  </div>
+
+  <div id="formulaModalOverlay">
+    <div class="formula-modal-box">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+        <h2>Insert Formula</h2>
+        <button type="button" class="q-edit-btn" onclick="closeFormulaEditor()">Cancel</button>
+      </div>
+      <div id="formulaMathfieldHost">
+        <math-field id="formulaMathfield"></math-field>
+      </div>
+      <div class="formula-modal-hint">Build your formula visually — fractions, superscripts, subscripts, brackets, etc. It's inserted as <code>$$...$$</code> at your cursor, into the field you opened this from.</div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px;">
+        <button type="button" class="q-save-btn" onclick="confirmFormulaInsert()">Insert</button>
+      </div>
     </div>
   </div>
 
@@ -757,6 +791,61 @@
       if (slot) slot.style.display = checkboxEl.checked ? 'block' : 'none';
     }
 
+    // ---------------- Formula editor (MathLive) ----------------
+    // One shared <math-field> for all edit fields, not one per field. The same question can
+    // appear twice on screen at once in duplicates view, so nothing here is looked up by id --
+    // openFormulaEditor is always called with the actual clicked button element, and finds its
+    // sibling textarea via .closest('.q-edit-field'), same pattern the diagram upload handlers
+    // above already use for the same reason.
+    let formulaEditorTarget = null; // { textarea, selectionStart, selectionEnd }
+
+    function openFormulaEditor(btnEl) {
+      const textarea = btnEl.closest('.q-edit-field').querySelector('textarea');
+      if (!textarea) return;
+      formulaEditorTarget = {
+        textarea,
+        selectionStart: textarea.selectionStart,
+        selectionEnd: textarea.selectionEnd
+      };
+      const mf = document.getElementById('formulaMathfield');
+      mf.value = '';
+      document.getElementById('formulaModalOverlay').style.display = 'flex';
+      setTimeout(() => mf.focus(), 50);
+    }
+
+    function closeFormulaEditor() {
+      document.getElementById('formulaModalOverlay').style.display = 'none';
+      formulaEditorTarget = null;
+    }
+
+    function confirmFormulaInsert() {
+      if (!formulaEditorTarget) return;
+      const { textarea, selectionStart, selectionEnd } = formulaEditorTarget;
+      const latex = document.getElementById('formulaMathfield').value.trim();
+      if (!textarea || !latex) { closeFormulaEditor(); return; }
+      const insertText = '$$' + latex + '$$';
+      const current = textarea.value;
+      textarea.value = current.slice(0, selectionStart) + insertText + current.slice(selectionEnd);
+      const newCursorPos = selectionStart + insertText.length;
+      textarea.focus();
+      textarea.setSelectionRange(newCursorPos, newCursorPos);
+      autoResizeTextarea(textarea);
+      updateEditFieldPreview(textarea);
+      closeFormulaEditor();
+    }
+
+    // Reuses this file's own parseWithMath (same Match-List/Assertion-Reason/sequential-steps
+    // + KaTeX/Markdown pipeline the read-only card view already renders questions through), so
+    // the preview matches exactly what students will actually see, not a simplified stand-in.
+    function updateEditFieldPreview(textareaEl) {
+      const previewEl = textareaEl.closest('.q-edit-field').querySelector('.edit-math-preview');
+      if (!previewEl) return;
+      const text = textareaEl.value;
+      if (!text.trim()) { previewEl.innerHTML = ''; previewEl.style.display = 'none'; return; }
+      previewEl.innerHTML = parseWithMath(text);
+      previewEl.style.display = 'block';
+    }
+
     // ---------------- Edit form: the form itself ----------------
 
     function chapterOptionsHtml(chapters, selectedChapter) {
@@ -790,15 +879,35 @@
             <span>${escapeHtml(q.subject || '')}</span>
             ${q.chapter ? `<span>${escapeHtml(q.chapter)}</span>` : ''}
           </div>
-          <div class="q-edit-field"><label>Question</label><textarea data-field="question" rows="3" oninput="autoResizeTextarea(this)">${escapeHtml(q.question)}</textarea></div>
+          <div class="q-edit-field">
+            <div class="q-edit-label-row"><label>Question</label><button type="button" class="formula-btn" onclick="openFormulaEditor(this)">∑ Formula</button></div>
+            <textarea data-field="question" rows="3" oninput="autoResizeTextarea(this); updateEditFieldPreview(this)">${escapeHtml(q.question)}</textarea>
+            <div class="edit-math-preview" style="display:${q.question ? 'block' : 'none'}">${parseWithMath(q.question)}</div>
+          </div>
           <label class="q-edit-active-check"><input type="checkbox" onchange="toggleEditSlot(this, '.q-diagram-group-stem')" ${hasStemDiagram ? 'checked' : ''}/> Question has diagram</label>
           <div class="q-diagram-group-stem" style="display:${hasStemDiagram ? 'block' : 'none'}">
             ${editDiagramSlotHtml(q.id, 'diagram_url', 'Question diagram')}
           </div>
-          <div class="q-edit-field"><label>Option A</label><textarea data-field="option_a" rows="1" oninput="autoResizeTextarea(this)">${escapeHtml(q.option_a || '')}</textarea></div>
-          <div class="q-edit-field"><label>Option B</label><textarea data-field="option_b" rows="1" oninput="autoResizeTextarea(this)">${escapeHtml(q.option_b || '')}</textarea></div>
-          <div class="q-edit-field"><label>Option C</label><textarea data-field="option_c" rows="1" oninput="autoResizeTextarea(this)">${escapeHtml(q.option_c || '')}</textarea></div>
-          <div class="q-edit-field"><label>Option D</label><textarea data-field="option_d" rows="1" oninput="autoResizeTextarea(this)">${escapeHtml(q.option_d || '')}</textarea></div>
+          <div class="q-edit-field">
+            <div class="q-edit-label-row"><label>Option A</label><button type="button" class="formula-btn" onclick="openFormulaEditor(this)">∑ Formula</button></div>
+            <textarea data-field="option_a" rows="1" oninput="autoResizeTextarea(this); updateEditFieldPreview(this)">${escapeHtml(q.option_a || '')}</textarea>
+            <div class="edit-math-preview" style="display:${q.option_a ? 'block' : 'none'}">${parseWithMath(q.option_a || '')}</div>
+          </div>
+          <div class="q-edit-field">
+            <div class="q-edit-label-row"><label>Option B</label><button type="button" class="formula-btn" onclick="openFormulaEditor(this)">∑ Formula</button></div>
+            <textarea data-field="option_b" rows="1" oninput="autoResizeTextarea(this); updateEditFieldPreview(this)">${escapeHtml(q.option_b || '')}</textarea>
+            <div class="edit-math-preview" style="display:${q.option_b ? 'block' : 'none'}">${parseWithMath(q.option_b || '')}</div>
+          </div>
+          <div class="q-edit-field">
+            <div class="q-edit-label-row"><label>Option C</label><button type="button" class="formula-btn" onclick="openFormulaEditor(this)">∑ Formula</button></div>
+            <textarea data-field="option_c" rows="1" oninput="autoResizeTextarea(this); updateEditFieldPreview(this)">${escapeHtml(q.option_c || '')}</textarea>
+            <div class="edit-math-preview" style="display:${q.option_c ? 'block' : 'none'}">${parseWithMath(q.option_c || '')}</div>
+          </div>
+          <div class="q-edit-field">
+            <div class="q-edit-label-row"><label>Option D</label><button type="button" class="formula-btn" onclick="openFormulaEditor(this)">∑ Formula</button></div>
+            <textarea data-field="option_d" rows="1" oninput="autoResizeTextarea(this); updateEditFieldPreview(this)">${escapeHtml(q.option_d || '')}</textarea>
+            <div class="edit-math-preview" style="display:${q.option_d ? 'block' : 'none'}">${parseWithMath(q.option_d || '')}</div>
+          </div>
           <label class="q-edit-active-check"><input type="checkbox" onchange="toggleEditSlot(this, '.q-diagram-group-options')" ${hasAnyOptionDiagram ? 'checked' : ''}/> Options have diagram</label>
           <div class="q-diagram-group-options" style="display:${hasAnyOptionDiagram ? 'block' : 'none'}">
             ${editDiagramSlotHtml(q.id, 'option_a_diagram_url', 'Option A diagram')}
