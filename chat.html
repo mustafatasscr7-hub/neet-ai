@@ -166,6 +166,18 @@
     .selection-toolbar-btn:hover { background: #2a2a2a; color: #fff; }
     .selection-toolbar-divider { width: 1px; height: 16px; background: #333; flex-shrink: 0; }
 
+    /* Slash-command menu -- same visual language as .selection-toolbar above (dark chip,
+       fixed positioning, computed on demand), anchored above whichever input triggered it. */
+    .slash-menu { position: fixed; display: none; flex-direction: column; gap: 2px; background: #1e1e1e; border: 1px solid #333; border-radius: 10px; padding: 6px; z-index: 500; box-shadow: 0 8px 24px rgba(0,0,0,0.6); min-width: 260px; max-width: 360px; }
+    .slash-menu.visible { display: flex; }
+    .slash-menu-item { display: flex; flex-direction: column; gap: 2px; padding: 7px 10px; border-radius: 6px; cursor: pointer; }
+    .slash-menu-item:hover, .slash-menu-item.active { background: #2a2a2a; }
+    .slash-menu-cmd { font-size: 13px; font-weight: 600; color: #4f8ef7; font-family: 'Inter', sans-serif; }
+    .slash-menu-desc { font-size: 11px; color: #888; }
+    body.light-mode .slash-menu { background: #ffffff !important; border-color: #e0e0e5 !important; box-shadow: 0 8px 24px rgba(0,0,0,0.12) !important; }
+    body.light-mode .slash-menu-item:hover, body.light-mode .slash-menu-item.active { background: #f0f0f3 !important; }
+    body.light-mode .slash-menu-desc { color: #7a7a85 !important; }
+
     @keyframes voicePulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.55; transform: scale(1.18); } }
     .voice-btn.recording { color: #ef4444 !important; }
     .voice-btn.recording .voice-icon { animation: voicePulse 1.1s ease-in-out infinite; }
@@ -1713,6 +1725,12 @@ function plainTextFromMarkdown(text) {
       hideSelectionToolbar();
     });
 
+    document.addEventListener('mousedown', function(e) {
+      if (!slashMenu.classList.contains('visible')) return;
+      if (slashMenu.contains(e.target) || e.target === slashMenuTargetInput) return;
+      hideSlashMenu();
+    });
+
     selectionToolbar.addEventListener('click', function(e) {
       const btn = e.target.closest('.selection-toolbar-btn');
       if (!btn) return;
@@ -1737,6 +1755,159 @@ function plainTextFromMarkdown(text) {
       selection.removeAllRanges();
       hideSelectionToolbar();
     });
+
+    // ---------------- Slash-command menu ----------------
+    // One shared menu for both entry points (#welcomeInput on the empty-chat screen and the
+    // persistent #userInput bar) -- tracks which of the two triggered it so a selection lands
+    // in the right element, same reasoning as the formula editor's field-by-reference targeting.
+    const SLASH_COMMANDS = [
+      { cmd: '/mocktest', desc: 'Jump straight into a mock test' },
+      { cmd: '/pyq', desc: 'Search Previous Year Questions by topic' },
+      { cmd: '/explain simply', desc: 'Re-explain the last answer, simply' }
+    ];
+
+    const slashMenu = document.createElement('div');
+    slashMenu.className = 'slash-menu';
+    document.body.appendChild(slashMenu);
+    slashMenu.addEventListener('mousedown', function(e) { e.preventDefault(); }); // keep focus in the input
+
+    let slashMenuTargetInput = null;
+    let slashMenuMatches = [];
+    let slashMenuActiveIndex = 0;
+
+    function hideSlashMenu() {
+      slashMenu.classList.remove('visible');
+      slashMenuTargetInput = null;
+      slashMenuMatches = [];
+    }
+
+    function positionSlashMenu(targetEl) {
+      const rect = targetEl.getBoundingClientRect();
+      const menuRect = slashMenu.getBoundingClientRect();
+      let left = rect.left;
+      left = Math.max(8, Math.min(left, window.innerWidth - menuRect.width - 8));
+      let top = rect.top - menuRect.height - 8;
+      if (top < 4) top = rect.bottom + 8;
+      slashMenu.style.left = left + 'px';
+      slashMenu.style.top = top + 'px';
+    }
+
+    function renderSlashMenu() {
+      slashMenu.innerHTML = slashMenuMatches.map((c, i) =>
+        `<div class="slash-menu-item${i === slashMenuActiveIndex ? ' active' : ''}" data-idx="${i}">
+           <span class="slash-menu-cmd">${c.cmd}</span>
+           <span class="slash-menu-desc">${c.desc}</span>
+         </div>`
+      ).join('');
+    }
+
+    // Plain prefix matching against the full command string (not just the word before any
+    // space) is what lets this keep matching through "/explain simply"'s internal space --
+    // "/explain ".startsWith is true against "/explain simply", but stops matching the moment
+    // typed text diverges from every known command (e.g. "/pyq " + a topic), which is exactly
+    // when the menu should get out of the way and let the student keep typing.
+    function updateSlashMenuForInput(el) {
+      const value = el.value;
+      if (!value.startsWith('/')) { hideSlashMenu(); return; }
+      const lower = value.toLowerCase();
+      const matches = SLASH_COMMANDS.filter(c => c.cmd.startsWith(lower));
+      if (matches.length === 0) { hideSlashMenu(); return; }
+      slashMenuMatches = matches;
+      slashMenuActiveIndex = Math.min(slashMenuActiveIndex, matches.length - 1);
+      slashMenuTargetInput = el;
+      renderSlashMenu();
+      slashMenu.classList.add('visible');
+      positionSlashMenu(el);
+    }
+
+    // /mocktest and /explain simply run immediately by funnelling the full command text through
+    // sendMessage() itself (see the interception block at its top) -- one place recognizes a
+    // command, whether it arrived via this menu or the student just typed it and hit Enter.
+    // /pyq is the one exception: it still needs a topic, so it only fills the input and waits.
+    function selectSlashCommand(command, el) {
+      hideSlashMenu();
+      if (command.cmd === '/pyq') {
+        el.value = '/pyq ';
+        el.focus();
+        if (el.setSelectionRange) el.setSelectionRange(el.value.length, el.value.length);
+        return;
+      }
+      input.value = command.cmd;
+      sendMessage();
+    }
+
+    slashMenu.addEventListener('click', function(e) {
+      const item = e.target.closest('.slash-menu-item');
+      if (!item || !slashMenuTargetInput) return;
+      selectSlashCommand(slashMenuMatches[parseInt(item.dataset.idx, 10)], slashMenuTargetInput);
+    });
+
+    // Returns true if it handled the key (caller should skip its own Enter-to-send handling).
+    function handleSlashMenuKeydown(e, el) {
+      if (!slashMenu.classList.contains('visible') || slashMenuTargetInput !== el) return false;
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        slashMenuActiveIndex = (slashMenuActiveIndex + 1) % slashMenuMatches.length;
+        renderSlashMenu();
+        return true;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        slashMenuActiveIndex = (slashMenuActiveIndex - 1 + slashMenuMatches.length) % slashMenuMatches.length;
+        renderSlashMenu();
+        return true;
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        selectSlashCommand(slashMenuMatches[slashMenuActiveIndex], el);
+        return true;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        hideSlashMenu();
+        return true;
+      }
+      return false;
+    }
+
+    // /explain simply has no argument to wait for -- pulls the most recent AI turn straight
+    // out of the existing conversation and asks for a simpler re-explanation of it, reusing
+    // the same addMessageRow/streamAIResponse path sendMessage() itself uses for a normal turn.
+    function runExplainSimplyCommand() {
+      const lastAi = [...currentConversation].reverse().find(m => m.role === 'ai');
+      if (!lastAi) return; // nothing to explain yet -- quietly do nothing rather than confuse
+      const welcome = document.getElementById('welcome');
+      if (welcome) welcome.remove();
+      inputArea.style.display = 'block';
+      const instructionText = 'Explain your previous answer in simpler, easier-to-understand terms.';
+      const userIndex = currentConversation.length;
+      addMessageRow('user', instructionText, undefined, userIndex);
+      currentConversation.push({ role: 'user', text: instructionText });
+      streamAIResponse(instructionText);
+    }
+
+    // /pyq [topic] reuses the same search + modal already wired to the "Previous Year
+    // Questions" button under each AI answer, rather than sending the topic through the model.
+    async function runPyqSearchCommand(topic) {
+      const welcome = document.getElementById('welcome');
+      if (welcome) welcome.remove();
+      inputArea.style.display = 'block';
+      try {
+        const res = await fetch(`${API_BASE}/pyq`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: topic })
+        });
+        const data = await res.json();
+        if (data.pyqs && data.pyqs.length > 0) {
+          showPYQModal(data.pyqs);
+        } else {
+          addMessageRow('ai', `No matching PYQs found for "${topic}".`);
+        }
+      } catch (e) {
+        addMessageRow('ai', 'Could not search PYQs right now — please try again.');
+      }
+    }
 
     function createHistoryItem(id, title, onClickFn) {
       const item = document.createElement('div');
@@ -1899,8 +2070,10 @@ function plainTextFromMarkdown(text) {
       welcome.innerHTML = `<h2>${t('chat','welcomeHeading')}</h2><div class="welcome-search"><input type="text" id="welcomeInput" placeholder="${t('chat','askPlaceholder')}" /><button id="welcomeVoiceBtn" class="voice-btn" onclick="toggleVoice()" style="background:transparent;border:none;color:#666;cursor:pointer;padding:6px;display:flex;align-items:center;flex-shrink:0;border-radius:8px;" title="Voice input"><svg class="voice-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg></button><button class="welcome-send" id="welcomeSend"><svg viewBox="0 0 24 24"><path d="M2 21l21-9L2 3v7l15 2-15 2v7z"/></svg></button></div><div class="suggestions"><div class="suggestion"><span class="suggestion-icon">🔬</span>${t('chat','suggestion1')}</div><div class="suggestion"><span class="suggestion-icon">⚗️</span>${t('chat','suggestion2')}</div><div class="suggestion"><span class="suggestion-icon">📊</span>${t('chat','suggestion3')}</div><div class="suggestion"><span class="suggestion-icon">🧪</span>${t('chat','suggestion4')}</div></div>`;
       chatWindow.appendChild(welcome);
       document.getElementById('welcomeInput').addEventListener('keydown', function(e) {
+        if (handleSlashMenuKeydown(e, this)) return;
         if (e.key === 'Enter') { input.value = this.value; sendMessage(); }
       });
+      document.getElementById('welcomeInput').addEventListener('input', function() { updateSlashMenuForInput(this); });
       document.getElementById('welcomeInput').addEventListener('paste', handleWelcomePaste);
       document.getElementById('welcomeSend').addEventListener('click', function() {
         input.value = document.getElementById('welcomeInput').value;
@@ -2055,6 +2228,30 @@ function plainTextFromMarkdown(text) {
       if (isStreaming) return;
       const text = input.value.trim();
       if (!text && selectedImages.length === 0 && !selectedPDF) return;
+
+      // Slash commands -- recognized here regardless of whether they arrived via the dropdown
+      // menu (selectSlashCommand) or the student just typed the whole thing and hit Enter.
+      if (/^\/mocktest\s*$/i.test(text)) {
+        window.location.href = './mocktest.html';
+        return;
+      }
+      if (/^\/explain simply\s*$/i.test(text)) {
+        input.value = '';
+        input.style.height = 'auto';
+        runExplainSimplyCommand();
+        return;
+      }
+      if (/^\/pyq\s*$/i.test(text)) {
+        window.location.href = './pyqbank.html';
+        return;
+      }
+      const pyqTopicMatch = text.match(/^\/pyq\s+(.+)$/i);
+      if (pyqTopicMatch) {
+        input.value = '';
+        input.style.height = 'auto';
+        await runPyqSearchCommand(pyqTopicMatch[1].trim());
+        return;
+      }
 
       const welcome = document.getElementById('welcome');
       if (welcome) welcome.remove();
@@ -2318,11 +2515,14 @@ function plainTextFromMarkdown(text) {
     input.addEventListener('input', function() {
       this.style.height = 'auto';
       this.style.height = Math.min(this.scrollHeight, 160) + 'px';
+      updateSlashMenuForInput(this);
     });
 
     document.getElementById('welcomeInput').addEventListener('keydown', function(e) {
+      if (handleSlashMenuKeydown(e, this)) return;
       if (e.key === 'Enter') { input.value = this.value; sendMessage(); }
     });
+    document.getElementById('welcomeInput').addEventListener('input', function() { updateSlashMenuForInput(this); });
     document.getElementById('welcomeInput').addEventListener('paste', handleWelcomePaste);
 
     document.getElementById('welcomeSend').addEventListener('click', function() {
@@ -2766,6 +2966,7 @@ function openSettings() {
     applyAllSettings();
 
     input.addEventListener('keydown', function(e) {
+      if (handleSlashMenuKeydown(e, this)) return;
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
     });
 
