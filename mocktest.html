@@ -260,6 +260,17 @@
   <script src="./theme.js"></script>
   <script src="./i18n.js"></script>
   <script>
+    // Used by submitReport() below -- unlike pyqbank.html/personalised-test.html, this file
+    // never declared these at module scope (every other fetch here hardcodes its full URL
+    // directly instead). submitReport referenced them anyway, throwing an uncaught
+    // ReferenceError the instant it ran -- before any of its own try/catch or error handling
+    // ever got a chance to run -- which is why the Submit button froze with no visible error.
+    const API_BASE = 'https://neet-ai-production.up.railway.app';
+    const SUPABASE_URL = 'https://hvhnfttrfouajlyhvunq.supabase.co';
+    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh2aG5mdHRyZm91YWpseWh2dW5xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg5NDI1NTIsImV4cCI6MjA5NDUxODU1Mn0.8RaSu5yiTpQCEUGKrFO2y6oiRXSqdBehIz933j9Z7WA';
+    const { createClient } = supabase;
+    const client = createClient(SUPABASE_URL, SUPABASE_KEY);
+
     let questions = [];
     let currentIndex = 0;
     let answers = {};
@@ -602,15 +613,21 @@ async function submitReport(pyqId, btnEl) {
   const note = document.getElementById('reportNote').value.trim();
   btnEl.disabled = true;
   btnEl.textContent = 'Submitting...';
-  const { data: { session } } = await client.auth.getSession();
-  if (!session) {
-    errEl.textContent = 'Please log in to report a question.';
-    btnEl.disabled = false; btnEl.textContent = 'Submit';
-    return;
-  }
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 15000);
   try {
+    // Raced against the same abort signal the fetch below uses -- getSession() has no timeout
+    // of its own, so a stalled token refresh here used to leave the button stuck on
+    // "Submitting..." forever with no error, since nothing guarded this specific await.
+    const abortPromise = new Promise((_, reject) => {
+      controller.signal.addEventListener('abort', () => reject(new DOMException('Timed out', 'AbortError')));
+    });
+    const { data: { session } } = await Promise.race([client.auth.getSession(), abortPromise]);
+    if (!session) {
+      errEl.textContent = 'Please log in to report a question.';
+      btnEl.disabled = false; btnEl.textContent = 'Submit';
+      return;
+    }
     const res = await fetch(`${API_BASE}/report-question`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
