@@ -1874,8 +1874,13 @@ function plainTextFromMarkdown(text) {
     // out of the existing conversation and asks for a simpler re-explanation of it, reusing
     // the same addMessageRow/streamAIResponse path sendMessage() itself uses for a normal turn.
     function runExplainSimplyCommand() {
-      const lastAi = [...currentConversation].reverse().find(m => m.role === 'ai');
-      if (!lastAi) return; // nothing to explain yet -- quietly do nothing rather than confuse
+      const lastAiIndex = currentConversation.map(m => m.role).lastIndexOf('ai');
+      if (lastAiIndex === -1) return; // nothing to explain yet -- quietly do nothing rather than confuse
+      // The doubt itself hasn't changed, only the wording of the request -- pass the ORIGINAL
+      // question through as pyqSearchText so the PYQ button still searches on the real topic,
+      // not on this instruction sentence (which has no topical content of its own).
+      const precedingUser = currentConversation[lastAiIndex - 1];
+      const originalTopicText = (precedingUser && precedingUser.role === 'user') ? precedingUser.text : '';
       const welcome = document.getElementById('welcome');
       if (welcome) welcome.remove();
       inputArea.style.display = 'block';
@@ -1883,7 +1888,7 @@ function plainTextFromMarkdown(text) {
       const userIndex = currentConversation.length;
       addMessageRow('user', instructionText, undefined, userIndex);
       currentConversation.push({ role: 'user', text: instructionText });
-      streamAIResponse(instructionText);
+      streamAIResponse(instructionText, { pyqSearchText: originalTopicText || instructionText });
     }
 
     // /pyq [topic] reuses the same search + modal already wired to the "Previous Year
@@ -2292,6 +2297,12 @@ function plainTextFromMarkdown(text) {
     // (assumed to already be the last entry in currentConversation), streams the
     // response into a new AI bubble, and persists the updated conversation.
     async function streamAIResponse(questionText, options = {}) {
+      // Separate from questionText (what's sent to the model / shown as the message bubble) --
+      // most callers search PYQs for the same text they're asking about, but a few (e.g.
+      // /explain simply) send an instruction ("explain this more simply") that has no topical
+      // content of its own. Those pass the ORIGINAL doubt's text here instead, so the PYQ button
+      // still searches on the actual topic rather than the wrapper instruction around it.
+      const pyqSearchText = options.pyqSearchText || questionText;
       isStreaming = true;
       document.getElementById('sendIcon').style.display = 'none';
       document.getElementById('stopIcon').style.display = 'block';
@@ -2429,7 +2440,7 @@ function plainTextFromMarkdown(text) {
             const res = await fetch(`${API_BASE}/pyq`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ text: questionText })
+              body: JSON.stringify({ text: pyqSearchText })
             });
             const data = await res.json();
             if (data.pyqs && data.pyqs.length > 0) {
