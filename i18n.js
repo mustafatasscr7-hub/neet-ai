@@ -538,7 +538,12 @@ const TRANSLATIONS = {
       addAttachment: 'Add attachment',
       voiceInput: 'Voice input',
       pyqModalTitle: '📋 Previous Year Questions',
-      streakDays: '🔥 {n} day streak'
+      streakDays: '🔥 {n} day streak',
+      thinkingPhrase1: 'Thinking...',
+      thinkingPhrase2: 'Checking NCERT...',
+      thinkingPhrase3: 'Solving...',
+      thinkingPhrase4: 'Working it out...',
+      thinkingPhrase5: 'Analyzing...'
     },
     hi: {
       newChat: 'नई चैट',
@@ -653,7 +658,12 @@ const TRANSLATIONS = {
       addAttachment: 'अटैचमेंट जोड़ें',
       voiceInput: 'वॉइस इनपुट',
       pyqModalTitle: '📋 पिछले वर्ष के प्रश्न',
-      streakDays: '🔥 {n} दिन की स्ट्रीक'
+      streakDays: '🔥 {n} दिन की स्ट्रीक',
+      thinkingPhrase1: 'सोच रहा हूँ...',
+      thinkingPhrase2: 'NCERT जाँच रहा हूँ...',
+      thinkingPhrase3: 'हल निकाल रहा हूँ...',
+      thinkingPhrase4: 'समाधान तैयार कर रहा हूँ...',
+      thinkingPhrase5: 'विश्लेषण कर रहा हूँ...'
     }
   },
 
