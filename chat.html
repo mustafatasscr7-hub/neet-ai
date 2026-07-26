@@ -265,10 +265,10 @@
     .thinking-indicator { display: flex; align-items: center; gap: 10px; padding: 12px 4px; }
     .thinking-orb { position: relative; width: 18px; height: 18px; flex-shrink: 0; }
     .thinking-orb::before, .thinking-orb::after { content: ''; position: absolute; inset: 0; border-radius: 50%; border: 2px solid transparent; }
-    .thinking-orb::before { border-top-color: #4f8ef7; border-right-color: #4f8ef7; animation: thinkingSpin 0.9s linear infinite; }
-    .thinking-orb::after { border-bottom-color: #7c3aed; border-left-color: #7c3aed; animation: thinkingSpin 1.3s linear infinite reverse; }
+    .thinking-orb::before { border-top-color: #4f8ef7; border-right-color: #4f8ef7; animation: thinkingSpin 1.6s linear infinite; }
+    .thinking-orb::after { border-bottom-color: #7c3aed; border-left-color: #7c3aed; animation: thinkingSpin 2.2s linear infinite reverse; }
     @keyframes thinkingSpin { to { transform: rotate(360deg); } }
-    .thinking-text { font-size: var(--chat-font-size, 14px); color: #888; animation: thinkingFade 1.6s ease-in-out infinite; }
+    .thinking-text { font-size: var(--chat-font-size, 14px); color: #888; animation: thinkingFade 2.2s ease-in-out infinite; }
     @keyframes thinkingFade { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
     body.light-mode .thinking-text { color: #7a7a85 !important; }
 
@@ -2116,7 +2116,7 @@ function plainTextFromMarkdown(text) {
       typingRow._thinkingInterval = setInterval(() => {
         thinkingPhraseIdx = (thinkingPhraseIdx + 1) % THINKING_PHRASE_KEYS.length;
         thinkingTextEl.textContent = t('chat', THINKING_PHRASE_KEYS[thinkingPhraseIdx]);
-      }, 1750);
+      }, 2000);
       function removeTypingRow() {
         clearInterval(typingRow._thinkingInterval);
         if (typingRow.parentNode === chatWindow) chatWindow.removeChild(typingRow);
@@ -2168,13 +2168,22 @@ function plainTextFromMarkdown(text) {
         }
 
         const aiIndex = currentConversation.length;
-        const aiRow = document.createElement('div');
-        aiRow.className = 'message-row ai';
-        aiRow.dataset.msgIndex = aiIndex;
-        aiRow.innerHTML = '<div class="avatar ai">⚡</div><div class="message-content ai"><div class="message-bubble ai"></div></div>';
-        chatWindow.appendChild(aiRow);
+        // Not created until the first real chunk arrives (see ensureAiRow below) -- creating
+        // it right here, while the thinking row is still on screen, put a second (empty)
+        // avatar row on screen at the same time, since this row's own avatar renders
+        // regardless of whether its bubble has any text yet.
+        let aiRow = null;
+        let bubble = null;
+        function ensureAiRow() {
+          if (aiRow) return;
+          aiRow = document.createElement('div');
+          aiRow.className = 'message-row ai';
+          aiRow.dataset.msgIndex = aiIndex;
+          aiRow.innerHTML = '<div class="avatar ai">⚡</div><div class="message-content ai"><div class="message-bubble ai"></div></div>';
+          chatWindow.appendChild(aiRow);
+          bubble = aiRow.querySelector('.message-bubble.ai');
+        }
 
-        const bubble = aiRow.querySelector('.message-bubble.ai');
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let fullText = '';
@@ -2188,7 +2197,10 @@ function plainTextFromMarkdown(text) {
           // Swap the thinking indicator out the instant real content starts arriving --
           // everything before this point (NCERT search, model routing, first token) is exactly
           // the gap this indicator exists to cover.
-          if (value && value.length > 0) removeTypingRow();
+          if (value && value.length > 0) {
+            removeTypingRow();
+            ensureAiRow();
+          }
           const chunk = decoder.decode(value);
           for (let i = 0; i < chunk.length; i++) {
             if (streamController && streamController.signal.aborted) break;
@@ -2206,6 +2218,7 @@ function plainTextFromMarkdown(text) {
           }
         }
         removeTypingRow(); // safety net -- covers a done-with-no-value edge case (empty response)
+        ensureAiRow();
 
         bubble.innerHTML = parseWithMath(fullText);
 
