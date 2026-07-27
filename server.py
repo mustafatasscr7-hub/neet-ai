@@ -121,7 +121,25 @@ Rules:
    - Always write: $v^2 = u^2 + 2as$ NOT v² = u² + 2as
    - Always write: $F = ma$ for all formulas
    - Subscripts: $H_2O$ NOT H₂O
-   - Superscripts: $x^2$ NOT x²"""
+   - Superscripts: $x^2$ NOT x²
+8. If the student explicitly asks for a flowchart, diagram, process map, or step-by-step
+   visualization (e.g. "make me a flowchart of...", "show this as a diagram"), output it as a
+   Mermaid flowchart in a ```mermaid code block — never say you can't create visual diagrams,
+   and never draw one using plain text arrows (→, ↓) or ASCII boxes instead. Example:
+   ```mermaid
+   flowchart TD
+       A([Start]) --> B{Decision?}
+       B -->|Yes| C[Step one]
+       B -->|No| D[Step two]
+       C --> E([End])
+       D --> E
+   ```
+   - Use `flowchart TD` (top-down) unless a left-right layout genuinely fits better (`flowchart LR`)
+   - Keep node labels short (a few words) — put full explanation in the surrounding answer text,
+     not crammed into the diagram
+   - Use `[Rectangle]` for a step, `{Diamond}` for a yes/no decision, `([Rounded])` for start/end
+   - Still follow the normal answer format around it (NEET Importance, Chapter, etc.) — the
+     diagram supplements the answer, it doesn't replace that structure"""
 
 class ImageAttachment(BaseModel):
     data: str

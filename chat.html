@@ -9,6 +9,7 @@
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
   <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
   <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: 'Inter', sans-serif; background: #0d0d0d; color: #ececec; height: 100vh; display: flex; overflow: hidden; }
@@ -262,6 +263,10 @@
     .message-bubble.ai li { margin: 4px 0; color: #c4c4c4; }
     .message-bubble.ai p { margin: 8px 0; }
     .message-bubble.ai code { background: #1a1a1a; padding: 2px 6px; border-radius: 4px; font-size: calc(var(--chat-font-size, 14px) - 1px); color: #4f8ef7; }
+
+    .mermaid-diagram { margin: 12px 0; padding: 16px; background: #111111; border: 1px solid #2a2a2a; border-radius: 10px; overflow-x: auto; text-align: center; }
+    .mermaid-diagram svg { max-width: 100%; height: auto; }
+    body.light-mode .mermaid-diagram { background: #f9f9fb !important; border-color: #e0e0e5 !important; }
 
     .typing-row { padding: 16px 24px; display: flex; gap: 16px; max-width: 820px; width: 100%; margin: 0 auto; }
     .typing { display: flex; gap: 5px; padding: 12px 4px; align-items: center; }
@@ -980,6 +985,79 @@ let selectedImages = [];
       bubble.innerHTML = parseWithMath(fullText.slice(0, safeLen)) + escapeStreamingTail(fullText.slice(safeLen));
     }
 
+    // ---------------- Mermaid flowchart rendering ----------------
+    // marked() already turns a ```mermaid fenced block into <pre><code class="language-mermaid">
+    // as part of parseWithMath's normal markdown pass -- this is a separate async post-process
+    // step that finds those specific blocks and swaps them for a rendered SVG diagram. Kept
+    // fully separate from parseWithMath (which every caller expects to return a plain string
+    // synchronously) rather than making that function async everywhere it's used.
+    let mermaidBlockSeq = 0;
+
+    function getMermaidThemeVariables() {
+      const isLight = document.body.classList.contains('light-mode');
+      return isLight ? {
+        background: '#ffffff',
+        primaryColor: '#f5f5f7',
+        primaryTextColor: '#0d0d0d',
+        primaryBorderColor: '#4f8ef7',
+        lineColor: '#4f8ef7',
+        secondaryColor: '#e8e8f0',
+        secondaryBorderColor: '#d5d5dd',
+        tertiaryColor: '#ffffff',
+        mainBkg: '#f5f5f7',
+        nodeTextColor: '#0d0d0d',
+        fontFamily: 'Inter, sans-serif'
+      } : {
+        background: '#0d0d0d',
+        primaryColor: '#1e1e2e',
+        primaryTextColor: '#ececec',
+        primaryBorderColor: '#4f8ef7',
+        lineColor: '#4f8ef7',
+        secondaryColor: '#2a2a3a',
+        secondaryBorderColor: '#3a3a4a',
+        tertiaryColor: '#111111',
+        mainBkg: '#1e1e2e',
+        nodeTextColor: '#ececec',
+        fontFamily: 'Inter, sans-serif'
+      };
+    }
+
+    // Only called on a fully-streamed answer (never mid-stream -- partial, unclosed ```mermaid
+    // syntax would just fail to parse repeatedly and flash broken states). Each matched block is
+    // rendered independently, so one bad diagram in a multi-diagram answer doesn't take the
+    // others down with it -- a parse failure just leaves that one block as the plain-text code
+    // marked already rendered it as, per the fallback requirement.
+    async function renderMermaidBlocksIn(containerEl) {
+      const codeBlocks = containerEl.querySelectorAll('pre code.language-mermaid');
+      if (codeBlocks.length === 0) return;
+      mermaid.initialize({
+        startOnLoad: false,
+        theme: 'base',
+        themeVariables: getMermaidThemeVariables(),
+        fontFamily: 'Inter, sans-serif',
+        securityLevel: 'strict',
+        // Without this, a parse failure both rejects our own promise (which the catch below
+        // already handles) AND independently injects Mermaid's own floating "Syntax error in
+        // text" graphic into the page -- this suppresses that second, uncatchable side effect
+        // so a bad diagram falls back to silent plain text, not a stray error banner.
+        suppressErrorRendering: true
+      });
+      for (const codeEl of codeBlocks) {
+        const preEl = codeEl.closest('pre') || codeEl;
+        const rawCode = codeEl.textContent;
+        try {
+          const id = 'mermaid-diagram-' + (mermaidBlockSeq++);
+          const { svg } = await mermaid.render(id, rawCode);
+          const wrapper = document.createElement('div');
+          wrapper.className = 'mermaid-diagram';
+          wrapper.innerHTML = svg;
+          preEl.replaceWith(wrapper);
+        } catch (e) {
+          console.warn('Mermaid render failed, leaving plain text in place:', e);
+        }
+      }
+    }
+
     function escapeHtml(str) {
       const div = document.createElement('div');
       div.textContent = str == null ? '' : String(str);
@@ -1487,6 +1565,7 @@ let selectedImages = [];
 
       if (role === 'ai') {
         bubble.innerHTML = parseWithMath(text);
+        renderMermaidBlocksIn(bubble);
 
         if (userQuestion) {
           const pyqBtn = document.createElement('button');
@@ -2429,6 +2508,7 @@ function plainTextFromMarkdown(text) {
         ensureAiRow();
 
         bubble.innerHTML = parseWithMath(fullText);
+        await renderMermaidBlocksIn(bubble);
 
         const pyqBtn = document.createElement('button');
         pyqBtn.className = 'pyq-btn';
