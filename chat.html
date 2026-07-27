@@ -267,6 +267,8 @@
     .mermaid-diagram { margin: 12px 0; padding: 16px; background: #111111; border: 1px solid #2a2a2a; border-radius: 10px; overflow-x: auto; text-align: center; }
     .mermaid-diagram svg { max-width: 100%; height: auto; }
     body.light-mode .mermaid-diagram { background: #f9f9fb !important; border-color: #e0e0e5 !important; }
+    .mermaid-placeholder { margin: 12px 0; padding: 16px; background: #111111; border: 1px dashed #2a2a2a; border-radius: 10px; text-align: center; color: #666; font-size: calc(var(--chat-font-size, 14px) - 1px); animation: thinkingFade 1.6s ease-in-out infinite; }
+    body.light-mode .mermaid-placeholder { background: #f9f9fb !important; border-color: #d5d5dd !important; color: #999 !important; }
 
     .typing-row { padding: 16px 24px; display: flex; gap: 16px; max-width: 820px; width: 100%; margin: 0 auto; }
     .typing { display: flex; gap: 5px; padding: 12px 4px; align-items: center; }
@@ -980,9 +982,23 @@ let selectedImages = [];
     // a per-character cached-safe-HTML/live-tail split was tried and pulled back out
     // (see git history) after it introduced its own repeated/duplicated-content bug
     // that wasn't present in this simpler single-write version.
+    // Raw Mermaid syntax (```mermaid ... ```) is wide, multi-line, and meaningless to read as
+    // text -- showing it while it streams in (whether the fence is still open or has already
+    // closed but the rest of the answer is still coming) looked broken. Masked out to a small
+    // placeholder here instead; the real diagram only replaces it once the whole message has
+    // finished streaming (see renderMermaidBlocksIn) -- deliberately not attempting to swap in
+    // the live diagram mid-stream, since piecemeal DOM patching during streaming is exactly what
+    // previously caused a duplicated-content bug here (see git history).
+    const MERMAID_FENCE_RE = /```mermaid\b[\s\S]*?(?:```|$)/g;
+
+    function maskMermaidBlocksForStreaming(text) {
+      return text.replace(MERMAID_FENCE_RE, '\n<div class="mermaid-placeholder">📊 Generating diagram…</div>\n');
+    }
+
     function renderStreamingText(bubble, fullText) {
       const safeLen = findSafeRenderBoundary(fullText);
-      bubble.innerHTML = parseWithMath(fullText.slice(0, safeLen)) + escapeStreamingTail(fullText.slice(safeLen));
+      const safePrefix = maskMermaidBlocksForStreaming(fullText.slice(0, safeLen));
+      bubble.innerHTML = parseWithMath(safePrefix) + escapeStreamingTail(fullText.slice(safeLen));
     }
 
     // ---------------- Mermaid flowchart rendering ----------------
