@@ -265,7 +265,12 @@
     .message-bubble.ai code { background: #1a1a1a; padding: 2px 6px; border-radius: 4px; font-size: calc(var(--chat-font-size, 14px) - 1px); color: #4f8ef7; }
 
     .mermaid-diagram { margin: 12px 0; padding: 16px; background: #111111; border: 1px solid #2a2a2a; border-radius: 10px; overflow-x: auto; text-align: center; }
-    .mermaid-diagram svg { max-width: 100%; height: auto; }
+    /* Mermaid's SVG root ships with width="100%" -- left alone, that stretches even a small
+       2-3 node diagram to fill the whole bubble width, and since height scales to match the
+       same aspect ratio, a narrow/tall diagram balloons into something enormous. Overriding to
+       the SVG's own natural size, only capped back down by max-width if it's genuinely wider
+       than the bubble (a diagram with many parallel branches, for instance). */
+    .mermaid-diagram svg { width: auto; max-width: 100%; height: auto; }
     body.light-mode .mermaid-diagram { background: #f9f9fb !important; border-color: #e0e0e5 !important; }
     .mermaid-placeholder { margin: 12px 0; padding: 16px; background: #111111; border: 1px dashed #2a2a2a; border-radius: 10px; text-align: center; color: #666; font-size: calc(var(--chat-font-size, 14px) - 1px); animation: thinkingFade 1.6s ease-in-out infinite; }
     body.light-mode .mermaid-placeholder { background: #f9f9fb !important; border-color: #d5d5dd !important; color: #999 !important; }
@@ -1022,7 +1027,8 @@ let selectedImages = [];
         tertiaryColor: '#ffffff',
         mainBkg: '#f5f5f7',
         nodeTextColor: '#0d0d0d',
-        fontFamily: 'Inter, sans-serif'
+        fontFamily: 'Inter, sans-serif',
+        fontSize: '13px'
       } : {
         background: '#0d0d0d',
         primaryColor: '#1e1e2e',
@@ -1034,7 +1040,8 @@ let selectedImages = [];
         tertiaryColor: '#111111',
         mainBkg: '#1e1e2e',
         nodeTextColor: '#ececec',
-        fontFamily: 'Inter, sans-serif'
+        fontFamily: 'Inter, sans-serif',
+        fontSize: '13px'
       };
     }
 
@@ -1052,6 +1059,16 @@ let selectedImages = [];
         themeVariables: getMermaidThemeVariables(),
         fontFamily: 'Inter, sans-serif',
         securityLevel: 'strict',
+        // Mermaid's defaults (16px font, ~50px node/rank spacing, ~15px node padding) produce
+        // a noticeably oversized diagram compared to the chat text around it -- tightened here
+        // so a several-node flowchart stays compact instead of dominating the whole reply.
+        flowchart: {
+          htmlLabels: true,
+          curve: 'basis',
+          nodeSpacing: 25,
+          rankSpacing: 32,
+          padding: 8
+        },
         // Without this, a parse failure both rejects our own promise (which the catch below
         // already handles) AND independently injects Mermaid's own floating "Syntax error in
         // text" graphic into the page -- this suppresses that second, uncatchable side effect
