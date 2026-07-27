@@ -2235,12 +2235,28 @@ function plainTextFromMarkdown(text) {
       return new Date(Date.now() + IST_OFFSET_MS).toISOString().split('T')[0];
     }
 
-    function getMsUntilISTMidnight() {
+    function getISTYesterdayString() {
       const IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000;
-      const shiftedNow = new Date(Date.now() + IST_OFFSET_MS); // IST wall-clock, read via UTC getters
-      const msSinceISTMidnight = shiftedNow.getUTCHours() * 3600000 + shiftedNow.getUTCMinutes() * 60000
-        + shiftedNow.getUTCSeconds() * 1000 + shiftedNow.getUTCMilliseconds();
-      return 86400000 - msSinceISTMidnight;
+      const shifted = new Date(Date.now() + IST_OFFSET_MS - 86400000);
+      return shifted.toISOString().split('T')[0];
+    }
+
+    // Mirrors server.py's _active_cooldown_seconds -- the block clears a fixed COOLDOWN_HOURS
+    // after limit_reached_at was set, not at IST midnight, so a block from late yesterday can
+    // still be active into today. Checking both rows covers that.
+    function computeActiveCooldownSeconds(rows, todayStr, yesterdayStr) {
+      const COOLDOWN_HOURS = 24;
+      const byDate = {};
+      (rows || []).forEach(r => { byDate[r.usage_date] = r; });
+      for (const d of [yesterdayStr, todayStr]) {
+        const row = byDate[d];
+        if (row && row.limit_reached_at) {
+          const elapsedMs = Date.now() - new Date(row.limit_reached_at).getTime();
+          const remainingMs = COOLDOWN_HOURS * 3600000 - elapsedMs;
+          if (remainingMs > 0) return Math.floor(remainingMs / 1000);
+        }
+      }
+      return null;
     }
 
     function formatCountdown(ms) {
@@ -2261,23 +2277,32 @@ function plainTextFromMarkdown(text) {
     // Shared by both the logged-in and guest paths below: same thresholds, different budget
     // number and different call-to-action on the hard-block banner (login vs upgrade). Caches
     // its inputs so the countdown ticker (below) can re-render just the time remaining every
-    // minute without re-fetching usage data that hasn't actually changed.
+    // minute without re-fetching usage data that hasn't actually changed. cooldownDeadlineMs is
+    // an absolute timestamp (not a stored "seconds remaining" snapshot) so the tick stays
+    // accurate between refreshes instead of drifting or needing to know how long ago it was set.
     let usageDisplayState = null;
-    function applyUsageDisplay(used, budget, isGuest) {
-      usageDisplayState = { used, budget, isGuest };
+    function applyUsageDisplay(used, budget, isGuest, retryAfterSeconds) {
+      usageDisplayState = {
+        used, budget, isGuest,
+        cooldownDeadlineMs: (retryAfterSeconds != null) ? Date.now() + retryAfterSeconds * 1000 : null
+      };
       renderUsageDisplay();
     }
 
     function renderUsageDisplay() {
       if (!usageDisplayState) return;
-      const { used, budget, isGuest } = usageDisplayState;
+      const { used, budget, isGuest, cooldownDeadlineMs } = usageDisplayState;
       const warningEl = document.getElementById('usageWarning');
       const limitEl = document.getElementById('limitBanner');
       const limitText = document.getElementById('limitBannerText');
       const limitBtn = document.getElementById('limitBannerBtn');
-      const countdown = t('chat', 'resetsIn').replace('{time}', formatCountdown(getMsUntilISTMidnight()));
 
-      if (used >= budget) {
+      // Blocked -- a fixed 24h cooldown from whenever the budget was actually crossed, not a
+      // countdown to IST midnight (that meant the wait could be anywhere from 1 minute to ~24h
+      // depending on what time of day the limit was hit).
+      if (cooldownDeadlineMs !== null) {
+        const remainingMs = Math.max(0, cooldownDeadlineMs - Date.now());
+        const countdown = t('chat', 'resetsIn').replace('{time}', formatCountdown(remainingMs));
         limitText.textContent = t('chat', isGuest ? 'guestLimitReached' : 'dailyLimitReached') + ' — ' + countdown;
         limitBtn.textContent = t('chat', isGuest ? 'login' : 'upgradeToPro');
         limitBtn.onclick = function() { window.location.href = isGuest ? './login.html' : './pricing.html'; };
@@ -2291,7 +2316,9 @@ function plainTextFromMarkdown(text) {
       limitEl.style.display = 'none';
       setSendEnabled(true);
       if (doubtsLeft <= WARNING_THRESHOLD_DOUBTS) {
-        warningEl.querySelector('span').textContent = t('chat', 'doubtsLeftWarning').replace('{n}', localizeNum(doubtsLeft)) + ' — ' + countdown;
+        // No "resets in" here -- the cooldown only starts once the budget is actually crossed,
+        // so there's nothing real to count down to yet.
+        warningEl.querySelector('span').textContent = t('chat', 'doubtsLeftWarning').replace('{n}', localizeNum(doubtsLeft));
         warningEl.style.display = 'block';
       } else {
         warningEl.style.display = 'none';
@@ -2328,7 +2355,7 @@ function plainTextFromMarkdown(text) {
         try {
           const res = await fetch(`${API_BASE}/guest-usage-status`);
           const data = await res.json();
-          applyUsageDisplay(data.tokens_used || 0, data.budget || DAILY_TOKEN_BUDGET_GUEST, true);
+          applyUsageDisplay(data.tokens_used || 0, data.budget || DAILY_TOKEN_BUDGET_GUEST, true, data.retry_after_seconds);
         } catch (e) {
           warningEl.style.display = 'none'; limitEl.style.display = 'none'; setSendEnabled(true);
         }
@@ -2343,10 +2370,16 @@ function plainTextFromMarkdown(text) {
         return;
       }
 
-      const { data: usageRow } = await client.from('usage_log').select('tokens_used')
-        .eq('user_id', session.user.id).eq('usage_date', getISTDateString()).single();
-      const used = usageRow ? usageRow.tokens_used : 0;
-      applyUsageDisplay(used, DAILY_TOKEN_BUDGET_FREE, false);
+      // Fetch today's AND yesterday's row -- a block set late yesterday can still be within its
+      // rolling 24h cooldown today, same reasoning as server.py's enforce_daily_budget.
+      const todayStr = getISTDateString();
+      const yesterdayStr = getISTYesterdayString();
+      const { data: usageRows } = await client.from('usage_log').select('usage_date,tokens_used,limit_reached_at')
+        .eq('user_id', session.user.id).in('usage_date', [todayStr, yesterdayStr]);
+      const todayRow = (usageRows || []).find(r => r.usage_date === todayStr);
+      const used = todayRow ? todayRow.tokens_used : 0;
+      const retryAfterSeconds = computeActiveCooldownSeconds(usageRows, todayStr, yesterdayStr);
+      applyUsageDisplay(used, DAILY_TOKEN_BUDGET_FREE, false, retryAfterSeconds);
     }
 
  async function sendMessage() {

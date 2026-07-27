@@ -324,13 +324,14 @@ ADMIN_HEADERS = {
     "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"
 }
 
-# ---------- Daily AI usage budget (per-user, resets at IST midnight) ----------
+# ---------- Daily AI usage budget (per-user, rolling 24h cooldown from when the limit is hit) ----------
 from datetime import datetime, timezone, timedelta, date
 
 IST = timezone(timedelta(hours=5, minutes=30))  # fixed offset: India has no DST
 DAILY_TOKEN_BUDGET_FREE = 20000  # ~8 doubts/day blended, ~4 if all heavy Sonnet numericals --
                                   # lowered from 37000 after real heavy usage showed the blended
                                   # average understates worst-case cost per user
+COOLDOWN_HOURS = 24  # how long a block lasts once the budget is actually crossed
 
 def _ist_today() -> str:
     return datetime.now(timezone.utc).astimezone(IST).date().isoformat()
@@ -352,19 +353,67 @@ DAILY_TOKEN_BUDGET_GUEST = 5000  # ~2 doubts/day -- deliberately tight vs. the l
                                   # tier (15/day): the goal is to force a login, not to be a
                                   # usable tier on its own
 
+# usage_log/guest_usage_log stay keyed by (id, usage_date) exactly as before -- tokens_used still
+# resets to 0 on a fresh calendar day. What changed is WHEN a block clears: previously that was
+# "whenever IST midnight next occurs" (0 minutes to ~24h depending on what time of day the limit
+# was hit); now it's a fixed 24h from the moment limit_reached_at was set, regardless of the
+# calendar-day boundary in between. Checking today's row plus yesterday's is sufficient: a 24h
+# window that starts anywhere "today" can only still be active sometime "tomorrow", never further.
+async def _fetch_usage_rows(table: str, id_field: str, id_value: str):
+    """Returns (today_str, yesterday_str, rows_by_date) for the shared today+yesterday lookup
+    both the enforcement check and the read-only status endpoint need."""
+    today = _ist_today()
+    yesterday = (date.fromisoformat(today) - timedelta(days=1)).isoformat()
+    resp = await async_client.get(
+        f"{SUPABASE_URL}/rest/v1/{table}", headers=ADMIN_HEADERS,
+        params={id_field: f"eq.{id_value}", "usage_date": f"in.({yesterday},{today})",
+                "select": "usage_date,tokens_used,limit_reached_at"}
+    )
+    return today, yesterday, {r["usage_date"]: r for r in resp.json()}
+
+def _active_cooldown_seconds(today: str, yesterday: str, rows_by_date: dict) -> "int | None":
+    """Read-only: does today's or yesterday's row have a limit_reached_at still within the
+    COOLDOWN_HOURS window? Doesn't decide whether a *new* crossing should start one -- that's
+    _check_rolling_cooldown's job, since only the enforcement path should have that side effect."""
+    now = datetime.now(timezone.utc)
+    for d in (yesterday, today):
+        row = rows_by_date.get(d)
+        if row and row.get("limit_reached_at"):
+            reached = datetime.fromisoformat(row["limit_reached_at"].replace("Z", "+00:00"))
+            elapsed = now - reached
+            if elapsed < timedelta(hours=COOLDOWN_HOURS):
+                return int((timedelta(hours=COOLDOWN_HOURS) - elapsed).total_seconds())
+    return None
+
+async def _check_rolling_cooldown(table: str, id_field: str, id_value: str, budget: int) -> "int | None":
+    """Returns remaining cooldown seconds if blocked, else None. Setting limit_reached_at on the
+    request that newly crosses the budget is a side effect of this check, not a separate step --
+    consistent with this file's existing accepted non-atomicity for usage tracking (see
+    log_token_usage's own comment on the same tradeoff)."""
+    today, yesterday, rows_by_date = await _fetch_usage_rows(table, id_field, id_value)
+    active = _active_cooldown_seconds(today, yesterday, rows_by_date)
+    if active is not None:
+        return active
+
+    today_row = rows_by_date.get(today)
+    used_today = today_row["tokens_used"] if today_row else 0
+    if used_today >= budget:
+        if not (today_row and today_row.get("limit_reached_at")):
+            await async_client.patch(
+                f"{SUPABASE_URL}/rest/v1/{table}", headers={**ADMIN_HEADERS, "Content-Type": "application/json"},
+                params={id_field: f"eq.{id_value}", "usage_date": f"eq.{today}"},
+                json={"limit_reached_at": datetime.now(timezone.utc).isoformat()}
+            )
+        return COOLDOWN_HOURS * 3600
+    return None
+
 async def enforce_daily_budget(user_id: str, ip: str = ""):
     if user_id:
         if await get_user_plan(user_id) != "free":
             return  # paid = unlimited for now
-        resp = await async_client.get(
-            f"{SUPABASE_URL}/rest/v1/usage_log", headers=ADMIN_HEADERS,
-            params={"user_id": f"eq.{user_id}", "usage_date": f"eq.{_ist_today()}",
-                    "select": "tokens_used", "limit": 1}
-        )
-        rows = resp.json()
-        used = rows[0]["tokens_used"] if rows else 0
-        if used >= DAILY_TOKEN_BUDGET_FREE:
-            raise HTTPException(status_code=402, detail="Daily limit reached")
+        remaining = await _check_rolling_cooldown("usage_log", "user_id", user_id, DAILY_TOKEN_BUDGET_FREE)
+        if remaining is not None:
+            raise HTTPException(status_code=402, detail={"message": "Daily limit reached", "retry_after_seconds": remaining})
         return
     # Guest (no account): tracked by IP instead, in a separate table -- an IP is a much weaker
     # identity than a user_id (shared behind NAT/campus wifi, changes on mobile networks), so
@@ -372,15 +421,9 @@ async def enforce_daily_budget(user_id: str, ip: str = ""):
     # actual goal here, not perfect anti-abuse.
     if not ip:
         return
-    resp = await async_client.get(
-        f"{SUPABASE_URL}/rest/v1/guest_usage_log", headers=ADMIN_HEADERS,
-        params={"ip": f"eq.{ip}", "usage_date": f"eq.{_ist_today()}",
-                "select": "tokens_used", "limit": 1}
-    )
-    rows = resp.json()
-    used = rows[0]["tokens_used"] if rows else 0
-    if used >= DAILY_TOKEN_BUDGET_GUEST:
-        raise HTTPException(status_code=402, detail="Guest limit reached — log in to continue")
+    remaining = await _check_rolling_cooldown("guest_usage_log", "ip", ip, DAILY_TOKEN_BUDGET_GUEST)
+    if remaining is not None:
+        raise HTTPException(status_code=402, detail={"message": "Guest limit reached — log in to continue", "retry_after_seconds": remaining})
 
 async def log_token_usage(user_id: str, tokens: int, ip: str = ""):
     # check-then-log (enforce_daily_budget then this) is not atomic -- a handful of concurrent
@@ -831,12 +874,10 @@ async def generate_title(message: Message, request: Request, _: None = Depends(r
 @app.get("/guest-usage-status")
 async def guest_usage_status(request: Request):
     ip = _client_ip(request)
-    rows = http_requests.get(
-        f"{SUPABASE_URL}/rest/v1/guest_usage_log", headers=ADMIN_HEADERS,
-        params={"ip": f"eq.{ip}", "usage_date": f"eq.{_ist_today()}", "select": "tokens_used", "limit": 1}
-    ).json()
-    used = rows[0]["tokens_used"] if rows else 0
-    return {"tokens_used": used, "budget": DAILY_TOKEN_BUDGET_GUEST}
+    today, yesterday, rows_by_date = await _fetch_usage_rows("guest_usage_log", "ip", ip)
+    used = rows_by_date[today]["tokens_used"] if today in rows_by_date else 0
+    retry_after_seconds = _active_cooldown_seconds(today, yesterday, rows_by_date)
+    return {"tokens_used": used, "budget": DAILY_TOKEN_BUDGET_GUEST, "retry_after_seconds": retry_after_seconds}
 
 # Called once a session exists (see chat.html on load): folds today's guest usage from this
 # browser's IP into the now-known user's usage_log, so logging in right after exhausting the
