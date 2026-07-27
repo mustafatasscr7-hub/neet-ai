@@ -140,11 +140,13 @@
   <div class="bg-glow"></div>
 
   <div class="header">
-    <span class="header-title">NEET<span class="brand-accent">-AI</span> <span data-i18n="scoreboard.headerTitle">Scoreboard</span></span>
+    <div style="display:flex;align-items:center;gap:16px;">
+      <button onclick="window.location.href='./chat.html'" style="background:transparent;border:none;color:#555;cursor:pointer;font-size:13px;font-family:Inter,sans-serif;padding:0;" onmouseover="this.style.color='#4f8ef7'" onmouseout="this.style.color=(typeof getTheme==='function'&&getTheme()==='light')?'#55555f':'#555'" data-i18n="common.backToNeetAi">← Back to NEET-AI</button>
+      <span class="header-title">NEET<span class="brand-accent">-AI</span> <span data-i18n="scoreboard.headerTitle">Scoreboard</span></span>
+    </div>
     <div style="display:flex;gap:10px;">
       <button class="lang-toggle" onclick="toggleLang()">हिं</button>
       <button class="btn btn-outline" onclick="window.location.href='./mocktest.html'" data-i18n="scoreboard.takeNewTest">Take New Test</button>
-      <button class="btn btn-primary" onclick="window.location.href='./chat.html'" data-i18n="personalisedTest.backToNeetAiBtn">Back to NEET-AI</button>
     </div>
   </div>
 

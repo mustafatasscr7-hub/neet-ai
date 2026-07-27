@@ -577,11 +577,13 @@
   <!-- ===== RESULTS SCREEN ===== -->
   <div id="resultsScreen">
     <div class="header">
-      <span class="header-title">NEET<span>-AI</span> Results</span>
+      <div style="display:flex;align-items:center;gap:16px;">
+        <button onclick="window.location.href='./chat.html'" style="background:transparent;border:none;color:#555;cursor:pointer;font-size:13px;font-family:Inter,sans-serif;padding:0;" onmouseover="this.style.color='#4f8ef7'" onmouseout="this.style.color=(typeof getTheme==='function'&&getTheme()==='light')?'#55555f':'#555'" data-i18n="common.backToNeetAi">← Back to NEET-AI</button>
+        <span class="header-title">NEET<span>-AI</span> Results</span>
+      </div>
       <div style="display:flex;gap:10px;">
         <button class="btn btn-outline" onclick="window.location.reload()" data-i18n="personalisedTest.takeAnotherTest">Take Another Test</button>
         <button class="btn btn-outline" onclick="window.location.href='./scoreboard.html'">📊 Scoreboard</button>
-        <button class="btn btn-primary" onclick="window.location.href='./chat.html'" data-i18n="personalisedTest.backToNeetAiBtn">Back to NEET-AI</button>
       </div>
     </div>
 
