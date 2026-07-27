@@ -851,6 +851,14 @@
       closeFormulaEditor();
     }
 
+    // This is a *math* preview, so it should only appear for fields that actually contain
+    // $...$/$$...$$ notation -- showing it for any non-empty plain-text field just duplicates
+    // the textarea right below itself with no new information.
+    const MATH_PATTERN = /\$\$([^$]+)\$\$|\$([^$\n]+)\$/;
+    function hasMathNotation(text) {
+      return !!text && MATH_PATTERN.test(text);
+    }
+
     // Reuses this file's own parseWithMath (same Match-List/Assertion-Reason/sequential-steps
     // + KaTeX/Markdown pipeline the read-only card view already renders questions through), so
     // the preview matches exactly what students will actually see, not a simplified stand-in.
@@ -858,7 +866,7 @@
       const previewEl = textareaEl.closest('.q-edit-field').querySelector('.edit-math-preview');
       if (!previewEl) return;
       const text = textareaEl.value;
-      if (!text.trim()) { previewEl.innerHTML = ''; previewEl.style.display = 'none'; return; }
+      if (!hasMathNotation(text)) { previewEl.innerHTML = ''; previewEl.style.display = 'none'; return; }
       previewEl.innerHTML = parseWithMath(text);
       previewEl.style.display = 'block';
     }
@@ -899,7 +907,7 @@
           <div class="q-edit-field">
             <div class="q-edit-label-row"><label>Question</label><button type="button" class="formula-btn" onclick="openFormulaEditor(this)">∑ Formula</button></div>
             <textarea data-field="question" rows="3" oninput="autoResizeTextarea(this); updateEditFieldPreview(this)">${escapeHtml(q.question)}</textarea>
-            <div class="edit-math-preview" style="display:${q.question ? 'block' : 'none'}">${parseWithMath(q.question)}</div>
+            <div class="edit-math-preview" style="display:${hasMathNotation(q.question) ? 'block' : 'none'}">${parseWithMath(q.question)}</div>
           </div>
           <label class="q-edit-active-check"><input type="checkbox" onchange="toggleEditSlot(this, '.q-diagram-group-stem')" ${hasStemDiagram ? 'checked' : ''}/> Question has diagram</label>
           <div class="q-diagram-group-stem" style="display:${hasStemDiagram ? 'block' : 'none'}">
@@ -908,22 +916,22 @@
           <div class="q-edit-field">
             <div class="q-edit-label-row"><label>Option A</label><button type="button" class="formula-btn" onclick="openFormulaEditor(this)">∑ Formula</button></div>
             <textarea data-field="option_a" rows="1" oninput="autoResizeTextarea(this); updateEditFieldPreview(this)">${escapeHtml(q.option_a || '')}</textarea>
-            <div class="edit-math-preview" style="display:${q.option_a ? 'block' : 'none'}">${parseWithMath(q.option_a || '')}</div>
+            <div class="edit-math-preview" style="display:${hasMathNotation(q.option_a) ? 'block' : 'none'}">${parseWithMath(q.option_a || '')}</div>
           </div>
           <div class="q-edit-field">
             <div class="q-edit-label-row"><label>Option B</label><button type="button" class="formula-btn" onclick="openFormulaEditor(this)">∑ Formula</button></div>
             <textarea data-field="option_b" rows="1" oninput="autoResizeTextarea(this); updateEditFieldPreview(this)">${escapeHtml(q.option_b || '')}</textarea>
-            <div class="edit-math-preview" style="display:${q.option_b ? 'block' : 'none'}">${parseWithMath(q.option_b || '')}</div>
+            <div class="edit-math-preview" style="display:${hasMathNotation(q.option_b) ? 'block' : 'none'}">${parseWithMath(q.option_b || '')}</div>
           </div>
           <div class="q-edit-field">
             <div class="q-edit-label-row"><label>Option C</label><button type="button" class="formula-btn" onclick="openFormulaEditor(this)">∑ Formula</button></div>
             <textarea data-field="option_c" rows="1" oninput="autoResizeTextarea(this); updateEditFieldPreview(this)">${escapeHtml(q.option_c || '')}</textarea>
-            <div class="edit-math-preview" style="display:${q.option_c ? 'block' : 'none'}">${parseWithMath(q.option_c || '')}</div>
+            <div class="edit-math-preview" style="display:${hasMathNotation(q.option_c) ? 'block' : 'none'}">${parseWithMath(q.option_c || '')}</div>
           </div>
           <div class="q-edit-field">
             <div class="q-edit-label-row"><label>Option D</label><button type="button" class="formula-btn" onclick="openFormulaEditor(this)">∑ Formula</button></div>
             <textarea data-field="option_d" rows="1" oninput="autoResizeTextarea(this); updateEditFieldPreview(this)">${escapeHtml(q.option_d || '')}</textarea>
-            <div class="edit-math-preview" style="display:${q.option_d ? 'block' : 'none'}">${parseWithMath(q.option_d || '')}</div>
+            <div class="edit-math-preview" style="display:${hasMathNotation(q.option_d) ? 'block' : 'none'}">${parseWithMath(q.option_d || '')}</div>
           </div>
           <label class="q-edit-active-check"><input type="checkbox" onchange="toggleEditSlot(this, '.q-diagram-group-options')" ${hasAnyOptionDiagram ? 'checked' : ''}/> Options have diagram</label>
           <div class="q-diagram-group-options" style="display:${hasAnyOptionDiagram ? 'block' : 'none'}">

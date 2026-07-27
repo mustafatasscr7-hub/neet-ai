@@ -834,6 +834,11 @@
 
   // ---------------- Live math preview ----------------
 
+  // Same $$...$$ / $...$ pattern as renderMathPreviewHtml below, kept as a separate non-global
+  // regex so .test() below doesn't share (and corrupt) lastIndex state with the 'g'-flagged one
+  // used for matching.
+  const MATH_PATTERN = /\$\$([^$]+)\$\$|\$([^$\n]+)\$/;
+
   // Splits on $$...$$ (display) and $...$ (inline) same as chat.html's parseWithMath, but
   // renders the plain-text segments escaped (not through marked) -- this admin tool's fields
   // are raw question/option text, never markdown, so a lighter parse is enough here.
@@ -864,7 +869,7 @@
     const previewEl = document.getElementById(fieldId + '-preview');
     if (!textarea || !previewEl) return;
     const text = textarea.value;
-    if (!text.trim()) { previewEl.innerHTML = ''; previewEl.style.display = 'none'; return; }
+    if (!text.trim() || !MATH_PATTERN.test(text)) { previewEl.innerHTML = ''; previewEl.style.display = 'none'; return; }
     previewEl.innerHTML = renderMathPreviewHtml(text);
     previewEl.style.display = 'block';
   }
