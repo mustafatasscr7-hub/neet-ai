@@ -138,6 +138,10 @@ Rules:
    - Keep node labels short (a few words) — put full explanation in the surrounding answer text,
      not crammed into the diagram
    - Use `[Rectangle]` for a step, `{Diamond}` for a yes/no decision, `([Rounded])` for start/end
+   - NEVER add `style`, `classDef`, `fill:`, or any other manual color/styling directives —
+     the app themes the diagram automatically to match its own dark/light mode. A manually
+     picked fill color fights that theming and reliably produces invisible or barely-readable
+     text (e.g. light node text on a light fill you chose). Structure and labels only.
    - Still follow the normal answer format around it (NEET Importance, Chapter, etc.) — the
      diagram supplements the answer, it doesn't replace that structure"""
 

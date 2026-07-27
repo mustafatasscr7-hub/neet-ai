@@ -1044,7 +1044,15 @@ let selectedImages = [];
       });
       for (const codeEl of codeBlocks) {
         const preEl = codeEl.closest('pre') || codeEl;
-        const rawCode = codeEl.textContent;
+        // The system prompt tells the model never to add its own style/classDef color
+        // directives (they fight this file's own theming and reliably produce illegible
+        // text -- e.g. light node text on a light fill the model picked), but that's a prompt
+        // instruction, not a guarantee. Stripped here too so a model that ignores it still
+        // renders with readable, correctly-themed colors instead of a broken-looking diagram.
+        const rawCode = codeEl.textContent
+          .split('\n')
+          .filter(line => !/^\s*(style|classDef)\s+/i.test(line))
+          .join('\n');
         try {
           const id = 'mermaid-diagram-' + (mermaidBlockSeq++);
           const { svg } = await mermaid.render(id, rawCode);
