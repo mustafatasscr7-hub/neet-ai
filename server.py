@@ -903,7 +903,17 @@ async def generate_title(message: Message, request: Request, _: None = Depends(r
     response = client.messages.create(
      model="claude-haiku-4-5",
         max_tokens=15,
-        system=f"Generate a short 3-5 word title {title_lang} for this NEET question. Return ONLY the title. No punctuation. No extra words.",
+        system=(
+            f"Generate a short 3-5 word title {title_lang} summarizing the TOPIC of this message, "
+            "the way a chat app names a conversation in its sidebar. The message is the first thing "
+            "a student sent -- it may be a NEET question, but it may just as easily be a greeting, "
+            "small talk, or something unrelated to NEET.\n\n"
+            "Always output a short topic label. NEVER reply to, answer, or continue the message "
+            "itself -- you are naming the conversation, not participating in it.\n"
+            "Examples: \"hi\" -> Greeting. \"what's your name\" -> Asking My Name. \"explain "
+            "photosynthesis\" -> Photosynthesis Explanation.\n\n"
+            "Return ONLY the title. No punctuation. No extra words. No markdown."
+        ),
         messages=[{"role": "user", "content": message.text}]
     )
     await log_token_usage(message.user_id, response.usage.input_tokens + response.usage.output_tokens, ip)
