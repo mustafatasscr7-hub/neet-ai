@@ -161,6 +161,10 @@
     .item-menu-option.delete { color: #ef4444; }
     .item-menu-divider { height: 1px; background: #2a2a2a; margin: 4px 0; }
 
+    .chat-title-btn:hover { background: #1a1a1a; }
+    body.light-mode .chat-title-btn { color: #0d0d0d !important; }
+    body.light-mode .chat-title-btn:hover { background: #e4e4ea !important; }
+
     .selection-toolbar { position: fixed; display: none; align-items: center; gap: 2px; background: #1e1e1e; border: 1px solid #333; border-radius: 8px; padding: 4px; z-index: 10000; box-shadow: 0 8px 24px rgba(0,0,0,0.6); }
     .selection-toolbar.visible { display: flex; }
     .selection-toolbar-btn { background: transparent; border: none; color: #ccc; font-size: 13px; font-family: 'Inter', sans-serif; padding: 6px 10px; border-radius: 6px; cursor: pointer; white-space: nowrap; transition: background 0.15s; }
@@ -490,8 +494,12 @@
   <div class="main">
   <div class="header">
       <div style="display:flex;align-items:center;gap:12px;">
-       
-        <span class="logo-brand" style="font-size:15px;font-weight:700;color:#fff;">NEET<span style="color:#4f8ef7;">-AI</span></span>
+
+        <span class="logo-brand" id="headerBrand" style="font-size:15px;font-weight:700;color:#fff;">NEET<span style="color:#4f8ef7;">-AI</span></span>
+        <button class="chat-title-btn" id="chatTitleBtn" style="display:none;align-items:center;gap:6px;background:transparent;border:none;color:#ececec;font-size:15px;font-weight:600;font-family:'Inter',sans-serif;cursor:pointer;padding:6px 8px;border-radius:8px;max-width:280px;">
+          <span id="chatTitleText" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0;"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
       </div>
     <div style="display:flex;align-items:center;gap:10px;">
 <div style="position:relative;" id="countdownWrapper">
@@ -2048,6 +2056,92 @@ function plainTextFromMarkdown(text) {
       }
     }
 
+    // Shared by both the per-item sidebar menu and the chat-title dropdown in the header, so
+    // renaming/deleting/pinning stays in sync regardless of which one triggered it.
+    async function renameConversationById(id, oldTitle) {
+      const newName = prompt('Enter new name:', oldTitle);
+      if (!newName) return;
+      const conv = conversations.find(c => c.id === id || c.supabaseId === id);
+      if (conv) conv.title = newName;
+      const sidebarTitle = document.querySelector('#conv-' + id + ' .item-title');
+      if (sidebarTitle) sidebarTitle.textContent = newName;
+      if (currentId === id) updateHeaderTitle(newName);
+      const { data: { session } } = await client.auth.getSession();
+      if (session) {
+        const supabaseId = conv ? conv.supabaseId : id;
+        if (supabaseId) {
+          await client.from('chats').update({ title: newName }).eq('id', supabaseId).eq('user_id', session.user.id);
+        }
+      }
+    }
+
+    async function deleteConversationById(id) {
+      document.getElementById('conv-' + id)?.remove();
+      document.getElementById('menu-' + id)?.remove();
+      conversations = conversations.filter(c => c.id !== id);
+      const { data: { session } } = await client.auth.getSession();
+      if (session) {
+        const conv = conversations.find(c => c.id === id || c.supabaseId === id);
+        const supabaseId = conv ? conv.supabaseId : id;
+        if (supabaseId) {
+          await client.from('chats').delete().eq('id', supabaseId).eq('user_id', session.user.id);
+        }
+      }
+      showWelcome();
+    }
+
+    function pinConversationById(id) {
+      const item = document.getElementById('conv-' + id);
+      if (item) document.getElementById('historyList').prepend(item);
+    }
+
+    function updateHeaderTitle(title) {
+      document.getElementById('headerBrand').style.display = 'none';
+      const btn = document.getElementById('chatTitleBtn');
+      btn.style.display = 'flex';
+      document.getElementById('chatTitleText').textContent = title;
+    }
+
+    function resetHeaderTitle() {
+      document.getElementById('headerBrand').style.display = '';
+      document.getElementById('chatTitleBtn').style.display = 'none';
+    }
+
+    document.getElementById('chatTitleBtn').addEventListener('click', function(e) {
+      e.stopPropagation();
+      document.querySelectorAll('.item-menu').forEach(m => m.style.display = 'none');
+      let menu = document.getElementById('chatTitleMenu');
+      if (!menu) {
+        menu = document.createElement('div');
+        menu.id = 'chatTitleMenu';
+        menu.className = 'item-menu';
+        menu.style.display = 'none';
+        menu.innerHTML = '<div class="item-menu-option" data-action="rename">Rename</div><div class="item-menu-option" data-action="pin">Pin</div><div class="item-menu-option" data-action="share">Share</div><div class="item-menu-divider"></div><div class="item-menu-option delete" data-action="delete">Delete</div>';
+        document.body.appendChild(menu);
+        menu.querySelectorAll('.item-menu-option').forEach(function(opt) {
+          opt.addEventListener('click', async function(e) {
+            e.stopPropagation();
+            menu.style.display = 'none';
+            if (!currentId) return;
+            const action = opt.dataset.action;
+            if (action === 'delete') {
+              await deleteConversationById(currentId);
+            } else if (action === 'rename') {
+              await renameConversationById(currentId, document.getElementById('chatTitleText').textContent);
+            } else if (action === 'pin') {
+              pinConversationById(currentId);
+            } else if (action === 'share') {
+              alert('Share feature coming soon!');
+            }
+          });
+        });
+      }
+      const rect = this.getBoundingClientRect();
+      menu.style.top = (rect.bottom + 4) + 'px';
+      menu.style.left = rect.left + 'px';
+      menu.style.display = 'block';
+    });
+
     function createHistoryItem(id, title, onClickFn) {
       const item = document.createElement('div');
       item.className = 'history-item';
@@ -2065,6 +2159,7 @@ function plainTextFromMarkdown(text) {
 
       const menu = document.createElement('div');
       menu.className = 'item-menu';
+      menu.id = 'menu-' + id;
       menu.style.display = 'none';
       menu.innerHTML = '<div class="item-menu-option" data-action="rename">Rename</div><div class="item-menu-option" data-action="pin">Pin</div><div class="item-menu-option" data-action="share">Share</div><div class="item-menu-divider"></div><div class="item-menu-option delete" data-action="delete">Delete</div>';
       document.body.appendChild(menu);
@@ -2086,43 +2181,19 @@ function plainTextFromMarkdown(text) {
       });
 
       menu.querySelectorAll('.item-menu-option').forEach(function(opt) {
-        opt.addEventListener('click', function(e) {
+        opt.addEventListener('click', async function(e) {
           e.stopPropagation();
+          menu.style.display = 'none';
           const action = opt.dataset.action;
           if (action === 'delete') {
-            item.remove();
-            menu.remove();
-            conversations = conversations.filter(c => c.id !== id);
-            client.auth.getSession().then(async ({ data: { session } }) => {
-              if (session) {
-                const conv = conversations.find(c => c.id === id || c.supabaseId === id);
-                const supabaseId = conv ? conv.supabaseId : id;
-                if (supabaseId) {
-                  await client.from('chats').delete().eq('id', supabaseId).eq('user_id', session.user.id);
-                }
-              }
-            });
-            showWelcome();
+            await deleteConversationById(id);
           } else if (action === 'rename') {
-            const newName = prompt('Enter new name:', titleSpan.textContent);
-            if (newName) {
-              titleSpan.textContent = newName;
-              client.auth.getSession().then(async ({ data: { session } }) => {
-                if (session) {
-                  const conv = conversations.find(c => c.id === id || c.supabaseId === id);
-                  const supabaseId = conv ? conv.supabaseId : id;
-                  if (supabaseId) {
-                    await client.from('chats').update({ title: newName }).eq('id', supabaseId).eq('user_id', session.user.id);
-                  }
-                }
-              });
-            }
+            await renameConversationById(id, titleSpan.textContent);
           } else if (action === 'pin') {
-            document.getElementById('historyList').prepend(item);
+            pinConversationById(id);
           } else if (action === 'share') {
             alert('Share feature coming soon!');
           }
-          menu.style.display = 'none';
         });
       });
 
@@ -2148,6 +2219,7 @@ function plainTextFromMarkdown(text) {
       item.classList.add('active');
       document.getElementById('historyList').prepend(item);
       conversations.push({ id: id, title: title, messages: currentConversation });
+      updateHeaderTitle(title);
 
       const { data: { session } } = await client.auth.getSession();
       if (session) {
@@ -2178,6 +2250,7 @@ function plainTextFromMarkdown(text) {
       });
       currentConversation = chat.messages;
       currentId = chat.supabaseId || chat.id;
+      updateHeaderTitle(chat.title);
       scrollBottom();
     }
 
@@ -2196,6 +2269,7 @@ function plainTextFromMarkdown(text) {
       });
       currentConversation = conv.messages;
       currentId = id;
+      updateHeaderTitle(conv.title);
       inputArea.style.display = 'block';
       scrollBottom();
     }
@@ -2203,6 +2277,7 @@ function plainTextFromMarkdown(text) {
     function showWelcome() {
       chatWindow.innerHTML = '';
       inputArea.style.display = 'none';
+      resetHeaderTitle();
       const welcome = document.createElement('div');
       welcome.className = 'welcome';
       welcome.id = 'welcome';
