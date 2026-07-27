@@ -1464,15 +1464,24 @@ let selectedImages = [];
               solBtn.textContent = '⏳ Generating solution...';
               solBtn.disabled = true;
               solDiv.style.display = 'block';
-              solDiv.innerHTML = '<span class="muted-text">AI is solving this question...</span>';
+              const THINKING_PHRASE_KEYS = ['thinkingPhrase1', 'thinkingPhrase2', 'thinkingPhrase3', 'thinkingPhrase4', 'thinkingPhrase5'];
+              solDiv.innerHTML = '<div class="thinking-indicator"><span class="thinking-orb"></span><span class="thinking-text"></span></div>';
+              const thinkingTextEl = solDiv.querySelector('.thinking-text');
+              let thinkingPhraseIdx = 0;
+              thinkingTextEl.textContent = t('chat', THINKING_PHRASE_KEYS[0]);
+              const thinkingInterval = setInterval(() => {
+                thinkingPhraseIdx = (thinkingPhraseIdx + 1) % THINKING_PHRASE_KEYS.length;
+                thinkingTextEl.textContent = t('chat', THINKING_PHRASE_KEYS[thinkingPhraseIdx]);
+              }, 2000);
               try {
                 const { data: { session } } = await client.auth.getSession();
                 const res = await fetch(`${API_BASE}/solve`, {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ question: q.question, option_a: q.option_a, option_b: q.option_b, option_c: q.option_c, option_d: q.option_d, correct_answer: q.correct_answer, language: getLang(), user_id: session?.user?.id || '' })
+                  body: JSON.stringify({ pyq_id: q.id, question: q.question, option_a: q.option_a, option_b: q.option_b, option_c: q.option_c, option_d: q.option_d, correct_answer: q.correct_answer, language: getLang(), user_id: session?.user?.id || '' })
                 });
                 if (res.status === 402) {
+                  clearInterval(thinkingInterval);
                   const guest = !session;
                   const link = guest ? './login.html' : './pricing.html';
                   solDiv.innerHTML = `<span style="color:#ef4444;">${t('chat', guest ? 'guestLimitReachedMessage' : 'limitReachedMessage')} <a href="${link}">${t('chat', guest ? 'login' : 'upgradeToPro')}</a></span>`;
@@ -1482,6 +1491,10 @@ let selectedImages = [];
                   return;
                 }
                 if (!res.ok) throw new Error('solve failed');
+                if (res.headers.get('X-Cache') === 'HIT') {
+                  await new Promise(r => setTimeout(r, 1000));
+                }
+                clearInterval(thinkingInterval);
                 solDiv.innerHTML = '';
                 const reader = res.body.getReader();
                 const decoder = new TextDecoder();
@@ -1508,6 +1521,7 @@ let selectedImages = [];
                 solBtn.textContent = '🔼 Hide Solution';
                 solBtn.disabled = false;
               } catch(e) {
+                clearInterval(thinkingInterval);
                 solDiv.innerHTML = '<span style="color:#ef4444;">Failed to generate solution. Try again.</span>';
                 solBtn.textContent = '💡 Show Solution';
                 solBtn.disabled = false;

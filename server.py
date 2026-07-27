@@ -165,6 +165,7 @@ class PhoneOtpRequest(BaseModel):
     phone: str
 
 class SolveRequest(BaseModel):
+    pyq_id: str = ""
     question: str
     option_a: str = ""
     option_b: str = ""
@@ -759,7 +760,32 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
         print(f"STREAMING ERROR: {e}")
         yield f"Error: {str(e)}"
 
-async def stream_solve_response(question: str, option_a: str, option_b: str, option_c: str, option_d: str, correct_answer: str, language: str = "en", user_id: str = "", ip: str = ""):
+SOLVE_CACHE_HEADERS = {
+    "apikey": SUPABASE_SERVICE_KEY,
+    "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"
+}
+
+async def get_cached_pyq_solution(pyq_id: str, language: str):
+    """A PYQ's correct solution never changes once generated, so it's cached forever, keyed on
+    the question's own DB row id (not a text hash -- it's already a fixed row) plus language,
+    since an English and Hindi solution for the same question are different content. Looked up
+    here in the route handler (not inside the generator) so /solve can tell the client up front,
+    via the X-Cache header, whether this request will be instant -- letting the frontend hold its
+    thinking indicator for a fixed ~1s on a hit instead of an instant, jarring pop-in."""
+    if not pyq_id:
+        return None
+    resp = await async_client.get(
+        f"{SUPABASE_URL}/rest/v1/pyq_solution_cache",
+        headers=SOLVE_CACHE_HEADERS,
+        params={"pyq_id": f"eq.{pyq_id}", "language": f"eq.{language}", "select": "solution"}
+    )
+    rows = resp.json()
+    return rows[0]["solution"] if rows else None
+
+async def stream_solve_response(pyq_id: str, cached_solution, question: str, option_a: str, option_b: str, option_c: str, option_d: str, correct_answer: str, language: str = "en", user_id: str = "", ip: str = ""):
+    if cached_solution is not None:
+        yield cached_solution
+        return
     client = anthropic_client
     lang_instruction = "\n5. Respond ONLY in Hindi (Devanagari script) — every word in Hindi, no English words or Hinglish mixing. The ONLY exceptions are LaTeX/KaTeX math notation, chemical formulas/symbols, and units, which stay exactly as-is." if language == "hi" else ""
     try:
@@ -793,8 +819,10 @@ Rules:
                 {"role": "user", "content": f"Solve this NEET question:\n\nQuestion: {question}\n\nA) {option_a}\nB) {option_b}\nC) {option_c}\nD) {option_d}\n\nCorrect Answer: {correct_answer}"}
             ]
         ) as stream:
+            full_solution = ""
             try:
                 for text_chunk in stream.text_stream:
+                    full_solution += text_chunk
                     yield text_chunk
             finally:
                 # Same accepted early-disconnect caveat as stream_response() above.
@@ -803,6 +831,12 @@ Rules:
                     await log_token_usage(user_id, usage.input_tokens + usage.output_tokens, ip)
                 except Exception:
                     pass
+            if pyq_id and full_solution:
+                await async_client.post(
+                    f"{SUPABASE_URL}/rest/v1/pyq_solution_cache",
+                    headers={**SOLVE_CACHE_HEADERS, "Content-Type": "application/json"},
+                    json={"pyq_id": pyq_id, "language": language, "solution": full_solution}
+                )
     except Exception as e:
         yield f"Error: {str(e)}"
 
@@ -810,9 +844,11 @@ Rules:
 async def solve_question(req: SolveRequest, request: Request, _: None = Depends(rate_limiter(15, 60))):
     ip = _client_ip(request)
     await enforce_daily_budget(req.user_id, ip)
+    cached_solution = await get_cached_pyq_solution(req.pyq_id, req.language)
     return StreamingResponse(
-        stream_solve_response(req.question, req.option_a, req.option_b, req.option_c, req.option_d, req.correct_answer, req.language, req.user_id, ip),
-        media_type="text/plain"
+        stream_solve_response(req.pyq_id, cached_solution, req.question, req.option_a, req.option_b, req.option_c, req.option_d, req.correct_answer, req.language, req.user_id, ip),
+        media_type="text/plain",
+        headers={"X-Cache": "HIT" if cached_solution is not None else "MISS"}
     )
 
 
