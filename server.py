@@ -788,9 +788,14 @@ async def stream_solve_response(pyq_id: str, cached_solution, question: str, opt
         return
     client = anthropic_client
     lang_instruction = "\n5. Respond ONLY in Hindi (Devanagari script) — every word in Hindi, no English words or Hinglish mixing. The ONLY exceptions are LaTeX/KaTeX math notation, chemical formulas/symbols, and units, which stay exactly as-is." if language == "hi" else ""
+    # Same routing as /chat: Haiku by default, Sonnet only for questions the classifier flags as
+    # needing multi-step derivation or a known trap -- most PYQ MCQs are a single direct
+    # formula/fact lookup and don't need Sonnet's cost to solve correctly.
+    is_complex = await classify_complexity(f"{question}\n\nA) {option_a}\nB) {option_b}\nC) {option_c}\nD) {option_d}")
+    selected_model = "claude-sonnet-4-5" if is_complex else "claude-haiku-4-5"
     try:
         with client.messages.stream(
-            model="claude-sonnet-4-5",
+            model=selected_model,
             max_tokens=1024,
             system=f"""You are a NEET exam expert. Solve the given NEET question step by step.
 
