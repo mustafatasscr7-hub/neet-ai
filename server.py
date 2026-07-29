@@ -48,6 +48,7 @@ app.add_middleware(
 )
 
 ANTHROPIC_KEY = os.getenv("ANTHROPIC_KEY")
+DEEPSEEK_KEY = os.getenv("DEEPSEEK_KEY")
 OPENAI_KEY = os.getenv("OPENAI_KEY")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
@@ -62,10 +63,12 @@ openai_client = openai.OpenAI(api_key=OPENAI_KEY)
 # ~0.2-0.3s, then establishing that fresh connection to Anthropic's API added another 1-2s+ on
 # top, sometimes far more), on top of whatever Anthropic's own response time actually is.
 anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
-# Async client used only for the complexity-classification call below -- that call needs to
-# genuinely run concurrently with the NCERT/student-context fetch (asyncio.gather), and the
-# sync client would block the event loop for its duration if awaited naively.
-anthropic_async_client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_KEY)
+# Text doubt-answering (/chat, /solve) runs on DeepSeek V4 Flash via its Anthropic-compatible
+# endpoint, not Claude -- same anthropic SDK, just pointed at a different base_url. Claude
+# (anthropic_client above) stays in use for image/PDF-attached questions only: DeepSeek's vision
+# support isn't reliable (confirmed via live testing -- it silently hallucinates on images
+# instead of erroring) and its PDF-document support was never verified.
+deepseek_client = anthropic.Anthropic(api_key=DEEPSEEK_KEY, base_url="https://api.deepseek.com/anthropic")
 import requests as http_requests
 from process_pyq_vision import scan_pdf_bytes
 
@@ -329,9 +332,21 @@ ADMIN_HEADERS = {
 from datetime import datetime, timezone, timedelta, date
 
 IST = timezone(timedelta(hours=5, minutes=30))  # fixed offset: India has no DST
-DAILY_TOKEN_BUDGET_FREE = 20000  # ~8 doubts/day blended, ~4 if all heavy Sonnet numericals --
-                                  # lowered from 37000 after real heavy usage showed the blended
-                                  # average understates worst-case cost per user
+DAILY_TOKEN_BUDGET_FREE = 3600  # ~9 doubts/day -- recalibrated after the Claude->DeepSeek text
+                                  # migration. DeepSeek's Anthropic-compat endpoint auto-caches
+                                  # the repeated system prompt/NCERT context (no cache_control
+                                  # needed), so usage.input_tokens -- what log_token_usage() sums
+                                  # here -- reflects only the small "fresh" remainder, not the
+                                  # full context Claude always billed in full. Real per-doubt cost
+                                  # dropped from ~2500 tokens/doubt (Claude) to a measured ~400
+                                  # tokens/doubt (pooled n=22 real samples: 20 from this session's
+                                  # three-way model comparison test + 2 live /chat and /solve
+                                  # calls), which silently let the OLD 20000-token ceiling cover
+                                  # ~47-50 doubts/day instead of the intended ~8 -- this number is
+                                  # 9 * ~400. If DeepSeek's caching behavior or output verbosity
+                                  # changes materially, re-measure avg tokens/doubt before trusting
+                                  # this ceiling again; it's tied to that assumption, not a fixed
+                                  # cost model.
 COOLDOWN_HOURS = 24  # how long a block lasts once the budget is actually crossed
 
 def _ist_today() -> str:
@@ -350,9 +365,11 @@ async def get_user_plan(user_id: str) -> str:
     except Exception:
         return "free"
 
-DAILY_TOKEN_BUDGET_GUEST = 5000  # ~2 doubts/day -- deliberately tight vs. the logged-in free
-                                  # tier (15/day): the goal is to force a login, not to be a
-                                  # usable tier on its own
+DAILY_TOKEN_BUDGET_GUEST = 1000  # ~2.5 doubts/day -- deliberately tight vs. the logged-in free
+                                  # tier: the goal is to force a login, not to be a usable tier on
+                                  # its own. Recalibrated at the same time and for the same reason
+                                  # as DAILY_TOKEN_BUDGET_FREE above (DeepSeek's automatic prompt
+                                  # caching) -- this is 2.5 * the same measured ~400 tokens/doubt.
 
 # usage_log/guest_usage_log stay keyed by (id, usage_date) exactly as before -- tokens_used still
 # resets to 0 on a fresh calendar day. What changed is WHEN a block clears: previously that was
@@ -599,41 +616,6 @@ async def get_student_context(user_id: str) -> str:
 async def _empty_str():
     return ""
 
-async def _return_true():
-    return True
-
-CLASSIFIER_FALLBACK_KEYWORDS = ["explain", "compare", "solve", "mechanism", "difference", "derive", "describe", "elaborate", "distinguish", "why", "how does", "what happens", "process of", "steps", "diagram"]
-
-async def classify_complexity(text: str) -> bool:
-    """True routes to Sonnet, False to Haiku. Runs inside the same asyncio.gather as the
-    NCERT/student-context fetch (see stream_response), so this adds ~zero wall-clock time in
-    the common case rather than stacking an extra round-trip in front of the real answer.
-    Replaces the old keyword/length heuristic as the primary signal -- real chat history
-    showed length alone was a bad proxy: any multiple-choice-formatted question exceeds 12
-    words purely from listing 4 options, regardless of whether the underlying problem is a
-    one-step calculation or a genuine multi-concept trap. Falls back to that old heuristic
-    only if this classification call itself errors, rather than defaulting every failure onto
-    the more expensive model."""
-    try:
-        message = await anthropic_async_client.messages.create(
-            model="claude-haiku-4-5",
-            max_tokens=5,
-            system=(
-                "You are a routing classifier for NEET exam doubts. Decide SIMPLE or COMPLEX:\n"
-                "SIMPLE = a single direct formula or fact with no unusual edge case, even if "
-                "the question text itself is long (e.g. padded with multiple-choice options).\n"
-                "COMPLEX = needs multi-step derivation, combines multiple concepts, OR is a "
-                "known trap/exception a student could easily get wrong with a naive approach "
-                "(e.g. sign conventions, specific-distance optics behavior, reaction exceptions).\n"
-                "Respond with ONLY one word: simple or complex."
-            ),
-            messages=[{"role": "user", "content": text[:1500]}]
-        )
-        answer = message.content[0].text.strip().lower()
-        return "complex" in answer
-    except Exception:
-        return any(kw in text.lower() for kw in CLASSIFIER_FALLBACK_KEYWORDS) or len(text.split()) > 12
-
 async def stream_response(text: str, history: list = [], images: list = [], pdf: str = None, answer_style: str = "detailed", student_name: str = "", language: str = "en", user_id: str = "", personalize: bool = True, skip_cache: bool = False, ip: str = ""):
     images = (images or [])[:3]
     import hashlib
@@ -658,14 +640,10 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
         if cached:
             yield cached[0]["answer"]
             return
-    # Student context, NCERT search, and model-complexity classification are all independent
-    # of each other -- run them concurrently instead of stacking their latency sequentially.
-    # Image/PDF attachments always get Sonnet: the classifier only sees text, and interpreting
-    # an attached diagram/handwritten problem warrants the stronger model regardless of how
-    # little text comes with it, so skip the classification call entirely in that case.
+    # Student context and NCERT search are independent of each other -- run them concurrently
+    # instead of stacking their latency sequentially.
     student_context_coro = get_student_context(user_id) if (personalize and user_id) else _empty_str()
-    complexity_coro = _return_true() if (images or pdf) else classify_complexity(text)
-    results, student_context, is_complex = await asyncio.gather(search_ncert(text), student_context_coro, complexity_coro)
+    results, student_context = await asyncio.gather(search_ncert(text), student_context_coro)
 
     if results:
         context = "\n\n".join([
@@ -675,8 +653,6 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
         user_message = f"NCERT Content:\n{context}\n\nStudent Question: {text}"
     else:
         user_message = f"Student Question: {text}"
-
-    client = anthropic_client
 
     messages = []
     for msg in history:
@@ -719,19 +695,35 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
     else:
         messages.append({"role": "user", "content": user_message})
     try:
-        selected_model = "claude-sonnet-4-5" if is_complex else "claude-haiku-4-5"
         import sys
-        print(f"MODEL SELECTED: {selected_model}", flush=True)
-        sys.stdout.flush()
         name_context = f"\n\nThe student name is {student_name}. Use their name naturally and occasionally in responses to make it personal." if student_name else ""
         style_context = "\n\nIMPORTANT: The student has selected CONCISE mode. Give a very short answer — maximum 3 sentences only. No bullet points, no key points section, no memory tricks. Just the core answer." if answer_style == "concise" else ""
         lang_context = "\n\nIMPORTANT: Respond ONLY in Hindi (Devanagari script). Every word — headings, key points, explanations, memory tricks — must be in Hindi. Do not mix in English words or Hinglish, even for common scientific terms (e.g. write \"गुणसूत्र\" not \"chromosome\"). The ONLY exceptions are: LaTeX/KaTeX math notation, chemical formulas/symbols (e.g. $H_2O$), units (e.g. m/s, kg), and proper nouns like NEET or NCERT — keep those exactly as-is, do not translate or romanize them." if language == "hi" else ""
-        with client.messages.stream(
-            model=selected_model,
-            max_tokens=1024,
-            system=SYSTEM_PROMPT + name_context + style_context + lang_context + student_context,
-            messages=messages
-        ) as stream:
+        full_system = SYSTEM_PROMPT + name_context + style_context + lang_context + student_context
+        if images or pdf:
+            # Image/PDF attachments stay on Claude Sonnet -- see the comment on deepseek_client
+            # above for why.
+            selected_model = "claude-sonnet-4-5"
+            print(f"MODEL SELECTED: {selected_model}", flush=True)
+            sys.stdout.flush()
+            stream_cm = anthropic_client.messages.stream(
+                model=selected_model,
+                max_tokens=1024,
+                system=full_system,
+                messages=messages
+            )
+        else:
+            selected_model = "deepseek-v4-flash"
+            print(f"MODEL SELECTED: {selected_model}", flush=True)
+            sys.stdout.flush()
+            stream_cm = deepseek_client.messages.stream(
+                model=selected_model,
+                max_tokens=1024,
+                thinking={"type": "disabled"},
+                system=full_system,
+                messages=messages
+            )
+        with stream_cm as stream:
             full_answer = ""
             try:
                 for text_chunk in stream.text_stream:
@@ -786,17 +778,12 @@ async def stream_solve_response(pyq_id: str, cached_solution, question: str, opt
     if cached_solution is not None:
         yield cached_solution
         return
-    client = anthropic_client
     lang_instruction = "\n5. Respond ONLY in Hindi (Devanagari script) — every word in Hindi, no English words or Hinglish mixing. The ONLY exceptions are LaTeX/KaTeX math notation, chemical formulas/symbols, and units, which stay exactly as-is." if language == "hi" else ""
-    # Same routing as /chat: Haiku by default, Sonnet only for questions the classifier flags as
-    # needing multi-step derivation or a known trap -- most PYQ MCQs are a single direct
-    # formula/fact lookup and don't need Sonnet's cost to solve correctly.
-    is_complex = await classify_complexity(f"{question}\n\nA) {option_a}\nB) {option_b}\nC) {option_c}\nD) {option_d}")
-    selected_model = "claude-sonnet-4-5" if is_complex else "claude-haiku-4-5"
     try:
-        with client.messages.stream(
-            model=selected_model,
+        with deepseek_client.messages.stream(
+            model="deepseek-v4-flash",
             max_tokens=1024,
+            thinking={"type": "disabled"},
             system=f"""You are a NEET exam expert. Solve the given NEET question step by step.
 
 Format your response exactly like this:

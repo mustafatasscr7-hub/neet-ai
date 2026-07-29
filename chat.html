@@ -2312,9 +2312,10 @@ function plainTextFromMarkdown(text) {
     // Daily usage banner: reads usage_log/user_plan directly (RLS allows reading only your own
     // rows) for display purposes only -- real enforcement is server-side in server.py, so this
     // can't be used to bypass anything, it just decides what to show.
-    const DAILY_TOKEN_BUDGET_FREE = 20000;  // must match server.py's constant
-    const DAILY_TOKEN_BUDGET_GUEST = 5000; // must match server.py's constant
-    const AVG_TOKENS_PER_DOUBT = 2440;     // rough display-only estimate, not the real enforcement
+    const DAILY_TOKEN_BUDGET_FREE = 3600;  // must match server.py's constant
+    const DAILY_TOKEN_BUDGET_GUEST = 1000; // must match server.py's constant
+    const AVG_TOKENS_PER_DOUBT = 400;      // rough display-only estimate, not the real enforcement --
+                                            // measured DeepSeek average post-migration (was 2440 for Claude)
     const WARNING_THRESHOLD_DOUBTS = 3;
 
     function getISTDateString() {
