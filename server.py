@@ -503,6 +503,15 @@ async def get_embedding(text: str):
 
     return embedding
 
+
+# ncert_content rows that are front/back matter (prelims, appendix, answer keys) rather than
+# real chapter content -- excluded below rather than given a fake chapter title, since citing
+# "Chapter: Appendix" to a student would be actively misleading. Filtered here in Python, not
+# in the match_ncert Postgres function itself: this repo has no DDL/DATABASE_URL access to
+# safely inspect or edit that function, so excluding post-hoc from a table we can't see is the
+# only change we can fully verify ourselves.
+NCERT_NON_CHAPTER_LABELS = {"Preliminary Pages", "Appendix", "Answer Key"}
+
 async def search_ncert(query: str, limit: int = 3):
     embedding = await get_embedding(query)
     headers = {
@@ -520,7 +529,7 @@ async def search_ncert(query: str, limit: int = 3):
         }
     )
     if response.status_code == 200:
-        return response.json()
+        return [r for r in response.json() if r.get("chapter_name") not in NCERT_NON_CHAPTER_LABELS]
     return []
 
 async def search_pyq(query: str, limit: int = 5):
