@@ -208,6 +208,8 @@
   let adminKey = sessionStorage.getItem('admin_key') || '';
   let currentSubject = null;
   let currentPdfFilename = null; // filename of the last-scanned PDF, attached to saves so it shows up in Processed PDFs
+  let currentProcessedPdfId = null;  // id of this scan's processed_pdfs row, for the completion/failure update
+  let currentPdfQuestionsExtracted = 0; // running count of questions saved so far for the current scan
   let chapterList = [];       // [{name, count}] style not needed here - just names for the dropdown
   let existingRows = [];      // {question, chapter, class} - all active rows for currentSubject
   let classifier = null;
@@ -545,10 +547,34 @@
     });
   }
 
+  async function checkPdfAlreadyProcessed(filename) {
+    try {
+      const res = await fetch(`${API_BASE}/admin/pdf-check-status?filename=${encodeURIComponent(filename)}`, { headers: authHeaders() });
+      if (!res.ok) return true; // can't check -- don't block the scan over a tracking lookup failure
+      const data = await res.json();
+      const prev = data.previous;
+      if (!prev) return true;
+      let msg;
+      if (prev.status === 'completed') {
+        msg = `This file was already processed on ${new Date(prev.upload_date).toLocaleDateString()}, extracted ${prev.questions_extracted} question${prev.questions_extracted === 1 ? '' : 's'} — reprocess anyway?`;
+      } else if (prev.status === 'failed') {
+        msg = `This file was previously scanned on ${new Date(prev.upload_date).toLocaleDateString()} but failed — try again?`;
+      } else {
+        msg = `This file is already marked "${prev.status}" from ${new Date(prev.upload_date).toLocaleDateString()} — reprocess anyway?`;
+      }
+      return confirm(msg);
+    } catch (e) {
+      return true;
+    }
+  }
+
   async function scanPdf() {
     const file = document.getElementById('pdfFile').files[0];
     if (!file || !currentSubject) return;
+    if (!(await checkPdfAlreadyProcessed(file.name))) return;
     currentPdfFilename = file.name;
+    currentProcessedPdfId = null;
+    currentPdfQuestionsExtracted = 0;
     const statusEl = document.getElementById('scanStatus');
     const scanBtn = document.getElementById('scanBtn');
     scanBtn.disabled = true;
@@ -560,11 +586,12 @@
       const res = await fetch(`${API_BASE}/admin/scan-pdf`, {
         method: 'POST',
         headers: authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ subject: currentSubject, data: b64 })
+        body: JSON.stringify({ subject: currentSubject, data: b64, filename: file.name })
       });
       if (res.status === 401) return logout();
       if (!res.ok) { statusEl.textContent = 'Scan failed: ' + await describeHttpError(res); return; }
       const data = await res.json();
+      currentProcessedPdfId = data.processed_pdf_id || null;
       if (data.error) { statusEl.textContent = 'Scan failed: ' + data.error; return; }
       statusEl.style.display = 'none';
       const filenameMatch = matchChapterFromFilename(file.name, allChaptersForSubject(currentSubject));
@@ -590,12 +617,14 @@
     }
   }
 
+  const PDF_STATUS_COLORS = { completed: '#4caf50', failed: '#e05555', processing: '#e0a030', pending: '#888' };
+
   async function openPdfHistory() {
     document.getElementById('pdfHistoryOverlay').style.display = 'flex';
     const listEl = document.getElementById('pdfHistoryList');
     listEl.textContent = 'Loading...';
     try {
-      const res = await fetch(`${API_BASE}/admin/pdf-upload-history`, { headers: authHeaders() });
+      const res = await fetch(`${API_BASE}/admin/processed-pdfs`, { headers: authHeaders() });
       if (res.status === 401) return logout();
       const data = await res.json();
       if (data.error) { listEl.textContent = 'Could not load history: ' + data.error; return; }
@@ -603,9 +632,13 @@
       if (pdfs.length === 0) { listEl.textContent = 'No PDFs processed through this pipeline yet.'; return; }
       listEl.innerHTML = pdfs.map(p => `
         <div style="padding:10px 0;border-bottom:1px solid #1e1e1e;">
-          <div style="color:#ececec;font-weight:600;">${escapeHtml(p.filename)}</div>
+          <div style="color:#ececec;font-weight:600;display:flex;align-items:center;gap:8px;">
+            ${escapeHtml(p.filename)}
+            <span style="color:${PDF_STATUS_COLORS[p.status] || '#888'};font-size:10px;font-weight:700;text-transform:uppercase;border:1px solid currentColor;border-radius:4px;padding:1px 5px;">${escapeHtml(p.status)}</span>
+          </div>
           <div style="color:#666;font-size:11px;margin-top:3px;">
-            ${escapeHtml(p.subjects.join(', '))} · ${p.question_count} question${p.question_count === 1 ? '' : 's'} · ${new Date(p.last_uploaded).toLocaleDateString()}
+            ${escapeHtml(p.subject || '')} · ${p.questions_extracted} question${p.questions_extracted === 1 ? '' : 's'} · ${new Date(p.upload_date).toLocaleDateString()}
+            ${p.status === 'failed' && p.error_message ? `<br><span style="color:#e05555;">${escapeHtml(p.error_message)}</span>` : ''}
           </div>
         </div>`).join('');
     } catch (e) {
@@ -1286,6 +1319,14 @@
         if (el) el.classList.add('is-saved');
       });
       updateSummaryBar();
+      if (currentProcessedPdfId) {
+        currentPdfQuestionsExtracted += toSave.length;
+        fetch(`${API_BASE}/admin/pdf-mark-processed`, {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ id: currentProcessedPdfId, status: 'completed', questions_extracted: currentPdfQuestionsExtracted })
+        }).catch(() => {});
+      }
       let msg = `Saved ${toSave.length} question(s).`;
       if (skipped.length) msg += ` Skipped ${skipped.length} blank block(s).`;
       if (dupCount) msg += ` ${dupCount} were exact duplicates of existing questions — saved anyway, delete the extras later.`;

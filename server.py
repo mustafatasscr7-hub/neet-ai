@@ -231,6 +231,13 @@ class SetUserPlanRequest(BaseModel):
 class ScanPdfRequest(BaseModel):
     subject: str
     data: str  # base64-encoded PDF bytes
+    filename: Optional[str] = None  # original filename, for processed_pdfs tracking
+
+class PdfMarkProcessedRequest(BaseModel):
+    id: int
+    status: str  # 'completed' or 'failed'
+    questions_extracted: Optional[int] = None
+    error_message: Optional[str] = None
 
 class DiagramUploadRequest(BaseModel):
     filename: str
@@ -1443,6 +1450,41 @@ async def admin_pyq_delete(pyq_id: str, _: None = Depends(verify_admin)):
 
 # ---------- Admin: PDF scan -> review -> save pipeline (admin-pdf-review.html) ----------
 
+def _create_processed_pdf_row(filename: str, subject: str):
+    # Tracking is best-effort and must never block the actual scan -- swallow failures here
+    # rather than let a processed_pdfs write error surface as a scan failure to the admin.
+    try:
+        response = http_requests.post(
+            f"{SUPABASE_URL}/rest/v1/processed_pdfs",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
+            json={"filename": filename, "subject": subject, "status": "processing"}
+        )
+        if response.status_code < 400:
+            rows = response.json()
+            if rows:
+                return rows[0]["id"]
+    except Exception:
+        pass
+    return None
+
+def _update_processed_pdf_row(row_id, status: str, questions_extracted=None, error_message: str = None):
+    if row_id is None:
+        return
+    body = {"status": status, "processed_at": datetime.now(timezone.utc).isoformat()}
+    if questions_extracted is not None:
+        body["questions_extracted"] = questions_extracted
+    if error_message is not None:
+        body["error_message"] = error_message[:2000]
+    try:
+        http_requests.patch(
+            f"{SUPABASE_URL}/rest/v1/processed_pdfs",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json"},
+            params={"id": f"eq.{row_id}"},
+            json=body
+        )
+    except Exception:
+        pass
+
 @app.post("/admin/scan-pdf")
 def admin_scan_pdf(req: ScanPdfRequest, _: None = Depends(verify_admin), __: None = Depends(rate_limiter(10, 300))):
     # Deliberately sync (not async def): FastAPI runs sync path functions in a thread pool,
@@ -1453,10 +1495,17 @@ def admin_scan_pdf(req: ScanPdfRequest, _: None = Depends(verify_admin), __: Non
         pdf_bytes = base64.b64decode(req.data)
     except Exception:
         return {"error": "Could not decode PDF data"}
+
+    processed_pdf_id = _create_processed_pdf_row(req.filename, req.subject) if req.filename else None
     try:
-        return scan_pdf_bytes(pdf_bytes, req.subject)
+        result = scan_pdf_bytes(pdf_bytes, req.subject)
     except Exception as e:
+        _update_processed_pdf_row(processed_pdf_id, "failed", error_message=str(e))
         return {"error": str(e)}
+    if result.get("error"):
+        _update_processed_pdf_row(processed_pdf_id, "failed", error_message=result["error"])
+    result["processed_pdf_id"] = processed_pdf_id
+    return result
 
 @app.get("/admin/pyq-classifier-data")
 async def admin_pyq_classifier_data(subject: str, _: None = Depends(verify_admin)):
@@ -1550,6 +1599,53 @@ async def admin_pyq_bulk_create(body: PyqBulkCreate, _: None = Depends(verify_ad
         if response.status_code >= 400:
             return {"error": response.text}
         return {"created": response.json()}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.post("/admin/pdf-mark-processed")
+def admin_pdf_mark_processed(req: PdfMarkProcessedRequest, _: None = Depends(verify_admin)):
+    if req.status not in ("completed", "failed"):
+        return {"error": "Invalid status"}
+    _update_processed_pdf_row(req.id, req.status, questions_extracted=req.questions_extracted, error_message=req.error_message)
+    return {"success": True}
+
+@app.get("/admin/pdf-check-status")
+def admin_pdf_check_status(filename: str, _: None = Depends(verify_admin)):
+    # Most recent processed_pdfs row for this filename, if any -- lets the frontend warn
+    # before reprocessing a PDF that's already gone through the pipeline.
+    try:
+        response = http_requests.get(
+            f"{SUPABASE_URL}/rest/v1/processed_pdfs",
+            headers=ADMIN_HEADERS,
+            params={
+                "filename": f"eq.{filename}",
+                "select": "id,status,questions_extracted,upload_date",
+                "order": "upload_date.desc",
+                "limit": 1
+            }
+        )
+        if response.status_code >= 400:
+            return {"error": response.text}
+        rows = response.json()
+        return {"previous": rows[0] if rows else None}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/admin/processed-pdfs")
+def admin_processed_pdfs(_: None = Depends(verify_admin)):
+    try:
+        response = http_requests.get(
+            f"{SUPABASE_URL}/rest/v1/processed_pdfs",
+            headers=ADMIN_HEADERS,
+            params={
+                "select": "id,filename,subject,status,questions_extracted,error_message,upload_date,processed_at",
+                "order": "upload_date.desc",
+                "limit": 500
+            }
+        )
+        if response.status_code >= 400:
+            return {"error": response.text}
+        return {"pdfs": response.json()}
     except Exception as e:
         return {"error": str(e)}
 
