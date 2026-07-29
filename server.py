@@ -2,7 +2,7 @@ from fastapi import FastAPI, Header, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional, List, Dict
 from contextlib import asynccontextmanager
 import asyncio
 import anthropic
@@ -70,7 +70,7 @@ anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
 # instead of erroring) and its PDF-document support was never verified.
 deepseek_client = anthropic.Anthropic(api_key=DEEPSEEK_KEY, base_url="https://api.deepseek.com/anthropic")
 import requests as http_requests
-from process_pyq_vision import scan_pdf_bytes
+from process_pyq_vision import scan_pdf_bytes, scan_mock_test_pdf
 
 SYSTEM_PROMPT = """You are NEET-AI — an expert tutor for Indian medical entrance exam preparation.
 
@@ -267,6 +267,52 @@ class PyqQuestionCreate(BaseModel):
 
 class PyqBulkCreate(BaseModel):
     questions: List[PyqQuestionCreate]
+
+class PageRange(BaseModel):
+    start: int
+    end: int
+
+class MockTestScanRequest(BaseModel):
+    title: str
+    filename: Optional[str] = None
+    data: str  # base64-encoded PDF bytes
+    ranges: Dict[str, PageRange]  # keys: "Physics", "Chemistry", "Biology"
+
+class MockTestMarkProcessedRequest(BaseModel):
+    id: int
+    status: str  # 'completed' or 'failed'
+    questions_extracted: Optional[int] = None
+    physics_count: Optional[int] = None
+    chemistry_count: Optional[int] = None
+    biology_count: Optional[int] = None
+    error_message: Optional[str] = None
+
+class MockTestPublishRequest(BaseModel):
+    id: int
+
+class MockTestQuestionCreate(BaseModel):
+    mock_test_id: int
+    question_order: int
+    subject: str
+    chapter: Optional[str] = None
+    class_: Optional[int] = Field(None, alias="class")
+    question: str
+    option_a: str
+    option_b: str
+    option_c: str
+    option_d: str
+    correct_answer: str = ""
+    question_type: str = "mcq"
+    year: Optional[int] = None
+    has_diagram: bool = False
+    diagram_url: Optional[str] = None
+    option_a_diagram_url: Optional[str] = None
+    option_b_diagram_url: Optional[str] = None
+    option_c_diagram_url: Optional[str] = None
+    option_d_diagram_url: Optional[str] = None
+
+class MockTestBulkCreate(BaseModel):
+    questions: List[MockTestQuestionCreate]
 
 import time
 
@@ -1025,6 +1071,77 @@ async def get_mock_test_questions():
     except Exception as e:
         return {"error": str(e)}
 
+@app.get("/mock-tests/available")
+async def get_available_mock_tests(user_id: str = ""):
+    # Published tests minus ones this user has already completed. RLS on mock_tests
+    # already restricts the anon key to is_published=true rows, so the published-only
+    # filter here is belt-and-suspenders, not the only guard.
+    try:
+        headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+        response = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/mock_tests",
+            headers=headers,
+            params={
+                "is_published": "eq.true",
+                "select": "id,title,questions_extracted,physics_count,chemistry_count,biology_count,published_at",
+                "order": "published_at.desc"
+            }
+        )
+        if response.status_code >= 400:
+            return {"error": response.text}
+        published = response.json()
+
+        taken_ids = set()
+        if user_id:
+            # Service-role key: mock_results is RLS-scoped to the owning user, and this
+            # lookup runs server-side on the student's own behalf (already filtered to
+            # their own user_id below) -- same justification as get_student_context() above.
+            taken_resp = await async_client.get(
+                f"{SUPABASE_URL}/rest/v1/mock_results",
+                headers={"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"},
+                params={
+                    "user_id": f"eq.{user_id}",
+                    "mock_test_id": "not.is.null",
+                    "select": "mock_test_id"
+                }
+            )
+            if taken_resp.status_code < 400:
+                taken_ids = {r["mock_test_id"] for r in taken_resp.json()}
+
+        available = [t for t in published if t["id"] not in taken_ids]
+        return {"available": available, "total_published": len(published)}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/mock-tests/{mock_test_id}/questions")
+async def get_mock_test_questions_by_id(mock_test_id: int):
+    try:
+        headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+        # Double-gated on is_published, on top of the RLS policy already enforcing it --
+        # a draft test's questions should never be fetchable even by guessing its id.
+        test_resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/mock_tests",
+            headers=headers,
+            params={"id": f"eq.{mock_test_id}", "is_published": "eq.true", "select": "id"}
+        )
+        if test_resp.status_code >= 400 or not test_resp.json():
+            return {"error": "Mock test not found"}
+        response = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/mock_test_questions",
+            headers=headers,
+            params={
+                "mock_test_id": f"eq.{mock_test_id}",
+                "select": "id,subject,chapter,year,question,option_a,option_b,option_c,option_d,correct_answer,diagram_url,option_a_diagram_url,option_b_diagram_url,option_c_diagram_url,option_d_diagram_url",
+                "order": "question_order.asc"
+            }
+        )
+        if response.status_code >= 400:
+            return {"error": response.text}
+        questions = response.json()
+        return {"questions": questions, "total": len(questions)}
+    except Exception as e:
+        return {"error": str(e)}
+
 @app.get("/pyq-chapters")
 async def get_pyq_chapters(subject: str):
     if subject not in ("Biology", "Physics", "Chemistry"):
@@ -1646,6 +1763,181 @@ def admin_processed_pdfs(_: None = Depends(verify_admin)):
         if response.status_code >= 400:
             return {"error": response.text}
         return {"pdfs": response.json()}
+    except Exception as e:
+        return {"error": str(e)}
+
+# ---------- Admin: official mock test upload pipeline (admin-mocktest-upload.html) ----------
+
+def _create_mock_test_row(title: str, filename: str):
+    # Tracking is best-effort and must never block the actual scan, same reasoning as
+    # _create_processed_pdf_row above.
+    try:
+        response = http_requests.post(
+            f"{SUPABASE_URL}/rest/v1/mock_tests",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
+            json={"title": title, "filename": filename, "status": "processing"}
+        )
+        if response.status_code < 400:
+            rows = response.json()
+            if rows:
+                return rows[0]["id"]
+    except Exception:
+        pass
+    return None
+
+def _update_mock_test_row(row_id, status: str, questions_extracted=None, physics_count=None,
+                           chemistry_count=None, biology_count=None, error_message: str = None):
+    if row_id is None:
+        return
+    body = {"status": status}
+    if questions_extracted is not None:
+        body["questions_extracted"] = questions_extracted
+    if physics_count is not None:
+        body["physics_count"] = physics_count
+    if chemistry_count is not None:
+        body["chemistry_count"] = chemistry_count
+    if biology_count is not None:
+        body["biology_count"] = biology_count
+    if error_message is not None:
+        body["error_message"] = error_message[:2000]
+    try:
+        http_requests.patch(
+            f"{SUPABASE_URL}/rest/v1/mock_tests",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json"},
+            params={"id": f"eq.{row_id}"},
+            json=body
+        )
+    except Exception:
+        pass
+
+@app.post("/admin/mock-test-scan")
+def admin_mock_test_scan(req: MockTestScanRequest, _: None = Depends(verify_admin), __: None = Depends(rate_limiter(5, 300))):
+    # Sync (not async def), same reasoning as /admin/scan-pdf: this call is ~3x the vision
+    # work of a single-subject scan, so it's rate-limited lower (5/300s vs 10/300s there).
+    missing = [s for s in ("Physics", "Chemistry", "Biology") if s not in req.ranges]
+    if missing:
+        return {"error": f"Missing page range(s) for: {', '.join(missing)}"}
+    try:
+        pdf_bytes = base64.b64decode(req.data)
+    except Exception:
+        return {"error": "Could not decode PDF data"}
+
+    mock_test_id = _create_mock_test_row(req.title, req.filename)
+    ranges = {s: (req.ranges[s].start, req.ranges[s].end) for s in req.ranges}
+    try:
+        result = scan_mock_test_pdf(pdf_bytes, ranges)
+    except Exception as e:
+        _update_mock_test_row(mock_test_id, "failed", error_message=str(e))
+        return {"error": str(e)}
+    if result.get("errors"):
+        import json
+        _update_mock_test_row(mock_test_id, "failed", error_message=json.dumps(result["errors"]))
+    result["mock_test_id"] = mock_test_id
+    return result
+
+@app.post("/admin/mock-test-bulk-create")
+async def admin_mock_test_bulk_create(body: MockTestBulkCreate, _: None = Depends(verify_admin)):
+    if not body.questions:
+        return {"error": "No questions provided"}
+    if any(q.subject not in ("Biology", "Physics", "Chemistry") for q in body.questions):
+        return {"error": "Invalid subject"}
+    payload = [
+        {
+            "mock_test_id": q.mock_test_id,
+            "question_order": q.question_order,
+            "subject": q.subject,
+            "chapter": q.chapter,
+            "class": q.class_,
+            "question": q.question,
+            "option_a": q.option_a,
+            "option_b": q.option_b,
+            "option_c": q.option_c,
+            "option_d": q.option_d,
+            "correct_answer": q.correct_answer,
+            "question_type": q.question_type,
+            "year": q.year,
+            "has_diagram": q.has_diagram,
+            "diagram_url": q.diagram_url,
+            "option_a_diagram_url": q.option_a_diagram_url,
+            "option_b_diagram_url": q.option_b_diagram_url,
+            "option_c_diagram_url": q.option_c_diagram_url,
+            "option_d_diagram_url": q.option_d_diagram_url
+        }
+        for q in body.questions
+    ]
+    try:
+        response = http_requests.post(
+            f"{SUPABASE_URL}/rest/v1/mock_test_questions",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
+            json=payload
+        )
+        if response.status_code >= 400:
+            return {"error": response.text}
+        return {"created": response.json()}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.post("/admin/mock-test-mark-processed")
+def admin_mock_test_mark_processed(req: MockTestMarkProcessedRequest, _: None = Depends(verify_admin)):
+    if req.status not in ("completed", "failed"):
+        return {"error": "Invalid status"}
+    _update_mock_test_row(
+        req.id, req.status, questions_extracted=req.questions_extracted,
+        physics_count=req.physics_count, chemistry_count=req.chemistry_count,
+        biology_count=req.biology_count, error_message=req.error_message
+    )
+    return {"success": True}
+
+@app.post("/admin/mock-test-publish")
+def admin_mock_test_publish(req: MockTestPublishRequest, _: None = Depends(verify_admin)):
+    try:
+        response = http_requests.patch(
+            f"{SUPABASE_URL}/rest/v1/mock_tests",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json"},
+            params={"id": f"eq.{req.id}"},
+            json={"is_published": True, "published_at": datetime.now(timezone.utc).isoformat()}
+        )
+        if response.status_code >= 400:
+            return {"error": response.text}
+        return {"success": True}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/admin/mock-test-check-status")
+def admin_mock_test_check_status(filename: str, _: None = Depends(verify_admin)):
+    try:
+        response = http_requests.get(
+            f"{SUPABASE_URL}/rest/v1/mock_tests",
+            headers=ADMIN_HEADERS,
+            params={
+                "filename": f"eq.{filename}",
+                "select": "id,title,status,questions_extracted,created_at",
+                "order": "created_at.desc",
+                "limit": 1
+            }
+        )
+        if response.status_code >= 400:
+            return {"error": response.text}
+        rows = response.json()
+        return {"previous": rows[0] if rows else None}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/admin/mock-tests")
+def admin_mock_tests_list(_: None = Depends(verify_admin)):
+    try:
+        response = http_requests.get(
+            f"{SUPABASE_URL}/rest/v1/mock_tests",
+            headers=ADMIN_HEADERS,
+            params={
+                "select": "id,title,filename,status,is_published,questions_extracted,physics_count,chemistry_count,biology_count,error_message,created_at,published_at",
+                "order": "created_at.desc",
+                "limit": 200
+            }
+        )
+        if response.status_code >= 400:
+            return {"error": response.text}
+        return {"tests": response.json()}
     except Exception as e:
         return {"error": str(e)}
 

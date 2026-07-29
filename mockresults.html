@@ -220,6 +220,7 @@
         subject_biology_score: Math.max(0, (subjectData.Biology.correct * 4) - subjectData.Biology.wrong),
         subject_physics_score: Math.max(0, (subjectData.Physics.correct * 4) - subjectData.Physics.wrong),
         subject_chemistry_score: Math.max(0, (subjectData.Chemistry.correct * 4) - subjectData.Chemistry.wrong),
+        mock_test_id: data.mockTestId || null,
       });
     }
 
@@ -237,7 +238,11 @@ if (rankBtn) rankBtn.href = `./rank-predictor.html?score=${Math.max(0, data.scor
       // Subject breakdown
       const subjects = ['Biology', 'Physics', 'Chemistry'];
       const subjectColors = { Biology: '#4ade80', Physics: '#4f8ef7', Chemistry: '#f97316' };
-      const subjectMax = { Biology: 360, Physics: 180, Chemistry: 180 };
+      // Max marks per subject are derived from how many questions of that subject this
+      // specific test actually served (sd.total * 4), rather than the hardcoded 90/45/45
+      // random-mode split -- this stays correct for an official mock test whose real
+      // composition differs, and incidentally also fixes the random mode's own max being
+      // wrong if the pyq pool ever has fewer than 90/45/45 questions in a subject.
       const subjectData = {};
 
       subjects.forEach(s => { subjectData[s] = { correct: 0, wrong: 0, skipped: 0, total: 0 }; });
@@ -256,7 +261,7 @@ if (rankBtn) rankBtn.href = `./rank-predictor.html?score=${Math.max(0, data.scor
       subjects.forEach(s => {
         const sd = subjectData[s];
         const score = Math.max(0, (sd.correct * 4) - sd.wrong);
-        const max = subjectMax[s];
+        const max = sd.total * 4;
         const pct = max > 0 ? (score / max) * 100 : 0;
         breakdown.innerHTML += `
           <div class="subject-row">

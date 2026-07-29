@@ -280,12 +280,25 @@
     let currentFilter = 'all';
    let startTime = Date.now();
     let savedQuestions = new Set();
+    let currentMockTestId = null; // id of the official test being taken, or null for random/personalised mode
+    const ORIGINAL_START_SCREEN_HTML = document.getElementById('startScreen').innerHTML;
 
-    // Load questions
-   async function loadQuestions() {
+    function escapeHtmlMock(str) {
+      const div = document.createElement('div');
+      div.textContent = str == null ? '' : String(str);
+      return div.innerHTML;
+    }
+
+    // Load questions -- mockTestId picks a specific admin-uploaded official test;
+    // omitted/null falls back to the original random-sample-from-pyq endpoint.
+   async function loadQuestions(mockTestId) {
       try {
-        const res = await fetch('https://neet-ai-production.up.railway.app/mock-test-questions');
+        const url = mockTestId
+          ? `${API_BASE}/mock-tests/${mockTestId}/questions`
+          : 'https://neet-ai-production.up.railway.app/mock-test-questions';
+        const res = await fetch(url);
         const data = await res.json();
+        if (data.error) throw new Error(data.error);
         questions = data.questions;
         renderQuestion(0);
         renderGrid();
@@ -844,7 +857,8 @@ async function saveQuestionFromMock(index) {
         total: questions.length,
         timeTaken,
         results,
-        date: new Date().toISOString()
+        date: new Date().toISOString(),
+        mockTestId: currentMockTestId
       }));
 
       await autoSaveMockMistakes(results);
@@ -884,7 +898,50 @@ async function saveQuestionFromMock(index) {
       }
     }
 
-   function startTest() {
+    // "Full Mock Test" card's onclick. Guests (no session) and users with zero published
+    // official tests go straight to the existing random flow, unchanged. Logged-in users
+    // with un-taken official tests see a picker first; official tests take priority.
+    async function startTest() {
+      const { data: { session } } = await client.auth.getSession();
+      if (!session) { beginLoadingQuestions(null); return; }
+      try {
+        const res = await fetch(`${API_BASE}/mock-tests/available?user_id=${session.user.id}`);
+        const data = await res.json();
+        if (data.error || !data.total_published) { beginLoadingQuestions(null); return; }
+        if (data.available && data.available.length > 0) { showMockTestPicker(data.available); return; }
+        document.getElementById('startScreen').innerHTML = `
+          <div style="text-align:center;">
+            <div style="font-size:40px;margin-bottom:16px;">🎉</div>
+            <p style="color:#ccc;font-size:14px;margin-bottom:24px;" data-i18n="mocktest.allOfficialTestsDone">You've completed all official mock tests — starting a practice set instead.</p>
+          </div>
+        `;
+        applyTranslations();
+        setTimeout(() => beginLoadingQuestions(null), 1500);
+      } catch (e) {
+        beginLoadingQuestions(null);
+      }
+    }
+
+    function showMockTestPicker(tests) {
+      document.getElementById('startScreen').innerHTML = `
+        <div style="text-align:center;max-width:680px;padding:40px;width:100%;">
+          <h1 style="font-size:24px;font-weight:800;color:#fff;margin-bottom:28px;" data-i18n="mocktest.pickOfficialTest">Pick a Mock Test</h1>
+          <div style="display:flex;flex-direction:column;gap:14px;max-width:420px;margin:0 auto;">
+            ${tests.map(test => `
+              <button onclick="beginLoadingQuestions(${test.id})" style="background:#151515;border:1px solid #2a2a2a;color:#ececec;padding:18px 20px;border-radius:14px;cursor:pointer;font-family:Inter,sans-serif;text-align:left;transition:border-color 0.2s;" onmouseover="this.style.borderColor='#4f8ef7'" onmouseout="this.style.borderColor='#2a2a2a'">
+                <div style="font-size:16px;font-weight:700;margin-bottom:4px;">${escapeHtmlMock(test.title)}</div>
+                <div style="font-size:12.5px;color:#888;">${t('mocktest', 'officialTestMeta').replace('{n}', localizeNum(test.questions_extracted))}</div>
+              </button>
+            `).join('')}
+          </div>
+          <button onclick="document.getElementById('startScreen').innerHTML = ORIGINAL_START_SCREEN_HTML; applyTranslations();" style="margin-top:24px;background:transparent;border:1px solid #2a2a2a;color:#888;padding:8px 16px;border-radius:8px;cursor:pointer;font-size:13px;font-family:Inter,sans-serif;" data-i18n="mocktest.backToChoices">← Back</button>
+        </div>
+      `;
+      applyTranslations();
+    }
+
+    function beginLoadingQuestions(mockTestId) {
+      currentMockTestId = mockTestId || null;
       document.getElementById('startScreen').innerHTML = `
         <div style="text-align:center;">
           <div style="font-size:48px;margin-bottom:24px;">⏳</div>
@@ -914,7 +971,7 @@ async function saveQuestionFromMock(index) {
         const el = document.getElementById('loadingDots');
         if (el) el.textContent = 'Please wait' + '.'.repeat(dots);
       }, 500);
-      loadQuestions().then(() => {
+      loadQuestions(mockTestId).then(() => {
         clearInterval(progressInterval);
         clearInterval(dotsInterval);
         loadBar.style.width = '100%';

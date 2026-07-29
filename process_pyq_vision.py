@@ -295,6 +295,64 @@ def scan_pdf_bytes(pdf_bytes, subject, max_workers=5):
     flagged_pages.sort(key=lambda f: f["page"])
     return {"questions": questions, "pages_scanned": len(pages), "flagged_pages": flagged_pages}
 
+def slice_pdf_pages(pdf_bytes, start_page, end_page):
+    """start_page/end_page are 1-indexed, inclusive, matching how an admin reads printed
+    page numbers. Builds a standalone in-memory PDF for just that range via PyMuPDF, so
+    scan_pdf_bytes() runs completely unmodified against it -- no changes to the proven
+    single-subject PYQ scan path."""
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    total = len(doc)
+    if start_page < 1 or end_page < start_page or end_page > total:
+        doc.close()
+        raise ValueError(f"Invalid page range {start_page}-{end_page} for a {total}-page PDF")
+    doc.select(list(range(start_page - 1, end_page)))
+    out_bytes = doc.tobytes()
+    doc.close()
+    return out_bytes
+
+MOCK_TEST_SUBJECT_ORDER = ["Physics", "Chemistry", "Biology"]
+
+def scan_mock_test_pdf(pdf_bytes, ranges, max_workers=3):
+    """ranges: {"Physics": (start,end), "Chemistry": (start,end), "Biology": (start,end)}.
+    Slices once per subject, then calls the existing scan_pdf_bytes() 3x concurrently (each
+    already parallelizes its own pages internally). question_order is assigned in fixed
+    Physics->Chemistry->Biology order regardless of dict/completion order, so the served
+    exam's section order can't get scrambled by an out-of-order scan completion."""
+    sliced = {s: slice_pdf_pages(pdf_bytes, *ranges[s]) for s in MOCK_TEST_SUBJECT_ORDER}
+    results = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_subject = {executor.submit(scan_pdf_bytes, sliced[s], s): s for s in MOCK_TEST_SUBJECT_ORDER}
+        for future in concurrent.futures.as_completed(future_to_subject):
+            s = future_to_subject[future]
+            try:
+                results[s] = future.result()
+            except Exception as e:
+                results[s] = {"error": str(e), "questions": [], "pages_scanned": 0, "flagged_pages": []}
+
+    questions = []
+    flagged_pages = []
+    per_subject_counts = {}
+    errors = {}
+    order = 1
+    for s in MOCK_TEST_SUBJECT_ORDER:
+        r = results[s]
+        if r.get("error"):
+            errors[s] = r["error"]
+        for f in r.get("flagged_pages", []):
+            flagged_pages.append({**f, "subject": s})
+        subj_questions = r.get("questions", [])
+        per_subject_counts[s] = len(subj_questions)
+        for q in subj_questions:
+            questions.append({**q, "subject": s, "question_order": order})
+            order += 1
+
+    return {
+        "questions": questions,
+        "flagged_pages": flagged_pages,
+        "per_subject_counts": per_subject_counts,
+        "errors": errors
+    }
+
 def insert_question(q, subject="Biology"):
     headers = {
         "apikey": SUPABASE_KEY,
