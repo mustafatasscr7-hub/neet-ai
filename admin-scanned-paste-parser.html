@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<meta name="robots" content="noindex, nofollow"/>
+<title>Scanned PDF Parser (Mathpix) — NEET-AI Admin</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Inter', sans-serif; background: #0d0d0d; color: #ececec; min-height: 100vh; }
+
+  #gateOverlay { position: fixed; inset: 0; background: #0d0d0d; display: flex; align-items: center; justify-content: center; z-index: 999; }
+  .gate-box { background: #111; border: 1px solid #2a2a2a; border-radius: 14px; padding: 32px; width: 100%; max-width: 340px; text-align: center; }
+  .gate-box h1 { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
+  .gate-box p { font-size: 12px; color: #666; margin-bottom: 20px; }
+  .gate-box input { width: 100%; background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 8px; padding: 10px 14px; color: #ececec; font-size: 14px; font-family: 'Inter', sans-serif; outline: none; margin-bottom: 12px; }
+  .gate-box input:focus { border-color: #4f8ef7; }
+  .gate-box button { width: 100%; background: #4f8ef7; border: none; border-radius: 8px; padding: 10px; color: white; font-size: 13px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
+  .gate-box button:hover { background: #3b7de8; }
+  .gate-error { font-size: 12px; color: #ef4444; margin-top: 10px; min-height: 14px; }
+
+  #dashboard { display: none; max-width: 900px; margin: 0 auto; padding: 24px; }
+  .db-header { margin-bottom: 6px; }
+  .db-header h1 { font-size: 18px; font-weight: 700; }
+  .db-header h1 span { color: #4f8ef7; }
+  .db-header p { font-size: 12px; color: #666; margin-top: 4px; margin-bottom: 20px; }
+  .logout-row { display: flex; justify-content: flex-end; margin-bottom: 12px; }
+  .logout-btn { background: transparent; border: 1px solid #2a2a2a; color: #888; padding: 6px 14px; border-radius: 8px; font-size: 12px; cursor: pointer; font-family: 'Inter', sans-serif; }
+  .logout-btn:hover { color: #ccc; border-color: #3a3a3a; }
+
+  .panel { background: #111; border: 1px solid #1e1e1e; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  .panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: #888; margin-bottom: 12px; }
+
+  .dest-picker { display: flex; gap: 10px; margin-bottom: 16px; }
+  .dest-btn { flex: 1; background: #0d0d0d; border: 1px solid #2a2a2a; color: #ccc; padding: 12px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; text-align: center; }
+  .dest-btn:hover { border-color: #4f8ef750; }
+  .dest-btn.active { border-color: #4f8ef7; background: #4f8ef712; color: #4f8ef7; }
+
+  .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+  .field { margin-bottom: 0; }
+  .field label { display: block; font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 5px; }
+  .field input, .field select, .field textarea {
+    width: 100%; background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 6px; padding: 8px 10px;
+    color: #ececec; font-size: 13px; font-family: 'Inter', sans-serif; outline: none;
+  }
+  .field input:focus, .field select:focus, .field textarea:focus { border-color: #4f8ef7; }
+
+  #pasteTextarea { width: 100%; min-height: 220px; background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 8px; padding: 12px; color: #ececec; font-size: 12.5px; font-family: 'SF Mono', Consolas, monospace; outline: none; resize: vertical; margin-bottom: 12px; }
+  #pasteTextarea:focus { border-color: #4f8ef7; }
+
+  .action-btn { background: #1a1a1a; border: 1px solid #2a2a2a; color: #ececec; padding: 9px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
+  .action-btn:hover { border-color: #4f8ef7; color: #4f8ef7; }
+  .action-btn.primary { background: #4f8ef7; border-color: #4f8ef7; color: white; }
+  .action-btn.primary:hover { background: #3b7de8; }
+  .action-btn.publish { background: #2e7d32; border-color: #2e7d32; color: white; }
+  .action-btn.publish:hover { background: #256428; }
+  .action-btn.danger:hover { border-color: #ef4444; color: #ef4444; }
+  .action-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  #summaryBar { display: none; align-items: center; gap: 14px; flex-wrap: wrap; background: #111; border: 1px solid #1e1e1e; border-radius: 10px; padding: 14px 16px; margin-bottom: 16px; }
+  #summaryBar .stat { font-size: 12px; color: #aaa; }
+  #summaryBar .stat b { color: #ececec; font-size: 14px; }
+  #summaryBar .spacer { flex: 1; }
+
+  #statusBanner { display: none; border-radius: 10px; padding: 12px 14px; margin-bottom: 16px; font-size: 13px; }
+  #statusBanner.success { display: block; background: #4caf5020; color: #4caf50; border: 1px solid #4caf5050; }
+  #statusBanner.error { display: block; background: #ef444420; color: #ef4444; border: 1px solid #ef444450; }
+
+  .q-block { background: #111; border: 1px solid #1e1e1e; border-radius: 10px; padding: 16px; margin-bottom: 14px; }
+  .q-block.is-saved { opacity: 0.55; }
+  .q-block-header { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .q-number { font-size: 13px; font-weight: 700; color: #4f8ef7; }
+  .q-saved-badge { font-size: 11px; background: #4ade8020; color: #4ade80; padding: 2px 8px; border-radius: 20px; font-weight: 600; }
+  .q-block-actions { margin-left: auto; }
+  .q-block-actions button { background: transparent; border: 1px solid #2a2a2a; color: #888; padding: 5px 10px; border-radius: 6px; font-size: 11px; cursor: pointer; font-family: 'Inter', sans-serif; }
+  .q-block-actions button:hover { border-color: #ef4444; color: #ef4444; }
+
+  .q-field { margin-bottom: 10px; }
+  .q-field label { display: block; font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 5px; }
+  .editable {
+    width: 100%; min-height: 20px; background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 6px; padding: 8px 10px;
+    color: #ececec; font-size: 13px; font-family: 'Inter', sans-serif; outline: none; white-space: pre-wrap; word-break: break-word;
+  }
+  .editable:focus { border-color: #4f8ef7; }
+  .math-preview { margin-top: 6px; padding: 8px 10px; background: #0d0d0d; border: 1px dashed #2a2a2a; border-radius: 6px; font-size: 13px; color: #ececec; overflow-x: auto; display: none; }
+  .math-preview.visible { display: block; }
+  .math-preview .katex-display { margin: 4px 0; }
+
+  .q-options-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .q-option-wrap { border: 1px solid transparent; border-radius: 8px; padding: 6px; transition: border-color 0.15s; }
+  .q-option-wrap.correct { border-color: #4ade80; background: #4ade8010; }
+  .opt-label-row { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+  .opt-badge {
+    width: 22px; height: 22px; border-radius: 50%; border: 1px solid #2a2a2a; background: #0d0d0d; color: #888;
+    display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; cursor: pointer;
+    flex-shrink: 0; transition: all 0.15s; font-family: 'Inter', sans-serif;
+  }
+  .opt-badge:hover { border-color: #4ade80; color: #4ade80; }
+  .q-option-wrap.correct .opt-badge { background: #4ade80; border-color: #4ade80; color: #0d0d0d; }
+  .opt-hint { font-size: 10px; color: #555; }
+
+  .q-meta-grid { display: grid; grid-template-columns: 1fr 100px 140px; gap: 10px; }
+
+  .empty-hint { text-align: center; padding: 40px; color: #555; font-size: 13px; }
+</style>
+</head>
+<body>
+
+<div id="gateOverlay">
+  <div class="gate-box">
+    <h1>Scanned PDF Parser</h1>
+    <p>Internal tool — enter admin password</p>
+    <input type="password" id="gatePassword" placeholder="Password" autocomplete="off"/>
+    <button onclick="verifyPassword()">Enter</button>
+    <div class="gate-error" id="gateError"></div>
+  </div>
+</div>
+
+<div id="dashboard">
+  <div class="logout-row">
+    <button class="logout-btn" onclick="logout()">Log out</button>
+  </div>
+  <div class="db-header">
+    <h1>NEET<span>-AI</span> Scanned PDF Parser (Mathpix) — Mock Tests &amp; PYQ Bank</h1>
+    <p>For scanned PDFs only, where Mathpix produced raw LaTeX text instead of structured data. Paste that LaTeX below — this does not replace or touch admin-mocktest-upload.html or admin-pdf-review.html, it's a manual-paste alternative for scanned sources.</p>
+  </div>
+
+  <div class="panel">
+    <h2>1. Destination</h2>
+    <div class="dest-picker" id="destPicker">
+      <button type="button" class="dest-btn active" data-dest="mocktest" onclick="selectDestination('mocktest')">Mock Test</button>
+      <button type="button" class="dest-btn" data-dest="pyq" onclick="selectDestination('pyq')">PYQ Bank</button>
+    </div>
+
+    <div class="field-row">
+      <div class="field">
+        <label>Subject</label>
+        <select id="subjectSelect">
+          <option value="Physics">Physics</option>
+          <option value="Chemistry">Chemistry</option>
+          <option value="Biology">Biology</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Default Chapter</label>
+        <input type="text" id="defaultChapterInput" placeholder="e.g. Thermodynamics"/>
+      </div>
+    </div>
+
+    <div class="field" id="mockTestTitleField">
+      <label>Mock Test Title</label>
+      <input type="text" id="mockTestTitleInput" placeholder="e.g. NEET 2026 Mock Test 3"/>
+    </div>
+
+    <h2 style="margin-top:16px;">2. Paste Mathpix LaTeX output</h2>
+    <textarea id="pasteTextarea" placeholder="\item[1.] Question text... [AIPMT 2007]&#10;(A) option (B) option (C) option (D) option&#10;\item[2.] ..."></textarea>
+    <button type="button" class="action-btn primary" onclick="parsePastedText()">Parse Text</button>
+    <div id="parseHint" style="font-size:11px;color:#666;margin-top:8px;"></div>
+  </div>
+
+  <div id="statusBanner"></div>
+
+  <div id="summaryBar">
+    <div class="stat"><b id="statQuestionCount">0</b> question(s) parsed</div>
+    <div class="stat"><b id="statSavedCount">0</b> saved</div>
+    <div class="spacer"></div>
+    <button type="button" class="action-btn danger" onclick="clearAllBlocks()">Clear All</button>
+    <button type="button" class="action-btn" onclick="addBlankQuestion()">+ Add blank question</button>
+    <button type="button" class="action-btn primary" onclick="saveAll()">Save All</button>
+    <button type="button" class="action-btn publish" id="publishBtn" style="display:none;" onclick="publishMockTest()">Publish Test</button>
+  </div>
+
+  <div id="blocksContainer"></div>
+</div>
+
+<script>
+  const API_BASE = 'https://neet-ai-production.up.railway.app';
+  let adminKey = sessionStorage.getItem('admin_key') || '';
+  let destination = 'mocktest'; // 'mocktest' | 'pyq'
+  let blocks = [];
+  let blockIdSeq = 0;
+  let currentMockTestId = null; // set once the first save creates the mock_tests row
+  // Cumulative per-subject saved counts for the current mock test, across possibly multiple
+  // paste+save rounds (e.g. Physics section pasted and saved, then Chemistry, then Biology,
+  // all into the same mock_test_id) -- mark-processed needs the running total, not just
+  // whatever the most recent save's subject was, or it would zero out the other two subjects.
+  let savedCountsBySubject = { Physics: 0, Chemistry: 0, Biology: 0 };
+
+  function authHeaders(extra) {
+    return Object.assign({ 'X-Admin-Key': adminKey }, extra || {});
+  }
+
+  function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str == null ? '' : String(str);
+    return div.innerHTML;
+  }
+
+  // Reused verbatim from mocktest.html/mockresults.html/personalised-test.html/admin-dashboard.html
+  // -- do not fork this logic, copy it as-is if it ever changes there.
+  function renderMathInText(text, plainTransform) {
+    if (!text) return '';
+    const parts = [];
+    let lastIndex = 0;
+    const re = /\$\$([^$]+)\$\$|\$([^$\n]+)\$/g;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      if (m.index > lastIndex) parts.push({ type: 'text', value: text.slice(lastIndex, m.index) });
+      parts.push(m[1] !== undefined ? { type: 'display', value: m[1].trim() } : { type: 'inline', value: m[2].trim() });
+      lastIndex = re.lastIndex;
+    }
+    if (lastIndex < text.length) parts.push({ type: 'text', value: text.slice(lastIndex) });
+
+    return parts.map(p => {
+      if (p.type === 'text') {
+        const escaped = escapeHtml(p.value);
+        return plainTransform ? plainTransform(escaped) : escaped;
+      }
+      try {
+        return katex.renderToString(p.value, { displayMode: p.type === 'display', throwOnError: false });
+      } catch (e) {
+        return escapeHtml(p.type === 'display' ? '$$' + p.value + '$$' : '$' + p.value + '$');
+      }
+    }).join('');
+  }
+
+  async function describeHttpError(res) {
+    try {
+      const body = await res.json();
+      return body.error || body.detail || `HTTP ${res.status}`;
+    } catch (e) {
+      return `HTTP ${res.status}`;
+    }
+  }
+
+  async function verifyPassword() {
+    const pw = document.getElementById('gatePassword').value;
+    const errEl = document.getElementById('gateError');
+    errEl.textContent = '';
+    try {
+      const res = await fetch(`${API_BASE}/admin/verify`, { method: 'POST', headers: authHeaders({ 'X-Admin-Key': pw }) });
+      if (res.status === 200) {
+        adminKey = pw;
+        sessionStorage.setItem('admin_key', adminKey);
+        enterDashboard();
+      } else if (res.status === 429) {
+        const data = await res.json().catch(() => ({}));
+        errEl.textContent = data.detail || 'Too many failed attempts. Try again later.';
+      } else {
+        errEl.textContent = 'Wrong password.';
+      }
+    } catch (e) {
+      errEl.textContent = 'Could not reach server.';
+    }
+  }
+
+  document.getElementById('gatePassword').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') verifyPassword();
+  });
+
+  function logout() {
+    sessionStorage.removeItem('admin_key');
+    adminKey = '';
+    document.getElementById('dashboard').style.display = 'none';
+    document.getElementById('gateOverlay').style.display = 'flex';
+    document.getElementById('gatePassword').value = '';
+  }
+
+  function enterDashboard() {
+    document.getElementById('gateOverlay').style.display = 'none';
+    document.getElementById('dashboard').style.display = 'block';
+  }
+
+  if (adminKey) enterDashboard();
+
+  // ---------------- Destination toggle ----------------
+
+  function selectDestination(dest) {
+    destination = dest;
+    document.querySelectorAll('.dest-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.dest === dest));
+    document.getElementById('mockTestTitleField').style.display = dest === 'mocktest' ? 'block' : 'none';
+    document.getElementById('publishBtn').style.display = 'none'; // hidden again until a fresh mock-test save
+    // Switching destination mid-session invalidates any mock_test_id already created (a PYQ
+    // save doesn't need one, and a second mock test shouldn't silently reuse the first's id).
+    currentMockTestId = null;
+    savedCountsBySubject = { Physics: 0, Chemistry: 0, Biology: 0 };
+  }
+  selectDestination('mocktest');
+
+  // ---------------- Mathpix LaTeX parsing ----------------
+
+  // Strips a couple of always-safe-to-remove LaTeX document wrappers Mathpix commonly emits
+  // around the whole paste. Anything else (itemize wrappers around JUST the options) is handled
+  // per-question inside parseQuestionChunk, since those can't be safely stripped globally.
+  function cleanupLatexWrappers(text) {
+    return text
+      .replace(/\\begin\{document\}/g, '')
+      .replace(/\\end\{document\}/g, '')
+      .replace(/\\documentclass(\[[^\]]*\])?\{[^}]*\}/g, '')
+      .trim();
+  }
+
+  // [SOURCE YEAR] tag, e.g. "[AIPMT 2007]" -- a bracket group containing a 4-digit year, NOT
+  // part of a \item[...] marker (those are option/question markers, not source tags).
+  function extractSourceTag(chunk) {
+    const re = /\[([^\[\]]*?(\d{4})[^\[\]]*)\]/g;
+    let m;
+    while ((m = re.exec(chunk)) !== null) {
+      const precedingText = chunk.slice(Math.max(0, m.index - 5), m.index);
+      if (/\\item\s*$/.test(precedingText)) continue; // this is a \item[...] marker, not a tag
+      return {
+        sourceTag: m[1].trim(),
+        year: parseInt(m[2], 10),
+        cleaned: chunk.slice(0, m.index) + chunk.slice(m.index + m[0].length)
+      };
+    }
+    return { sourceTag: null, year: null, cleaned: chunk };
+  }
+
+  // Handles BOTH option styles: inline "(A) text (B) text (C) text (D) text" and nested
+  // "\item[(A)] text \item[(B)] text ..." itemize markers.
+  function extractOptions(chunk) {
+    const nestedRe = /\\item\[\(([A-Da-d])\)\]/g;
+    const nestedMatches = [...chunk.matchAll(nestedRe)];
+    if (nestedMatches.length >= 4) {
+      // The nested style wraps its \item[(A)]... markers in \begin{itemize}...\end{itemize},
+      // which sits between the stem and the first marker -- strip it off the stem too, not
+      // just from each option's own text.
+      const stem = chunk.slice(0, nestedMatches[0].index).replace(/\\begin\{itemize\}\s*$/, '');
+      const options = { a: '', b: '', c: '', d: '' };
+      for (let i = 0; i < nestedMatches.length; i++) {
+        const letter = nestedMatches[i][1].toLowerCase();
+        const start = nestedMatches[i].index + nestedMatches[i][0].length;
+        const end = i + 1 < nestedMatches.length ? nestedMatches[i + 1].index : chunk.length;
+        let text = chunk.slice(start, end);
+        text = text.replace(/\\begin\{itemize\}|\\end\{itemize\}/g, '').trim();
+        if (options.hasOwnProperty(letter)) options[letter] = text;
+      }
+      return { stem, options };
+    }
+
+    // Inline style: marker must be preceded by whitespace/start-of-string so it doesn't fire
+    // on a parenthesized letter inside a formula (same heuristic already used in mocktest.html's
+    // (\s)(\([A-E]\)\s) line-break regex).
+    const inlineRe = /(?:^|\s)\(([A-Da-d])\)\s*/g;
+    const inlineMatches = [...chunk.matchAll(inlineRe)];
+    if (inlineMatches.length >= 4) {
+      const stem = chunk.slice(0, inlineMatches[0].index);
+      const options = { a: '', b: '', c: '', d: '' };
+      for (let i = 0; i < inlineMatches.length; i++) {
+        const letter = inlineMatches[i][1].toLowerCase();
+        const start = inlineMatches[i].index + inlineMatches[i][0].length;
+        const end = i + 1 < inlineMatches.length ? inlineMatches[i + 1].index : chunk.length;
+        if (options.hasOwnProperty(letter)) options[letter] = chunk.slice(start, end).trim();
+      }
+      return { stem, options };
+    }
+
+    // No 4-option pattern detected -- whole chunk becomes the stem, options left blank for
+    // manual entry (matches admin-pdf-review.html's "review, don't guess silently" posture).
+    return { stem: chunk, options: { a: '', b: '', c: '', d: '' } };
+  }
+
+  function parseQuestionChunk(rawChunk) {
+    const { sourceTag, year, cleaned } = extractSourceTag(rawChunk);
+    const { stem, options } = extractOptions(cleaned);
+    return {
+      question: stem.trim(),
+      option_a: options.a, option_b: options.b, option_c: options.c, option_d: options.d,
+      source_tag: sourceTag, year
+    };
+  }
+
+  function parseMathpixText(rawText) {
+    const text = cleanupLatexWrappers(rawText);
+    const boundaryRe = /\\item\[\s*\d+\.\s*\]/g;
+    const boundaries = [...text.matchAll(boundaryRe)];
+    if (boundaries.length === 0) return [];
+    const parsed = [];
+    for (let i = 0; i < boundaries.length; i++) {
+      const start = boundaries[i].index + boundaries[i][0].length;
+      const end = i + 1 < boundaries.length ? boundaries[i + 1].index : text.length;
+      parsed.push(parseQuestionChunk(text.slice(start, end)));
+    }
+    return parsed;
+  }
+
+  function parsePastedText() {
+    const raw = document.getElementById('pasteTextarea').value;
+    const hintEl = document.getElementById('parseHint');
+    if (!raw.trim()) { hintEl.textContent = 'Paste some Mathpix output first.'; return; }
+    const parsedQuestions = parseMathpixText(raw);
+    if (parsedQuestions.length === 0) {
+      hintEl.textContent = 'No \\item[N.] question markers found -- check the pasted text matches the expected Mathpix format.';
+      hintEl.style.color = '#ef4444';
+      return;
+    }
+    const defaultChapter = document.getElementById('defaultChapterInput').value.trim();
+    blocks = parsedQuestions.map(q => ({
+      id: 'b' + (blockIdSeq++),
+      question: q.question, option_a: q.option_a, option_b: q.option_b, option_c: q.option_c, option_d: q.option_d,
+      correct_answer: '', chapter: defaultChapter, source_tag: q.source_tag || '', year: q.year,
+      saved: false
+    }));
+    const missingOptions = blocks.filter(b => !b.option_a && !b.option_b && !b.option_c && !b.option_d).length;
+    hintEl.style.color = '#4ade80';
+    hintEl.textContent = `Parsed ${blocks.length} question(s).` + (missingOptions ? ` ${missingOptions} had no options detected -- fill those in manually.` : '');
+    renderAllBlocks();
+    updateSummaryBar();
+    document.getElementById('summaryBar').style.display = 'flex';
+    document.getElementById('statusBanner').className = '';
+  }
+
+  // ---------------- Block rendering ----------------
+
+  function findBlockIndex(id) { return blocks.findIndex(b => b.id === id); }
+
+  function optionWrapClass(block, letter) {
+    return 'q-option-wrap' + (block.correct_answer === letter ? ' correct' : '');
+  }
+
+  function blockTemplate(block, displayIndex) {
+    const b = block;
+    const letters = ['a', 'b', 'c', 'd'];
+    return `
+    <div class="q-block${b.saved ? ' is-saved' : ''}" id="block-${b.id}" data-id="${b.id}">
+      <div class="q-block-header">
+        <span class="q-number">Q${displayIndex}</span>
+        <span class="q-saved-badge" id="saved-badge-${b.id}" style="display:${b.saved ? 'inline-flex' : 'none'}">Saved</span>
+        <div class="q-block-actions">
+          <button type="button" onclick="removeBlock('${b.id}')">Remove</button>
+        </div>
+      </div>
+
+      <div class="q-field">
+        <label>Question</label>
+        <div class="editable" contenteditable="true" id="q-text-${b.id}"
+             oninput="onFieldInput('${b.id}', 'question', 'q-text-${b.id}')"
+             onpaste="handlePlainPaste(event)">${escapeHtml(b.question)}</div>
+        <div class="math-preview" id="q-text-${b.id}-preview"></div>
+      </div>
+
+      <div class="q-options-grid">
+        ${letters.map(l => `
+        <div class="${optionWrapClass(b, l)}" id="opt-wrap-${l}-${b.id}">
+          <div class="opt-label-row">
+            <div class="opt-badge" onclick="setCorrectAnswer('${b.id}', '${l}')" title="Mark ${l.toUpperCase()} as the correct answer">${l.toUpperCase()}</div>
+            <span class="opt-hint">click to mark correct</span>
+          </div>
+          <div class="editable" contenteditable="true" id="opt-${l}-${b.id}"
+               oninput="onFieldInput('${b.id}', 'option_${l}', 'opt-${l}-${b.id}')"
+               onpaste="handlePlainPaste(event)">${escapeHtml(b['option_' + l])}</div>
+          <div class="math-preview" id="opt-${l}-${b.id}-preview"></div>
+        </div>`).join('')}
+      </div>
+
+      <div class="q-meta-grid" style="margin-top:12px;">
+        <div class="field"><label>Chapter</label><input type="text" id="chapter-${b.id}" value="${escapeHtml(b.chapter || '')}" oninput="onMetaInput('${b.id}','chapter','chapter-${b.id}')"/></div>
+        <div class="field"><label>Year</label><input type="number" id="year-${b.id}" value="${b.year != null ? b.year : ''}" oninput="onMetaInput('${b.id}','year','year-${b.id}',true)"/></div>
+        <div class="field"><label>Source tag</label><input type="text" id="source-${b.id}" value="${escapeHtml(b.source_tag || '')}" placeholder="e.g. AIPMT 2007" oninput="onMetaInput('${b.id}','source_tag','source-${b.id}')"/></div>
+      </div>
+    </div>`;
+  }
+
+  function renderAllBlocks() {
+    const container = document.getElementById('blocksContainer');
+    if (blocks.length === 0) {
+      container.innerHTML = '<div class="empty-hint">Paste Mathpix output above and click "Parse Text" to get started.</div>';
+      return;
+    }
+    container.innerHTML = blocks.map((b, i) => blockTemplate(b, i + 1)).join('');
+    blocks.forEach(b => {
+      updateFieldPreview('q-text-' + b.id);
+      ['a', 'b', 'c', 'd'].forEach(l => updateFieldPreview('opt-' + l + '-' + b.id));
+    });
+  }
+
+  function updateFieldPreview(fieldId) {
+    const el = document.getElementById(fieldId);
+    const previewEl = document.getElementById(fieldId + '-preview');
+    if (!el || !previewEl) return;
+    const text = el.textContent;
+    if (!text.trim()) { previewEl.innerHTML = ''; previewEl.classList.remove('visible'); return; }
+    previewEl.innerHTML = renderMathInText(text);
+    previewEl.classList.add('visible');
+  }
+
+  // Forces plain-text paste into contenteditable fields -- pasting from a PDF viewer/Word often
+  // carries rich HTML/styles that would otherwise get inserted as real markup.
+  function handlePlainPaste(e) {
+    e.preventDefault();
+    const text = (e.clipboardData || window.clipboardData).getData('text/plain');
+    document.execCommand('insertText', false, text);
+  }
+
+  function onFieldInput(id, prop, fieldId) {
+    const block = blocks[findBlockIndex(id)];
+    if (!block) return;
+    block[prop] = document.getElementById(fieldId).textContent;
+    updateFieldPreview(fieldId);
+  }
+
+  function onMetaInput(id, prop, fieldId, isNumber) {
+    const block = blocks[findBlockIndex(id)];
+    if (!block) return;
+    const raw = document.getElementById(fieldId).value;
+    block[prop] = isNumber ? (raw ? parseInt(raw, 10) : null) : raw;
+  }
+
+  function setCorrectAnswer(id, letter) {
+    const block = blocks[findBlockIndex(id)];
+    if (!block) return;
+    block.correct_answer = block.correct_answer === letter ? '' : letter;
+    ['a', 'b', 'c', 'd'].forEach(l => {
+      document.getElementById(`opt-wrap-${l}-${id}`).className = optionWrapClass(block, l);
+    });
+  }
+
+  function removeBlock(id) {
+    if (!confirm('Remove this question block?')) return;
+    const idx = findBlockIndex(id);
+    if (idx === -1) return;
+    blocks.splice(idx, 1);
+    renderAllBlocks();
+    updateSummaryBar();
+    document.getElementById('summaryBar').style.display = blocks.length ? 'flex' : 'none';
+  }
+
+  function clearAllBlocks() {
+    if (blocks.length === 0) return;
+    const unsavedCount = blocks.filter(b => !b.saved).length;
+    const msg = unsavedCount > 0
+      ? `Clear all ${blocks.length} question block(s)? ${unsavedCount} of them are not saved yet and will be lost.`
+      : `Clear all ${blocks.length} question block(s)?`;
+    if (!confirm(msg)) return;
+    blocks = [];
+    renderAllBlocks();
+    updateSummaryBar();
+    document.getElementById('summaryBar').style.display = 'none';
+  }
+
+  function addBlankQuestion() {
+    const defaultChapter = document.getElementById('defaultChapterInput').value.trim();
+    blocks.push({
+      id: 'b' + (blockIdSeq++), question: '', option_a: '', option_b: '', option_c: '', option_d: '',
+      correct_answer: '', chapter: defaultChapter, source_tag: '', year: null, saved: false
+    });
+    document.getElementById('summaryBar').style.display = 'flex';
+    renderAllBlocks();
+    updateSummaryBar();
+    const el = document.getElementById('blocksContainer');
+    window.scrollTo(0, document.body.scrollHeight);
+  }
+
+  function updateSummaryBar() {
+    document.getElementById('statQuestionCount').textContent = blocks.length;
+    document.getElementById('statSavedCount').textContent = blocks.filter(b => b.saved).length;
+  }
+
+  function showStatus(message, isError) {
+    const el = document.getElementById('statusBanner');
+    el.textContent = message;
+    el.className = isError ? 'error' : 'success';
+  }
+
+  // ---------------- Save ----------------
+
+  async function ensureMockTestId() {
+    if (currentMockTestId) return currentMockTestId;
+    const title = document.getElementById('mockTestTitleInput').value.trim();
+    if (!title) { showStatus('Mock Test Title is required.', true); return null; }
+    const res = await fetch(`${API_BASE}/admin/mock-test-create`, {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ title })
+    });
+    if (res.status === 401) { logout(); return null; }
+    if (!res.ok) { showStatus('Could not create mock test: ' + await describeHttpError(res), true); return null; }
+    const data = await res.json();
+    if (data.error) { showStatus('Could not create mock test: ' + data.error, true); return null; }
+    currentMockTestId = data.mock_test_id;
+    return currentMockTestId;
+  }
+
+  async function saveAll() {
+    const subject = document.getElementById('subjectSelect').value;
+    const unsaved = blocks.filter(b => !b.saved);
+    if (unsaved.length === 0) { showStatus('Nothing to save.', true); return; }
+    const skipped = unsaved.filter(b => !b.question.trim());
+    const toSave = unsaved.filter(b => b.question.trim());
+    if (toSave.length === 0) { showStatus('Nothing to save -- every remaining block is blank.', true); return; }
+
+    try {
+      if (destination === 'mocktest') {
+        const mockTestId = await ensureMockTestId();
+        if (!mockTestId) return;
+        const startOrder = blocks.filter(b => b.saved).length;
+        const payload = toSave.map((b, i) => ({
+          mock_test_id: mockTestId,
+          question_order: startOrder + i + 1,
+          subject,
+          chapter: b.chapter || null,
+          question: b.question,
+          option_a: b.option_a, option_b: b.option_b, option_c: b.option_c, option_d: b.option_d,
+          correct_answer: b.correct_answer || '',
+          year: b.year
+        }));
+        const res = await fetch(`${API_BASE}/admin/mock-test-bulk-create`, {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ questions: payload })
+        });
+        if (res.status === 401) return logout();
+        if (!res.ok) { showStatus('Save failed: ' + await describeHttpError(res), true); return; }
+        const data = await res.json();
+        if (data.error) { showStatus('Save failed: ' + data.error, true); return; }
+
+        markSaved(toSave);
+        savedCountsBySubject[subject] = (savedCountsBySubject[subject] || 0) + toSave.length;
+        const savedTotal = blocks.filter(b => b.saved).length;
+        fetch(`${API_BASE}/admin/mock-test-mark-processed`, {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({
+            id: mockTestId, status: 'completed', questions_extracted: savedTotal,
+            physics_count: savedCountsBySubject.Physics,
+            chemistry_count: savedCountsBySubject.Chemistry,
+            biology_count: savedCountsBySubject.Biology
+          })
+        }).catch(() => {});
+        document.getElementById('publishBtn').style.display = 'inline-block';
+        showStatus(`${toSave.length} question(s) saved to Mock Test.` + (skipped.length ? ` Skipped ${skipped.length} blank block(s).` : ''), false);
+      } else {
+        const payload = toSave.map(b => ({
+          subject,
+          chapter: b.chapter || null,
+          question: b.question,
+          option_a: b.option_a, option_b: b.option_b, option_c: b.option_c, option_d: b.option_d,
+          correct_answer: b.correct_answer || '',
+          year: b.year,
+          source_tag: b.source_tag || null
+        }));
+        const res = await fetch(`${API_BASE}/admin/pyq-bulk-create`, {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ questions: payload })
+        });
+        if (res.status === 401) return logout();
+        if (!res.ok) { showStatus('Save failed: ' + await describeHttpError(res), true); return; }
+        const data = await res.json();
+        if (data.error) { showStatus('Save failed: ' + data.error, true); return; }
+
+        markSaved(toSave);
+        showStatus(`${toSave.length} question(s) saved to PYQ Bank.` + (skipped.length ? ` Skipped ${skipped.length} blank block(s).` : ''), false);
+      }
+    } catch (e) {
+      showStatus('Save failed -- check connection.', true);
+    }
+  }
+
+  function markSaved(savedBlocks) {
+    savedBlocks.forEach(b => {
+      b.saved = true;
+      const badge = document.getElementById('saved-badge-' + b.id);
+      if (badge) badge.style.display = 'inline-flex';
+      const el = document.getElementById('block-' + b.id);
+      if (el) el.classList.add('is-saved');
+    });
+    updateSummaryBar();
+  }
+
+  async function publishMockTest() {
+    if (!currentMockTestId) return;
+    if (!confirm('Publish this test? It will immediately become visible to students in the mock test picker.')) return;
+    try {
+      const res = await fetch(`${API_BASE}/admin/mock-test-publish`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ id: currentMockTestId })
+      });
+      if (res.status === 401) return logout();
+      if (!res.ok) { showStatus('Publish failed: ' + await describeHttpError(res), true); return; }
+      const data = await res.json();
+      if (data.error) { showStatus('Publish failed: ' + data.error, true); return; }
+      showStatus('Published! Students will now see this test in their mock test picker.', false);
+    } catch (e) {
+      showStatus('Publish failed -- check connection.', true);
+    }
+  }
+
+  // Read-only state accessors for automated testing only - nothing in the real UI uses this.
+  window.__test = {
+    get blocks() { return blocks; },
+    get destination() { return destination; },
+    get currentMockTestId() { return currentMockTestId; },
+    parseMathpixText
+  };
+</script>
+</body>
+</html>

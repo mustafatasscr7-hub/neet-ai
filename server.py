@@ -290,6 +290,9 @@ class MockTestMarkProcessedRequest(BaseModel):
 class MockTestPublishRequest(BaseModel):
     id: int
 
+class MockTestCreateRequest(BaseModel):
+    title: str
+
 class MockTestQuestionCreate(BaseModel):
     mock_test_id: int
     question_order: int
@@ -1809,6 +1812,18 @@ def _update_mock_test_row(row_id, status: str, questions_extracted=None, physics
         )
     except Exception:
         pass
+
+@app.post("/admin/mock-test-create")
+def admin_mock_test_create(req: MockTestCreateRequest, _: None = Depends(verify_admin)):
+    # For admin-scanned-paste-parser.html -- a mock_tests row created directly from a title,
+    # with no PDF/scan step. Reuses the exact same _create_mock_test_row() helper /admin/mock-
+    # test-scan uses, just without the scanning that normally precedes it.
+    if not req.title or not req.title.strip():
+        return {"error": "Title is required"}
+    mock_test_id = _create_mock_test_row(req.title.strip(), None)
+    if mock_test_id is None:
+        return {"error": "Could not create mock test row"}
+    return {"mock_test_id": mock_test_id}
 
 @app.post("/admin/mock-test-scan")
 def admin_mock_test_scan(req: MockTestScanRequest, _: None = Depends(verify_admin), __: None = Depends(rate_limiter(5, 300))):
