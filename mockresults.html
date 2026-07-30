@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Results — NEET-AI</title>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: 'Inter', sans-serif; background: #0d0d0d; color: #ececec; min-height: 100vh; }
@@ -576,6 +578,35 @@ function generateScorecard() {
       return div.innerHTML;
     }
 
+    // Renders $$...$$ (display) and $...$ (inline) LaTeX via KaTeX, escaping everything else --
+    // same split-and-render approach as admin-pdf-review.html's math preview. This is a plain
+    // function declaration (not a const), so unlike AR_MARKER_RE/MATCH_LIST_ITEM_RE/SEQ_ITEM_RE
+    // above it's safe to call from renderQuestions('all') even though that runs synchronously
+    // near the top of this script -- function declarations are fully hoisted with their body,
+    // no TDZ risk regardless of where they're called from.
+    function renderMathInText(text) {
+      if (!text) return '';
+      const parts = [];
+      let lastIndex = 0;
+      const re = /\$\$([^$]+)\$\$|\$([^$\n]+)\$/g;
+      let m;
+      while ((m = re.exec(text)) !== null) {
+        if (m.index > lastIndex) parts.push({ type: 'text', value: text.slice(lastIndex, m.index) });
+        parts.push(m[1] !== undefined ? { type: 'display', value: m[1].trim() } : { type: 'inline', value: m[2].trim() });
+        lastIndex = re.lastIndex;
+      }
+      if (lastIndex < text.length) parts.push({ type: 'text', value: text.slice(lastIndex) });
+
+      return parts.map(p => {
+        if (p.type === 'text') return escapeHtml(p.value);
+        try {
+          return katex.renderToString(p.value, { displayMode: p.type === 'display', throwOnError: false });
+        } catch (e) {
+          return escapeHtml(p.type === 'display' ? '$$' + p.value + '$$' : '$' + p.value + '$');
+        }
+      }).join('');
+    }
+
     // ---------------- Sequential steps / ordered-list formatting ----------------
     // Detects a stem that lists several (i)/(ii)/(iii)... or (a)/(b)/(c)... or (1)/(2)/(3)...
     // items run together in one paragraph (e.g. "correct sequence of steps is (i) ... (ii) ...
@@ -644,12 +675,12 @@ function generateScorecard() {
     // conversion) -- this keeps that exactly unchanged for every question that isn't
     // confidently detected as one of the three special formats.
     function applySpecialFormattingOnly_ML(text) {
-      const matchListHtml = renderMatchListHtml_ML(text, t => t);
+      const matchListHtml = renderMatchListHtml_ML(text, renderMathInText);
       if (matchListHtml !== null) return matchListHtml;
-      const arHtml = renderAssertionReasonHtml_AR(text, t => t);
+      const arHtml = renderAssertionReasonHtml_AR(text, renderMathInText);
       if (arHtml !== null) return arHtml;
-      const seqHtml = renderSequenceListHtml_SEQ(text, t => t);
-      return seqHtml !== null ? seqHtml : text;
+      const seqHtml = renderSequenceListHtml_SEQ(text, renderMathInText);
+      return seqHtml !== null ? seqHtml : renderMathInText(text);
     }
 
     function filterQuestions(filter, btn) {
@@ -685,7 +716,7 @@ function generateScorecard() {
           if (opt === correctAns) cls += ' correct-ans';
           if (opt === userAns && opt !== correctAns) cls += ' wrong-ans';
           const optImg = q['option_' + opt + '_diagram_url'] ? `<img class="q-diagram-img" src="${escapeHtml(q['option_' + opt + '_diagram_url'])}">` : '';
-          return `<div class="${cls}">${opt.toUpperCase()}) ${q['option_' + opt]}${optImg}</div>`;
+          return `<div class="${cls}">${opt.toUpperCase()}) ${renderMathInText(q['option_' + opt])}${optImg}</div>`;
         }).join('');
 
         const statusText = q.status === 'correct' ? t('mockresults','statusCorrect') : q.status === 'wrong' ? t('mockresults','statusWrong') : t('mockresults','statusSkipped');

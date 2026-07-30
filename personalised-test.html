@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Personalised Test — NEET-AI</title>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: 'Inter', sans-serif; background: #0d0d0d; color: #ececec; overflow-x: hidden; }
@@ -649,6 +651,36 @@
 
     function escapeHtml(str) {
       return String(str).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+    }
+
+    // Renders $$...$$ (display) and $...$ (inline) LaTeX via KaTeX, escaping everything else --
+    // same split-and-render approach as admin-pdf-review.html's math preview. plainTransform (if
+    // given) runs on each escaped plain-text segment only, e.g. to still apply <br> conversion
+    // without corrupting math segments or being re-escaped itself.
+    function renderMathInText(text, plainTransform) {
+      if (!text) return '';
+      const parts = [];
+      let lastIndex = 0;
+      const re = /\$\$([^$]+)\$\$|\$([^$\n]+)\$/g;
+      let m;
+      while ((m = re.exec(text)) !== null) {
+        if (m.index > lastIndex) parts.push({ type: 'text', value: text.slice(lastIndex, m.index) });
+        parts.push(m[1] !== undefined ? { type: 'display', value: m[1].trim() } : { type: 'inline', value: m[2].trim() });
+        lastIndex = re.lastIndex;
+      }
+      if (lastIndex < text.length) parts.push({ type: 'text', value: text.slice(lastIndex) });
+
+      return parts.map(p => {
+        if (p.type === 'text') {
+          const escaped = escapeHtml(p.value);
+          return plainTransform ? plainTransform(escaped) : escaped;
+        }
+        try {
+          return katex.renderToString(p.value, { displayMode: p.type === 'display', throwOnError: false });
+        } catch (e) {
+          return escapeHtml(p.type === 'display' ? '$$' + p.value + '$$' : '$' + p.value + '$');
+        }
+      }).join('');
     }
 
     // ---------- Tab switching ----------
@@ -1519,22 +1551,21 @@
 
     function formatQuestionTextInner(text) {
       if (!text) return '';
-      let formatted = text
+      return renderMathInText(text, escaped => escaped
         .replace(/\n/g, '<br>')
-        .replace(/(\s)(\([A-E]\)\s)/g, '<br>$2');
-      return formatted;
+        .replace(/(\s)(\([A-E]\)\s)/g, '<br>$2'));
     }
 
     // Used only by the post-test review screen below, which has always shown q.question
     // completely raw (no <br> conversion, no escaping) -- this keeps that exactly unchanged
     // for every question that isn't confidently detected as one of the three special formats.
     function applySpecialFormattingOnly_ML(text) {
-      const matchListHtml = renderMatchListHtml_ML(text, t => t);
+      const matchListHtml = renderMatchListHtml_ML(text, renderMathInText);
       if (matchListHtml !== null) return matchListHtml;
-      const arHtml = renderAssertionReasonHtml_AR(text, t => t);
+      const arHtml = renderAssertionReasonHtml_AR(text, renderMathInText);
       if (arHtml !== null) return arHtml;
-      const seqHtml = renderSequenceListHtml_SEQ(text, t => t);
-      return seqHtml !== null ? seqHtml : text;
+      const seqHtml = renderSequenceListHtml_SEQ(text, renderMathInText);
+      return seqHtml !== null ? seqHtml : renderMathInText(text);
     }
 
     function renderQuestion(index) {
@@ -1554,7 +1585,7 @@
           ${['a','b','c','d'].map(opt => (q['option_' + opt] || q['option_' + opt + '_diagram_url']) ? `
             <div class="option ${selectedAnswer === opt ? 'selected' : ''}" onclick="selectAnswer('${opt}')">
               <div class="option-label">${opt.toUpperCase()}</div>
-              <div>${q['option_' + opt]}</div>
+              <div>${renderMathInText(q['option_' + opt])}</div>
               ${q['option_' + opt + '_diagram_url'] ? `<img src="${q['option_' + opt + '_diagram_url']}" style="max-width:100%;border-radius:6px;margin-top:8px;border:1px solid #2a2a2a;">` : ''}
             </div>
           ` : '').join('')}
@@ -1832,7 +1863,7 @@
           if (opt === correctAns) cls += ' correct-ans';
           if (opt === userAns && opt !== correctAns) cls += ' wrong-ans';
           const optImg = q['option_' + opt + '_diagram_url'] ? `<img class="q-diagram-img" src="${escapeHtml(q['option_' + opt + '_diagram_url'])}">` : '';
-          return `<div class="${cls}">${opt.toUpperCase()}) ${q['option_' + opt]}${optImg}</div>`;
+          return `<div class="${cls}">${opt.toUpperCase()}) ${renderMathInText(q['option_' + opt])}${optImg}</div>`;
         }).join('');
 
         const statusText = q.status === 'correct' ? t('mockresults','statusCorrect') : q.status === 'wrong' ? t('mockresults','statusWrong') : t('mockresults','statusSkipped');

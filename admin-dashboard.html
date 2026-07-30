@@ -6,6 +6,8 @@
   <meta name="robots" content="noindex, nofollow"/>
   <title>PYQ Admin — NEET-AI</title>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: 'Inter', sans-serif; background: #0d0d0d; color: #ececec; min-height: 100vh; }
@@ -342,6 +344,33 @@
       return div.innerHTML;
     }
 
+    // Renders $$...$$ (display) and $...$ (inline) LaTeX via KaTeX, escaping everything else --
+    // same split-and-render approach as admin-pdf-review.html's math preview. A formula cut off
+    // mid-string (e.g. by the truncation these snippets already apply) just has no closing $, so
+    // it falls through untouched as escaped plain text rather than rendering garbled.
+    function renderMathInText(text) {
+      if (!text) return '';
+      const parts = [];
+      let lastIndex = 0;
+      const re = /\$\$([^$]+)\$\$|\$([^$\n]+)\$/g;
+      let m;
+      while ((m = re.exec(text)) !== null) {
+        if (m.index > lastIndex) parts.push({ type: 'text', value: text.slice(lastIndex, m.index) });
+        parts.push(m[1] !== undefined ? { type: 'display', value: m[1].trim() } : { type: 'inline', value: m[2].trim() });
+        lastIndex = re.lastIndex;
+      }
+      if (lastIndex < text.length) parts.push({ type: 'text', value: text.slice(lastIndex) });
+
+      return parts.map(p => {
+        if (p.type === 'text') return escapeHtml(p.value);
+        try {
+          return katex.renderToString(p.value, { displayMode: p.type === 'display', throwOnError: false });
+        } catch (e) {
+          return escapeHtml(p.type === 'display' ? '$$' + p.value + '$$' : '$' + p.value + '$');
+        }
+      }).join('');
+    }
+
     async function loadResults() {
       const tbody = document.getElementById('tableBody');
       tbody.innerHTML = '<tr><td colspan="7" class="loading-text">Loading...</td></tr>';
@@ -395,7 +424,7 @@
             <td>${row.id}</td>
             <td>${escapeHtml(row.subject)}</td>
             <td class="chapter-cell${chapterEmpty ? ' empty' : ''}">${chapterEmpty ? '(none)' : escapeHtml(row.chapter)}</td>
-            <td class="q-cell" title="${escapeHtml(row.question)}">${escapeHtml(qTruncated)}</td>
+            <td class="q-cell" title="${escapeHtml(row.question)}">${renderMathInText(qTruncated)}</td>
             <td class="answer-cell${answerEmpty ? ' empty' : ''}">${answerEmpty ? '(none)' : escapeHtml(row.correct_answer)}</td>
             <td><span class="active-badge ${row.is_active ? 'yes' : 'no'}">${row.is_active ? 'Active' : 'Inactive'}</span></td>
           </tr>`;
@@ -606,7 +635,7 @@
         const qSnippet = q ? (q.question || '').slice(0, 220) + ((q.question || '').length > 220 ? '…' : '') : '';
         const questionHtml = q
           ? `<div class="report-group-meta">${escapeHtml(q.subject || '')}${q.chapter ? ' • ' + escapeHtml(q.chapter) : ''}${q.is_active === false ? ' • INACTIVE' : ''}</div>
-             <div class="report-group-question">${escapeHtml(qSnippet)}</div>`
+             <div class="report-group-question">${renderMathInText(qSnippet)}</div>`
           : `<div class="report-deleted-note">This question no longer exists (already deleted).</div>`;
         return `
           <div class="report-group-card">
