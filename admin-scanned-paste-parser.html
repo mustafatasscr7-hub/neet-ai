@@ -69,14 +69,17 @@
   #statusBanner.success { display: block; background: #4caf5020; color: #4caf50; border: 1px solid #4caf5050; }
   #statusBanner.error { display: block; background: #ef444420; color: #ef4444; border: 1px solid #ef444450; }
 
-  .q-block { background: #111; border: 1px solid #1e1e1e; border-radius: 10px; padding: 16px; margin-bottom: 14px; }
-  .q-block.is-saved { opacity: 0.55; }
+  .q-block { background: #111; border: 1px solid #1e1e1e; border-left: 3px solid #1e1e1e; border-radius: 10px; padding: 16px; margin-bottom: 14px; }
+  .q-block.is-saved { border-left-color: #4ade80; }
   .q-block-header { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
   .q-number { font-size: 13px; font-weight: 700; color: #4f8ef7; }
   .q-saved-badge { font-size: 11px; background: #4ade8020; color: #4ade80; padding: 2px 8px; border-radius: 20px; font-weight: 600; }
-  .q-block-actions { margin-left: auto; }
+  .q-block-actions { margin-left: auto; display: flex; gap: 6px; }
   .q-block-actions button { background: transparent; border: 1px solid #2a2a2a; color: #888; padding: 5px 10px; border-radius: 6px; font-size: 11px; cursor: pointer; font-family: 'Inter', sans-serif; }
-  .q-block-actions button:hover { border-color: #ef4444; color: #ef4444; }
+  .q-block-actions .save-btn-card { border-color: #4f8ef750; color: #4f8ef7; }
+  .q-block-actions .save-btn-card:hover { border-color: #4f8ef7; background: #4f8ef712; }
+  .q-block-actions .save-btn-card:disabled { opacity: 0.5; cursor: not-allowed; }
+  .q-block-actions .remove-btn-card:hover { border-color: #ef4444; color: #ef4444; }
 
   .q-field { margin-bottom: 10px; }
   .q-field label { display: block; font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 5px; }
@@ -85,8 +88,9 @@
     color: #ececec; font-size: 13px; font-family: 'Inter', sans-serif; outline: none; white-space: pre-wrap; word-break: break-word;
   }
   .editable:focus { border-color: #4f8ef7; }
-  .math-preview { margin-top: 6px; padding: 8px 10px; background: #0d0d0d; border: 1px dashed #2a2a2a; border-radius: 6px; font-size: 13px; color: #ececec; overflow-x: auto; display: none; }
+  .math-preview { margin-top: 6px; padding: 16px 10px 8px; background: #11202b; border: 1px solid #1e3a4f; border-radius: 6px; font-size: 13px; color: #ececec; overflow-x: auto; display: none; position: relative; }
   .math-preview.visible { display: block; }
+  .math-preview::before { content: 'RENDERED PREVIEW'; position: absolute; top: 4px; left: 10px; font-size: 9px; font-weight: 700; letter-spacing: 0.06em; color: #4f8ef7; }
   .math-preview .katex-display { margin: 4px 0; }
 
   .q-options-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
@@ -179,7 +183,7 @@
 <script>
   const API_BASE = 'https://neet-ai-production.up.railway.app';
   let adminKey = sessionStorage.getItem('admin_key') || '';
-  let destination = 'mocktest'; // 'mocktest' | 'pyq'
+  let destination = null; // 'mocktest' | 'pyq' -- set by the selectDestination('mocktest') init call below
   let blocks = [];
   let blockIdSeq = 0;
   let currentMockTestId = null; // set once the first save creates the mock_tests row
@@ -279,6 +283,17 @@
   // ---------------- Destination toggle ----------------
 
   function selectDestination(dest) {
+    if (dest === destination) return;
+    // A block's savedRowId is an id in whichever table it was last saved to -- pyq and
+    // mock_test_questions are different tables with overlapping id spaces, so carrying a
+    // savedRowId across a destination switch would make a later "Update" PATCH the wrong row
+    // (or a nonexistent one) in the new destination's table. The rows already saved under the
+    // old destination are untouched in the DB either way -- this only forgets the local link to
+    // them, so editing one of those questions again here creates a new row instead of updating.
+    const alreadySavedCount = blocks.filter(b => b.savedRowId).length;
+    if (alreadySavedCount > 0 && !confirm(`${alreadySavedCount} question(s) here are already saved. Switching destination won't touch what's already in the database, but if you edit and re-save one of them now, it'll be saved as a NEW question instead of updating the old one. Continue?`)) {
+      return;
+    }
     destination = dest;
     document.querySelectorAll('.dest-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.dest === dest));
     document.getElementById('mockTestTitleField').style.display = dest === 'mocktest' ? 'block' : 'none';
@@ -287,6 +302,9 @@
     // save doesn't need one, and a second mock test shouldn't silently reuse the first's id).
     currentMockTestId = null;
     savedCountsBySubject = { Physics: 0, Chemistry: 0, Biology: 0 };
+    blocks.forEach(b => { b.saved = false; b.savedRowId = null; });
+    renderAllBlocks();
+    updateSummaryBar();
   }
   selectDestination('mocktest');
 
@@ -403,7 +421,7 @@
       id: 'b' + (blockIdSeq++),
       question: q.question, option_a: q.option_a, option_b: q.option_b, option_c: q.option_c, option_d: q.option_d,
       correct_answer: '', chapter: defaultChapter, source_tag: q.source_tag || '', year: q.year,
-      saved: false
+      saved: false, savedRowId: null
     }));
     const missingOptions = blocks.filter(b => !b.option_a && !b.option_b && !b.option_c && !b.option_d).length;
     hintEl.style.color = '#4ade80';
@@ -431,7 +449,8 @@
         <span class="q-number">Q${displayIndex}</span>
         <span class="q-saved-badge" id="saved-badge-${b.id}" style="display:${b.saved ? 'inline-flex' : 'none'}">Saved</span>
         <div class="q-block-actions">
-          <button type="button" onclick="removeBlock('${b.id}')">Remove</button>
+          <button type="button" class="save-btn-card" id="save-btn-${b.id}" onclick="saveBlock('${b.id}')">${b.saved ? 'Update' : 'Save'}</button>
+          <button type="button" class="remove-btn-card" onclick="removeBlock('${b.id}')">Remove</button>
         </div>
       </div>
 
@@ -546,7 +565,7 @@
     const defaultChapter = document.getElementById('defaultChapterInput').value.trim();
     blocks.push({
       id: 'b' + (blockIdSeq++), question: '', option_a: '', option_b: '', option_c: '', option_d: '',
-      correct_answer: '', chapter: defaultChapter, source_tag: '', year: null, saved: false
+      correct_answer: '', chapter: defaultChapter, source_tag: '', year: null, saved: false, savedRowId: null
     });
     document.getElementById('summaryBar').style.display = 'flex';
     renderAllBlocks();
@@ -585,91 +604,206 @@
     return currentMockTestId;
   }
 
-  async function saveAll() {
-    const subject = document.getElementById('subjectSelect').value;
-    const unsaved = blocks.filter(b => !b.saved);
-    if (unsaved.length === 0) { showStatus('Nothing to save.', true); return; }
-    const skipped = unsaved.filter(b => !b.question.trim());
-    const toSave = unsaved.filter(b => b.question.trim());
-    if (toSave.length === 0) { showStatus('Nothing to save -- every remaining block is blank.', true); return; }
+  // A block is only ever a fresh INSERT once (savedRowId still null). After that, saving it
+  // again -- individually or via Save All -- is an UPDATE against that same row, so editing a
+  // saved question and re-saving never creates a duplicate.
 
+  async function markProcessedAfterMockTestSave(mockTestId, subject, insertedCount) {
+    if (insertedCount > 0) savedCountsBySubject[subject] = (savedCountsBySubject[subject] || 0) + insertedCount;
+    const savedTotal = blocks.filter(b => b.savedRowId).length;
+    await fetch(`${API_BASE}/admin/mock-test-mark-processed`, {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({
+        id: mockTestId, status: 'completed', questions_extracted: savedTotal,
+        physics_count: savedCountsBySubject.Physics,
+        chemistry_count: savedCountsBySubject.Chemistry,
+        biology_count: savedCountsBySubject.Biology
+      })
+    }).catch(() => {});
+    document.getElementById('publishBtn').style.display = 'inline-block';
+  }
+
+  function markInserted(block, rowId) {
+    block.saved = true;
+    block.savedRowId = rowId;
+    const badge = document.getElementById('saved-badge-' + block.id);
+    if (badge) badge.style.display = 'inline-flex';
+    const el = document.getElementById('block-' + block.id);
+    if (el) el.classList.add('is-saved');
+    const btn = document.getElementById('save-btn-' + block.id);
+    if (btn) btn.textContent = 'Update';
+    updateSummaryBar();
+  }
+
+  // ---------------- Individual per-card save (insert-or-update) ----------------
+
+  async function saveBlock(id) {
+    const block = blocks[findBlockIndex(id)];
+    if (!block) return;
+    if (!block.question.trim()) { showStatus('This question is blank -- nothing to save.', true); return; }
+    const subject = document.getElementById('subjectSelect').value;
+    const btn = document.getElementById('save-btn-' + id);
+    btn.disabled = true;
     try {
       if (destination === 'mocktest') {
         const mockTestId = await ensureMockTestId();
         if (!mockTestId) return;
-        const startOrder = blocks.filter(b => b.saved).length;
-        const payload = toSave.map((b, i) => ({
-          mock_test_id: mockTestId,
-          question_order: startOrder + i + 1,
-          subject,
-          chapter: b.chapter || null,
-          question: b.question,
-          option_a: b.option_a, option_b: b.option_b, option_c: b.option_c, option_d: b.option_d,
-          correct_answer: b.correct_answer || '',
-          year: b.year
-        }));
-        const res = await fetch(`${API_BASE}/admin/mock-test-bulk-create`, {
-          method: 'POST',
-          headers: authHeaders({ 'Content-Type': 'application/json' }),
-          body: JSON.stringify({ questions: payload })
-        });
-        if (res.status === 401) return logout();
-        if (!res.ok) { showStatus('Save failed: ' + await describeHttpError(res), true); return; }
-        const data = await res.json();
-        if (data.error) { showStatus('Save failed: ' + data.error, true); return; }
-
-        markSaved(toSave);
-        savedCountsBySubject[subject] = (savedCountsBySubject[subject] || 0) + toSave.length;
-        const savedTotal = blocks.filter(b => b.saved).length;
-        fetch(`${API_BASE}/admin/mock-test-mark-processed`, {
-          method: 'POST',
-          headers: authHeaders({ 'Content-Type': 'application/json' }),
-          body: JSON.stringify({
-            id: mockTestId, status: 'completed', questions_extracted: savedTotal,
-            physics_count: savedCountsBySubject.Physics,
-            chemistry_count: savedCountsBySubject.Chemistry,
-            biology_count: savedCountsBySubject.Biology
-          })
-        }).catch(() => {});
-        document.getElementById('publishBtn').style.display = 'inline-block';
-        showStatus(`${toSave.length} question(s) saved to Mock Test.` + (skipped.length ? ` Skipped ${skipped.length} blank block(s).` : ''), false);
+        if (block.savedRowId) {
+          const res = await fetch(`${API_BASE}/admin/mock-test-question-update/${block.savedRowId}`, {
+            method: 'PATCH',
+            headers: authHeaders({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify({
+              subject, chapter: block.chapter || null, question: block.question,
+              option_a: block.option_a, option_b: block.option_b, option_c: block.option_c, option_d: block.option_d,
+              correct_answer: block.correct_answer || '', year: block.year
+            })
+          });
+          if (res.status === 401) return logout();
+          if (!res.ok) { showStatus('Update failed: ' + await describeHttpError(res), true); return; }
+          const data = await res.json();
+          if (data.error) { showStatus('Update failed: ' + data.error, true); return; }
+          showStatus('Question updated in Mock Test.', false);
+        } else {
+          const questionOrder = blocks.filter(b => b.savedRowId).length + 1;
+          const res = await fetch(`${API_BASE}/admin/mock-test-bulk-create`, {
+            method: 'POST',
+            headers: authHeaders({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify({ questions: [{
+              mock_test_id: mockTestId, question_order: questionOrder, subject,
+              chapter: block.chapter || null, question: block.question,
+              option_a: block.option_a, option_b: block.option_b, option_c: block.option_c, option_d: block.option_d,
+              correct_answer: block.correct_answer || '', year: block.year
+            }] })
+          });
+          if (res.status === 401) return logout();
+          if (!res.ok) { showStatus('Save failed: ' + await describeHttpError(res), true); return; }
+          const data = await res.json();
+          if (data.error) { showStatus('Save failed: ' + data.error, true); return; }
+          markInserted(block, data.created[0].id);
+          await markProcessedAfterMockTestSave(mockTestId, subject, 1);
+          showStatus('Question saved to Mock Test.', false);
+        }
       } else {
-        const payload = toSave.map(b => ({
-          subject,
-          chapter: b.chapter || null,
-          question: b.question,
-          option_a: b.option_a, option_b: b.option_b, option_c: b.option_c, option_d: b.option_d,
-          correct_answer: b.correct_answer || '',
-          year: b.year,
-          source_tag: b.source_tag || null
-        }));
-        const res = await fetch(`${API_BASE}/admin/pyq-bulk-create`, {
-          method: 'POST',
-          headers: authHeaders({ 'Content-Type': 'application/json' }),
-          body: JSON.stringify({ questions: payload })
-        });
-        if (res.status === 401) return logout();
-        if (!res.ok) { showStatus('Save failed: ' + await describeHttpError(res), true); return; }
-        const data = await res.json();
-        if (data.error) { showStatus('Save failed: ' + data.error, true); return; }
-
-        markSaved(toSave);
-        showStatus(`${toSave.length} question(s) saved to PYQ Bank.` + (skipped.length ? ` Skipped ${skipped.length} blank block(s).` : ''), false);
+        if (block.savedRowId) {
+          const res = await fetch(`${API_BASE}/admin/pyq-update/${block.savedRowId}`, {
+            method: 'PATCH',
+            headers: authHeaders({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify({
+              subject, chapter: block.chapter || null, question: block.question,
+              option_a: block.option_a, option_b: block.option_b, option_c: block.option_c, option_d: block.option_d,
+              correct_answer: block.correct_answer || '', year: block.year, source_tag: block.source_tag || null
+            })
+          });
+          if (res.status === 401) return logout();
+          if (!res.ok) { showStatus('Update failed: ' + await describeHttpError(res), true); return; }
+          const data = await res.json();
+          if (data.error) { showStatus('Update failed: ' + data.error, true); return; }
+          showStatus('Question updated in PYQ Bank.', false);
+        } else {
+          const res = await fetch(`${API_BASE}/admin/pyq-bulk-create`, {
+            method: 'POST',
+            headers: authHeaders({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify({ questions: [{
+              subject, chapter: block.chapter || null, question: block.question,
+              option_a: block.option_a, option_b: block.option_b, option_c: block.option_c, option_d: block.option_d,
+              correct_answer: block.correct_answer || '', year: block.year, source_tag: block.source_tag || null
+            }] })
+          });
+          if (res.status === 401) return logout();
+          if (!res.ok) { showStatus('Save failed: ' + await describeHttpError(res), true); return; }
+          const data = await res.json();
+          if (data.error) { showStatus('Save failed: ' + data.error, true); return; }
+          markInserted(block, data.created[0].id);
+          showStatus('Question saved to PYQ Bank.', false);
+        }
       }
     } catch (e) {
       showStatus('Save failed -- check connection.', true);
+    } finally {
+      btn.disabled = false;
     }
   }
 
-  function markSaved(savedBlocks) {
-    savedBlocks.forEach(b => {
-      b.saved = true;
-      const badge = document.getElementById('saved-badge-' + b.id);
-      if (badge) badge.style.display = 'inline-flex';
-      const el = document.getElementById('block-' + b.id);
-      if (el) el.classList.add('is-saved');
-    });
-    updateSummaryBar();
+  // ---------------- Save All (insert every new block, update every already-saved one) ----------------
+
+  async function saveAll() {
+    const subject = document.getElementById('subjectSelect').value;
+    const withText = blocks.filter(b => b.question.trim());
+    const skipped = blocks.length - withText.length;
+    if (withText.length === 0) { showStatus('Nothing to save.', true); return; }
+    const toInsert = withText.filter(b => !b.savedRowId);
+    const toUpdate = withText.filter(b => b.savedRowId);
+
+    try {
+      let mockTestId = null;
+      if (destination === 'mocktest' && (toInsert.length > 0 || toUpdate.length > 0)) {
+        mockTestId = await ensureMockTestId();
+        if (!mockTestId) return;
+      }
+
+      if (toInsert.length > 0) {
+        if (destination === 'mocktest') {
+          const startOrder = blocks.filter(b => b.savedRowId).length;
+          const payload = toInsert.map((b, i) => ({
+            mock_test_id: mockTestId, question_order: startOrder + i + 1, subject,
+            chapter: b.chapter || null, question: b.question,
+            option_a: b.option_a, option_b: b.option_b, option_c: b.option_c, option_d: b.option_d,
+            correct_answer: b.correct_answer || '', year: b.year
+          }));
+          const res = await fetch(`${API_BASE}/admin/mock-test-bulk-create`, {
+            method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify({ questions: payload })
+          });
+          if (res.status === 401) return logout();
+          if (!res.ok) { showStatus('Save failed: ' + await describeHttpError(res), true); return; }
+          const data = await res.json();
+          if (data.error) { showStatus('Save failed: ' + data.error, true); return; }
+          toInsert.forEach((b, i) => markInserted(b, data.created[i].id));
+        } else {
+          const payload = toInsert.map(b => ({
+            subject, chapter: b.chapter || null, question: b.question,
+            option_a: b.option_a, option_b: b.option_b, option_c: b.option_c, option_d: b.option_d,
+            correct_answer: b.correct_answer || '', year: b.year, source_tag: b.source_tag || null
+          }));
+          const res = await fetch(`${API_BASE}/admin/pyq-bulk-create`, {
+            method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify({ questions: payload })
+          });
+          if (res.status === 401) return logout();
+          if (!res.ok) { showStatus('Save failed: ' + await describeHttpError(res), true); return; }
+          const data = await res.json();
+          if (data.error) { showStatus('Save failed: ' + data.error, true); return; }
+          toInsert.forEach((b, i) => markInserted(b, data.created[i].id));
+        }
+      }
+
+      // No bulk-update endpoint carries full question/option fields for either table, so
+      // already-saved-and-edited blocks are updated one at a time -- fine at this tool's scale
+      // (a manual paste-and-review session, not a bulk migration).
+      for (const b of toUpdate) {
+        const url = destination === 'mocktest'
+          ? `${API_BASE}/admin/mock-test-question-update/${b.savedRowId}`
+          : `${API_BASE}/admin/pyq-update/${b.savedRowId}`;
+        const body = destination === 'mocktest'
+          ? { subject, chapter: b.chapter || null, question: b.question, option_a: b.option_a, option_b: b.option_b, option_c: b.option_c, option_d: b.option_d, correct_answer: b.correct_answer || '', year: b.year }
+          : { subject, chapter: b.chapter || null, question: b.question, option_a: b.option_a, option_b: b.option_b, option_c: b.option_c, option_d: b.option_d, correct_answer: b.correct_answer || '', year: b.year, source_tag: b.source_tag || null };
+        await fetch(url, { method: 'PATCH', headers: authHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify(body) });
+      }
+
+      if (destination === 'mocktest' && mockTestId) {
+        await markProcessedAfterMockTestSave(mockTestId, subject, toInsert.length);
+      }
+
+      let msg = '';
+      if (toInsert.length) msg += `${toInsert.length} saved`;
+      if (toUpdate.length) msg += (msg ? ', ' : '') + `${toUpdate.length} updated`;
+      msg += ` (${destination === 'mocktest' ? 'Mock Test' : 'PYQ Bank'}).`;
+      if (skipped) msg += ` Skipped ${skipped} blank block(s).`;
+      showStatus(msg, false);
+    } catch (e) {
+      showStatus('Save failed -- check connection.', true);
+    }
   }
 
   async function publishMockTest() {

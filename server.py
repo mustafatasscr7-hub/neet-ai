@@ -317,6 +317,18 @@ class MockTestQuestionCreate(BaseModel):
 class MockTestBulkCreate(BaseModel):
     questions: List[MockTestQuestionCreate]
 
+class MockTestQuestionUpdate(BaseModel):
+    subject: Optional[str] = None
+    chapter: Optional[str] = None
+    class_: Optional[int] = Field(None, alias="class")
+    question: Optional[str] = None
+    option_a: Optional[str] = None
+    option_b: Optional[str] = None
+    option_c: Optional[str] = None
+    option_d: Optional[str] = None
+    correct_answer: Optional[str] = None
+    year: Optional[int] = None
+
 import time
 
 ADMIN_MAX_ATTEMPTS = 3
@@ -1889,6 +1901,52 @@ async def admin_mock_test_bulk_create(body: MockTestBulkCreate, _: None = Depend
         if response.status_code >= 400:
             return {"error": response.text}
         return {"created": response.json()}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.patch("/admin/mock-test-question-update/{question_id}")
+async def admin_mock_test_question_update(question_id: int, body: MockTestQuestionUpdate, _: None = Depends(verify_admin)):
+    # Mirrors /admin/pyq-update/{pyq_id}'s exact shape -- lets an already-saved question (from
+    # admin-scanned-paste-parser.html or elsewhere) be edited and re-saved as an UPDATE instead
+    # of a duplicate INSERT.
+    if body.subject is not None and body.subject not in ("Biology", "Physics", "Chemistry"):
+        return {"error": "Invalid subject"}
+    update_fields = {}
+    if body.subject is not None:
+        update_fields["subject"] = body.subject
+    if body.chapter is not None:
+        update_fields["chapter"] = body.chapter
+    if body.class_ is not None:
+        update_fields["class"] = body.class_
+    if body.question is not None:
+        update_fields["question"] = body.question
+    if body.option_a is not None:
+        update_fields["option_a"] = body.option_a
+    if body.option_b is not None:
+        update_fields["option_b"] = body.option_b
+    if body.option_c is not None:
+        update_fields["option_c"] = body.option_c
+    if body.option_d is not None:
+        update_fields["option_d"] = body.option_d
+    if body.correct_answer is not None:
+        update_fields["correct_answer"] = body.correct_answer
+    if body.year is not None:
+        update_fields["year"] = body.year
+    if not update_fields:
+        return {"error": "No fields to update"}
+    try:
+        response = await async_client.patch(
+            f"{SUPABASE_URL}/rest/v1/mock_test_questions",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
+            params={"id": f"eq.{question_id}", "select": "id"},
+            json=update_fields
+        )
+        if response.status_code >= 400:
+            return {"error": response.text}
+        updated = response.json()
+        if not updated:
+            return {"error": "Row not found"}
+        return {"updated": updated[0]}
     except Exception as e:
         return {"error": str(e)}
 
