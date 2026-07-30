@@ -328,6 +328,12 @@ class MockTestQuestionUpdate(BaseModel):
     option_d: Optional[str] = None
     correct_answer: Optional[str] = None
     year: Optional[int] = None
+    has_diagram: Optional[bool] = None
+    diagram_url: Optional[str] = None
+    option_a_diagram_url: Optional[str] = None
+    option_b_diagram_url: Optional[str] = None
+    option_c_diagram_url: Optional[str] = None
+    option_d_diagram_url: Optional[str] = None
 
 import time
 
@@ -1932,6 +1938,14 @@ async def admin_mock_test_question_update(question_id: int, body: MockTestQuesti
         update_fields["correct_answer"] = body.correct_answer
     if body.year is not None:
         update_fields["year"] = body.year
+    if body.has_diagram is not None:
+        update_fields["has_diagram"] = body.has_diagram
+    # Same distinguish-"not sent"-from-"sent as null" reasoning as /admin/pyq-update/{pyq_id}:
+    # removing a photo means explicitly clearing the URL, and `is not None` would ignore that.
+    for diagram_field in ("diagram_url", "option_a_diagram_url", "option_b_diagram_url",
+                           "option_c_diagram_url", "option_d_diagram_url"):
+        if diagram_field in body.model_fields_set:
+            update_fields[diagram_field] = getattr(body, diagram_field)
     if not update_fields:
         return {"error": "No fields to update"}
     try:

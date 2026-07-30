@@ -8,6 +8,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
 <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mathlive@0.110.0/mathlive.min.js"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: 'Inter', sans-serif; background: #0d0d0d; color: #ececec; min-height: 100vh; }
@@ -79,7 +80,8 @@
   .q-block-actions .save-btn-card { border-color: #4f8ef750; color: #4f8ef7; }
   .q-block-actions .save-btn-card:hover { border-color: #4f8ef7; background: #4f8ef712; }
   .q-block-actions .save-btn-card:disabled { opacity: 0.5; cursor: not-allowed; }
-  .q-block-actions .remove-btn-card:hover { border-color: #ef4444; color: #ef4444; }
+  .remove-btn-card { background: transparent; border: 1px solid #2a2a2a; color: #888; padding: 5px 10px; border-radius: 6px; font-size: 11px; cursor: pointer; font-family: 'Inter', sans-serif; }
+  .remove-btn-card:hover { border-color: #ef4444; color: #ef4444; }
 
   .q-field { margin-bottom: 10px; }
   .q-field label { display: block; font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 5px; }
@@ -109,6 +111,32 @@
   .q-meta-grid { display: grid; grid-template-columns: 1fr 100px 140px; gap: 10px; }
 
   .empty-hint { text-align: center; padding: 40px; color: #555; font-size: 13px; }
+
+  .q-diagram-badge { font-size: 11px; background: #f9731620; color: #f97316; padding: 2px 8px; border-radius: 20px; font-weight: 600; }
+  .q-field-label-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 5px; }
+  .q-field-label-row label { margin-bottom: 0; }
+  .formula-btn { background: transparent; border: 1px solid #2a2a2a; color: #888; padding: 2px 8px; border-radius: 5px; font-size: 10px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; white-space: nowrap; }
+  .formula-btn:hover { border-color: #4f8ef7; color: #4f8ef7; }
+
+  .checkbox-field { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+  .checkbox-field label { margin: 0; text-transform: none; font-size: 12px; color: #ccc; }
+
+  .q-diagram-slot { margin-top: 10px; padding: 10px; border: 1px dashed #2a2a2a; border-radius: 8px; }
+  .q-diagram-slot img { max-width: 160px; max-height: 160px; border-radius: 6px; margin-top: 8px; display: block; }
+  .q-diagram-slot .diag-status { font-size: 11px; color: #666; margin-top: 6px; }
+  .diag-paste-zone { border: 1px dashed #333; border-radius: 6px; padding: 6px 8px; }
+  .diag-paste-zone:focus { outline: none; border-color: #4f8ef7; }
+  .diag-paste-hint { font-size: 10px; color: #555; margin-top: 4px; }
+
+  #formulaModalOverlay { display: none; position: fixed; inset: 0; background: #000000a0; z-index: 950; align-items: center; justify-content: center; }
+  .formula-modal-box { background: #111; border: 1px solid #2a2a2a; border-radius: 14px; padding: 24px; width: 100%; max-width: 480px; }
+  .formula-modal-box h2 { font-size: 14px; }
+  .formula-modal-hint { font-size: 11px; color: #666; margin-top: 10px; }
+  #formulaMathfieldHost { background: #fff; border-radius: 8px; padding: 10px; }
+  #formulaMathfield { width: 100%; min-height: 44px; font-size: 20px; }
+  /* MathLive's on-screen keyboard defaults to z-index 105, well below our modal overlay's 950
+     -- same fix as admin-pdf-review.html. */
+  :root { --keyboard-zindex: 960; }
 </style>
 </head>
 <body>
@@ -127,6 +155,23 @@
   <div class="logout-row">
     <button class="logout-btn" onclick="logout()">Log out</button>
   </div>
+
+  <div id="formulaModalOverlay">
+    <div class="formula-modal-box">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+        <h2>Insert Formula</h2>
+        <button type="button" class="action-btn" onclick="closeFormulaEditor()">Cancel</button>
+      </div>
+      <div id="formulaMathfieldHost">
+        <math-field id="formulaMathfield"></math-field>
+      </div>
+      <div class="formula-modal-hint">Build your formula visually — fractions, superscripts, subscripts, brackets, etc. It's inserted as <code>$$...$$</code> at your cursor, into the field you opened this from.</div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px;">
+        <button type="button" class="action-btn primary" onclick="confirmFormulaInsert()">Insert</button>
+      </div>
+    </div>
+  </div>
+
   <div class="db-header">
     <h1>NEET<span>-AI</span> Scanned PDF Parser (Mathpix) — Mock Tests &amp; PYQ Bank</h1>
     <p>For scanned PDFs only, where Mathpix produced raw LaTeX text instead of structured data. Paste that LaTeX below — this does not replace or touch admin-mocktest-upload.html or admin-pdf-review.html, it's a manual-paste alternative for scanned sources.</p>
@@ -421,6 +466,8 @@
       id: 'b' + (blockIdSeq++),
       question: q.question, option_a: q.option_a, option_b: q.option_b, option_c: q.option_c, option_d: q.option_d,
       correct_answer: '', chapter: defaultChapter, source_tag: q.source_tag || '', year: q.year,
+      has_diagram: false, diagram_url: null,
+      option_a_diagram_url: null, option_b_diagram_url: null, option_c_diagram_url: null, option_d_diagram_url: null,
       saved: false, savedRowId: null
     }));
     const missingOptions = blocks.filter(b => !b.option_a && !b.option_b && !b.option_c && !b.option_d).length;
@@ -447,6 +494,7 @@
     <div class="q-block${b.saved ? ' is-saved' : ''}" id="block-${b.id}" data-id="${b.id}">
       <div class="q-block-header">
         <span class="q-number">Q${displayIndex}</span>
+        ${b.has_diagram ? '<span class="q-diagram-badge">Diagram</span>' : ''}
         <span class="q-saved-badge" id="saved-badge-${b.id}" style="display:${b.saved ? 'inline-flex' : 'none'}">Saved</span>
         <div class="q-block-actions">
           <button type="button" class="save-btn-card" id="save-btn-${b.id}" onclick="saveBlock('${b.id}')">${b.saved ? 'Update' : 'Save'}</button>
@@ -455,7 +503,7 @@
       </div>
 
       <div class="q-field">
-        <label>Question</label>
+        <div class="q-field-label-row"><label>Question</label><button type="button" class="formula-btn" onclick="openFormulaEditor('q-text-${b.id}', '${b.id}', 'question')">∑ Formula</button></div>
         <div class="editable" contenteditable="true" id="q-text-${b.id}"
              oninput="onFieldInput('${b.id}', 'question', 'q-text-${b.id}')"
              onpaste="handlePlainPaste(event)">${escapeHtml(b.question)}</div>
@@ -468,6 +516,7 @@
           <div class="opt-label-row">
             <div class="opt-badge" onclick="setCorrectAnswer('${b.id}', '${l}')" title="Mark ${l.toUpperCase()} as the correct answer">${l.toUpperCase()}</div>
             <span class="opt-hint">click to mark correct</span>
+            <button type="button" class="formula-btn" style="margin-left:auto;" onclick="openFormulaEditor('opt-${l}-${b.id}', '${b.id}', 'option_${l}')">∑ Formula</button>
           </div>
           <div class="editable" contenteditable="true" id="opt-${l}-${b.id}"
                oninput="onFieldInput('${b.id}', 'option_${l}', 'opt-${l}-${b.id}')"
@@ -480,6 +529,41 @@
         <div class="field"><label>Chapter</label><input type="text" id="chapter-${b.id}" value="${escapeHtml(b.chapter || '')}" oninput="onMetaInput('${b.id}','chapter','chapter-${b.id}')"/></div>
         <div class="field"><label>Year</label><input type="number" id="year-${b.id}" value="${b.year != null ? b.year : ''}" oninput="onMetaInput('${b.id}','year','year-${b.id}',true)"/></div>
         <div class="field"><label>Source tag</label><input type="text" id="source-${b.id}" value="${escapeHtml(b.source_tag || '')}" placeholder="e.g. AIPMT 2007" oninput="onMetaInput('${b.id}','source_tag','source-${b.id}')"/></div>
+      </div>
+
+      <div class="checkbox-field">
+        <input type="checkbox" id="hasdiagram-${b.id}" onchange="toggleDiagramSlot('${b.id}')" ${b.has_diagram ? 'checked' : ''}/>
+        <label for="hasdiagram-${b.id}">Question has diagram</label>
+      </div>
+      <div class="checkbox-field">
+        <input type="checkbox" id="optiondiagram-${b.id}" onchange="toggleOptionDiagramSlot('${b.id}')" ${hasAnyOptionDiagram(b) ? 'checked' : ''}/>
+        <label for="optiondiagram-${b.id}">Options have diagram</label>
+      </div>
+
+      <div class="q-diagram-slot" id="diagram-slot-${b.id}" style="display:${b.has_diagram ? 'block' : 'none'}">
+        <label style="font-size:10px;color:#666;text-transform:uppercase;letter-spacing:0.04em;display:block;margin-bottom:5px;">Question diagram</label>
+        <div class="diag-paste-zone" tabindex="0" onpaste="handleDiagramPaste(event, '${b.id}')">
+          <input type="file" accept="image/*" id="diagram-file-${b.id}" onchange="uploadDiagram('${b.id}')"/>
+          <div class="diag-paste-hint">or click here and paste (Ctrl+V) an image</div>
+        </div>
+        <div class="diag-status" id="diagram-status-${b.id}"></div>
+        <div id="diagram-preview-${b.id}">${b.diagram_url ? `<img src="${escapeHtml(b.diagram_url)}"><br><button type="button" class="remove-btn-card" onclick="removeDiagram('${b.id}')">✕ Remove photo</button>` : ''}</div>
+      </div>
+
+      <div class="q-diagram-slot" id="option-diagram-slot-${b.id}" style="display:${hasAnyOptionDiagram(b) ? 'block' : 'none'}">
+        <label style="font-size:10px;color:#666;text-transform:uppercase;letter-spacing:0.04em;display:block;margin-bottom:8px;">Option diagrams (one image per option, upload only the ones that need it)</label>
+        <div class="q-options-grid">
+          ${letters.map(l => `
+          <div>
+            <label style="font-size:10px;color:#888;">Option ${l.toUpperCase()}</label>
+            <div class="diag-paste-zone" tabindex="0" onpaste="handleOptionDiagramPaste(event, '${b.id}', '${l}')">
+              <input type="file" accept="image/*" id="opt-diagram-file-${l}-${b.id}" onchange="uploadOptionDiagram('${b.id}', '${l}')"/>
+              <div class="diag-paste-hint">or click + paste (Ctrl+V)</div>
+            </div>
+            <div class="diag-status" id="opt-diagram-status-${l}-${b.id}"></div>
+            <div id="opt-diagram-preview-${l}-${b.id}">${b['option_' + l + '_diagram_url'] ? `<img src="${escapeHtml(b['option_' + l + '_diagram_url'])}"><br><button type="button" class="remove-btn-card" onclick="removeOptionDiagram('${b.id}','${l}')">✕ Remove photo</button>` : ''}</div>
+          </div>`).join('')}
+        </div>
       </div>
     </div>`;
   }
@@ -513,6 +597,194 @@
     e.preventDefault();
     const text = (e.clipboardData || window.clipboardData).getData('text/plain');
     document.execCommand('insertText', false, text);
+  }
+
+  // ---------------- Diagram upload (question + per-option) -- reused verbatim from
+  // admin-pdf-review.html's pipeline: same /admin/pyq-diagram-upload endpoint (already
+  // subject/table-agnostic despite its bucket name), same paste-or-file-picker UX. ----------------
+
+  function fileToBase64(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result.split(',')[1]);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function toggleDiagramSlot(id) {
+    const checked = document.getElementById('hasdiagram-' + id).checked;
+    document.getElementById('diagram-slot-' + id).style.display = checked ? 'block' : 'none';
+    const block = blocks[findBlockIndex(id)];
+    if (block) block.has_diagram = checked;
+  }
+
+  async function uploadImageFile(file, statusElId, onSuccess) {
+    const statusEl = document.getElementById(statusElId);
+    statusEl.textContent = 'Uploading...';
+    try {
+      const b64 = await fileToBase64(file);
+      const res = await fetch(`${API_BASE}/admin/pyq-diagram-upload`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ filename: file.name || 'pasted-image.png', data: b64, media_type: file.type || 'image/png' })
+      });
+      if (res.status === 401) return logout();
+      if (!res.ok) { statusEl.textContent = 'Upload failed: ' + await describeHttpError(res); return; }
+      const data = await res.json();
+      if (data.error) { statusEl.textContent = 'Upload failed: ' + data.error; return; }
+      statusEl.textContent = 'Uploaded';
+      onSuccess(data.url);
+    } catch (e) {
+      statusEl.textContent = 'Upload failed — check connection.';
+    }
+  }
+
+  function extractImageFromClipboard(event) {
+    const items = event.clipboardData && event.clipboardData.items;
+    if (!items) return null;
+    for (const item of items) {
+      if (item.type && item.type.startsWith('image/')) return item.getAsFile();
+    }
+    return null;
+  }
+
+  async function uploadDiagram(id) {
+    const fileInput = document.getElementById('diagram-file-' + id);
+    const file = fileInput.files[0];
+    if (!file) return;
+    await uploadImageFile(file, 'diagram-status-' + id, (url) => {
+      const block = blocks[findBlockIndex(id)];
+      block.diagram_url = url;
+      document.getElementById('diagram-preview-' + id).innerHTML = `<img src="${escapeHtml(url)}"><br><button type="button" class="remove-btn-card" onclick="removeDiagram('${id}')">✕ Remove photo</button>`;
+    });
+  }
+
+  async function handleDiagramPaste(event, id) {
+    const file = extractImageFromClipboard(event);
+    if (!file) return;
+    event.preventDefault();
+    await uploadImageFile(file, 'diagram-status-' + id, (url) => {
+      const block = blocks[findBlockIndex(id)];
+      block.diagram_url = url;
+      document.getElementById('diagram-preview-' + id).innerHTML = `<img src="${escapeHtml(url)}"><br><button type="button" class="remove-btn-card" onclick="removeDiagram('${id}')">✕ Remove photo</button>`;
+    });
+  }
+
+  function removeDiagram(id) {
+    const block = blocks[findBlockIndex(id)];
+    if (!block) return;
+    block.diagram_url = null;
+    document.getElementById('diagram-preview-' + id).innerHTML = '';
+    document.getElementById('diagram-status-' + id).textContent = '';
+    const fileInput = document.getElementById('diagram-file-' + id);
+    if (fileInput) fileInput.value = '';
+  }
+
+  function hasAnyOptionDiagram(block) {
+    return !!(block.option_a_diagram_url || block.option_b_diagram_url || block.option_c_diagram_url || block.option_d_diagram_url);
+  }
+
+  function toggleOptionDiagramSlot(id) {
+    const checked = document.getElementById('optiondiagram-' + id).checked;
+    document.getElementById('option-diagram-slot-' + id).style.display = checked ? 'block' : 'none';
+  }
+
+  async function uploadOptionDiagram(id, opt) {
+    const fileInput = document.getElementById(`opt-diagram-file-${opt}-${id}`);
+    const file = fileInput.files[0];
+    if (!file) return;
+    await uploadImageFile(file, `opt-diagram-status-${opt}-${id}`, (url) => {
+      const block = blocks[findBlockIndex(id)];
+      block['option_' + opt + '_diagram_url'] = url;
+      document.getElementById(`opt-diagram-preview-${opt}-${id}`).innerHTML = `<img src="${escapeHtml(url)}"><br><button type="button" class="remove-btn-card" onclick="removeOptionDiagram('${id}','${opt}')">✕ Remove photo</button>`;
+    });
+  }
+
+  async function handleOptionDiagramPaste(event, id, opt) {
+    const file = extractImageFromClipboard(event);
+    if (!file) return;
+    event.preventDefault();
+    await uploadImageFile(file, `opt-diagram-status-${opt}-${id}`, (url) => {
+      const block = blocks[findBlockIndex(id)];
+      block['option_' + opt + '_diagram_url'] = url;
+      document.getElementById(`opt-diagram-preview-${opt}-${id}`).innerHTML = `<img src="${escapeHtml(url)}"><br><button type="button" class="remove-btn-card" onclick="removeOptionDiagram('${id}','${opt}')">✕ Remove photo</button>`;
+    });
+  }
+
+  function removeOptionDiagram(id, opt) {
+    const block = blocks[findBlockIndex(id)];
+    if (!block) return;
+    block['option_' + opt + '_diagram_url'] = null;
+    document.getElementById(`opt-diagram-preview-${opt}-${id}`).innerHTML = '';
+    document.getElementById(`opt-diagram-status-${opt}-${id}`).textContent = '';
+    const fileInput = document.getElementById(`opt-diagram-file-${opt}-${id}`);
+    if (fileInput) fileInput.value = '';
+  }
+
+  // ---------------- Formula editor (MathLive) ----------------
+  // Adapted from admin-pdf-review.html's textarea version -- fields here are contenteditable
+  // divs, not textareas, so instead of selectionStart/selectionEnd this captures a cloned
+  // Selection Range at open-time (before focus moves to the modal's math-field) and re-applies
+  // it on Insert. The clone stays valid even after the live window selection moves elsewhere,
+  // as long as the field's DOM nodes aren't rebuilt in between (they aren't -- no re-render
+  // happens while the modal is open).
+
+  let formulaEditorTarget = null; // { fieldId, blockId, prop, range }
+
+  function openFormulaEditor(fieldId, blockId, prop) {
+    const el = document.getElementById(fieldId);
+    if (!el) return;
+    const sel = window.getSelection();
+    let range = null;
+    if (sel.rangeCount > 0 && el.contains(sel.anchorNode)) {
+      range = sel.getRangeAt(0).cloneRange();
+    }
+    formulaEditorTarget = { fieldId, blockId, prop, range };
+    const mf = document.getElementById('formulaMathfield');
+    mf.value = '';
+    document.getElementById('formulaModalOverlay').style.display = 'flex';
+    setTimeout(() => mf.focus(), 50);
+  }
+
+  function closeFormulaEditor() {
+    document.getElementById('formulaModalOverlay').style.display = 'none';
+    formulaEditorTarget = null;
+  }
+
+  function confirmFormulaInsert() {
+    if (!formulaEditorTarget) return;
+    const { fieldId, blockId, prop, range } = formulaEditorTarget;
+    const el = document.getElementById(fieldId);
+    const latex = document.getElementById('formulaMathfield').value.trim();
+    if (!el || !latex) { closeFormulaEditor(); return; }
+    const insertText = '$$' + latex + '$$';
+
+    el.focus();
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    let activeRange;
+    if (range) {
+      sel.addRange(range);
+      activeRange = sel.getRangeAt(0);
+    } else {
+      // No cursor position was ever captured in this field (e.g. Formula clicked before ever
+      // clicking into the field itself) -- fall back to inserting at the end of its content.
+      activeRange = document.createRange();
+      activeRange.selectNodeContents(el);
+      activeRange.collapse(false);
+      sel.addRange(activeRange);
+    }
+    activeRange.deleteContents();
+    const textNode = document.createTextNode(insertText);
+    activeRange.insertNode(textNode);
+    activeRange.setStartAfter(textNode);
+    activeRange.setEndAfter(textNode);
+    sel.removeAllRanges();
+    sel.addRange(activeRange);
+
+    onFieldInput(blockId, prop, fieldId);
+    closeFormulaEditor();
   }
 
   function onFieldInput(id, prop, fieldId) {
@@ -565,7 +837,10 @@
     const defaultChapter = document.getElementById('defaultChapterInput').value.trim();
     blocks.push({
       id: 'b' + (blockIdSeq++), question: '', option_a: '', option_b: '', option_c: '', option_d: '',
-      correct_answer: '', chapter: defaultChapter, source_tag: '', year: null, saved: false, savedRowId: null
+      correct_answer: '', chapter: defaultChapter, source_tag: '', year: null,
+      has_diagram: false, diagram_url: null,
+      option_a_diagram_url: null, option_b_diagram_url: null, option_c_diagram_url: null, option_d_diagram_url: null,
+      saved: false, savedRowId: null
     });
     document.getElementById('summaryBar').style.display = 'flex';
     renderAllBlocks();
@@ -586,6 +861,17 @@
   }
 
   // ---------------- Save ----------------
+
+  function diagramFields(block) {
+    return {
+      has_diagram: !!block.has_diagram,
+      diagram_url: block.diagram_url,
+      option_a_diagram_url: block.option_a_diagram_url,
+      option_b_diagram_url: block.option_b_diagram_url,
+      option_c_diagram_url: block.option_c_diagram_url,
+      option_d_diagram_url: block.option_d_diagram_url
+    };
+  }
 
   async function ensureMockTestId() {
     if (currentMockTestId) return currentMockTestId;
@@ -653,11 +939,11 @@
           const res = await fetch(`${API_BASE}/admin/mock-test-question-update/${block.savedRowId}`, {
             method: 'PATCH',
             headers: authHeaders({ 'Content-Type': 'application/json' }),
-            body: JSON.stringify({
+            body: JSON.stringify(Object.assign({
               subject, chapter: block.chapter || null, question: block.question,
               option_a: block.option_a, option_b: block.option_b, option_c: block.option_c, option_d: block.option_d,
               correct_answer: block.correct_answer || '', year: block.year
-            })
+            }, diagramFields(block)))
           });
           if (res.status === 401) return logout();
           if (!res.ok) { showStatus('Update failed: ' + await describeHttpError(res), true); return; }
@@ -669,12 +955,12 @@
           const res = await fetch(`${API_BASE}/admin/mock-test-bulk-create`, {
             method: 'POST',
             headers: authHeaders({ 'Content-Type': 'application/json' }),
-            body: JSON.stringify({ questions: [{
+            body: JSON.stringify({ questions: [Object.assign({
               mock_test_id: mockTestId, question_order: questionOrder, subject,
               chapter: block.chapter || null, question: block.question,
               option_a: block.option_a, option_b: block.option_b, option_c: block.option_c, option_d: block.option_d,
               correct_answer: block.correct_answer || '', year: block.year
-            }] })
+            }, diagramFields(block))] })
           });
           if (res.status === 401) return logout();
           if (!res.ok) { showStatus('Save failed: ' + await describeHttpError(res), true); return; }
@@ -689,11 +975,11 @@
           const res = await fetch(`${API_BASE}/admin/pyq-update/${block.savedRowId}`, {
             method: 'PATCH',
             headers: authHeaders({ 'Content-Type': 'application/json' }),
-            body: JSON.stringify({
+            body: JSON.stringify(Object.assign({
               subject, chapter: block.chapter || null, question: block.question,
               option_a: block.option_a, option_b: block.option_b, option_c: block.option_c, option_d: block.option_d,
               correct_answer: block.correct_answer || '', year: block.year, source_tag: block.source_tag || null
-            })
+            }, diagramFields(block)))
           });
           if (res.status === 401) return logout();
           if (!res.ok) { showStatus('Update failed: ' + await describeHttpError(res), true); return; }
@@ -704,11 +990,11 @@
           const res = await fetch(`${API_BASE}/admin/pyq-bulk-create`, {
             method: 'POST',
             headers: authHeaders({ 'Content-Type': 'application/json' }),
-            body: JSON.stringify({ questions: [{
+            body: JSON.stringify({ questions: [Object.assign({
               subject, chapter: block.chapter || null, question: block.question,
               option_a: block.option_a, option_b: block.option_b, option_c: block.option_c, option_d: block.option_d,
               correct_answer: block.correct_answer || '', year: block.year, source_tag: block.source_tag || null
-            }] })
+            }, diagramFields(block))] })
           });
           if (res.status === 401) return logout();
           if (!res.ok) { showStatus('Save failed: ' + await describeHttpError(res), true); return; }
@@ -745,12 +1031,12 @@
       if (toInsert.length > 0) {
         if (destination === 'mocktest') {
           const startOrder = blocks.filter(b => b.savedRowId).length;
-          const payload = toInsert.map((b, i) => ({
+          const payload = toInsert.map((b, i) => Object.assign({
             mock_test_id: mockTestId, question_order: startOrder + i + 1, subject,
             chapter: b.chapter || null, question: b.question,
             option_a: b.option_a, option_b: b.option_b, option_c: b.option_c, option_d: b.option_d,
             correct_answer: b.correct_answer || '', year: b.year
-          }));
+          }, diagramFields(b)));
           const res = await fetch(`${API_BASE}/admin/mock-test-bulk-create`, {
             method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({ questions: payload })
@@ -761,11 +1047,11 @@
           if (data.error) { showStatus('Save failed: ' + data.error, true); return; }
           toInsert.forEach((b, i) => markInserted(b, data.created[i].id));
         } else {
-          const payload = toInsert.map(b => ({
+          const payload = toInsert.map(b => Object.assign({
             subject, chapter: b.chapter || null, question: b.question,
             option_a: b.option_a, option_b: b.option_b, option_c: b.option_c, option_d: b.option_d,
             correct_answer: b.correct_answer || '', year: b.year, source_tag: b.source_tag || null
-          }));
+          }, diagramFields(b)));
           const res = await fetch(`${API_BASE}/admin/pyq-bulk-create`, {
             method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({ questions: payload })
@@ -786,8 +1072,8 @@
           ? `${API_BASE}/admin/mock-test-question-update/${b.savedRowId}`
           : `${API_BASE}/admin/pyq-update/${b.savedRowId}`;
         const body = destination === 'mocktest'
-          ? { subject, chapter: b.chapter || null, question: b.question, option_a: b.option_a, option_b: b.option_b, option_c: b.option_c, option_d: b.option_d, correct_answer: b.correct_answer || '', year: b.year }
-          : { subject, chapter: b.chapter || null, question: b.question, option_a: b.option_a, option_b: b.option_b, option_c: b.option_c, option_d: b.option_d, correct_answer: b.correct_answer || '', year: b.year, source_tag: b.source_tag || null };
+          ? Object.assign({ subject, chapter: b.chapter || null, question: b.question, option_a: b.option_a, option_b: b.option_b, option_c: b.option_c, option_d: b.option_d, correct_answer: b.correct_answer || '', year: b.year }, diagramFields(b))
+          : Object.assign({ subject, chapter: b.chapter || null, question: b.question, option_a: b.option_a, option_b: b.option_b, option_c: b.option_c, option_d: b.option_d, correct_answer: b.correct_answer || '', year: b.year, source_tag: b.source_tag || null }, diagramFields(b));
         await fetch(url, { method: 'PATCH', headers: authHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify(body) });
       }
 
