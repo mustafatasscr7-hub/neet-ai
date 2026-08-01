@@ -477,32 +477,96 @@
     };
   }
 
-  // Paragraphs (blank-line separated) are the only structural signal SimpleTex gives us.
-  // A paragraph is only treated as a question if all 4 options are found -- this is what
-  // keeps out-of-order solution/explanation paragraphs (which don't restate all 4 options)
-  // from being parsed as questions, per the "don't auto-match solutions" requirement.
+  // SimpleTex sometimes emits the trailing [SOURCE YEAR] tag as its own markdown header
+  // line, e.g. "# [AIPMT Canceled 2015]", instead of plain bracket text. Normalize those
+  // away to plain "[...]" BEFORE paragraph-splitting so they're treated as an ordinary
+  // trailing tag rather than mistaken for a real chapter header.
+  function normalizeSimpleTexHeaders(rawText) {
+    return rawText.replace(/^[ \t]*#{1,6}[ \t]+(\[[^\[\]]*\])[ \t]*$/gm, '$1');
+  }
+
+  // Paragraphs (blank-line separated) are the only structural signal SimpleTex gives us, but
+  // OCR line-wrapping often lands a single question's option list across MULTIPLE paragraphs
+  // (one or two options per paragraph) rather than one clean block. We accumulate paragraphs
+  // into a buffer until all 4 options are found, then flush immediately -- this both handles
+  // the multi-paragraph option list AND stops a stray explanation bullet that reuses
+  // "(A)/(B)/(C)/(D)" as a generic label from gluing onto an already-finished question.
+  // A buffer is never *started* from a paragraph that itself opens with an option marker --
+  // a real question stem never does, so that's always an orphaned fragment (leaked-in
+  // explanation text) worth dropping silently, per the "don't auto-match solutions" requirement.
   function parseSimpleTexText(rawText) {
-    const normalized = rawText.replace(/\r\n/g, '\n');
+    const normalized = normalizeSimpleTexHeaders(rawText.replace(/\r\n/g, '\n'));
     const paragraphs = normalized.split(/\n\s*\n+/).map(p => p.trim()).filter(Boolean);
+
+    function tryExtract(text) {
+      const { sourceTag, year, cleaned } = extractSourceTag(text);
+      const { stem, options } = extractOptionsSimpleTex(cleaned);
+      if (!options.a || !options.b || !options.c || !options.d) return null;
+      return { question: stem.trim(), option_a: options.a, option_b: options.b, option_c: options.c, option_d: options.d, source_tag: sourceTag, year };
+    }
+
+    // How many of A,B,C,D have been found so far, in strict order -- used to gate whether
+    // an incoming option-marker paragraph is really the NEXT option of the question being
+    // accumulated, or an unrelated fragment (e.g. an explanation snippet elsewhere in the
+    // document that happens to open with "(C)" as a generic label) that shouldn't be glued on.
+    function optionProgress(text) {
+      const idxA = text.indexOf('(A)');
+      if (idxA === -1) return 0;
+      const idxB = text.indexOf('(B)', idxA + 3);
+      if (idxB === -1) return 1;
+      const idxC = text.indexOf('(C)', idxB + 3);
+      if (idxC === -1) return 2;
+      const idxD = text.indexOf('(D)', idxC + 3);
+      if (idxD === -1) return 3;
+      return 4;
+    }
+
     const parsed = [];
     let currentChapter = '';
-    for (const para of paragraphs) {
-      const lines = para.split('\n');
-      while (lines.length && /^#{1,6}\s+/.test(lines[0].trim())) {
-        currentChapter = lines[0].trim().replace(/^#{1,6}\s+/, '').trim();
-        lines.shift();
-      }
-      const remaining = lines.join('\n').trim();
-      if (!remaining) continue;
+    let buffer = [];
+    let bufferChapter = '';
 
-      const { sourceTag, year, cleaned } = extractSourceTag(remaining);
-      const { stem, options } = extractOptionsSimpleTex(cleaned);
-      if (!options.a || !options.b || !options.c || !options.d) continue; // not a question paragraph
-      parsed.push({
-        question: stem.trim(), option_a: options.a, option_b: options.b, option_c: options.c, option_d: options.d,
-        source_tag: sourceTag, year, chapter: currentChapter
-      });
+    function flush() {
+      if (buffer.length === 0) return;
+      const result = tryExtract(buffer.join('\n\n'));
+      if (result) parsed.push(Object.assign(result, { chapter: bufferChapter }));
+      buffer = [];
     }
+
+    for (let i = 0; i < paragraphs.length; i++) {
+      const para = paragraphs[i];
+      const headerMatch = para.split('\n')[0].trim().match(/^#{1,6}\s+(.*)$/);
+      if (headerMatch) {
+        flush();
+        currentChapter = headerMatch[1].trim();
+        continue;
+      }
+
+      const leadMatch = para.match(/^\(([A-D])\)/);
+      if (buffer.length > 0 && leadMatch) {
+        const expectedLetter = 'ABCD'[optionProgress(buffer.join('\n\n'))];
+        if (leadMatch[1] !== expectedLetter) continue; // not the next option in sequence -- orphaned fragment, drop it
+        buffer.push(para);
+      } else if (!leadMatch) {
+        flush();
+        buffer = [para];
+        bufferChapter = currentChapter;
+      } else {
+        continue; // orphaned option-marker paragraph with no preceding stem -- drop it
+      }
+
+      if (tryExtract(buffer.join('\n\n'))) {
+        // The "[SOURCE YEAR]" tag sometimes lands in its own trailing paragraph right
+        // after the options -- greedily fold it in before flushing so it isn't lost.
+        const next = paragraphs[i + 1];
+        if (next && /^\[[^\[\]]*\d{4}[^\[\]]*\]$/.test(next.trim())) {
+          buffer.push(next);
+          i++;
+        }
+        flush();
+      }
+    }
+    flush();
     return parsed;
   }
 
