@@ -451,13 +451,71 @@
     return parsed;
   }
 
+  // ---------------- SimpleTex-style parsing (no \item[N.] markers) ----------------
+
+  // SimpleTex glues options directly onto the preceding text with no separator, e.g.
+  // "...no units(B) no units and no dimensions(C)..." -- so unlike Mathpix's inline style,
+  // the marker can't be required to follow whitespace. Instead we require all four markers
+  // A,B,C,D to appear in strict order (each search starts after the previous match), which
+  // keeps this from firing on a stray "(A)"-shaped fragment inside a formula.
+  function extractOptionsSimpleTex(chunk) {
+    const idxA = chunk.indexOf('(A)');
+    const idxB = idxA === -1 ? -1 : chunk.indexOf('(B)', idxA + 3);
+    const idxC = idxB === -1 ? -1 : chunk.indexOf('(C)', idxB + 3);
+    const idxD = idxC === -1 ? -1 : chunk.indexOf('(D)', idxC + 3);
+    if (idxA === -1 || idxB === -1 || idxC === -1 || idxD === -1) {
+      return { stem: chunk, options: { a: '', b: '', c: '', d: '' } };
+    }
+    return {
+      stem: chunk.slice(0, idxA),
+      options: {
+        a: chunk.slice(idxA + 3, idxB).trim(),
+        b: chunk.slice(idxB + 3, idxC).trim(),
+        c: chunk.slice(idxC + 3, idxD).trim(),
+        d: chunk.slice(idxD + 3).trim()
+      }
+    };
+  }
+
+  // Paragraphs (blank-line separated) are the only structural signal SimpleTex gives us.
+  // A paragraph is only treated as a question if all 4 options are found -- this is what
+  // keeps out-of-order solution/explanation paragraphs (which don't restate all 4 options)
+  // from being parsed as questions, per the "don't auto-match solutions" requirement.
+  function parseSimpleTexText(rawText) {
+    const normalized = rawText.replace(/\r\n/g, '\n');
+    const paragraphs = normalized.split(/\n\s*\n+/).map(p => p.trim()).filter(Boolean);
+    const parsed = [];
+    let currentChapter = '';
+    for (const para of paragraphs) {
+      const lines = para.split('\n');
+      while (lines.length && /^#{1,6}\s+/.test(lines[0].trim())) {
+        currentChapter = lines[0].trim().replace(/^#{1,6}\s+/, '').trim();
+        lines.shift();
+      }
+      const remaining = lines.join('\n').trim();
+      if (!remaining) continue;
+
+      const { sourceTag, year, cleaned } = extractSourceTag(remaining);
+      const { stem, options } = extractOptionsSimpleTex(cleaned);
+      if (!options.a || !options.b || !options.c || !options.d) continue; // not a question paragraph
+      parsed.push({
+        question: stem.trim(), option_a: options.a, option_b: options.b, option_c: options.c, option_d: options.d,
+        source_tag: sourceTag, year, chapter: currentChapter
+      });
+    }
+    return parsed;
+  }
+
   function parsePastedText() {
     const raw = document.getElementById('pasteTextarea').value;
     const hintEl = document.getElementById('parseHint');
-    if (!raw.trim()) { hintEl.textContent = 'Paste some Mathpix output first.'; return; }
-    const parsedQuestions = parseMathpixText(raw);
+    if (!raw.trim()) { hintEl.textContent = 'Paste some text first.'; return; }
+    const isMathpix = /\\item\[/.test(raw);
+    const parsedQuestions = isMathpix ? parseMathpixText(raw) : parseSimpleTexText(raw);
     if (parsedQuestions.length === 0) {
-      hintEl.textContent = 'No \\item[N.] question markers found -- check the pasted text matches the expected Mathpix format.';
+      hintEl.textContent = isMathpix
+        ? 'No \\item[N.] question markers found -- check the pasted text matches the expected Mathpix format.'
+        : 'No questions detected -- check each question is followed by (A)(B)(C)(D) options.';
       hintEl.style.color = '#ef4444';
       return;
     }
@@ -465,14 +523,14 @@
     blocks = parsedQuestions.map(q => ({
       id: 'b' + (blockIdSeq++),
       question: q.question, option_a: q.option_a, option_b: q.option_b, option_c: q.option_c, option_d: q.option_d,
-      correct_answer: '', chapter: defaultChapter, source_tag: q.source_tag || '', year: q.year,
+      correct_answer: '', chapter: q.chapter || defaultChapter, source_tag: q.source_tag || '', year: q.year,
       has_diagram: false, diagram_url: null,
       option_a_diagram_url: null, option_b_diagram_url: null, option_c_diagram_url: null, option_d_diagram_url: null,
       saved: false, savedRowId: null
     }));
     const missingOptions = blocks.filter(b => !b.option_a && !b.option_b && !b.option_c && !b.option_d).length;
     hintEl.style.color = '#4ade80';
-    hintEl.textContent = `Parsed ${blocks.length} question(s).` + (missingOptions ? ` ${missingOptions} had no options detected -- fill those in manually.` : '');
+    hintEl.textContent = `Parsed ${blocks.length} question(s) as ${isMathpix ? 'Mathpix' : 'SimpleTex'} format.` + (missingOptions ? ` ${missingOptions} had no options detected -- fill those in manually.` : '');
     renderAllBlocks();
     updateSummaryBar();
     document.getElementById('summaryBar').style.display = 'flex';
@@ -1116,7 +1174,8 @@
     get blocks() { return blocks; },
     get destination() { return destination; },
     get currentMockTestId() { return currentMockTestId; },
-    parseMathpixText
+    parseMathpixText,
+    parseSimpleTexText
   };
 </script>
 </body>
