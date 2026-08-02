@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<meta name="robots" content="noindex, nofollow"/>
+<title>Diagram Upload — NEET-AI Admin</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Inter', sans-serif; background: #0d0d0d; color: #ececec; min-height: 100vh; }
+
+  /* Password gate -- same pattern as admin-pdf-review.html / admin-pyq-preview.html */
+  #gateOverlay { position: fixed; inset: 0; background: #0d0d0d; display: flex; align-items: center; justify-content: center; z-index: 999; }
+  .gate-box { background: #111; border: 1px solid #2a2a2a; border-radius: 14px; padding: 32px; width: 100%; max-width: 340px; text-align: center; }
+  .gate-box h1 { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
+  .gate-box p { font-size: 12px; color: #666; margin-bottom: 20px; }
+  .gate-box input { width: 100%; background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 8px; padding: 10px 14px; color: #ececec; font-size: 14px; font-family: 'Inter', sans-serif; outline: none; margin-bottom: 12px; }
+  .gate-box input:focus { border-color: #4f8ef7; }
+  .gate-box button { width: 100%; background: #4f8ef7; border: none; border-radius: 8px; padding: 10px; color: white; font-size: 13px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
+  .gate-box button:hover { background: #3b7de8; }
+  .gate-error { font-size: 12px; color: #ef4444; margin-top: 10px; min-height: 14px; }
+
+  #dashboard { display: none; max-width: 900px; margin: 0 auto; padding: 24px; }
+  .db-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+  .db-header h1 { font-size: 18px; font-weight: 700; }
+  .db-header h1 span { color: #4f8ef7; }
+  .logout-btn { background: transparent; border: 1px solid #2a2a2a; color: #888; padding: 6px 14px; border-radius: 8px; font-size: 12px; cursor: pointer; font-family: 'Inter', sans-serif; }
+  .logout-btn:hover { color: #ccc; border-color: #3a3a3a; }
+
+  .panel { background: #111; border: 1px solid #1e1e1e; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  .panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: #888; margin-bottom: 12px; }
+
+  .q-field { margin-bottom: 12px; }
+  .q-field label { display: block; font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 5px; }
+  .q-field textarea, .q-field input[type="text"], .q-field input[type="number"], .q-field select {
+    width: 100%; background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 6px; padding: 8px 10px;
+    color: #ececec; font-size: 13px; font-family: 'Inter', sans-serif; outline: none; resize: vertical;
+  }
+  .q-field textarea:focus, .q-field input:focus, .q-field select:focus { border-color: #4f8ef7; }
+  .form-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+  .form-row .q-field { margin-bottom: 0; }
+
+  .upload-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .upload-row input[type="file"] { flex: 1; min-width: 200px; font-size: 12px; color: #888; }
+  .scan-btn { background: #4f8ef7; border: none; border-radius: 8px; padding: 10px 20px; color: white; font-size: 13px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
+  .scan-btn:hover:not(:disabled) { background: #3b7de8; }
+  .scan-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  #imagePreviewWrap { display: none; margin-top: 12px; }
+  #imagePreviewWrap img { max-width: 220px; max-height: 220px; border-radius: 8px; border: 1px solid #2a2a2a; display: block; }
+
+  #uploadStatus { font-size: 12px; margin-top: 12px; display: none; }
+  #uploadStatus.info { color: #4f8ef7; }
+  #uploadStatus.error { color: #ef4444; }
+  #uploadStatus.success { color: #4ade80; }
+
+  .table-wrap { background: #111; border: 1px solid #1e1e1e; border-radius: 10px; overflow: hidden; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  thead th { text-align: left; padding: 10px 12px; border-bottom: 1px solid #1e1e1e; color: #888; font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; white-space: nowrap; }
+  tbody tr { border-bottom: 1px solid #1a1a1a; }
+  tbody tr:last-child { border-bottom: none; }
+  tbody td { padding: 8px 12px; vertical-align: middle; }
+  .thumb { width: 52px; height: 52px; border-radius: 6px; object-fit: cover; border: 1px solid #2a2a2a; display: block; }
+  .row-name { font-weight: 600; }
+  .row-desc { font-size: 11px; color: #666; margin-top: 2px; max-width: 260px; }
+  .subject-chip { font-size: 11px; padding: 2px 8px; border-radius: 20px; font-weight: 600; display: inline-block; }
+  .subject-chip.Physics { background: #4f8ef720; color: #4f8ef7; }
+  .subject-chip.Biology { background: #4ade8020; color: #4ade80; }
+  .subject-chip.Chemistry { background: #f9731620; color: #f97316; }
+  .action-btn { background: #1a1a1a; border: 1px solid #2a2a2a; color: #ececec; padding: 6px 12px; border-radius: 6px; font-size: 11px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
+  .action-btn:hover { border-color: #4f8ef7; color: #4f8ef7; }
+  .action-btn.danger:hover { border-color: #ef4444; color: #ef4444; }
+  .empty-row td { text-align: center; padding: 40px; color: #555; }
+</style>
+</head>
+<body>
+
+<div id="gateOverlay">
+  <div class="gate-box">
+    <h1>Diagram Upload</h1>
+    <p>Internal tool — enter admin password</p>
+    <input type="password" id="gatePassword" placeholder="Password" autocomplete="off"/>
+    <button onclick="verifyPassword()">Enter</button>
+    <div class="gate-error" id="gateError"></div>
+  </div>
+</div>
+
+<div id="dashboard">
+  <div class="db-header">
+    <h1>NEET<span>-AI</span> Diagram Upload</h1>
+    <button class="logout-btn" onclick="logout()">Log out</button>
+  </div>
+
+  <div class="panel">
+    <h2>Upload a diagram</h2>
+    <div class="form-row" style="margin-bottom:12px;">
+      <div class="q-field">
+        <label>Subject</label>
+        <select id="subjectInput" onchange="onSubjectOrClassChange()">
+          <option value="">Select subject</option>
+          <option value="Physics">Physics</option>
+          <option value="Biology">Biology</option>
+          <option value="Chemistry">Chemistry</option>
+        </select>
+      </div>
+      <div class="q-field">
+        <label>Class</label>
+        <select id="classInput" onchange="onSubjectOrClassChange()">
+          <option value="">Select class</option>
+          <option value="11">11</option>
+          <option value="12">12</option>
+        </select>
+      </div>
+      <div class="q-field">
+        <label>Chapter</label>
+        <select id="chapterInput">
+          <option value="">Select subject + class first</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="q-field">
+      <label>Diagram name / title</label>
+      <input type="text" id="nameInput" placeholder="e.g. Human Heart Cross-Section, Ray Diagram - Convex Lens"/>
+    </div>
+
+    <div class="q-field">
+      <label>Description / caption (optional)</label>
+      <input type="text" id="descriptionInput" placeholder="Short caption or extra context"/>
+    </div>
+
+    <div class="q-field">
+      <label>Image (PNG, JPG, WEBP)</label>
+      <div class="upload-row">
+        <input type="file" id="imageFile" accept="image/png,image/jpeg,image/webp" onchange="onImageFileChange()"/>
+        <button type="button" class="scan-btn" id="uploadBtn" onclick="uploadDiagram()">Upload</button>
+      </div>
+      <div id="imagePreviewWrap"><img id="imagePreview" alt="Preview"/></div>
+    </div>
+
+    <div id="uploadStatus"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Uploaded diagrams (<span id="diagramCount">0</span>)</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th></th>
+            <th>Name</th>
+            <th>Subject</th>
+            <th>Class</th>
+            <th>Chapter</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="diagramsTableBody">
+          <tr class="empty-row"><td colspan="6">Loading...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+  const API_BASE = 'https://neet-ai-production.up.railway.app';
+  let adminKey = sessionStorage.getItem('admin_key') || '';
+  let selectedImageBase64 = null;
+  let selectedImageFilename = null;
+  let selectedImageMediaType = null;
+
+  // Same source of truth as pyqbank.html's / admin-pdf-review.html's neetSyllabus, kept in
+  // sync manually -- used to populate the chapter dropdown once subject + class are chosen.
+  const NEET_SYLLABUS = {
+    Biology: {
+      11: ['The Living World', 'Biological Classification', 'Plant Kingdom', 'Animal Kingdom', 'Morphology of Flowering Plants', 'Anatomy of Flowering Plants', 'Structural Organisation in Animals', 'Cell: The Unit of Life', 'Biomolecules', 'Cell Cycle and Cell Division', 'Transport in Plants', 'Mineral Nutrition', 'Photosynthesis in Higher Plants', 'Respiration in Plants', 'Plant Growth and Development', 'Digestion and Absorption', 'Breathing and Exchange of Gases', 'Body Fluids and Circulation', 'Excretory Products and their Elimination', 'Locomotion and Movement', 'Neural Control and Coordination', 'Chemical Coordination and Integration'],
+      12: ['Reproduction in Organisms', 'Sexual Reproduction in Flowering Plants', 'Human Reproduction', 'Reproductive Health', 'Principles of Inheritance and Variation', 'Molecular Basis of Inheritance', 'Evolution', 'Human Health and Disease', 'Strategies for Enhancement in Food Production', 'Microbes in Human Welfare', 'Biotechnology: Principles and Processes', 'Biotechnology and its Applications', 'Organisms and Populations', 'Ecosystem', 'Biodiversity and Conservation', 'Environmental Issues']
+    },
+    Physics: {
+      11: ['Units and Measurements', 'Motion in a Straight Line', 'Motion in a Plane', 'Laws of Motion', 'Work, Energy and Power', 'System of Particles and Rotational Motion', 'Gravitation', 'Mechanical Properties of Solids', 'Mechanical Properties of Fluids', 'Thermal Properties of Matter', 'Thermodynamics', 'Kinetic Theory', 'Oscillations', 'Waves'],
+      12: ['Electric Charges and Fields', 'Electrostatic Potential and Capacitance', 'Current Electricity', 'Moving Charges and Magnetism', 'Magnetism and Matter', 'Electromagnetic Induction', 'Alternating Current', 'Electromagnetic Waves', 'Ray Optics and Optical Instruments', 'Wave Optics', 'Dual Nature of Radiation and Matter', 'Atoms', 'Nuclei', 'Semiconductor Electronics: Materials, Devices and Simple Circuits']
+    },
+    Chemistry: {
+      11: ['Some Basic Concepts of Chemistry', 'Structure of Atom', 'Classification of Elements and Periodicity in Properties of Elements', 'Chemical Bonding and Molecular Structure', 'States of Matter: Gases and Liquids', 'Thermodynamics', 'Equilibrium', 'Redox Reactions', 'Hydrogen', 'The s-Block Elements (Alkali and Alkaline Earth Metals)', 'The p-Block Elements', 'Organic Chemistry: Some Basic Principles and Techniques', 'Hydrocarbons', 'Environmental Chemistry'],
+      12: ['The Solid State', 'Solutions', 'Electrochemistry', 'Chemical Kinetics', 'Surface Chemistry', 'General Principles and Processes of Isolation of Elements', 'The p-Block Elements', 'The d and f Block Elements', 'Coordination Compounds', 'Haloalkanes and Haloarenes', 'Alcohols, Phenols and Ethers', 'Aldehydes, Ketones and Carboxylic Acids', 'Amines', 'Biomolecules', 'Polymers', 'Chemistry in Everyday Life']
+    }
+  };
+
+  function authHeaders(extra) {
+    return Object.assign({ 'X-Admin-Key': adminKey }, extra || {});
+  }
+
+  async function describeHttpError(res) {
+    try {
+      const body = await res.json();
+      return body.error || body.detail || `HTTP ${res.status}`;
+    } catch (e) {
+      return `HTTP ${res.status}`;
+    }
+  }
+
+  async function verifyPassword() {
+    const pw = document.getElementById('gatePassword').value;
+    const errEl = document.getElementById('gateError');
+    errEl.textContent = '';
+    try {
+      const res = await fetch(`${API_BASE}/admin/verify`, { method: 'POST', headers: authHeaders({ 'X-Admin-Key': pw }) });
+      if (res.status === 200) {
+        adminKey = pw;
+        sessionStorage.setItem('admin_key', adminKey);
+        enterDashboard();
+      } else if (res.status === 429) {
+        const data = await res.json().catch(() => ({}));
+        errEl.textContent = data.detail || 'Too many failed attempts. Try again later.';
+      } else {
+        errEl.textContent = 'Wrong password.';
+      }
+    } catch (e) {
+      errEl.textContent = 'Could not reach server.';
+    }
+  }
+
+  document.getElementById('gatePassword').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') verifyPassword();
+  });
+
+  function logout() {
+    sessionStorage.removeItem('admin_key');
+    adminKey = '';
+    document.getElementById('dashboard').style.display = 'none';
+    document.getElementById('gateOverlay').style.display = 'flex';
+    document.getElementById('gatePassword').value = '';
+  }
+
+  async function enterDashboard() {
+    document.getElementById('gateOverlay').style.display = 'none';
+    document.getElementById('dashboard').style.display = 'block';
+    onSubjectOrClassChange();
+    loadDiagrams();
+  }
+
+  if (adminKey) {
+    enterDashboard();
+  }
+
+  // ---------------- Form ----------------
+
+  function onSubjectOrClassChange() {
+    const subject = document.getElementById('subjectInput').value;
+    const cls = document.getElementById('classInput').value;
+    const chapterSelect = document.getElementById('chapterInput');
+    if (!subject || !cls) {
+      chapterSelect.innerHTML = '<option value="">Select subject + class first</option>';
+      return;
+    }
+    const chapters = (NEET_SYLLABUS[subject] && NEET_SYLLABUS[subject][cls]) || [];
+    chapterSelect.innerHTML = '<option value="">Select chapter</option>' +
+      chapters.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+  }
+
+  function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s == null ? '' : String(s);
+    return div.innerHTML;
+  }
+
+  function fileToBase64(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result.split(',')[1]);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function onImageFileChange() {
+    const file = document.getElementById('imageFile').files[0];
+    const previewWrap = document.getElementById('imagePreviewWrap');
+    if (!file) {
+      selectedImageBase64 = null;
+      selectedImageFilename = null;
+      selectedImageMediaType = null;
+      previewWrap.style.display = 'none';
+      return;
+    }
+    selectedImageFilename = file.name;
+    selectedImageMediaType = file.type || 'image/png';
+    selectedImageBase64 = await fileToBase64(file);
+    document.getElementById('imagePreview').src = `data:${selectedImageMediaType};base64,${selectedImageBase64}`;
+    previewWrap.style.display = 'block';
+  }
+
+  function setUploadStatus(text, cls) {
+    const el = document.getElementById('uploadStatus');
+    el.textContent = text;
+    el.className = cls || '';
+    el.style.display = text ? 'block' : 'none';
+  }
+
+  async function uploadDiagram() {
+    const subject = document.getElementById('subjectInput').value;
+    const cls = document.getElementById('classInput').value;
+    const chapter = document.getElementById('chapterInput').value;
+    const name = document.getElementById('nameInput').value.trim();
+    const description = document.getElementById('descriptionInput').value.trim();
+
+    if (!subject || !chapter || !name || !selectedImageBase64) {
+      setUploadStatus('Subject, chapter, name, and an image are all required.', 'error');
+      return;
+    }
+
+    const uploadBtn = document.getElementById('uploadBtn');
+    uploadBtn.disabled = true;
+    setUploadStatus('Uploading image...', 'info');
+
+    try {
+      const uploadRes = await fetch(`${API_BASE}/admin/diagram-upload`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ filename: selectedImageFilename, data: selectedImageBase64, media_type: selectedImageMediaType })
+      });
+      if (uploadRes.status === 401) { logout(); return; }
+      if (!uploadRes.ok) { setUploadStatus(await describeHttpError(uploadRes), 'error'); return; }
+      const uploadData = await uploadRes.json();
+      if (uploadData.error) { setUploadStatus(uploadData.error, 'error'); return; }
+
+      setUploadStatus('Saving diagram record...', 'info');
+      const createRes = await fetch(`${API_BASE}/admin/diagrams-create`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          subject, class: cls ? parseInt(cls, 10) : null, chapter, name,
+          description: description || null, image_url: uploadData.url
+        })
+      });
+      if (createRes.status === 401) { logout(); return; }
+      if (!createRes.ok) { setUploadStatus(await describeHttpError(createRes), 'error'); return; }
+      const createData = await createRes.json();
+      if (createData.error) { setUploadStatus(createData.error, 'error'); return; }
+
+      setUploadStatus('Uploaded successfully.', 'success');
+      document.getElementById('nameInput').value = '';
+      document.getElementById('descriptionInput').value = '';
+      document.getElementById('imageFile').value = '';
+      document.getElementById('imagePreviewWrap').style.display = 'none';
+      selectedImageBase64 = null;
+      selectedImageFilename = null;
+      selectedImageMediaType = null;
+      loadDiagrams();
+    } catch (e) {
+      setUploadStatus('Could not reach server.', 'error');
+    } finally {
+      uploadBtn.disabled = false;
+    }
+  }
+
+  // ---------------- List ----------------
+
+  async function loadDiagrams() {
+    const tbody = document.getElementById('diagramsTableBody');
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="6">Loading...</td></tr>';
+    try {
+      const res = await fetch(`${API_BASE}/admin/diagrams-list`, { headers: authHeaders() });
+      if (res.status === 401) { logout(); return; }
+      if (!res.ok) { tbody.innerHTML = `<tr class="empty-row"><td colspan="6">${escapeHtml(await describeHttpError(res))}</td></tr>`; return; }
+      const data = await res.json();
+      if (data.error) { tbody.innerHTML = `<tr class="empty-row"><td colspan="6">${escapeHtml(data.error)}</td></tr>`; return; }
+      renderDiagrams(data.diagrams || []);
+    } catch (e) {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="6">Could not reach server.</td></tr>';
+    }
+  }
+
+  function renderDiagrams(diagrams) {
+    document.getElementById('diagramCount').textContent = diagrams.length;
+    const tbody = document.getElementById('diagramsTableBody');
+    if (diagrams.length === 0) {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="6">No diagrams uploaded yet.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = diagrams.map(d => `
+      <tr data-id="${d.id}">
+        <td><img class="thumb" src="${escapeHtml(d.image_url)}" alt=""/></td>
+        <td>
+          <div class="row-name">${escapeHtml(d.name)}</div>
+          ${d.description ? `<div class="row-desc">${escapeHtml(d.description)}</div>` : ''}
+        </td>
+        <td><span class="subject-chip ${escapeHtml(d.subject)}">${escapeHtml(d.subject)}</span></td>
+        <td>${d.class != null ? escapeHtml(String(d.class)) : '—'}</td>
+        <td>${escapeHtml(d.chapter)}</td>
+        <td><button type="button" class="action-btn danger" onclick="deleteDiagram(${d.id})">Delete</button></td>
+      </tr>
+    `).join('');
+  }
+
+  async function deleteDiagram(id) {
+    if (!confirm('Delete this diagram? This removes both the image file and the record.')) return;
+    try {
+      const res = await fetch(`${API_BASE}/admin/diagram-delete/${id}`, { method: 'DELETE', headers: authHeaders() });
+      if (res.status === 401) { logout(); return; }
+      if (!res.ok) { alert(await describeHttpError(res)); return; }
+      const data = await res.json();
+      if (data.error) { alert(data.error); return; }
+      loadDiagrams();
+    } catch (e) {
+      alert('Could not reach server.');
+    }
+  }
+</script>
+</body>
+</html>

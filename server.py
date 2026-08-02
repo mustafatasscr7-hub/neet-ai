@@ -244,6 +244,14 @@ class DiagramUploadRequest(BaseModel):
     data: str  # base64-encoded image bytes
     media_type: str = "image/png"
 
+class DiagramCreate(BaseModel):
+    subject: str
+    class_: Optional[int] = Field(None, alias="class")
+    chapter: str
+    name: str
+    description: Optional[str] = None
+    image_url: str
+
 class PyqQuestionCreate(BaseModel):
     subject: str
     chapter: Optional[str] = None
@@ -1689,6 +1697,123 @@ async def admin_pyq_diagram_upload(body: DiagramUploadRequest, _: None = Depends
         if response.status_code >= 400:
             return {"error": response.text}
         return {"url": f"{SUPABASE_URL}/storage/v1/object/public/Q-Daigrams-BIO/{path}"}
+    except Exception as e:
+        return {"error": str(e)}
+
+DIAGRAMS_BUCKET = "ncert-diagrams"
+ALLOWED_DIAGRAM_EXTENSIONS = {"png", "jpg", "jpeg", "webp"}
+
+# Reference diagrams (admin-diagram-upload.html) -- separate bucket from Q-Daigrams-BIO
+# since these are standalone NCERT-style reference images for future chat doubt-matching,
+# not attached to a specific pyq/mock_test_questions row. Must be created manually as a
+# PUBLIC bucket in the Supabase dashboard before this endpoint works -- there is no
+# programmatic bucket-creation call anywhere in this codebase.
+@app.post("/admin/diagram-upload")
+async def admin_diagram_upload(body: DiagramUploadRequest, _: None = Depends(verify_admin)):
+    ext = body.filename.rsplit(".", 1)[-1].lower() if "." in body.filename else ""
+    if ext not in ALLOWED_DIAGRAM_EXTENSIONS or not body.media_type.startswith("image/"):
+        return {"error": "Only PNG, JPG, and WEBP images are allowed"}
+    try:
+        file_bytes = base64.b64decode(body.data)
+    except Exception:
+        return {"error": "Could not decode image data"}
+    import uuid
+    path = f"{uuid.uuid4().hex}.{ext}"
+    try:
+        response = http_requests.post(
+            f"{SUPABASE_URL}/storage/v1/object/{DIAGRAMS_BUCKET}/{path}",
+            headers={
+                "apikey": SUPABASE_SERVICE_KEY,
+                "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+                "Content-Type": body.media_type
+            },
+            data=file_bytes
+        )
+        if response.status_code >= 400:
+            return {"error": f"Storage upload failed (is the '{DIAGRAMS_BUCKET}' bucket created and public?): {response.text}"}
+        return {"url": f"{SUPABASE_URL}/storage/v1/object/public/{DIAGRAMS_BUCKET}/{path}"}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.post("/admin/diagrams-create")
+async def admin_diagrams_create(body: DiagramCreate, _: None = Depends(verify_admin)):
+    if body.subject not in ("Biology", "Physics", "Chemistry"):
+        return {"error": "Invalid subject"}
+    if not body.chapter.strip() or not body.name.strip() or not body.image_url.strip():
+        return {"error": "chapter, name, and image_url are required"}
+    payload = {
+        "subject": body.subject,
+        "class": body.class_,
+        "chapter": body.chapter.strip(),
+        "name": body.name.strip(),
+        "description": body.description.strip() if body.description else None,
+        "image_url": body.image_url
+    }
+    try:
+        response = await async_client.post(
+            f"{SUPABASE_URL}/rest/v1/diagrams",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
+            json=payload
+        )
+        if response.status_code >= 400:
+            return {"error": response.text}
+        created = response.json()
+        return {"diagram": created[0] if created else None}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/admin/diagrams-list")
+async def admin_diagrams_list(_: None = Depends(verify_admin)):
+    try:
+        response = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/diagrams",
+            headers=ADMIN_HEADERS,
+            params={
+                "select": "id,subject,class,chapter,name,description,image_url,created_at",
+                "order": "created_at.desc",
+                "limit": 1000
+            }
+        )
+        if response.status_code >= 400:
+            return {"error": response.text}
+        return {"diagrams": response.json()}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.delete("/admin/diagram-delete/{diagram_id}")
+async def admin_diagram_delete(diagram_id: int, _: None = Depends(verify_admin)):
+    try:
+        row_resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/diagrams",
+            headers=ADMIN_HEADERS,
+            params={"id": f"eq.{diagram_id}", "select": "image_url"}
+        )
+        if row_resp.status_code >= 400:
+            return {"error": row_resp.text}
+        rows = row_resp.json()
+        if not rows:
+            return {"error": "Row not found"}
+        image_url = rows[0].get("image_url") or ""
+        prefix = f"{SUPABASE_URL}/storage/v1/object/public/{DIAGRAMS_BUCKET}/"
+        if image_url.startswith(prefix):
+            storage_path = image_url[len(prefix):]
+            # Best-effort: a storage delete failure (e.g. file already gone) shouldn't block
+            # removing the DB row, since an orphaned storage object is harmless either way.
+            await async_client.delete(
+                f"{SUPABASE_URL}/storage/v1/object/{DIAGRAMS_BUCKET}/{storage_path}",
+                headers=ADMIN_HEADERS
+            )
+        del_resp = await async_client.delete(
+            f"{SUPABASE_URL}/rest/v1/diagrams",
+            headers={**ADMIN_HEADERS, "Prefer": "return=representation"},
+            params={"id": f"eq.{diagram_id}"}
+        )
+        if del_resp.status_code >= 400:
+            return {"error": del_resp.text}
+        deleted = del_resp.json()
+        if not deleted:
+            return {"error": "Row not found"}
+        return {"success": True}
     except Exception as e:
         return {"error": str(e)}
 
