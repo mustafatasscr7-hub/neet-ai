@@ -1700,7 +1700,7 @@ async def admin_pyq_diagram_upload(body: DiagramUploadRequest, _: None = Depends
     except Exception as e:
         return {"error": str(e)}
 
-DIAGRAMS_BUCKET = "ncert-diagrams"
+DIAGRAMS_BUCKET = "ncert-daigrams"  # bucket name as actually created in Supabase (matches the existing Q-Daigrams-BIO typo convention)
 ALLOWED_DIAGRAM_EXTENSIONS = {"png", "jpg", "jpeg", "webp"}
 
 # Reference diagrams (admin-diagram-upload.html) -- separate bucket from Q-Daigrams-BIO
