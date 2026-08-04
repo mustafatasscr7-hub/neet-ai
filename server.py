@@ -10,6 +10,7 @@ import requests
 import httpx
 import openai
 import base64
+import re
 from dotenv import load_dotenv
 import os
 import sys
@@ -259,6 +260,10 @@ class DiagramUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     reviewed: Optional[bool] = None
+
+class DiagramMatchRequest(BaseModel):
+    text: str   # the student's doubt text (same text /chat embeds for NCERT RAG)
+    answer: str = ""  # the AI's full answer, for chapter-line extraction
 
 class PyqQuestionCreate(BaseModel):
     subject: str
@@ -601,6 +606,59 @@ async def get_embedding(text: str):
 # safely inspect or edit that function, so excluding post-hoc from a table we can't see is the
 # only change we can fully verify ourselves.
 NCERT_NON_CHAPTER_LABELS = {"Preliminary Pages", "Appendix", "Answer Key"}
+
+# ---------------- Diagram matching (chat.html doubt-solving) ----------------
+# The SYSTEM_PROMPT instructs the model to always include a line like
+# "📚 Chapter: [NCERT Class X, Chapter X — Chapter Name]" in its answer, but nothing previously
+# parsed it back out -- this is the first consumer. The bracket's chapter NAME is whatever
+# follows the last dash-like separator ("—"/"–"/" - ", the model isn't perfectly consistent
+# about which one), since "Chapter X" itself isn't a lookup key.
+DIAGRAM_CHAPTER_LINE_RE = re.compile(r'chapter:\s*\[([^\]]*)\]', re.IGNORECASE)
+
+def extract_chapter_candidate(answer_text: str):
+    m = DIAGRAM_CHAPTER_LINE_RE.search(answer_text or '')
+    if not m:
+        return None
+    bracket = m.group(1)
+    for sep in ('—', '–', ' - '):
+        if sep in bracket:
+            candidate = bracket.rsplit(sep, 1)[-1].strip()
+            if candidate:
+                return candidate
+    return bracket.strip() or None
+
+DIAGRAM_CHAPTER_FUZZY_THRESHOLD = 0.3  # same spirit/magnitude as admin-pdf-review.html's FILENAME_MATCH_THRESHOLD
+
+def _tokenize_for_chapter_match(text: str):
+    return set(w.lower() for w in re.sub(r'[^a-zA-Z\s]', ' ', text or '').split() if len(w) > 1)
+
+# Token-overlap fuzzy match, same technique as admin-pdf-review.html's matchChapterFromFilename
+# (JS) -- the model's free-text chapter name won't always exactly string-match a diagrams.chapter
+# value verbatim (e.g. punctuation/wording drift), so an exact-equality filter would miss real
+# matches far too often.
+def fuzzy_match_chapter(candidate: str, known_chapters: list):
+    if not candidate or not known_chapters:
+        return None
+    candidate_tokens = _tokenize_for_chapter_match(candidate)
+    if not candidate_tokens:
+        return None
+    best, best_score = None, 0.0
+    for chapter in known_chapters:
+        chapter_tokens = _tokenize_for_chapter_match(chapter)
+        if not chapter_tokens:
+            continue
+        union = candidate_tokens | chapter_tokens
+        score = len(candidate_tokens & chapter_tokens) / len(union) if union else 0
+        if score > best_score:
+            best, best_score = chapter, score
+    return best if best_score >= DIAGRAM_CHAPTER_FUZZY_THRESHOLD else None
+
+def build_diagram_embedding_text(name: str, description: str, chapter: str):
+    parts = [name]
+    if description:
+        parts.append(description)
+    parts.append(chapter)
+    return " ".join(p for p in parts if p)
 
 async def search_ncert(query: str, limit: int = 3):
     embedding = await get_embedding(query)
@@ -1089,6 +1147,63 @@ async def report_question(req: ReportQuestionRequest, _: None = Depends(rate_lim
 async def get_pyq(message: Message, _: None = Depends(rate_limiter(15, 60))):
     results = await search_pyq(message.text)
     return {"pyqs": results}
+
+# Threshold is a similarity floor (1 - cosine distance), same convention as match_ncert's own
+# match_threshold. Configurable here -- no separate settings store in this project, every other
+# tunable constant (MIN_CONFIDENCE_SCORE, FILENAME_MATCH_THRESHOLD, etc) lives as a plain
+# module-level constant too.
+DIAGRAM_MATCH_THRESHOLD = 0.75
+
+# Mirrors the "always-available action button, lazily fetched on click" pattern the PYQ button
+# (/pyq) already uses -- chat.html calls this on demand when the student clicks "Show Diagram",
+# not during the /chat stream itself, so no change was needed to /chat's plain-text streaming
+# response format.
+#
+# Embedding reuse: get_embedding() caches by sha256(text) in the embedding_cache table (see
+# above). /chat already computed and cached an embedding for this exact doubt text via
+# search_ncert()'s own get_embedding(text) call before this button can even be clicked (the
+# button only exists after the full answer has streamed in) -- so this call is a cache hit in
+# practice, not a second real OpenAI charge. The one theoretical exception is a click landing
+# before /chat's fire-and-forget cache write (asyncio.create_task, not awaited) has completed;
+# that's a same-second race with negligible cost (one extra ~$0.00002 embedding call), not a
+# correctness issue.
+@app.post("/diagram-match")
+async def diagram_match(req: DiagramMatchRequest, _: None = Depends(rate_limiter(15, 60))):
+    try:
+        chapter = None
+        candidate = extract_chapter_candidate(req.answer)
+        if candidate:
+            chapters_resp = await async_client.get(
+                f"{SUPABASE_URL}/rest/v1/diagrams",
+                headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+                params={"select": "chapter", "reviewed": "eq.true"}
+            )
+            known_chapters = sorted(set(r["chapter"] for r in chapters_resp.json() if r.get("chapter"))) if chapters_resp.status_code == 200 else []
+            chapter = fuzzy_match_chapter(candidate, known_chapters)
+            # Falls through to filter_chapter=None (search all reviewed diagrams) when
+            # extraction/fuzzy-match fails or is ambiguous, per spec.
+
+        embedding = await get_embedding(req.text)
+        response = await async_client.post(
+            f"{SUPABASE_URL}/rest/v1/rpc/match_diagrams",
+            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"},
+            json={
+                "query_embedding": embedding,
+                "match_threshold": DIAGRAM_MATCH_THRESHOLD,
+                "match_count": 1,
+                "filter_chapter": chapter
+            }
+        )
+        if response.status_code != 200:
+            return {"matched": False}
+        rows = response.json()
+        if not rows:
+            return {"matched": False}
+        top = rows[0]
+        return {"matched": True, "diagram_id": top["id"], "image_url": top["image_url"], "name": top.get("name")}
+    except Exception:
+        return {"matched": False}
+
 @app.get("/mock-test-questions")
 async def get_mock_test_questions():
     try:
@@ -1749,13 +1864,23 @@ async def admin_diagrams_create(body: DiagramCreate, _: None = Depends(verify_ad
         return {"error": "Invalid subject"}
     if not body.chapter.strip() or not body.name.strip() or not body.image_url.strip():
         return {"error": "chapter, name, and image_url are required"}
+    name = body.name.strip()
+    chapter = body.chapter.strip()
+    description = body.description.strip() if body.description else None
+    try:
+        # Embedding is a match-quality enhancement for chat.html's diagram-matching, not a hard
+        # requirement for the row to exist -- a failure here shouldn't block the upload itself.
+        embedding = await get_embedding(build_diagram_embedding_text(name, description, chapter))
+    except Exception:
+        embedding = None
     payload = {
         "subject": body.subject,
         "class": body.class_,
-        "chapter": body.chapter.strip(),
-        "name": body.name.strip(),
-        "description": body.description.strip() if body.description else None,
-        "image_url": body.image_url
+        "chapter": chapter,
+        "name": name,
+        "description": description,
+        "image_url": body.image_url,
+        "embedding": embedding
     }
     try:
         response = await async_client.post(
@@ -1809,6 +1934,27 @@ async def admin_diagram_update(diagram_id: int, body: DiagramUpdate, _: None = D
         update_fields["reviewed"] = body.reviewed
     if not update_fields:
         return {"error": "No fields to update"}
+
+    # Keep the embedding in sync whenever the text it's derived from changes -- otherwise an
+    # edited diagram would silently keep matching doubts on its OLD name/description/chapter
+    # forever. Best-effort: an embedding refresh failure shouldn't block the metadata edit.
+    if any(k in update_fields for k in ("name", "description", "chapter")):
+        try:
+            current_resp = await async_client.get(
+                f"{SUPABASE_URL}/rest/v1/diagrams",
+                headers=ADMIN_HEADERS,
+                params={"id": f"eq.{diagram_id}", "select": "name,description,chapter"}
+            )
+            current_rows = current_resp.json() if current_resp.status_code < 400 else []
+            if current_rows:
+                current = current_rows[0]
+                new_name = update_fields.get("name", current["name"])
+                new_description = update_fields["description"] if "description" in update_fields else current.get("description")
+                new_chapter = update_fields.get("chapter", current["chapter"])
+                update_fields["embedding"] = await get_embedding(build_diagram_embedding_text(new_name, new_description, new_chapter))
+        except Exception:
+            pass
+
     try:
         response = await async_client.patch(
             f"{SUPABASE_URL}/rest/v1/diagrams",
@@ -1859,6 +2005,36 @@ async def admin_diagram_delete(diagram_id: int, _: None = Depends(verify_admin))
         if not deleted:
             return {"error": "Row not found"}
         return {"success": True}
+    except Exception as e:
+        return {"error": str(e)}
+
+# One-off/ongoing backfill for diagram rows created before embedding generation existed (or any
+# future edge case, e.g. a manual DB import) -- diagrams-create and diagram-update both keep the
+# embedding in sync going forward, so this only ever has work to do for rows that predate them.
+@app.post("/admin/diagrams-backfill-embeddings")
+async def admin_diagrams_backfill_embeddings(_: None = Depends(verify_admin)):
+    try:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/diagrams",
+            headers=ADMIN_HEADERS,
+            params={"select": "id,name,description,chapter", "embedding": "is.null"}
+        )
+        if resp.status_code >= 400:
+            return {"error": resp.text}
+        rows = resp.json()
+        updated = 0
+        for row in rows:
+            embed_text = build_diagram_embedding_text(row["name"], row.get("description"), row["chapter"])
+            embedding = await get_embedding(embed_text)
+            patch_resp = await async_client.patch(
+                f"{SUPABASE_URL}/rest/v1/diagrams",
+                headers={**ADMIN_HEADERS, "Content-Type": "application/json"},
+                params={"id": f"eq.{row['id']}"},
+                json={"embedding": embedding}
+            )
+            if patch_resp.status_code < 400:
+                updated += 1
+        return {"updated": updated, "total_missing": len(rows)}
     except Exception as e:
         return {"error": str(e)}
 

@@ -313,6 +313,9 @@
     .input-hint { text-align: center; font-size: 11px; color: #333; margin-top: 10px; }
     .pyq-btn { margin-top: 12px; background: transparent; border: 1px solid #4f8ef7; color: #4f8ef7; padding: 7px 14px; border-radius: 8px; cursor: pointer; font-size: 12px; font-family: 'Inter', sans-serif; transition: all 0.2s; display: block; }
     .pyq-btn:hover { background: #4f8ef720; }
+    .diagram-btn { margin-top: 8px; background: transparent; border: 1px solid #a78bfa; color: #a78bfa; padding: 7px 14px; border-radius: 8px; cursor: pointer; font-size: 12px; font-family: 'Inter', sans-serif; transition: all 0.2s; display: block; }
+    .diagram-btn:hover:not(:disabled) { background: #a78bfa20; }
+    .diagram-btn:disabled { cursor: default; opacity: 0.75; }
     .pyq-results { margin-top: 12px; border-top: 1px solid #1e1e1e; padding-top: 12px; }
     .pyq-item { padding: 8px 0; border-bottom: 1px solid #1a1a1a; font-size: 13px; color: #aaa; line-height: 1.5; }
    .pyq-year { color: #4f8ef7; font-weight: 600; margin-right: 8px; }
@@ -1578,6 +1581,69 @@ let selectedImages = [];
       document.body.appendChild(modal);
     }
 
+    // No lightbox/expanded-image pattern existed anywhere in this file before -- built fresh,
+    // structurally following showPYQModal's own construction pattern (createElement + inline
+    // cssText) so it fits the existing visual style rather than introducing a new one.
+    function showDiagramModal(diagram) {
+      const existing = document.getElementById('diagram-modal');
+      if (existing) existing.remove();
+
+      const modal = document.createElement('div');
+      modal.id = 'diagram-modal';
+      modal.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.75);z-index:1000;display:flex;align-items:center;justify-content:center;';
+      modal.onclick = function(e) { if (e.target === modal) modal.remove(); };
+
+      const box = document.createElement('div');
+      box.style.cssText = 'background:#1e1e2e;border-radius:12px;padding:16px;max-width:90vw;max-height:85vh;overflow:auto;';
+
+      const header = document.createElement('div');
+      header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px;';
+      const title = document.createElement('h3');
+      title.style.cssText = 'margin:0;color:#a78bfa;font-size:15px;';
+      title.textContent = diagram.name || 'Diagram';
+      header.appendChild(title);
+      const closeBtn = document.createElement('button');
+      closeBtn.textContent = '✕';
+      closeBtn.style.cssText = 'background:none;border:none;color:#888;font-size:20px;cursor:pointer;flex-shrink:0;';
+      closeBtn.onclick = () => modal.remove();
+      header.appendChild(closeBtn);
+      box.appendChild(header);
+
+      const img = document.createElement('img');
+      img.src = diagram.image_url;
+      img.alt = diagram.name || 'Diagram';
+      img.style.cssText = 'max-width:100%;max-height:70vh;display:block;border-radius:8px;';
+      box.appendChild(img);
+
+      modal.appendChild(box);
+      document.body.appendChild(modal);
+    }
+
+    // Shared by both the live-streamed answer's button and the conversation-history-reload
+    // button -- same lazy-fetch-on-click pattern as the PYQ button (no change needed to /chat's
+    // plain-text streaming response to carry this data).
+    async function handleShowDiagramClick(btnEl, doubtText, answerText) {
+      btnEl.disabled = true;
+      btnEl.innerHTML = '⏳ Finding diagram...';
+      try {
+        const res = await fetch(`${API_BASE}/diagram-match`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: doubtText, answer: answerText })
+        });
+        const data = await res.json();
+        if (data.matched && data.image_url) {
+          showDiagramModal(data);
+          btnEl.innerHTML = '🖼️ Show Diagram';
+          btnEl.disabled = false;
+        } else {
+          btnEl.innerHTML = 'No diagram available for this topic';
+        }
+      } catch (e) {
+        btnEl.innerHTML = '❌ Error loading';
+      }
+    }
+
     function buildActionsDiv(role, timeStr) {
       const actions = document.createElement('div');
       actions.className = 'message-actions';
@@ -1656,6 +1722,12 @@ let selectedImages = [];
             }
           };
           bubble.appendChild(pyqBtn);
+
+          const diagramBtn = document.createElement('button');
+          diagramBtn.className = 'diagram-btn';
+          diagramBtn.innerHTML = '🖼️ Show Diagram';
+          diagramBtn.onclick = () => handleShowDiagramClick(diagramBtn, userQuestion, text);
+          bubble.appendChild(diagramBtn);
         }
 
         contentWrapper.appendChild(bubble);
@@ -2699,6 +2771,12 @@ function plainTextFromMarkdown(text) {
           }
         };
         bubble.appendChild(pyqBtn);
+
+        const diagramBtn = document.createElement('button');
+        diagramBtn.className = 'diagram-btn';
+        diagramBtn.innerHTML = '🖼️ Show Diagram';
+        diagramBtn.onclick = () => handleShowDiagramClick(diagramBtn, pyqSearchText, fullText);
+        bubble.appendChild(diagramBtn);
 
         const aiTimeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         aiRow.querySelector('.message-content').appendChild(buildActionsDiv('ai', aiTimeStr));
