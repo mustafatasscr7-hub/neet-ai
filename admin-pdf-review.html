@@ -40,6 +40,14 @@
   .subject-btn.active { border-color: #4f8ef7; background: #4f8ef712; color: #4f8ef7; }
   .subject-btn .coverage { display: block; font-size: 10px; font-weight: 400; color: #666; margin-top: 3px; }
 
+  /* Separate class from .subject-btn (not just a style choice) -- selectSubject() re-queries
+     every .subject-btn on the page to toggle its own active state, and a shared class would
+     have made it silently clear the mode-tab's active highlight every time the subject changes. */
+  .mode-tabs { display: flex; gap: 10px; margin-bottom: 18px; }
+  .mode-btn { flex: 1; background: #0d0d0d; border: 1px solid #2a2a2a; color: #ccc; padding: 10px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; text-align: center; }
+  .mode-btn:hover { border-color: #4f8ef750; }
+  .mode-btn.active { border-color: #4f8ef7; background: #4f8ef712; color: #4f8ef7; }
+
   .upload-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   .upload-row input[type="file"] { flex: 1; min-width: 200px; font-size: 12px; color: #888; }
   .scan-btn { background: #4f8ef7; border: none; border-radius: 8px; padding: 10px 20px; color: white; font-size: 13px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
@@ -179,19 +187,37 @@
   </div>
 
   <div class="panel">
+    <div class="mode-tabs" id="inputModeTabs">
+      <button type="button" class="mode-btn active" data-mode="pdf" onclick="selectInputMode('pdf')">📄 PDF Scan</button>
+      <button type="button" class="mode-btn" data-mode="paste" onclick="selectInputMode('paste')">📋 Paste LaTeX (Mathpix/SimpleTex)</button>
+    </div>
+
     <h2>1. Choose subject</h2>
     <div class="subject-picker" id="subjectPicker">
       <button type="button" class="subject-btn" data-subject="Biology" onclick="selectSubject('Biology')">Biology<span class="coverage" id="coverage-Biology"></span></button>
       <button type="button" class="subject-btn" data-subject="Physics" onclick="selectSubject('Physics')">Physics<span class="coverage" id="coverage-Physics"></span></button>
       <button type="button" class="subject-btn" data-subject="Chemistry" onclick="selectSubject('Chemistry')">Chemistry<span class="coverage" id="coverage-Chemistry"></span></button>
     </div>
-    <h2>2. Upload PDF</h2>
-    <div class="upload-row">
-      <input type="file" id="pdfFile" accept="application/pdf" onchange="updateScanButton()"/>
-      <button type="button" class="scan-btn" id="scanBtn" disabled onclick="scanPdf()">Scan PDF</button>
+
+    <div id="pdfModeSection">
+      <h2>2. Upload PDF</h2>
+      <div class="upload-row">
+        <input type="file" id="pdfFile" accept="application/pdf" onchange="updateScanButton()"/>
+        <button type="button" class="scan-btn" id="scanBtn" disabled onclick="scanPdf()">Scan PDF</button>
+      </div>
+      <div id="scanBtnHint" style="font-size:11px;color:#666;margin-top:8px;">Pick a subject above and choose a PDF file to enable scanning.</div>
+      <div id="scanStatus"></div>
     </div>
-    <div id="scanBtnHint" style="font-size:11px;color:#666;margin-top:8px;">Pick a subject above and choose a PDF file to enable scanning.</div>
-    <div id="scanStatus"></div>
+
+    <div id="pasteModeSection" style="display:none;">
+      <h2>2. Paste LaTeX text</h2>
+      <textarea id="pasteTextarea" rows="10" placeholder="Paste Mathpix or SimpleTex output here (both are auto-detected)..." style="width:100%;background:#0d0d0d;border:1px solid #2a2a2a;border-radius:8px;padding:10px 12px;color:#ececec;font-family:ui-monospace,Consolas,monospace;font-size:12px;line-height:1.5;resize:vertical;"></textarea>
+      <div class="upload-row" style="margin-top:10px;">
+        <button type="button" class="scan-btn" id="parseTextBtn" disabled onclick="parsePastedTextIntoBlocks()">Parse Text</button>
+      </div>
+      <div id="parseBtnHint" style="font-size:11px;color:#666;margin-top:8px;">Pick a subject above to enable parsing.</div>
+      <div id="parseHint" style="font-size:12px;margin-top:8px;"></div>
+    </div>
   </div>
 
   <div id="summaryBar">
@@ -222,6 +248,7 @@
   let blocks = [];            // in-memory question blocks for the current scan session
   let blockIdSeq = 0;
   let scanFilenameMatch = null; // {chapter, score, tied} from the last scanned PDF's filename, or null
+  let inputMode = 'pdf';      // 'pdf' (Claude Vision scan) or 'paste' (Mathpix/SimpleTex text) -- which input panel is showing
   const DRAFT_STORAGE_KEY = 'pdf_review_draft_v1'; // versioned so a future schema change can't crash on an old saved draft
   let pendingDraft = null; // parsed draft object while the resume/discard banner is showing, null otherwise
   let autoSaveTimer = null;
@@ -461,6 +488,7 @@
         pdfQuestionsExtracted: currentPdfQuestionsExtracted,
         blockIdSeq,
         scanFilenameMatch,
+        inputMode,
         blocks: serializeBlocksForDraft()
       };
       localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(draft));
@@ -536,6 +564,7 @@
     if (currentSubject) {
       document.querySelectorAll('.subject-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.subject === currentSubject));
     }
+    selectInputMode(draft.inputMode || 'pdf'); // absent on v1 drafts saved before Paste LaTeX mode existed -- default to the only mode that existed then
     renderAllBlocks();
     updateSummaryBar();
     document.getElementById('summaryBar').style.display = blocks.length ? 'flex' : 'none';
@@ -554,6 +583,10 @@
   }
 
   function updateScanButton() {
+    // Piggybacked here rather than added to every call site individually -- this already runs
+    // at every point currentSubject could have changed (selectSubject, loadSubjectData,
+    // resumeDraft), so the paste-mode button stays in sync for free.
+    updateParseButton();
     const file = document.getElementById('pdfFile').files[0];
     document.getElementById('scanBtn').disabled = !currentSubject || !file;
     const hintEl = document.getElementById('scanBtnHint');
@@ -562,6 +595,285 @@
     else if (!currentSubject && !file) hintEl.textContent = 'Pick a subject above and choose a PDF file to enable scanning.';
     else if (!currentSubject) hintEl.textContent = 'Pick a subject above to enable scanning.';
     else hintEl.textContent = 'Choose a PDF file to enable scanning.';
+  }
+
+  function updateParseButton() {
+    const btn = document.getElementById('parseTextBtn');
+    if (!btn) return;
+    btn.disabled = !currentSubject;
+    const hintEl = document.getElementById('parseBtnHint');
+    if (hintEl) hintEl.textContent = currentSubject ? '' : 'Pick a subject above to enable parsing.';
+  }
+
+  // ---------------- Input mode: PDF Scan vs Paste LaTeX ----------------
+
+  function selectInputMode(mode) {
+    inputMode = mode;
+    document.querySelectorAll('.mode-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.mode === mode));
+    document.getElementById('pdfModeSection').style.display = mode === 'pdf' ? 'block' : 'none';
+    document.getElementById('pasteModeSection').style.display = mode === 'paste' ? 'block' : 'none';
+    updateScanButton();
+  }
+
+  // ---------------- Mathpix/SimpleTex paste parsing ----------------
+  // Ported verbatim from admin-scanned-paste-parser.html (same functions, unmodified) --
+  // see that file's own comments for the reasoning behind each regex/heuristic. Kept as an
+  // exact copy rather than a shared <script src> so this page has no runtime dependency on
+  // the other admin tool ever being present/unchanged.
+
+  // Strips a couple of always-safe-to-remove LaTeX document wrappers Mathpix commonly emits
+  // around the whole paste. Anything else (itemize wrappers around JUST the options) is handled
+  // per-question inside parseQuestionChunk, since those can't be safely stripped globally.
+  function cleanupLatexWrappers(text) {
+    return text
+      .replace(/\\begin\{document\}/g, '')
+      .replace(/\\end\{document\}/g, '')
+      .replace(/\\documentclass(\[[^\]]*\])?\{[^}]*\}/g, '')
+      .trim();
+  }
+
+  // [SOURCE YEAR] tag, e.g. "[AIPMT 2007]" -- a bracket group containing a 4-digit year, NOT
+  // part of a \item[...] marker (those are option/question markers, not source tags).
+  function extractSourceTag(chunk) {
+    const re = /\[([^\[\]]*?(\d{4})[^\[\]]*)\]/g;
+    let m;
+    while ((m = re.exec(chunk)) !== null) {
+      const precedingText = chunk.slice(Math.max(0, m.index - 5), m.index);
+      if (/\\item\s*$/.test(precedingText)) continue; // this is a \item[...] marker, not a tag
+      return {
+        sourceTag: m[1].trim(),
+        year: parseInt(m[2], 10),
+        cleaned: chunk.slice(0, m.index) + chunk.slice(m.index + m[0].length)
+      };
+    }
+    return { sourceTag: null, year: null, cleaned: chunk };
+  }
+
+  // Handles BOTH option styles: inline "(A) text (B) text (C) text (D) text" and nested
+  // "\item[(A)] text \item[(B)] text ..." itemize markers.
+  function extractOptions(chunk) {
+    const nestedRe = /\\item\[\(([A-Da-d])\)\]/g;
+    const nestedMatches = [...chunk.matchAll(nestedRe)];
+    if (nestedMatches.length >= 4) {
+      // The nested style wraps its \item[(A)]... markers in \begin{itemize}...\end{itemize},
+      // which sits between the stem and the first marker -- strip it off the stem too, not
+      // just from each option's own text.
+      const stem = chunk.slice(0, nestedMatches[0].index).replace(/\\begin\{itemize\}\s*$/, '');
+      const options = { a: '', b: '', c: '', d: '' };
+      for (let i = 0; i < nestedMatches.length; i++) {
+        const letter = nestedMatches[i][1].toLowerCase();
+        const start = nestedMatches[i].index + nestedMatches[i][0].length;
+        const end = i + 1 < nestedMatches.length ? nestedMatches[i + 1].index : chunk.length;
+        let text = chunk.slice(start, end);
+        text = text.replace(/\\begin\{itemize\}|\\end\{itemize\}/g, '').trim();
+        if (options.hasOwnProperty(letter)) options[letter] = text;
+      }
+      return { stem, options };
+    }
+
+    // Inline style: marker must be preceded by whitespace/start-of-string so it doesn't fire
+    // on a parenthesized letter inside a formula (same heuristic already used in mocktest.html's
+    // (\s)(\([A-E]\)\s) line-break regex).
+    const inlineRe = /(?:^|\s)\(([A-Da-d])\)\s*/g;
+    const inlineMatches = [...chunk.matchAll(inlineRe)];
+    if (inlineMatches.length >= 4) {
+      const stem = chunk.slice(0, inlineMatches[0].index);
+      const options = { a: '', b: '', c: '', d: '' };
+      for (let i = 0; i < inlineMatches.length; i++) {
+        const letter = inlineMatches[i][1].toLowerCase();
+        const start = inlineMatches[i].index + inlineMatches[i][0].length;
+        const end = i + 1 < inlineMatches.length ? inlineMatches[i + 1].index : chunk.length;
+        if (options.hasOwnProperty(letter)) options[letter] = chunk.slice(start, end).trim();
+      }
+      return { stem, options };
+    }
+
+    // No 4-option pattern detected -- whole chunk becomes the stem, options left blank for
+    // manual entry (matches admin-pdf-review.html's "review, don't guess silently" posture).
+    return { stem: chunk, options: { a: '', b: '', c: '', d: '' } };
+  }
+
+  function parseQuestionChunk(rawChunk) {
+    const { sourceTag, year, cleaned } = extractSourceTag(rawChunk);
+    const { stem, options } = extractOptions(cleaned);
+    return {
+      question: stem.trim(),
+      option_a: options.a, option_b: options.b, option_c: options.c, option_d: options.d,
+      source_tag: sourceTag, year
+    };
+  }
+
+  function parseMathpixText(rawText) {
+    const text = cleanupLatexWrappers(rawText);
+    const boundaryRe = /\\item\[\s*\d+\.\s*\]/g;
+    const boundaries = [...text.matchAll(boundaryRe)];
+    if (boundaries.length === 0) return [];
+    const parsed = [];
+    for (let i = 0; i < boundaries.length; i++) {
+      const start = boundaries[i].index + boundaries[i][0].length;
+      const end = i + 1 < boundaries.length ? boundaries[i + 1].index : text.length;
+      parsed.push(parseQuestionChunk(text.slice(start, end)));
+    }
+    return parsed;
+  }
+
+  // SimpleTex glues options directly onto the preceding text with no separator, e.g.
+  // "...no units(B) no units and no dimensions(C)..." -- so unlike Mathpix's inline style,
+  // the marker can't be required to follow whitespace. Instead we require all four markers
+  // A,B,C,D to appear in strict order (each search starts after the previous match), which
+  // keeps this from firing on a stray "(A)"-shaped fragment inside a formula.
+  function extractOptionsSimpleTex(chunk) {
+    const idxA = chunk.indexOf('(A)');
+    const idxB = idxA === -1 ? -1 : chunk.indexOf('(B)', idxA + 3);
+    const idxC = idxB === -1 ? -1 : chunk.indexOf('(C)', idxB + 3);
+    const idxD = idxC === -1 ? -1 : chunk.indexOf('(D)', idxC + 3);
+    if (idxA === -1 || idxB === -1 || idxC === -1 || idxD === -1) {
+      return { stem: chunk, options: { a: '', b: '', c: '', d: '' } };
+    }
+    return {
+      stem: chunk.slice(0, idxA),
+      options: {
+        a: chunk.slice(idxA + 3, idxB).trim(),
+        b: chunk.slice(idxB + 3, idxC).trim(),
+        c: chunk.slice(idxC + 3, idxD).trim(),
+        d: chunk.slice(idxD + 3).trim()
+      }
+    };
+  }
+
+  // SimpleTex sometimes emits the trailing [SOURCE YEAR] tag as its own markdown header
+  // line, e.g. "# [AIPMT Canceled 2015]", instead of plain bracket text. Normalize those
+  // away to plain "[...]" BEFORE paragraph-splitting so they're treated as an ordinary
+  // trailing tag rather than mistaken for a real chapter header.
+  function normalizeSimpleTexHeaders(rawText) {
+    return rawText.replace(/^[ \t]*#{1,6}[ \t]+(\[[^\[\]]*\])[ \t]*$/gm, '$1');
+  }
+
+  // Paragraphs (blank-line separated) are the only structural signal SimpleTex gives us, but
+  // OCR line-wrapping often lands a single question's option list across MULTIPLE paragraphs
+  // (one or two options per paragraph) rather than one clean block. We accumulate paragraphs
+  // into a buffer until all 4 options are found, then flush immediately -- this both handles
+  // the multi-paragraph option list AND stops a stray explanation bullet that reuses
+  // "(A)/(B)/(C)/(D)" as a generic label from gluing onto an already-finished question.
+  // A buffer is never *started* from a paragraph that itself opens with an option marker --
+  // a real question stem never does, so that's always an orphaned fragment (leaked-in
+  // explanation text) worth dropping silently, per the "don't auto-match solutions" requirement.
+  function parseSimpleTexText(rawText) {
+    const normalized = normalizeSimpleTexHeaders(rawText.replace(/\r\n/g, '\n'));
+    const paragraphs = normalized.split(/\n\s*\n+/).map(p => p.trim()).filter(Boolean);
+
+    function tryExtract(text) {
+      const { sourceTag, year, cleaned } = extractSourceTag(text);
+      const { stem, options } = extractOptionsSimpleTex(cleaned);
+      if (!options.a || !options.b || !options.c || !options.d) return null;
+      return { question: stem.trim(), option_a: options.a, option_b: options.b, option_c: options.c, option_d: options.d, source_tag: sourceTag, year };
+    }
+
+    // How many of A,B,C,D have been found so far, in strict order -- used to gate whether
+    // an incoming option-marker paragraph is really the NEXT option of the question being
+    // accumulated, or an unrelated fragment (e.g. an explanation snippet elsewhere in the
+    // document that happens to open with "(C)" as a generic label) that shouldn't be glued on.
+    function optionProgress(text) {
+      const idxA = text.indexOf('(A)');
+      if (idxA === -1) return 0;
+      const idxB = text.indexOf('(B)', idxA + 3);
+      if (idxB === -1) return 1;
+      const idxC = text.indexOf('(C)', idxB + 3);
+      if (idxC === -1) return 2;
+      const idxD = text.indexOf('(D)', idxC + 3);
+      if (idxD === -1) return 3;
+      return 4;
+    }
+
+    const parsed = [];
+    let currentChapter = '';
+    let buffer = [];
+    let bufferChapter = '';
+
+    function flush() {
+      if (buffer.length === 0) return;
+      const result = tryExtract(buffer.join('\n\n'));
+      if (result) parsed.push(Object.assign(result, { chapter: bufferChapter }));
+      buffer = [];
+    }
+
+    for (let i = 0; i < paragraphs.length; i++) {
+      const para = paragraphs[i];
+      const headerMatch = para.split('\n')[0].trim().match(/^#{1,6}\s+(.*)$/);
+      if (headerMatch) {
+        flush();
+        currentChapter = headerMatch[1].trim();
+        continue;
+      }
+
+      const leadMatch = para.match(/^\(([A-D])\)/);
+      if (buffer.length > 0 && leadMatch) {
+        const expectedLetter = 'ABCD'[optionProgress(buffer.join('\n\n'))];
+        if (leadMatch[1] !== expectedLetter) continue; // not the next option in sequence -- orphaned fragment, drop it
+        buffer.push(para);
+      } else if (!leadMatch) {
+        flush();
+        buffer = [para];
+        bufferChapter = currentChapter;
+      } else {
+        continue; // orphaned option-marker paragraph with no preceding stem -- drop it
+      }
+
+      if (tryExtract(buffer.join('\n\n'))) {
+        // The "[SOURCE YEAR]" tag sometimes lands in its own trailing paragraph right
+        // after the options -- greedily fold it in before flushing so it isn't lost.
+        const next = paragraphs[i + 1];
+        if (next && /^\[[^\[\]]*\d{4}[^\[\]]*\]$/.test(next.trim())) {
+          buffer.push(next);
+          i++;
+        }
+        flush();
+      }
+    }
+    flush();
+    return parsed;
+  }
+
+  // Feeds parsed questions into this page's EXISTING block model/render pipeline -- same
+  // blockTemplate, same KaTeX preview, same save flow as a PDF scan. Only the block
+  // construction differs from scanPdf()'s own mapping: source_tag/chapter come from the
+  // parsed text instead of being blank, since Claude Vision extraction never had those to give.
+  function parsePastedTextIntoBlocks() {
+    const raw = document.getElementById('pasteTextarea').value;
+    const hintEl = document.getElementById('parseHint');
+    if (!currentSubject) { hintEl.textContent = 'Pick a subject first.'; hintEl.style.color = '#ef4444'; return; }
+    if (!raw.trim()) { hintEl.textContent = 'Paste some Mathpix or SimpleTex text first.'; hintEl.style.color = '#ef4444'; return; }
+    const isMathpix = /\\item\[/.test(raw);
+    const parsedQuestions = isMathpix ? parseMathpixText(raw) : parseSimpleTexText(raw);
+    if (parsedQuestions.length === 0) {
+      hintEl.textContent = isMathpix
+        ? 'No \\item[N.] question markers found -- check the pasted text matches the expected Mathpix format.'
+        : 'No questions detected -- check each question is followed by (A)(B)(C)(D) options.';
+      hintEl.style.color = '#ef4444';
+      return;
+    }
+    blocks = parsedQuestions.map(q => ({
+      id: 'b' + (blockIdSeq++),
+      question: q.question, option_a: q.option_a, option_b: q.option_b, option_c: q.option_c, option_d: q.option_d,
+      correct_answer: '', question_type: 'mcq',
+      has_diagram: false, diagram_url: null,
+      option_a_diagram_url: null, option_b_diagram_url: null, option_c_diagram_url: null, option_d_diagram_url: null,
+      year: q.year, source_tag: q.source_tag || '', source_page: null, display_number: null,
+      chapter: q.chapter || null, // only ever set by SimpleTex's "# Chapter Name" headers -- see buildChapterOptionsHtml/applyChapterHint
+      saved: false, savePending: false
+    }));
+    scanFilenameMatch = null; // no filename to match chapters against in paste mode
+    currentPdfFilename = null;
+    currentProcessedPdfId = null;
+    document.getElementById('statPageCount').textContent = '—'; // "pages" doesn't apply to pasted text
+    renderAllBlocks();
+    updateSummaryBar();
+    document.getElementById('summaryBar').style.display = 'flex';
+    document.getElementById('flaggedPagesBanner').style.display = 'none';
+    const missingOptions = blocks.filter(b => !b.option_a && !b.option_b && !b.option_c && !b.option_d).length;
+    hintEl.style.color = '#4ade80';
+    hintEl.textContent = `Parsed ${blocks.length} question(s) as ${isMathpix ? 'Mathpix' : 'SimpleTex'} format.` + (missingOptions ? ` ${missingOptions} had no options detected -- fill those in manually.` : '');
+    saveDraftNow(); // a fresh parse just replaced the whole batch -- worth persisting right away, same as scanPdf()
   }
 
   // ---------------- TF-IDF chapter/class suggestion ----------------
@@ -810,8 +1122,11 @@
 
   function buildChapterOptionsHtml(block) {
     const suggestion = block._suggestion || { confident: false, suggestions: [] };
-    const suggestedChapter = suggestion.confident ? suggestion.suggestions[0].chapter : null;
-    let html = `<option value="">${suggestion.confident ? '— pick chapter —' : '— not enough data yet, pick manually —'}</option>`;
+    // An explicit block.chapter (set only by SimpleTex's "# Chapter Name" headers when pasted
+    // via Paste LaTeX mode) is a real signal from the source text itself, so it wins over the
+    // TF-IDF/filename guess -- PDF-scanned blocks never set this field, so this is a no-op there.
+    const suggestedChapter = block.chapter || (suggestion.confident ? suggestion.suggestions[0].chapter : null);
+    let html = `<option value="">${suggestedChapter || suggestion.confident ? '— pick chapter —' : '— not enough data yet, pick manually —'}</option>`;
     // Every real NCERT chapter for this subject is selectable, not just ones that already have
     // tagged rows - otherwise a confident filename/TF-IDF match to a never-before-tagged chapter
     // would have no matching <option> to select at all.
@@ -1056,6 +1371,18 @@
   function applyChapterHint(block) {
     const hintEl = document.getElementById('chapter-hint-' + block.id);
     if (!hintEl) return;
+    if (block.chapter) {
+      // Paste-parsed blocks have no _suggestion at all (no TF-IDF classifier involved), so this
+      // must come before the "!s return" below rather than as a branch inside it.
+      hintEl.textContent = 'From pasted text — verify this is correct.';
+      hintEl.classList.add('confident');
+      const classSel = document.getElementById('class-' + block.id);
+      if (classSel && !classSel.value) {
+        const cls = resolveClassForChapter(currentSubject, block.chapter);
+        if (cls) classSel.value = cls;
+      }
+      return;
+    }
     const s = block._suggestion;
     if (!s) return;
     if (s.confident) {
