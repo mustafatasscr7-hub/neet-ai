@@ -1615,6 +1615,13 @@ let selectedImages = [];
       img.style.cssText = 'max-width:100%;max-height:70vh;display:block;border-radius:8px;';
       box.appendChild(img);
 
+      if (diagram.description) {
+        const caption = document.createElement('p');
+        caption.style.cssText = 'margin:10px 0 0;color:#c4c4c4;font-size:13px;line-height:1.5;max-width:70vh;';
+        caption.textContent = diagram.description;
+        box.appendChild(caption);
+      }
+
       modal.appendChild(box);
       document.body.appendChild(modal);
     }

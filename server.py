@@ -1203,7 +1203,7 @@ async def diagram_match(req: DiagramMatchRequest, _: None = Depends(rate_limiter
         if not rows:
             return {"matched": False}
         top = rows[0]
-        return {"matched": True, "diagram_id": top["id"], "image_url": top["image_url"], "name": top.get("name")}
+        return {"matched": True, "diagram_id": top["id"], "image_url": top["image_url"], "name": top.get("name"), "description": top.get("description")}
     except Exception:
         return {"matched": False}
 
