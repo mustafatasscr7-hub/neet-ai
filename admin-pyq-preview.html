@@ -1586,6 +1586,40 @@
       }
     }
 
+    // The backend returns pairwise relationships (a duplicate of b, b duplicate of c, ...) --
+    // when 3+ questions are all near-identical, that shows up as multiple overlapping 2-card
+    // pairs sharing a question instead of one clear group. Union-find merges any pairs that
+    // share an id into a single cluster so the admin sees "these 3 are all the same" at once.
+    function groupDuplicatePairs(pairs) {
+      const parent = {};
+      function find(x) {
+        if (!(x in parent)) parent[x] = x;
+        while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; }
+        return x;
+      }
+      function union(a, b) {
+        const ra = find(a), rb = find(b);
+        if (ra !== rb) parent[ra] = rb;
+      }
+      pairs.forEach(p => union(p.a, p.b));
+
+      const clusters = {}; // root id -> { ids: Set, pairs: [] }
+      pairs.forEach(p => {
+        const root = find(p.a);
+        if (!clusters[root]) clusters[root] = { ids: new Set(), pairs: [] };
+        clusters[root].ids.add(p.a);
+        clusters[root].ids.add(p.b);
+        clusters[root].pairs.push(p);
+      });
+
+      return Object.values(clusters).map(c => ({
+        ids: Array.from(c.ids),
+        pairs: c.pairs,
+        maxOverlap: Math.max(...c.pairs.map(p => p.overlap)),
+        allExact: c.pairs.every(p => p.exact)
+      }));
+    }
+
     function renderDuplicatePairs(subjectFilter) {
       const area = document.getElementById('resultsArea');
       let pairs = duplicatePairs;
@@ -1595,38 +1629,47 @@
           return a && b && a.subject === subjectFilter && b.subject === subjectFilter;
         });
       }
-      document.getElementById('resultCount').textContent = `${pairs.length} duplicate pair${pairs.length === 1 ? '' : 's'} found (50%+ match)`;
-      if (pairs.length === 0) {
+      const groups = groupDuplicatePairs(pairs).filter(g => g.ids.every(id => duplicateRowsMap[id]));
+      document.getElementById('resultCount').textContent = `${groups.length} duplicate group${groups.length === 1 ? '' : 's'} found (50%+ match)`;
+      if (groups.length === 0) {
         area.innerHTML = '<div class="empty-text">No duplicate pairs found.</div>';
         return;
       }
-      area.innerHTML = pairs.map(p => {
-        const a = duplicateRowsMap[p.a], b = duplicateRowsMap[p.b];
-        if (!a || !b) return '';
-        const pct = Math.round(p.overlap * 100);
-        const badgeClass = p.exact ? 'exact' : (p.overlap >= 0.75 ? 'high' : 'moderate');
-        const label = p.exact ? `${pct}% match — likely exact duplicate` : `${pct}% match`;
+      area.innerHTML = groups.map(g => {
+        const pct = Math.round(g.maxOverlap * 100);
+        const badgeClass = g.allExact ? 'exact' : (g.maxOverlap >= 0.75 ? 'high' : 'moderate');
+        const label = g.allExact ? `${pct}% match — likely exact duplicate` : `${pct}% match`;
+        const countBadge = g.ids.length > 2 ? `<span class="dup-badge moderate">${g.ids.length} questions in this group</span>` : '';
+        const idsCsv = g.ids.join(',');
+        // "Delete both" in one click only makes unambiguous sense for a plain pair -- for a
+        // 3+ group there's no single button that captures "keep #3, delete #1 and #2", so
+        // each card's own Delete button (already correct in duplicatesMode) is the way to
+        // pick exactly which ones to remove.
+        const bulkDeleteBtn = g.ids.length === 2
+          ? `<button type="button" class="dup-delete-both-btn" onclick="deleteBothInPair('${g.ids[0]}', '${g.ids[1]}', this)">🗑 Delete both</button>`
+          : '';
         return `
           <div class="dup-pair">
             <div class="dup-pair-header">
-              <span class="dup-badge ${badgeClass}">${label}</span>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                <span class="dup-badge ${badgeClass}">${label}</span>
+                ${countBadge}
+              </div>
               <div style="display:flex;gap:8px;flex-wrap:wrap;">
-                <button type="button" class="dup-dismiss-btn" onclick="dismissDuplicate('${p.a}', '${p.b}', this)">Not a duplicate — don't show again</button>
-                <button type="button" class="dup-delete-both-btn" onclick="deleteBothInPair('${p.a}', '${p.b}', this)">🗑 Delete both</button>
+                <button type="button" class="dup-dismiss-btn" onclick="dismissDuplicateGroup('${idsCsv}', this)">Not a duplicate — don't show again</button>
+                ${bulkDeleteBtn}
               </div>
             </div>
+            ${g.ids.length > 2 ? `<div class="result-note" style="margin-bottom:10px;">Use each card's own 🗑 Delete button below to keep whichever one(s) you want and remove the rest.</div>` : ''}
             <div class="dup-columns">
-              ${questionCardHtml(a)}
-              ${questionCardHtml(b)}
+              ${g.ids.map(id => questionCardHtml(duplicateRowsMap[id])).join('')}
             </div>
           </div>`;
       }).join('');
       area.querySelectorAll('.q-edit-field textarea').forEach(autoResizeTextarea);
     }
 
-    async function dismissDuplicate(idA, idB, btnEl) {
-      const originalLabel = btnEl ? btnEl.textContent : null;
-      if (btnEl) { btnEl.disabled = true; btnEl.textContent = 'Saving...'; }
+    async function dismissPairQuietly(idA, idB) {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 20000);
       try {
@@ -1636,18 +1679,36 @@
           body: JSON.stringify({ id_a: idA, id_b: idB }),
           signal: controller.signal
         });
-        if (res.status === 401) return logout();
-        if (!res.ok) { alert('Could not dismiss: ' + await describeHttpError(res)); if (btnEl) { btnEl.disabled = false; btnEl.textContent = originalLabel; } return; }
+        if (res.status === 401) return { error: 'unauthorized' };
+        if (!res.ok) return { error: await describeHttpError(res) };
         const data = await res.json();
-        if (data.error) { alert('Could not dismiss: ' + data.error); if (btnEl) { btnEl.disabled = false; btnEl.textContent = originalLabel; } return; }
-        duplicatePairs = duplicatePairs.filter(p => !((p.a === idA && p.b === idB) || (p.a === idB && p.b === idA)));
-        renderDuplicatePairs(document.getElementById('filterSubject').value);
+        return data.error ? { error: data.error } : { success: true };
       } catch (e) {
-        alert(e.name === 'AbortError' ? 'Timed out waiting for the server -- check your connection and try again.' : 'Could not reach server.');
-        if (btnEl) { btnEl.disabled = false; btnEl.textContent = originalLabel; }
+        if (e.name === 'AbortError') return { error: 'Timed out waiting for the server -- check your connection and try again.' };
+        return { error: 'Could not reach server.' };
       } finally {
         clearTimeout(timeoutId);
       }
+    }
+
+    // Dismisses every originally-detected pair within this group at once -- for a plain pair
+    // that's just the one pair; for a 3+ cluster it's every pairwise relationship the backend
+    // found inside it, so none of them come back on a re-scan.
+    async function dismissDuplicateGroup(idsCsv, btnEl) {
+      const ids = idsCsv.split(',');
+      const originalLabel = btnEl ? btnEl.textContent : null;
+      if (btnEl) { btnEl.disabled = true; btnEl.textContent = 'Saving...'; }
+      const pairsToDismiss = duplicatePairs.filter(p => ids.includes(p.a) && ids.includes(p.b));
+      const results = await Promise.all(pairsToDismiss.map(p => dismissPairQuietly(p.a, p.b)));
+      if (results.some(r => r.error === 'unauthorized')) return logout();
+      const failed = results.filter(r => r.error);
+      if (failed.length) {
+        alert(`${failed.length} of ${results.length} dismiss call(s) failed: ` + failed.map(f => f.error).join(' / '));
+        if (btnEl) { btnEl.disabled = false; btnEl.textContent = originalLabel; }
+      }
+      const dismissedKeys = new Set(pairsToDismiss.filter((_, i) => !results[i].error).map(p => p.a + '|' + p.b));
+      duplicatePairs = duplicatePairs.filter(p => !dismissedKeys.has(p.a + '|' + p.b));
+      renderDuplicatePairs(document.getElementById('filterSubject').value);
     }
 
     // Shared by deleteQuestion and deleteBothInPair -- no confirm() dialog and no state
