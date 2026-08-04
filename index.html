@@ -22,6 +22,12 @@
     --green: #4ade80;
     --orange: #f97316;
     --red: #ef4444;
+    /* Single shared container recipe -- every full-width section (nav, hero, chat demo,
+       section.block, footer) uses this exact max-width + padding so their left/right edges
+       line up. Padding scales with viewport via clamp() instead of a fixed px value, so it
+       doesn't collapse to a sliver of the page on large desktop screens. */
+    --container-max: 1240px;
+    --container-pad: clamp(24px, 4vw, 64px);
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html { scroll-behavior: smooth; }
@@ -38,10 +44,10 @@
   body.light-mode .message-bubble.user { background: #eef0f6; border-color: #dfe1ea; }
   body.light-mode .kicker, body.light-mode .foot-note { color: var(--muted); }
 
-  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 32px; }
+  .wrap { max-width: var(--container-max); margin: 0 auto; padding: 0 var(--container-pad); }
 
   /* ---------- NAV ---------- */
-  nav.top { position: sticky; top: 0; z-index: 50; display: flex; align-items: center; justify-content: space-between; padding: 18px 32px; max-width: 1120px; margin: 0 auto; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(14px); }
+  nav.top { position: sticky; top: 0; z-index: 50; display: flex; align-items: center; justify-content: space-between; padding: 18px var(--container-pad); max-width: var(--container-max); margin: 0 auto; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(14px); }
   .brand { font-size: 16px; font-weight: 700; letter-spacing: -0.01em; color: var(--muted); text-decoration: none; }
   .brand span { color: var(--text); }
   .nav-links { display: flex; gap: 26px; }
@@ -52,18 +58,25 @@
   .nav-cta:hover { background: #3b7de8; }
 
   /* ---------- HERO ---------- */
-  .intro { max-width: 640px; margin: 56px auto 0; padding: 0 32px; }
-  .kicker { font-size: 12.5px; color: var(--muted-2); margin-bottom: 14px; }
+  /* Intro now spans the same container as nav (left edge lines up) -- the headline/kicker
+     themselves keep a readable line-length via their own max-width instead of the whole
+     block being narrowed and re-centered independently. */
+  .intro { max-width: var(--container-max); margin: 56px auto 0; padding: 0 var(--container-pad); }
+  .kicker { font-size: 12.5px; color: var(--muted-2); margin-bottom: 14px; max-width: 640px; }
   .kicker b { color: var(--muted); font-weight: 600; }
-  h1.head { font-size: clamp(23px, 2.6vw, 29px); font-weight: 600; line-height: 1.48; letter-spacing: -0.01em; margin: 0 0 26px; color: var(--text); text-wrap: balance; }
+  h1.head { font-size: clamp(23px, 2.6vw, 29px); font-weight: 600; line-height: 1.48; letter-spacing: -0.01em; margin: 0 0 26px; color: var(--text); text-wrap: balance; max-width: 640px; }
   .head-actions { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
   .btn-primary { background: var(--blue); color: #fff; font-weight: 600; font-size: 14px; padding: 11px 20px; border-radius: 8px; text-decoration: none; display: inline-block; border: none; cursor: pointer; font-family: 'Inter', sans-serif; }
   .btn-primary:hover { background: #3b7de8; }
   .link-quiet { color: var(--muted); font-size: 13px; text-decoration: none; border-bottom: 1px solid var(--border-2); padding-bottom: 1px; }
   .link-quiet:hover { color: var(--text); }
 
-  .chat-frame { max-width: 820px; margin: 52px auto 0; padding: 0 32px; }
-  .chat-window { background: var(--panel); border: 1px solid var(--border); border-radius: 16px 16px 0 0; padding: 26px 0 10px; box-shadow: 0 40px 90px -46px rgba(0,0,0,0.75); }
+  /* chat-frame shares the same edges as nav/intro; the visual chat window itself stays
+     capped at a comfortable reading width but sits LEFT-aligned within that shared
+     container (not independently centered), so its left edge lines up with the headline
+     above it instead of drifting to its own center. */
+  .chat-frame { max-width: var(--container-max); margin: 52px auto 0; padding: 0 var(--container-pad); }
+  .chat-window { max-width: 820px; background: var(--panel); border: 1px solid var(--border); border-radius: 16px 16px 0 0; padding: 26px 0 10px; box-shadow: 0 40px 90px -46px rgba(0,0,0,0.75); }
   .message-row { padding: 9px 26px; display: flex; gap: 14px; max-width: 720px; width: 100%; margin: 0 auto; }
   .message-row.user { flex-direction: row-reverse; }
   .avatar { width: 29px; height: 29px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 12.5px; flex-shrink: 0; margin-top: 2px; font-weight: 600; }
@@ -75,17 +88,17 @@
   .message-bubble.ai strong { color: #fff; }
   body.light-mode .message-bubble.ai strong { color: #0d0d0d; }
 
-  .chat-inputbar { max-width: 820px; margin: 0 auto; background: var(--panel); border: 1px solid var(--border); border-top: none; border-radius: 0 0 16px 16px; padding: 13px 22px; display: flex; align-items: center; gap: 12px; box-shadow: 0 40px 90px -46px rgba(0,0,0,0.75); }
+  .chat-inputbar { max-width: 820px; background: var(--panel); border: 1px solid var(--border); border-top: none; border-radius: 0 0 16px 16px; padding: 13px 22px; display: flex; align-items: center; gap: 12px; box-shadow: 0 40px 90px -46px rgba(0,0,0,0.75); }
   .chat-inputbar .typed { flex: 1; font-size: 13.5px; color: var(--muted); }
   .chat-inputbar .typed .cursor { display: inline-block; width: 1.5px; height: 15px; background: var(--blue); margin-left: 2px; vertical-align: -3px; animation: blink 1s step-end infinite; }
   @keyframes blink { 50% { opacity: 0; } }
   .send-dot { width: 29px; height: 29px; border-radius: 8px; background: var(--blue); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
   .send-dot svg { width: 13px; height: 13px; fill: #fff; }
 
-  .grade-note { max-width: 820px; margin: 14px auto 0; padding: 0 32px; font-size: 12px; color: var(--muted-2); }
+  .grade-note { max-width: var(--container-max); margin: 14px auto 0; padding: 0 var(--container-pad); font-size: 12px; color: var(--muted-2); }
 
   /* ---------- SECTION SHELL ---------- */
-  section.block { padding: 96px 32px; max-width: 1120px; margin: 0 auto; }
+  section.block { padding: 96px var(--container-pad); max-width: var(--container-max); margin: 0 auto; }
   .eyebrow-label { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--blue); margin-bottom: 14px; }
   h2.block-title { font-size: clamp(24px, 3vw, 32px); font-weight: 700; letter-spacing: -0.015em; margin-bottom: 14px; text-wrap: balance; }
   p.block-sub { font-size: 15px; color: var(--muted); max-width: 60ch; line-height: 1.65; margin-bottom: 48px; }
@@ -127,13 +140,13 @@
   .plan-btn.pro-btn:hover { background: #3b7de8; }
 
   /* ---------- CLOSING CTA ---------- */
-  .cta-block { padding: 100px 32px 120px; text-align: center; }
+  .cta-block { padding: 100px var(--container-pad) 120px; text-align: center; }
   .cta-block h2 { font-size: clamp(26px, 3.6vw, 38px); font-weight: 700; letter-spacing: -0.015em; margin-bottom: 16px; max-width: 620px; margin-left: auto; margin-right: auto; text-wrap: balance; }
   .cta-block p { font-size: 15px; color: var(--muted); margin-bottom: 34px; }
 
   /* ---------- FOOTER ---------- */
   .site-footer { border-top: 1px solid var(--border); }
-  .footer-columns { max-width: 1120px; margin: 0 auto; display: grid; grid-template-columns: 1.4fr 1fr 1fr 1fr; gap: 40px; padding: 60px 32px 44px; }
+  .footer-columns { max-width: var(--container-max); margin: 0 auto; display: grid; grid-template-columns: 1.4fr 1fr 1fr 1fr; gap: 40px; padding: 60px var(--container-pad) 44px; }
   .footer-brand .footer-logo { font-size: 16px; font-weight: 700; margin-bottom: 12px; }
   .footer-brand .footer-logo span { color: var(--blue); }
   .footer-tagline { font-size: 13px; color: var(--muted); line-height: 1.65; margin-bottom: 18px; max-width: 260px; }
@@ -142,7 +155,7 @@
   .footer-col a:hover { color: var(--blue); }
   .footer-col a.footer-soon { pointer-events: none; opacity: 0.4; }
   .footer-col a.footer-soon::after { content: 'Soon'; font-size: 9px; margin-left: 6px; padding: 2px 6px; border: 1px solid var(--border-2); border-radius: 20px; color: var(--muted-2); text-transform: uppercase; }
-  .footer-bottom { max-width: 1120px; margin: 0 auto; padding: 22px 32px; border-top: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
+  .footer-bottom { max-width: var(--container-max); margin: 0 auto; padding: 22px var(--container-pad); border-top: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
   .footer-bottom p { font-size: 11.5px; color: var(--muted-2); margin: 0; }
 
   @media (prefers-reduced-motion: reduce) {
