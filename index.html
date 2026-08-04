@@ -47,7 +47,10 @@
   .wrap { max-width: var(--container-max); margin: 0 auto; padding: 0 var(--container-pad); }
 
   /* ---------- NAV ---------- */
-  nav.top { position: sticky; top: 0; z-index: 50; display: flex; align-items: center; justify-content: space-between; padding: 26px var(--container-pad); max-width: var(--container-max); margin: 0 auto; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(14px); }
+  /* Nav spans the full viewport, unlike the content sections below it -- logo and CTA sit
+     at the true screen corners (just inset by the scaling padding), not inside a capped,
+     centered container that leaves visible dead space on wide screens. */
+  nav.top { position: sticky; top: 0; z-index: 50; display: flex; align-items: center; justify-content: space-between; padding: 26px var(--container-pad); background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(14px); }
   .brand { font-size: 17px; font-weight: 700; letter-spacing: -0.01em; color: var(--muted); text-decoration: none; }
   .brand span { color: var(--text); }
   .nav-links { display: flex; gap: 28px; }
@@ -294,7 +297,7 @@
 <!-- PRICING -->
 <section class="block" id="pricing">
   <div class="eyebrow-label">Pricing</div>
-  <h2 class="block-title">₹299 a month. Cancel anytime.</h2>
+  <h2 class="block-title">₹399 a month. Cancel anytime.</h2>
   <p class="block-sub">Free covers real studying, not a trial. Pro removes the limits once you're doing this daily.</p>
   <div class="pricing-grid">
     <div class="price-card">
@@ -313,7 +316,7 @@
     </div>
     <div class="price-card pro">
       <div class="plan-name">Pro</div>
-      <div class="plan-price">₹299<span>/mo</span></div>
+      <div class="plan-price">₹399<span>/mo</span></div>
       <div class="plan-sub">cancel anytime</div>
       <ul class="plan-features">
         <li class="yes"><span class="check">✓</span> Unlimited AI questions</li>
