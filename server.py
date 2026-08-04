@@ -252,6 +252,14 @@ class DiagramCreate(BaseModel):
     description: Optional[str] = None
     image_url: str
 
+class DiagramUpdate(BaseModel):
+    subject: Optional[str] = None
+    class_: Optional[int] = Field(None, alias="class")
+    chapter: Optional[str] = None
+    name: Optional[str] = None
+    description: Optional[str] = None
+    reviewed: Optional[bool] = None
+
 class PyqQuestionCreate(BaseModel):
     subject: str
     chapter: Optional[str] = None
@@ -1769,7 +1777,7 @@ async def admin_diagrams_list(_: None = Depends(verify_admin)):
             f"{SUPABASE_URL}/rest/v1/diagrams",
             headers=ADMIN_HEADERS,
             params={
-                "select": "id,subject,class,chapter,name,description,image_url,created_at",
+                "select": "id,subject,class,chapter,name,description,image_url,reviewed,created_at",
                 "order": "created_at.desc",
                 "limit": 1000
             }
@@ -1777,6 +1785,43 @@ async def admin_diagrams_list(_: None = Depends(verify_admin)):
         if response.status_code >= 400:
             return {"error": response.text}
         return {"diagrams": response.json()}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.patch("/admin/diagram-update/{diagram_id}")
+async def admin_diagram_update(diagram_id: int, body: DiagramUpdate, _: None = Depends(verify_admin)):
+    if body.subject is not None and body.subject not in ("Biology", "Physics", "Chemistry"):
+        return {"error": "Invalid subject"}
+    update_fields = {}
+    if body.subject is not None:
+        update_fields["subject"] = body.subject
+    if body.class_ is not None:
+        update_fields["class"] = body.class_
+    if body.chapter is not None:
+        update_fields["chapter"] = body.chapter
+    if body.name is not None:
+        update_fields["name"] = body.name
+    # description can legitimately be cleared to null (removing a caption), so distinguish
+    # "not sent" from "sent as null" the same way /admin/pyq-update does for diagram fields.
+    if "description" in body.model_fields_set:
+        update_fields["description"] = body.description
+    if body.reviewed is not None:
+        update_fields["reviewed"] = body.reviewed
+    if not update_fields:
+        return {"error": "No fields to update"}
+    try:
+        response = await async_client.patch(
+            f"{SUPABASE_URL}/rest/v1/diagrams",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
+            params={"id": f"eq.{diagram_id}", "select": "id,subject,class,chapter,name,description,image_url,reviewed,created_at"},
+            json=update_fields
+        )
+        if response.status_code >= 400:
+            return {"error": response.text}
+        updated = response.json()
+        if not updated:
+            return {"error": "Row not found"}
+        return {"updated": updated[0]}
     except Exception as e:
         return {"error": str(e)}
 

@@ -82,6 +82,8 @@
     .q-admin-id { font-size: 10px; color: #444; font-family: monospace; }
     .q-flag { font-size: 11px; padding: 3px 9px; border-radius: 20px; font-weight: 600; background: #ef444420; color: #ef4444; }
     .q-inactive-flag { font-size: 11px; padding: 3px 9px; border-radius: 20px; font-weight: 600; background: #66666620; color: #888; }
+    /* Same badge formula as q-flag/q-inactive-flag, green accent already used by q-approve-btn elsewhere in this file */
+    .q-confirmed-flag { font-size: 11px; padding: 3px 9px; border-radius: 20px; font-weight: 600; background: #4ade8020; color: #4ade80; }
     .q-delete-btn { background: transparent; border: 1px solid #ef4444; color: #ef4444; padding: 5px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; font-family: 'Inter', sans-serif; }
     .q-delete-btn:hover { background: #ef444420; }
     .q-edit-btn { background: transparent; border: 1px solid #2a2a2a; color: #888; padding: 5px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; font-family: 'Inter', sans-serif; margin-left: auto; }
@@ -162,6 +164,12 @@
     .pagination .page-info { font-size: 12px; color: #666; }
 
     .loading-text, .empty-text { text-align: center; padding: 40px; color: #555; font-size: 13px; }
+
+    /* Diagram Review section */
+    .diagram-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
+    .diagram-thumb { max-height: 160px; object-fit: cover; cursor: zoom-in; width: 100%; }
+    .diagram-lightbox-overlay { position: fixed; inset: 0; background: #000000c0; z-index: 970; display: flex; align-items: center; justify-content: center; cursor: zoom-out; }
+    .diagram-lightbox-overlay img { max-width: 90vw; max-height: 90vh; border-radius: 8px; }
   </style>
 </head>
 <body>
@@ -216,9 +224,24 @@
       <button type="button" id="dupToggleBtn" class="dup-toggle-btn" onclick="toggleDuplicatesView()">🔁 Find Duplicates (50%+)</button>
       <button type="button" id="reviewToggleBtn" class="dup-toggle-btn" onclick="toggleReviewMode()">📋 Review Queue</button>
       <button type="button" id="reportsToggleBtn" class="dup-toggle-btn" onclick="toggleReportsView()">🚩 Reported</button>
+      <button type="button" id="diagramToggleBtn" class="dup-toggle-btn" onclick="toggleDiagramMode()">🖼️ Diagram Review</button>
       <select id="reviewSortOrder" onchange="onFilterChange()" style="display:none">
         <option value="asc">Oldest uploaded first</option>
         <option value="desc">Newest uploaded first</option>
+      </select>
+      <select id="diagramFilterSubject" onchange="onDiagramFilterSubjectChange()" style="display:none">
+        <option value="">All Subjects</option>
+        <option value="Biology">Biology</option>
+        <option value="Physics">Physics</option>
+        <option value="Chemistry">Chemistry</option>
+      </select>
+      <select id="diagramFilterChapter" onchange="renderDiagramReview()" style="display:none">
+        <option value="">All Chapters</option>
+      </select>
+      <select id="diagramFilterStatus" onchange="renderDiagramReview()" style="display:none">
+        <option value="pending">Pending Review</option>
+        <option value="confirmed">Confirmed</option>
+        <option value="all">All</option>
       </select>
       <div class="result-count" id="resultCount"></div>
       <div class="result-note" id="resultNote"></div>
@@ -242,6 +265,9 @@
     let duplicatesMode = false;
     let reviewMode = false;
     let reportsMode = false;
+    let diagramMode = false;
+    let allDiagrams = [];
+    let diagramEditingIds = new Set();
     let duplicatePairs = [];
     let duplicateRowsMap = {};
     let reportGroups = [];
@@ -708,6 +734,10 @@
           area.innerHTML = `<div class="empty-text">Error: ${escapeHtml(data.error)}</div>`;
           return;
         }
+        // Bail if a different mode became active while this (often slow, thousands-of-rows)
+        // fetch was in flight -- otherwise a late response here silently stomps over whatever
+        // view the admin already switched to.
+        if (duplicatesMode || reportsMode || diagramMode) return;
         currentRows = data.rows || [];
         totalRows = data.total || 0;
         renderResults();
@@ -1125,11 +1155,19 @@
       document.getElementById('dupToggleBtn').classList.remove('active');
       document.getElementById('reviewToggleBtn').classList.remove('active');
       document.getElementById('reportsToggleBtn').classList.remove('active');
+      document.getElementById('diagramToggleBtn').classList.remove('active');
       document.getElementById('reviewSortOrder').style.display = 'none';
       document.getElementById('filterChapter').disabled = false;
       document.getElementById('filterSearch').disabled = false;
       document.getElementById('filterDiagram').disabled = false;
       document.getElementById('paginationBar').style.display = 'flex';
+      document.getElementById('filterSubject').style.display = '';
+      document.getElementById('filterChapter').style.display = '';
+      document.getElementById('filterSearch').style.display = '';
+      document.querySelector('.filter-bar label.check-label').style.display = '';
+      document.getElementById('diagramFilterSubject').style.display = 'none';
+      document.getElementById('diagramFilterChapter').style.display = 'none';
+      document.getElementById('diagramFilterStatus').style.display = 'none';
     }
 
     async function toggleDuplicatesView() {
@@ -1186,6 +1224,259 @@
       }
     }
 
+    async function toggleDiagramMode() {
+      diagramMode = !diagramMode;
+      duplicatesMode = false;
+      reviewMode = false;
+      reportsMode = false;
+      resetModeToggleUi();
+      document.getElementById('diagramToggleBtn').classList.toggle('active', diagramMode);
+      if (diagramMode) {
+        document.getElementById('filterSubject').style.display = 'none';
+        document.getElementById('filterChapter').style.display = 'none';
+        document.getElementById('filterSearch').style.display = 'none';
+        document.querySelector('.filter-bar label.check-label').style.display = 'none';
+        document.getElementById('diagramFilterSubject').style.display = 'inline-block';
+        document.getElementById('diagramFilterChapter').style.display = 'inline-block';
+        document.getElementById('diagramFilterStatus').style.display = 'inline-block';
+        document.getElementById('paginationBar').style.display = 'none';
+      }
+      document.getElementById('resultNote').textContent = diagramMode
+        ? 'Uploaded reference diagrams for future doubt-matching. Edit metadata if needed, then Confirm to mark it reviewed.'
+        : '';
+      if (diagramMode) {
+        await loadDiagramReview();
+      } else {
+        loadResults();
+      }
+    }
+
+    async function loadDiagramReview() {
+      const area = document.getElementById('resultsArea');
+      area.innerHTML = '<div class="loading-text">Loading diagrams...</div>';
+      document.getElementById('resultCount').textContent = '';
+      try {
+        const res = await fetch(`${API_BASE}/admin/diagrams-list`, { headers: authHeaders() });
+        if (res.status === 401) return logout();
+        if (!res.ok) {
+          area.innerHTML = `<div class="empty-text">Error: ${escapeHtml(await describeHttpError(res))}</div>`;
+          return;
+        }
+        const data = await res.json();
+        if (data.error) {
+          area.innerHTML = `<div class="empty-text">Error: ${escapeHtml(data.error)}</div>`;
+          return;
+        }
+        if (!diagramMode) return;
+        allDiagrams = data.diagrams || [];
+        populateDiagramChapterFilter();
+        renderDiagramReview();
+      } catch (e) {
+        area.innerHTML = '<div class="empty-text">Could not reach server.</div>';
+      }
+    }
+
+    // Only lists chapters that actually have an uploaded diagram (scoped to the selected
+    // subject filter, if any) -- unlike the edit form's chapter dropdown, which needs the
+    // full curriculum since admin can retag a diagram into any chapter, not just one that
+    // already has diagrams.
+    function populateDiagramChapterFilter() {
+      const subject = document.getElementById('diagramFilterSubject').value;
+      const chapters = [...new Set(allDiagrams.filter(d => !subject || d.subject === subject).map(d => d.chapter).filter(Boolean))].sort();
+      const sel = document.getElementById('diagramFilterChapter');
+      const current = sel.value;
+      sel.innerHTML = '<option value="">All Chapters</option>' + chapters.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+      if (chapters.includes(current)) sel.value = current;
+    }
+
+    function onDiagramFilterSubjectChange() {
+      populateDiagramChapterFilter();
+      renderDiagramReview();
+    }
+
+    function renderDiagramReview() {
+      const area = document.getElementById('resultsArea');
+      const subject = document.getElementById('diagramFilterSubject').value;
+      const chapter = document.getElementById('diagramFilterChapter').value;
+      const status = document.getElementById('diagramFilterStatus').value;
+      let rows = allDiagrams;
+      if (subject) rows = rows.filter(d => d.subject === subject);
+      if (chapter) rows = rows.filter(d => d.chapter === chapter);
+      if (status === 'pending') rows = rows.filter(d => !d.reviewed);
+      else if (status === 'confirmed') rows = rows.filter(d => d.reviewed);
+      document.getElementById('resultCount').textContent = `${rows.length} diagram${rows.length === 1 ? '' : 's'}`;
+      if (rows.length === 0) {
+        area.innerHTML = '<div class="empty-text">No diagrams match these filters.</div>';
+        return;
+      }
+      area.innerHTML = `<div class="diagram-grid">${rows.map(d => diagramEditingIds.has(d.id) ? diagramEditCardHtml(d) : diagramViewCardHtml(d)).join('')}</div>`;
+      area.querySelectorAll('.q-edit-field textarea').forEach(autoResizeTextarea);
+    }
+
+    function diagramViewCardHtml(d) {
+      const statusBadge = d.reviewed
+        ? '<span class="q-confirmed-flag">Confirmed</span>'
+        : '<span class="q-flag">Pending Review</span>';
+      return `
+        <div class="question-card diagram-card" data-diagram-id="${d.id}">
+          <div class="q-meta">
+            <span>${escapeHtml(d.subject)}</span>
+            ${d.class != null ? `<span>Class ${escapeHtml(String(d.class))}</span>` : ''}
+            ${d.chapter ? `<span>${escapeHtml(d.chapter)}</span>` : ''}
+            <span>${new Date(d.created_at).toLocaleDateString()}</span>
+            ${statusBadge}
+          </div>
+          <img class="q-diagram-img diagram-thumb" src="${escapeHtml(d.image_url)}" alt="${escapeHtml(d.name)}" onclick="openDiagramLightbox('${escapeHtml(d.image_url)}')"/>
+          <div class="q-text" style="margin-bottom:4px;"><strong>${escapeHtml(d.name)}</strong></div>
+          ${d.description ? `<div class="q-text" style="font-size:12px;color:#888;">${escapeHtml(d.description)}</div>` : ''}
+          <div class="q-admin-bar">
+            <span class="q-admin-id">${d.id}</span>
+            <button type="button" class="q-edit-btn" onclick="startDiagramEdit(${d.id})">Edit</button>
+            ${!d.reviewed ? `<button type="button" class="q-approve-btn" onclick="confirmDiagram(${d.id}, this)">✅ Confirm</button>` : ''}
+            <button type="button" class="q-delete-btn" onclick="deleteDiagramReview(${d.id})">Delete</button>
+          </div>
+        </div>`;
+    }
+
+    function diagramEditCardHtml(d) {
+      const chapters = CANONICAL_CHAPTERS[d.subject] || [];
+      return `
+        <div class="question-card diagram-card" data-diagram-id="${d.id}">
+          <div class="q-edit-field">
+            <label>Name</label>
+            <input type="text" data-field="name" value="${escapeHtml(d.name)}"/>
+          </div>
+          <div class="q-edit-field">
+            <label>Description</label>
+            <textarea data-field="description" rows="2" oninput="autoResizeTextarea(this)">${escapeHtml(d.description || '')}</textarea>
+          </div>
+          <div class="q-edit-row">
+            <div class="q-edit-field">
+              <label>Subject</label>
+              <select data-field="subject" onchange="onDiagramEditSubjectChange(this)">
+                <option value="Biology" ${d.subject === 'Biology' ? 'selected' : ''}>Biology</option>
+                <option value="Physics" ${d.subject === 'Physics' ? 'selected' : ''}>Physics</option>
+                <option value="Chemistry" ${d.subject === 'Chemistry' ? 'selected' : ''}>Chemistry</option>
+              </select>
+            </div>
+            <div class="q-edit-field">
+              <label>Chapter</label>
+              <select data-field="chapter">${chapterOptionsHtml(chapters, d.chapter)}</select>
+            </div>
+          </div>
+          <img class="q-diagram-img diagram-thumb" src="${escapeHtml(d.image_url)}" alt="" onclick="openDiagramLightbox('${escapeHtml(d.image_url)}')"/>
+          <div class="q-admin-bar">
+            <span class="q-admin-id">${d.id}</span>
+            <button type="button" class="q-edit-btn" onclick="cancelDiagramEdit(${d.id})">Cancel</button>
+            <button type="button" class="q-save-btn" onclick="saveDiagramEdit(${d.id}, this)">Save</button>
+          </div>
+        </div>`;
+    }
+
+    function onDiagramEditSubjectChange(selectEl) {
+      const newSubject = selectEl.value;
+      const card = selectEl.closest('.question-card');
+      const chapterSelect = card.querySelector('[data-field="chapter"]');
+      // Same "reset rather than guess" reasoning as onEditSubjectChange: a chapter name that
+      // made sense under the old subject usually won't under the new one.
+      chapterSelect.innerHTML = chapterOptionsHtml(CANONICAL_CHAPTERS[newSubject] || [], null);
+    }
+
+    function startDiagramEdit(id) {
+      diagramEditingIds.add(id);
+      renderDiagramReview();
+    }
+
+    function cancelDiagramEdit(id) {
+      diagramEditingIds.delete(id);
+      renderDiagramReview();
+    }
+
+    async function saveDiagramEdit(id, btnEl) {
+      const card = btnEl.closest('.question-card');
+      const getVal = (name) => card.querySelector(`[data-field="${name}"]`).value;
+      const name = getVal('name').trim();
+      const chapter = getVal('chapter');
+      if (!name || !chapter) { alert('Name and chapter are required.'); return; }
+      const payload = {
+        name, chapter,
+        description: getVal('description').trim() || null,
+        subject: getVal('subject')
+      };
+      const originalLabel = btnEl.textContent;
+      btnEl.disabled = true;
+      btnEl.textContent = 'Saving...';
+      try {
+        const res = await fetch(`${API_BASE}/admin/diagram-update/${id}`, {
+          method: 'PATCH',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify(payload)
+        });
+        if (res.status === 401) return logout();
+        if (!res.ok) { alert('Save failed: ' + await describeHttpError(res)); btnEl.disabled = false; btnEl.textContent = originalLabel; return; }
+        const data = await res.json();
+        if (data.error) { alert('Save failed: ' + data.error); btnEl.disabled = false; btnEl.textContent = originalLabel; return; }
+        const idx = allDiagrams.findIndex(x => x.id === id);
+        if (idx !== -1) allDiagrams[idx] = Object.assign({}, allDiagrams[idx], data.updated);
+        diagramEditingIds.delete(id);
+        populateDiagramChapterFilter();
+        renderDiagramReview();
+      } catch (e) {
+        alert('Could not reach server.');
+        btnEl.disabled = false;
+        btnEl.textContent = originalLabel;
+      }
+    }
+
+    async function confirmDiagram(id, btnEl) {
+      const originalLabel = btnEl.textContent;
+      btnEl.disabled = true;
+      btnEl.textContent = 'Confirming...';
+      try {
+        const res = await fetch(`${API_BASE}/admin/diagram-update/${id}`, {
+          method: 'PATCH',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ reviewed: true })
+        });
+        if (res.status === 401) return logout();
+        if (!res.ok) { alert('Could not confirm: ' + await describeHttpError(res)); btnEl.disabled = false; btnEl.textContent = originalLabel; return; }
+        const data = await res.json();
+        if (data.error) { alert('Could not confirm: ' + data.error); btnEl.disabled = false; btnEl.textContent = originalLabel; return; }
+        const idx = allDiagrams.findIndex(x => x.id === id);
+        if (idx !== -1) allDiagrams[idx] = Object.assign({}, allDiagrams[idx], data.updated);
+        renderDiagramReview();
+      } catch (e) {
+        alert('Could not reach server.');
+        btnEl.disabled = false;
+        btnEl.textContent = originalLabel;
+      }
+    }
+
+    async function deleteDiagramReview(id) {
+      if (!confirm('Delete this diagram? This removes both the image file and the record.')) return;
+      try {
+        const res = await fetch(`${API_BASE}/admin/diagram-delete/${id}`, { method: 'DELETE', headers: authHeaders() });
+        if (res.status === 401) return logout();
+        if (!res.ok) { alert(await describeHttpError(res)); return; }
+        const data = await res.json();
+        if (data.error) { alert(data.error); return; }
+        allDiagrams = allDiagrams.filter(x => x.id !== id);
+        diagramEditingIds.delete(id);
+        populateDiagramChapterFilter();
+        renderDiagramReview();
+      } catch (e) {
+        alert('Could not reach server.');
+      }
+    }
+
+    function openDiagramLightbox(url) {
+      const overlay = document.createElement('div');
+      overlay.className = 'diagram-lightbox-overlay';
+      overlay.onclick = () => overlay.remove();
+      overlay.innerHTML = `<img src="${escapeHtml(url)}"/>`;
+      document.body.appendChild(overlay);
+    }
+
     async function loadReportedQuestions() {
       const area = document.getElementById('resultsArea');
       area.innerHTML = '<div class="loading-text">Loading reported questions...</div>';
@@ -1202,6 +1493,7 @@
           area.innerHTML = `<div class="empty-text">Error: ${escapeHtml(data.error)}</div>`;
           return;
         }
+        if (!reportsMode) return;
         reportGroups = data.groups || [];
         reportedRowsMap = {};
         reportGroups.forEach(g => { if (g.question) reportedRowsMap[g.pyq_id] = g.question; });
@@ -1285,6 +1577,7 @@
           area.innerHTML = `<div class="empty-text">Error: ${escapeHtml(data.error)}</div>`;
           return;
         }
+        if (!duplicatesMode) return;
         duplicatePairs = data.pairs || [];
         duplicateRowsMap = data.rows || {};
         renderDuplicatePairs(document.getElementById('filterSubject').value);
