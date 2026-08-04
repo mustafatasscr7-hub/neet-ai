@@ -1595,10 +1595,14 @@ let selectedImages = [];
       modal.onclick = function(e) { if (e.target === modal) modal.remove(); };
 
       const box = document.createElement('div');
-      box.style.cssText = 'background:#1e1e2e;border-radius:12px;padding:16px;max-width:90vw;max-height:85vh;overflow:auto;';
+      // Sized to the content, not the viewport -- a tall/narrow diagram used to sit inside a
+      // box stretched toward max-width:90vw (set by the header row), leaving a big dead-space
+      // gap beside it. Capping width and centering everything keeps the box hugging whatever
+      // the actual image's aspect ratio is.
+      box.style.cssText = 'background:#1e1e2e;border-radius:12px;padding:20px;width:min(92vw,560px);max-height:85vh;overflow:auto;display:flex;flex-direction:column;align-items:center;';
 
       const header = document.createElement('div');
-      header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px;';
+      header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px;width:100%;';
       const title = document.createElement('h3');
       title.style.cssText = 'margin:0;color:#a78bfa;font-size:15px;';
       title.textContent = diagram.name || 'Diagram';
@@ -1610,15 +1614,18 @@ let selectedImages = [];
       header.appendChild(closeBtn);
       box.appendChild(header);
 
+      const imgFrame = document.createElement('div');
+      imgFrame.style.cssText = 'background:#141420;border-radius:10px;padding:12px;display:flex;align-items:center;justify-content:center;width:100%;';
       const img = document.createElement('img');
       img.src = diagram.image_url;
       img.alt = diagram.name || 'Diagram';
-      img.style.cssText = 'max-width:100%;max-height:70vh;display:block;border-radius:8px;';
-      box.appendChild(img);
+      img.style.cssText = 'max-width:100%;max-height:65vh;display:block;border-radius:6px;';
+      imgFrame.appendChild(img);
+      box.appendChild(imgFrame);
 
       if (diagram.description) {
         const caption = document.createElement('p');
-        caption.style.cssText = 'margin:10px 0 0;color:#c4c4c4;font-size:13px;line-height:1.5;max-width:70vh;';
+        caption.style.cssText = 'margin:14px 0 0;color:#c4c4c4;font-size:13px;line-height:1.6;text-align:center;width:100%;';
         caption.textContent = diagram.description;
         box.appendChild(caption);
       }
