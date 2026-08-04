@@ -211,6 +211,12 @@
 
     <div id="pasteModeSection" style="display:none;">
       <h2>2. Paste LaTeX text</h2>
+      <div style="margin-bottom:10px;">
+        <label style="display:block;font-size:11px;color:#888;margin-bottom:4px;">Chapter (optional — applied to every parsed question below, overriding any per-question guess)</label>
+        <select id="pasteChapterSelect" style="width:100%;max-width:360px;background:#0d0d0d;border:1px solid #2a2a2a;border-radius:8px;padding:8px 10px;color:#ececec;font-family:'Inter',sans-serif;font-size:13px;">
+          <option value="">— auto-detect per question —</option>
+        </select>
+      </div>
       <textarea id="pasteTextarea" rows="10" placeholder="Paste Mathpix or SimpleTex output here (both are auto-detected)..." style="width:100%;background:#0d0d0d;border:1px solid #2a2a2a;border-radius:8px;padding:10px 12px;color:#ececec;font-family:ui-monospace,Consolas,monospace;font-size:12px;line-height:1.5;resize:vertical;"></textarea>
       <div class="upload-row" style="margin-top:10px;">
         <button type="button" class="scan-btn" id="parseTextBtn" disabled onclick="parsePastedTextIntoBlocks()">Parse Text</button>
@@ -584,9 +590,10 @@
 
   function updateScanButton() {
     // Piggybacked here rather than added to every call site individually -- this already runs
-    // at every point currentSubject could have changed (selectSubject, loadSubjectData,
-    // resumeDraft), so the paste-mode button stays in sync for free.
+    // at every point currentSubject/chapterList could have changed (selectSubject, loadSubjectData,
+    // resumeDraft), so the paste-mode button and its chapter dropdown stay in sync for free.
     updateParseButton();
+    populatePasteChapterSelect();
     const file = document.getElementById('pdfFile').files[0];
     document.getElementById('scanBtn').disabled = !currentSubject || !file;
     const hintEl = document.getElementById('scanBtnHint');
@@ -612,7 +619,18 @@
     document.querySelectorAll('.mode-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.mode === mode));
     document.getElementById('pdfModeSection').style.display = mode === 'pdf' ? 'block' : 'none';
     document.getElementById('pasteModeSection').style.display = mode === 'paste' ? 'block' : 'none';
-    updateScanButton();
+    updateScanButton(); // also refreshes the paste-mode chapter dropdown -- see its own comment
+  }
+
+  // chapterList only exists once loadSubjectData(subject) resolves; updateScanButton() (called
+  // at every point currentSubject/chapterList could change) keeps this in sync automatically.
+  function populatePasteChapterSelect() {
+    const sel = document.getElementById('pasteChapterSelect');
+    if (!sel) return;
+    const previousValue = sel.value;
+    sel.innerHTML = '<option value="">— auto-detect per question —</option>'
+      + allChaptersForSubject(currentSubject).map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
+    sel.value = previousValue; // no-ops back to "" if that chapter doesn't exist for the new subject
   }
 
   // ---------------- Mathpix/SimpleTex paste parsing ----------------
@@ -834,6 +852,88 @@
     return parsed;
   }
 
+  // Fallback for SimpleTex exports that omit (A)(B)(C)(D) markers entirely and instead lay out
+  // each option as its own bare paragraph, in order, right after the question stem -- no marker
+  // of any kind. Deliberately only invoked (see parsePastedTextIntoBlocks) when the letter-marker
+  // pass above finds ZERO questions in the whole paste: mixing both grouping strategies within the
+  // same document is far more likely to misfire than picking one strategy for the whole paste, and
+  // a real paste is normally homogeneous in export style.
+  // Because there's no marker to validate a grouping against, this is inherently a positional
+  // guess: a run of 5 paragraphs (stem + 4) is grouped as one question purely by position. To keep
+  // the guess honest, anything that doesn't fit a clean 5-paragraph run (embedded numbered-list
+  // stems, table rows, image-only options, stray fragments) is still emitted as its own block with
+  // blank options -- never silently dropped -- so the admin sees every source paragraph and can fix
+  // it by hand instead of losing it outright.
+  function parseSimpleTexBareParagraphs(rawText) {
+    const normalized = normalizeSimpleTexHeaders(rawText.replace(/\r\n/g, '\n'));
+    const paragraphs = normalized.split(/\n\s*\n+/).map(p => p.trim()).filter(Boolean);
+
+    function isHeader(p) { return /^#{1,6}\s+(.*)$/.test(p.split('\n')[0].trim()); }
+    function isSourceTagOnly(p) { return /^\[[^\[\]]*\d{4}[^\[\]]*\]$/.test(p); }
+    // Sub-topic labels this OCR source emits WITHOUT a "#" -- e.g. "Octate, Isoelectronic
+    // Species... - Level I" or a bare "Level I"/"Level II" paragraph on its own. These aren't
+    // questions or options; left undetected they get swept into a neighboring group as a bogus
+    // stem/option and misalign everything after them (worse than leaving a question blank).
+    function isPseudoSectionHeader(p) {
+      const line = p.split('\n')[0].trim();
+      return /^Level\s+(I{1,3}|IV)$/i.test(line) || /[\s\-–]Level\s+(I{1,3}|IV)\s*$/i.test(line);
+    }
+    // Real question stems in this export consistently end in "-", ":" or "?" right before their
+    // options start (e.g. "The bond length can be defined as -", "...compound?"). A candidate
+    // "option" paragraph ending the same way is actually the START of the NEXT question, not an
+    // option of the current one -- without this check a short-on-options question (one whose
+    // options got embedded in its own stem, or glued together) swallows the next question's stem
+    // and diagram as its own bogus options 3 and 4 instead of stopping cleanly.
+    function endsLikeStem(p) { return /[:\-–—?]$/.test(p.trim()); }
+    // A stem candidate that already embeds its own numbered option list ("...is: 1. ... 2. ...")
+    // is a different, unhandled pattern -- grouping the paragraphs AFTER it as A-D would actually
+    // be grabbing the start of the next question by mistake, so it's excluded from grouping here.
+    function looksSelfContained(p) { return /(?:^|[\s\-:])[1-4]\.\s*\S.*(?:^|[\s\-:])[1-4]\.\s*\S/s.test(p); }
+
+    const parsed = [];
+    let currentChapter = '';
+    let i = 0;
+
+    function emitUnparsed(p) {
+      parsed.push({ question: p.trim(), option_a: '', option_b: '', option_c: '', option_d: '', source_tag: null, year: null, chapter: currentChapter });
+    }
+
+    while (i < paragraphs.length) {
+      const p = paragraphs[i];
+      const headerMatch = p.split('\n')[0].trim().match(/^#{1,6}\s+(.*)$/);
+      if (headerMatch) { currentChapter = headerMatch[1].trim(); i++; continue; }
+      if (isSourceTagOnly(p)) { i++; continue; } // an orphaned tag with nothing preceding it to attach to
+      if (isPseudoSectionHeader(p)) { i++; continue; } // sub-topic label, not a question or option
+
+      const candidateOptions = paragraphs.slice(i + 1, i + 5);
+      const canGroup = candidateOptions.length === 4
+        && !looksSelfContained(p)
+        && candidateOptions.every(op => !isHeader(op) && !isSourceTagOnly(op) && !isPseudoSectionHeader(op) && !endsLikeStem(op) && op.length > 0 && op.length < 300);
+
+      if (canGroup) {
+        const { sourceTag, year, cleaned: stemCleaned } = extractSourceTag(p);
+        let tag = sourceTag, yr = year, consumed = 5;
+        const next = paragraphs[i + 5];
+        if (!tag && next && isSourceTagOnly(next)) {
+          const t = extractSourceTag(next);
+          tag = t.sourceTag; yr = t.year;
+          consumed = 6;
+        }
+        parsed.push({
+          question: stemCleaned.trim(),
+          option_a: candidateOptions[0].trim(), option_b: candidateOptions[1].trim(),
+          option_c: candidateOptions[2].trim(), option_d: candidateOptions[3].trim(),
+          source_tag: tag, year: yr, chapter: currentChapter
+        });
+        i += consumed;
+      } else {
+        emitUnparsed(p);
+        i++;
+      }
+    }
+    return parsed;
+  }
+
   // Feeds parsed questions into this page's EXISTING block model/render pipeline -- same
   // blockTemplate, same KaTeX preview, same save flow as a PDF scan. Only the block
   // construction differs from scanPdf()'s own mapping: source_tag/chapter come from the
@@ -844,14 +944,26 @@
     if (!currentSubject) { hintEl.textContent = 'Pick a subject first.'; hintEl.style.color = '#ef4444'; return; }
     if (!raw.trim()) { hintEl.textContent = 'Paste some Mathpix or SimpleTex text first.'; hintEl.style.color = '#ef4444'; return; }
     const isMathpix = /\\item\[/.test(raw);
-    const parsedQuestions = isMathpix ? parseMathpixText(raw) : parseSimpleTexText(raw);
+    let parsedQuestions = isMathpix ? parseMathpixText(raw) : parseSimpleTexText(raw);
+    // No (A)(B)(C)(D) markers found anywhere in the whole paste -- fall back to grouping bare
+    // sequential paragraphs as options instead of reporting a hard failure. See
+    // parseSimpleTexBareParagraphs for why this only kicks in when the primary pass found nothing.
+    let usedBareFallback = false;
+    if (!isMathpix && parsedQuestions.length === 0) {
+      parsedQuestions = parseSimpleTexBareParagraphs(raw);
+      usedBareFallback = true;
+    }
     if (parsedQuestions.length === 0) {
       hintEl.textContent = isMathpix
         ? 'No \\item[N.] question markers found -- check the pasted text matches the expected Mathpix format.'
-        : 'No questions detected -- check each question is followed by (A)(B)(C)(D) options.';
+        : 'No questions detected -- check the pasted text has recognizable question/option structure.';
       hintEl.style.color = '#ef4444';
       return;
     }
+    // A manually-picked chapter (see populatePasteChapterSelect) applies to every question in this
+    // paste, overriding any per-question guess -- a real paste is normally all one chapter/topic
+    // anyway, and this sidesteps relying on "# Chapter" headers being present/correct at all.
+    const manualChapter = document.getElementById('pasteChapterSelect').value || null;
     blocks = parsedQuestions.map(q => ({
       id: 'b' + (blockIdSeq++),
       question: q.question, option_a: q.option_a, option_b: q.option_b, option_c: q.option_c, option_d: q.option_d,
@@ -859,7 +971,7 @@
       has_diagram: false, diagram_url: null,
       option_a_diagram_url: null, option_b_diagram_url: null, option_c_diagram_url: null, option_d_diagram_url: null,
       year: q.year, source_tag: q.source_tag || '', source_page: null, display_number: null,
-      chapter: q.chapter || null, // only ever set by SimpleTex's "# Chapter Name" headers -- see buildChapterOptionsHtml/applyChapterHint
+      chapter: manualChapter || q.chapter || null, // manual pick (if any) wins over a per-question "# Chapter Name" header guess -- see buildChapterOptionsHtml/applyChapterHint
       saved: false, savePending: false
     }));
     scanFilenameMatch = null; // no filename to match chapters against in paste mode
@@ -871,8 +983,11 @@
     document.getElementById('summaryBar').style.display = 'flex';
     document.getElementById('flaggedPagesBanner').style.display = 'none';
     const missingOptions = blocks.filter(b => !b.option_a && !b.option_b && !b.option_c && !b.option_d).length;
-    hintEl.style.color = '#4ade80';
-    hintEl.textContent = `Parsed ${blocks.length} question(s) as ${isMathpix ? 'Mathpix' : 'SimpleTex'} format.` + (missingOptions ? ` ${missingOptions} had no options detected -- fill those in manually.` : '');
+    const formatLabel = isMathpix ? 'Mathpix' : (usedBareFallback ? 'SimpleTex, no-marker fallback' : 'SimpleTex');
+    hintEl.style.color = usedBareFallback ? '#f97316' : '#4ade80';
+    hintEl.textContent = `Parsed ${blocks.length} question(s) as ${formatLabel} format.`
+      + (usedBareFallback ? ' No (A)(B)(C)(D) markers were found, so options were grouped by paragraph position -- double-check every question, not just the ones below.' : '')
+      + (missingOptions ? ` ${missingOptions} had no options detected -- fill those in manually.` : '');
     saveDraftNow(); // a fresh parse just replaced the whole batch -- worth persisting right away, same as scanPdf()
   }
 
