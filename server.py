@@ -1151,8 +1151,11 @@ async def get_pyq(message: Message, _: None = Depends(rate_limiter(15, 60))):
 # Threshold is a similarity floor (1 - cosine distance), same convention as match_ncert's own
 # match_threshold. Configurable here -- no separate settings store in this project, every other
 # tunable constant (MIN_CONFIDENCE_SCORE, FILENAME_MATCH_THRESHOLD, etc) lives as a plain
-# module-level constant too.
-DIAGRAM_MATCH_THRESHOLD = 0.75
+# module-level constant too. Lowered from an initial 0.75 after live measurement showed even a
+# near-exact topical match only scored ~0.72 for this embedding model (text-embedding-3-small's
+# absolute similarity scale runs lower than 0.75 for real paraphrased matches) -- 0.75 would have
+# meant this feature almost never fired. 0.5 matches match_ncert's own threshold for the same model.
+DIAGRAM_MATCH_THRESHOLD = 0.5
 
 # Mirrors the "always-available action button, lazily fetched on click" pattern the PYQ button
 # (/pyq) already uses -- chat.html calls this on demand when the student clicks "Show Diagram",
