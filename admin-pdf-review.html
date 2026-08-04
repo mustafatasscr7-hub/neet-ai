@@ -146,6 +146,12 @@
     </div>
   </div>
 
+  <div id="draftBanner" style="display:none;align-items:center;gap:14px;flex-wrap:wrap;background:#4f8ef715;border:1px solid #4f8ef750;border-radius:10px;padding:12px 14px;margin-bottom:16px;font-size:12px;color:#ececec;">
+    <span id="draftBannerText" style="flex:1;"></span>
+    <button type="button" class="action-btn primary" onclick="resumeDraft()">Resume</button>
+    <button type="button" class="action-btn danger" onclick="discardDraft()">Discard</button>
+  </div>
+
   <div id="formulaModalOverlay">
     <div class="formula-modal-box">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
@@ -216,6 +222,9 @@
   let blocks = [];            // in-memory question blocks for the current scan session
   let blockIdSeq = 0;
   let scanFilenameMatch = null; // {chapter, score, tied} from the last scanned PDF's filename, or null
+  const DRAFT_STORAGE_KEY = 'pdf_review_draft_v1'; // versioned so a future schema change can't crash on an old saved draft
+  let pendingDraft = null; // parsed draft object while the resume/discard banner is showing, null otherwise
+  let autoSaveTimer = null;
   const MIN_SUBJECT_ROWS_FOR_SUGGESTION = 15;
   const MIN_CONFIDENCE_SCORE = 0.08;
   const FILENAME_MATCH_THRESHOLD = 0.3;
@@ -365,6 +374,7 @@
   function enterDashboard() {
     document.getElementById('gateOverlay').style.display = 'none';
     document.getElementById('dashboard').style.display = 'block';
+    checkForDraftAndShowBanner();
   }
 
   if (adminKey) enterDashboard();
@@ -380,7 +390,13 @@
     document.getElementById('summaryBar').style.display = 'none';
     document.getElementById('flaggedPagesBanner').style.display = 'none';
     updateScanButton();
+    clearDraft(); // a fresh subject pick discards whatever in-progress blocks it just reset
+    await loadSubjectData(subject);
+  }
 
+  // Split out of selectSubject so resumeDraft() can load a subject's chapter/classifier data
+  // without selectSubject's own blocks=[] reset wiping the blocks just restored from a draft.
+  async function loadSubjectData(subject) {
     const scanBtn = document.getElementById('scanBtn');
     scanBtn.disabled = true;
 
@@ -411,6 +427,130 @@
       classifier = buildClassifier([]);
     }
     updateScanButton();
+  }
+
+  // ---------------- Auto-save / resume draft ----------------
+  // Pure safety net on top of the existing review flow -- never touches save-to-DB, parsing,
+  // or KaTeX rendering. Text/select/checkbox field edits are caught generically via event
+  // delegation on #blocksContainer (see bottom of script); structural mutations (remove/merge/
+  // split/add/scan/diagram upload) call scheduleAutoSave()/saveDraftNow() explicitly at their
+  // own call sites since those don't fire a DOM input/change event on their own.
+
+  // blocks[] only holds diagram URLs/ids/flags -- text/select/checkbox fields live in the DOM
+  // and are normally only pulled in at save time via readBlockFromDom. A draft has to capture
+  // that live DOM state too, or a resume would lose whatever's currently typed but unsaved.
+  function serializeBlocksForDraft() {
+    return blocks.map(b => {
+      const domFields = document.getElementById('q-text-' + b.id) ? readBlockFromDom(b.id) : {};
+      const merged = Object.assign({}, b, domFields);
+      // Transient/derived fields (recomputed on render) don't belong in a persisted draft.
+      Object.keys(merged).forEach(k => { if (k.startsWith('_')) delete merged[k]; });
+      return merged;
+    });
+  }
+
+  function saveDraftNow() {
+    try {
+      if (blocks.length === 0) { localStorage.removeItem(DRAFT_STORAGE_KEY); return; }
+      const draft = {
+        version: 1,
+        savedAt: Date.now(),
+        subject: currentSubject,
+        pdfFilename: currentPdfFilename,
+        processedPdfId: currentProcessedPdfId,
+        pdfQuestionsExtracted: currentPdfQuestionsExtracted,
+        blockIdSeq,
+        scanFilenameMatch,
+        blocks: serializeBlocksForDraft()
+      };
+      localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(draft));
+    } catch (e) {
+      // localStorage full or disabled (private browsing, quota exceeded, etc) -- auto-save is
+      // a convenience on top of the real save-to-DB flow, not a requirement, so fail silently
+      // rather than interrupting the admin's review work.
+    }
+  }
+
+  function clearDraft() {
+    try { localStorage.removeItem(DRAFT_STORAGE_KEY); } catch (e) {}
+  }
+
+  function scheduleAutoSave() {
+    clearTimeout(autoSaveTimer);
+    autoSaveTimer = setTimeout(saveDraftNow, 2500);
+  }
+
+  // Called right after a successful save-to-DB (per-block or bulk). Once nothing is left
+  // unsaved there's nothing worth protecting anymore, so the draft is cleared outright instead
+  // of just updated -- otherwise a stale "resume?" prompt could outlive the real save it was
+  // guarding, for a batch the admin already fully finished.
+  function clearDraftIfBatchFullySaved() {
+    if (blocks.length > 0 && blocks.every(b => b.saved)) {
+      clearDraft();
+    } else {
+      saveDraftNow();
+    }
+  }
+
+  function checkForDraftAndShowBanner() {
+    let raw;
+    try {
+      raw = localStorage.getItem(DRAFT_STORAGE_KEY);
+    } catch (e) {
+      return; // localStorage inaccessible -- nothing to offer, nothing to crash over
+    }
+    if (!raw) return;
+    let draft;
+    try {
+      draft = JSON.parse(raw);
+    } catch (e) {
+      clearDraft(); // corrupt JSON -- discard rather than error
+      return;
+    }
+    if (!draft || draft.version !== 1 || !Array.isArray(draft.blocks) || draft.blocks.length === 0) {
+      clearDraft(); // unknown/future version or empty -- start fresh rather than guess at its shape
+      return;
+    }
+    pendingDraft = draft;
+    const when = new Date(draft.savedAt).toLocaleString();
+    const count = draft.blocks.length;
+    document.getElementById('draftBannerText').textContent =
+      `Unsaved work from ${when} found (${count} question${count === 1 ? '' : 's'}${draft.subject ? ', ' + draft.subject : ''}) — Resume or Discard?`;
+    document.getElementById('draftBanner').style.display = 'flex';
+  }
+
+  async function resumeDraft() {
+    if (!pendingDraft) return;
+    const draft = pendingDraft;
+    pendingDraft = null;
+    document.getElementById('draftBanner').style.display = 'none';
+
+    currentSubject = draft.subject || null;
+    currentPdfFilename = draft.pdfFilename || null;
+    currentProcessedPdfId = draft.processedPdfId || null;
+    currentPdfQuestionsExtracted = draft.pdfQuestionsExtracted || 0;
+    blockIdSeq = draft.blockIdSeq || 0;
+    scanFilenameMatch = draft.scanFilenameMatch || null;
+    blocks = draft.blocks;
+
+    if (currentSubject) {
+      document.querySelectorAll('.subject-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.subject === currentSubject));
+    }
+    renderAllBlocks();
+    updateSummaryBar();
+    document.getElementById('summaryBar').style.display = blocks.length ? 'flex' : 'none';
+    updateScanButton();
+
+    if (currentSubject) {
+      await loadSubjectData(currentSubject);
+      renderAllBlocks(); // refresh chapter options/suggestions now that chapterList/classifier are loaded
+    }
+  }
+
+  function discardDraft() {
+    clearDraft();
+    pendingDraft = null;
+    document.getElementById('draftBanner').style.display = 'none';
   }
 
   function updateScanButton() {
@@ -610,6 +750,7 @@
       updateSummaryBar();
       document.getElementById('summaryBar').style.display = 'flex';
       renderFlaggedPagesBanner(data.flagged_pages || []);
+      saveDraftNow(); // a fresh scan just replaced the whole batch -- worth persisting right away, not after a debounce delay
     } catch (e) {
       statusEl.textContent = 'Scan failed — check connection and try again.';
     } finally {
@@ -984,6 +1125,7 @@
       if (data.error) { statusEl.textContent = 'Upload failed: ' + data.error; return; }
       statusEl.textContent = 'Uploaded';
       onSuccess(data.url);
+      scheduleAutoSave(); // shared by all 4 diagram upload entry points (stem/option x file-picker/paste)
     } catch (e) {
       statusEl.textContent = 'Upload failed — check connection.';
     }
@@ -1028,6 +1170,7 @@
     document.getElementById('diagram-status-' + id).textContent = '';
     const fileInput = document.getElementById('diagram-file-' + id);
     if (fileInput) fileInput.value = '';
+    scheduleAutoSave();
   }
 
   function hasAnyOptionDiagram(block) {
@@ -1069,6 +1212,7 @@
     document.getElementById(`opt-diagram-status-${opt}-${id}`).textContent = '';
     const fileInput = document.getElementById(`opt-diagram-file-${opt}-${id}`);
     if (fileInput) fileInput.value = '';
+    scheduleAutoSave();
   }
 
   function onQuestionTextInput(id) {
@@ -1133,6 +1277,7 @@
     blocks.splice(idx + 1, 1);
     renderAllBlocks();
     updateSummaryBar();
+    scheduleAutoSave();
   }
 
   function splitBlock(id) {
@@ -1150,6 +1295,7 @@
     blocks.splice(idx + 1, 0, secondHalf);
     renderAllBlocks();
     updateSummaryBar();
+    scheduleAutoSave();
   }
 
   function removeBlock(id) {
@@ -1160,6 +1306,7 @@
     renderAllBlocks();
     updateSummaryBar();
     document.getElementById('summaryBar').style.display = blocks.length ? 'flex' : 'none';
+    saveDraftNow(); // immediate, not debounced -- blocks.length===0 here means the draft should clear right away, not linger for 2.5s
   }
 
   function clearAllBlocks() {
@@ -1174,6 +1321,7 @@
     updateSummaryBar();
     document.getElementById('summaryBar').style.display = 'none';
     document.getElementById('flaggedPagesBanner').style.display = 'none';
+    clearDraft(); // explicit discard -- don't offer to "resume" work the admin just deliberately wiped
   }
 
   function addMissedQuestion() {
@@ -1189,6 +1337,7 @@
     const el = document.getElementById('blocksContainer');
     el.scrollTop = el.scrollHeight;
     window.scrollTo(0, document.body.scrollHeight);
+    scheduleAutoSave();
   }
 
   // ---------------- Save ----------------
@@ -1263,6 +1412,7 @@
       document.getElementById('saved-badge-' + id).style.display = 'inline-flex';
       document.getElementById('block-' + id).classList.add('is-saved');
       updateSummaryBar();
+      clearDraftIfBatchFullySaved();
     } catch (e) {
       btn.disabled = false;
       btn.textContent = 'Save';
@@ -1319,6 +1469,7 @@
         if (el) el.classList.add('is-saved');
       });
       updateSummaryBar();
+      clearDraftIfBatchFullySaved();
       if (currentProcessedPdfId) {
         currentPdfQuestionsExtracted += toSave.length;
         fetch(`${API_BASE}/admin/pdf-mark-processed`, {
@@ -1337,13 +1488,23 @@
     }
   }
 
+  // Catches every question/option/answer/year/source-tag/class/chapter/checkbox edit inside
+  // any block generically (delegated on the stable container, not per-field) -- covers all
+  // current AND future re-rendered fields without needing to touch blockTemplate's existing
+  // on* attributes at all.
+  document.getElementById('blocksContainer').addEventListener('input', scheduleAutoSave);
+  document.getElementById('blocksContainer').addEventListener('change', scheduleAutoSave);
+
   // Read-only state accessors for automated testing only - nothing in the real UI uses this.
   window.__test = {
     get blocks() { return blocks; },
     get chapterList() { return chapterList; },
     get existingRows() { return existingRows; },
     get classifier() { return classifier; },
-    get currentSubject() { return currentSubject; }
+    get currentSubject() { return currentSubject; },
+    get pendingDraft() { return pendingDraft; },
+    saveDraftNow, clearDraft, checkForDraftAndShowBanner, resumeDraft, discardDraft,
+    DRAFT_STORAGE_KEY
   };
 </script>
 </body>
