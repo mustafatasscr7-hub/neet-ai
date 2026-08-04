@@ -47,14 +47,14 @@
   .wrap { max-width: var(--container-max); margin: 0 auto; padding: 0 var(--container-pad); }
 
   /* ---------- NAV ---------- */
-  nav.top { position: sticky; top: 0; z-index: 50; display: flex; align-items: center; justify-content: space-between; padding: 18px var(--container-pad); max-width: var(--container-max); margin: 0 auto; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(14px); }
-  .brand { font-size: 16px; font-weight: 700; letter-spacing: -0.01em; color: var(--muted); text-decoration: none; }
+  nav.top { position: sticky; top: 0; z-index: 50; display: flex; align-items: center; justify-content: space-between; padding: 26px var(--container-pad); max-width: var(--container-max); margin: 0 auto; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(14px); }
+  .brand { font-size: 17px; font-weight: 700; letter-spacing: -0.01em; color: var(--muted); text-decoration: none; }
   .brand span { color: var(--text); }
-  .nav-links { display: flex; gap: 26px; }
-  .nav-links a { font-size: 13px; color: var(--muted); text-decoration: none; }
+  .nav-links { display: flex; gap: 28px; }
+  .nav-links a { font-size: 13.5px; color: var(--muted); text-decoration: none; }
   .nav-links a:hover { color: var(--text); }
-  .nav-right { display: flex; align-items: center; gap: 14px; }
-  .nav-cta { background: var(--blue); color: #fff; font-weight: 600; font-size: 13px; padding: 8px 16px; border-radius: 7px; text-decoration: none; }
+  .nav-right { display: flex; align-items: center; gap: 16px; }
+  .nav-cta { background: var(--blue); color: #fff; font-weight: 600; font-size: 13.5px; padding: 10px 20px; border-radius: 8px; text-decoration: none; }
   .nav-cta:hover { background: #3b7de8; }
 
   /* ---------- HERO ---------- */
@@ -169,7 +169,7 @@
     .footer-columns { grid-template-columns: 1fr 1fr; gap: 32px; }
   }
   @media (max-width: 640px) {
-    nav.top { padding: 16px 20px; }
+    nav.top { padding: 20px 20px; }
     .nav-links { display: none; }
     .intro, .chat-frame, .grade-note { padding: 0 20px; }
     .intro { margin-top: 40px; }
