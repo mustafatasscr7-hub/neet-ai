@@ -311,9 +311,10 @@
     #stopIcon rect { fill: white; }
     .send-btn svg { width: 16px; height: 16px; fill: white; }
     .input-hint { text-align: center; font-size: 11px; color: #333; margin-top: 10px; }
-    .pyq-btn { margin-top: 12px; background: transparent; border: 1px solid #4f8ef7; color: #4f8ef7; padding: 7px 14px; border-radius: 8px; cursor: pointer; font-size: 12px; font-family: 'Inter', sans-serif; transition: all 0.2s; display: block; }
+    .answer-actions-row { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; }
+    .pyq-btn { margin: 0; background: transparent; border: 1px solid #4f8ef7; color: #4f8ef7; padding: 7px 14px; border-radius: 8px; cursor: pointer; font-size: 12px; font-family: 'Inter', sans-serif; transition: all 0.2s; }
     .pyq-btn:hover { background: #4f8ef720; }
-    .diagram-btn { margin-top: 8px; background: transparent; border: 1px solid #a78bfa; color: #a78bfa; padding: 7px 14px; border-radius: 8px; cursor: pointer; font-size: 12px; font-family: 'Inter', sans-serif; transition: all 0.2s; display: block; }
+    .diagram-btn { margin: 0; background: transparent; border: 1px solid #a78bfa; color: #a78bfa; padding: 7px 14px; border-radius: 8px; cursor: pointer; font-size: 12px; font-family: 'Inter', sans-serif; transition: all 0.2s; }
     .diagram-btn:hover:not(:disabled) { background: #a78bfa20; }
     .diagram-btn:disabled { cursor: default; opacity: 0.75; }
     .pyq-results { margin-top: 12px; border-top: 1px solid #1e1e1e; padding-top: 12px; }
@@ -1704,6 +1705,15 @@ let selectedImages = [];
         renderMermaidBlocksIn(bubble);
 
         if (userQuestion) {
+          const actionsRow = document.createElement('div');
+          actionsRow.className = 'answer-actions-row';
+
+          const diagramBtn = document.createElement('button');
+          diagramBtn.className = 'diagram-btn';
+          diagramBtn.innerHTML = '🖼️ Show Diagram';
+          diagramBtn.onclick = () => handleShowDiagramClick(diagramBtn, userQuestion, text);
+          actionsRow.appendChild(diagramBtn);
+
           const pyqBtn = document.createElement('button');
           pyqBtn.className = 'pyq-btn';
           pyqBtn.innerHTML = '📋 Previous Year Questions';
@@ -1728,13 +1738,9 @@ let selectedImages = [];
               pyqBtn.innerHTML = '❌ Error loading';
             }
           };
-          bubble.appendChild(pyqBtn);
+          actionsRow.appendChild(pyqBtn);
 
-          const diagramBtn = document.createElement('button');
-          diagramBtn.className = 'diagram-btn';
-          diagramBtn.innerHTML = '🖼️ Show Diagram';
-          diagramBtn.onclick = () => handleShowDiagramClick(diagramBtn, userQuestion, text);
-          bubble.appendChild(diagramBtn);
+          bubble.appendChild(actionsRow);
         }
 
         contentWrapper.appendChild(bubble);
@@ -2753,6 +2759,15 @@ function plainTextFromMarkdown(text) {
         bubble.innerHTML = parseWithMath(fullText);
         await renderMermaidBlocksIn(bubble);
 
+        const actionsRow = document.createElement('div');
+        actionsRow.className = 'answer-actions-row';
+
+        const diagramBtn = document.createElement('button');
+        diagramBtn.className = 'diagram-btn';
+        diagramBtn.innerHTML = '🖼️ Show Diagram';
+        diagramBtn.onclick = () => handleShowDiagramClick(diagramBtn, pyqSearchText, fullText);
+        actionsRow.appendChild(diagramBtn);
+
         const pyqBtn = document.createElement('button');
         pyqBtn.className = 'pyq-btn';
         pyqBtn.innerHTML = '📋 Previous Year Questions';
@@ -2777,13 +2792,9 @@ function plainTextFromMarkdown(text) {
             pyqBtn.innerHTML = '❌ Error loading';
           }
         };
-        bubble.appendChild(pyqBtn);
+        actionsRow.appendChild(pyqBtn);
 
-        const diagramBtn = document.createElement('button');
-        diagramBtn.className = 'diagram-btn';
-        diagramBtn.innerHTML = '🖼️ Show Diagram';
-        diagramBtn.onclick = () => handleShowDiagramClick(diagramBtn, pyqSearchText, fullText);
-        bubble.appendChild(diagramBtn);
+        bubble.appendChild(actionsRow);
 
         const aiTimeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         aiRow.querySelector('.message-content').appendChild(buildActionsDiv('ai', aiTimeStr));
