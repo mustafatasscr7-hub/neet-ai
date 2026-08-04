@@ -48,8 +48,6 @@
   .nav-links a { font-size: 13px; color: var(--muted); text-decoration: none; }
   .nav-links a:hover { color: var(--text); }
   .nav-right { display: flex; align-items: center; gap: 14px; }
-  .lang-toggle { background: transparent; border: 1px solid var(--border-2); color: var(--muted); padding: 7px 13px; border-radius: 100px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
-  .lang-toggle:hover { border-color: var(--blue); color: var(--blue); }
   .nav-cta { background: var(--blue); color: #fff; font-weight: 600; font-size: 13px; padding: 8px 16px; border-radius: 7px; text-decoration: none; }
   .nav-cta:hover { background: #3b7de8; }
 
@@ -186,7 +184,6 @@
     <a href="#pricing">Pricing</a>
   </div>
   <div class="nav-right">
-    <button class="lang-toggle" onclick="toggleLang()">हिं</button>
     <a href="./chat.html" class="nav-cta">Start Free →</a>
   </div>
 </nav>
@@ -358,14 +355,5 @@
 </footer>
 
 <script src="./theme.js"></script>
-<script>
-  // Minimal placeholder until i18n copy for the redesigned sections is written --
-  // toggles a data attribute other pages already use so the button isn't dead.
-  function toggleLang() {
-    const cur = localStorage.getItem('lang') || 'en';
-    localStorage.setItem('lang', cur === 'en' ? 'hi' : 'en');
-    location.reload();
-  }
-</script>
 </body>
 </html>
