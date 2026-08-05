@@ -1419,15 +1419,32 @@ let selectedImages = [];
           // option_a's text to decide whether to show ANY options hid every option (and its
           // diagram) whenever option_a specifically had no text, even if b/c/d did.
           if (['a','b','c','d'].some(opt => q['option_' + opt] || q['option_' + opt + '_diagram_url'])) {
+            // correct_answer comes through as either a letter ("b") or a 1-based number
+            // string ("2") depending on where the row originated -- normalize once up front.
+            const numToLetter = { '1': 'a', '2': 'b', '3': 'c', '4': 'd' };
+            const raw = (q.correct_answer || '').toLowerCase().trim();
+            const correctOpt = ['a','b','c','d'].includes(raw) ? raw : (numToLetter[raw] || null);
+            const optionEls = {};
             ['a','b','c','d'].forEach(function(opt) {
               if (q['option_' + opt] || q['option_' + opt + '_diagram_url']) {
                 const optEl = document.createElement('div');
                 optEl.className = 'pyq-opt';
-                optEl.style.cssText = 'padding:6px 10px;margin:4px 0;border-radius:6px;font-size:13px;color:#c4c4c4;background:#1a1a2e;border:1px solid #3a3a5e;';
-                const isCorrect = q.correct_answer && (q.correct_answer.toLowerCase() === opt || q.correct_answer === String(['a','b','c','d'].indexOf(opt)+1));
-                if (isCorrect) optEl.style.cssText += 'border-color:#4ade80;color:#4ade80;';
+                optEl.style.cssText = 'padding:6px 10px;margin:4px 0;border-radius:6px;font-size:13px;color:#c4c4c4;background:#1a1a2e;border:1px solid #3a3a5e;cursor:pointer;transition:all 0.15s ease;';
                 const optImg = q['option_' + opt + '_diagram_url'] ? `<img src="${escapeHtml(q['option_' + opt + '_diagram_url'])}" style="max-width:100%;border-radius:6px;margin-top:6px;border:1px solid #3a3a5e;display:block;">` : '';
                 optEl.innerHTML = escapeHtml(opt.toUpperCase() + ') ' + (q['option_' + opt] || '')) + optImg;
+                optionEls[opt] = optEl;
+                // Don't reveal the answer up front -- let the student pick first, then show
+                // green/red, same as pyqbank.html's selectPyqOption().
+                optEl.onclick = function() {
+                  ['a','b','c','d'].forEach(function(o) {
+                    const el = optionEls[o];
+                    if (!el) return;
+                    el.onclick = null;
+                    el.style.cursor = 'default';
+                    if (o === correctOpt) el.style.cssText += 'border-color:#4ade80;background:#4ade8020;color:#4ade80;';
+                    else if (o === opt) el.style.cssText += 'border-color:#ef4444;background:#ef444415;color:#ef4444;';
+                  });
+                };
                 optionsDiv.appendChild(optEl);
               }
             });
