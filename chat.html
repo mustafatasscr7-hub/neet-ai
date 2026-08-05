@@ -287,11 +287,12 @@
        a one-word reply and a long explanation should occupy visually different amounts of
        track), and the thumb shows the current viewport range. Track itself has no visible
        rail, matching this app's existing "thumb-only" scrollbar aesthetic. */
-    .scroll-track { position: absolute; top: 0; bottom: 0; right: 2px; width: 6px; cursor: pointer; z-index: 5; touch-action: none; }
-    .scroll-tick { position: absolute; right: 0; width: 6px; height: 2px; border-radius: 1px; background: #2a2a2a; pointer-events: none; }
-    .scroll-thumb { position: absolute; right: 0; width: 6px; border-radius: 3px; background: #4f8ef7; opacity: 0.45; transition: opacity 0.15s; pointer-events: none; }
+    .scroll-track { position: absolute; top: 0; bottom: 0; right: 8px; width: 18px; cursor: pointer; z-index: 5; touch-action: none; }
+    .scroll-tick { position: absolute; right: 0; width: 13px; height: 1.5px; border-radius: 1px; background: #333; pointer-events: none; }
+    .scroll-tick.long { width: 18px; }
+    .scroll-thumb { position: absolute; right: 0; width: 4px; border-radius: 2px; background: #4f8ef7; opacity: 0.5; transition: opacity 0.15s; pointer-events: none; }
     .scroll-track:hover .scroll-thumb, .scroll-thumb.dragging { opacity: 0.9; }
-    body.light-mode .scroll-tick { background: #d0d0d5 !important; }
+    body.light-mode .scroll-tick { background: #cfcfd6 !important; }
     body.light-mode .scroll-thumb { background: #4f8ef7 !important; }
 
     .welcome { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 24px; padding: 40px; text-align: center; }
@@ -730,10 +731,13 @@
       thumb.style.top = thumbTop + 'px';
     }
 
-    // Full recompute: rebuilds every tick from the current set of .message-row elements, then
-    // updates the thumb. Call this whenever the message COUNT changes or history is (re)loaded --
-    // not on every scroll frame, since walking all message rows on each scroll event would be
-    // wasteful (updateScrollThumb() alone handles the common case).
+    // Rebuilds the ruler ticks, then updates the thumb. Ticks are a dense, evenly-spaced
+    // decorative ruler texture spanning the whole track -- NOT one-per-message (the actual
+    // ChatGPT reference has dozens of ticks for a single short reply, so they're clearly not
+    // tied to message count/position -- a first version here tried that and looked wrong).
+    // Width alternates between two lengths for the same slightly-irregular "measuring tape"
+    // texture the reference shows, rather than a perfectly uniform mechanical grid.
+    const TICK_SPACING = 14; // px between tick centers
     function updateScrollTrack() {
       const track = document.getElementById('scrollTrack');
       if (!track) return;
@@ -741,13 +745,14 @@
       const { scrollHeight, clientHeight } = chatWindow;
       if (scrollHeight > clientHeight + 1) {
         const trackHeight = track.clientHeight;
+        const count = Math.floor(trackHeight / TICK_SPACING);
         const frag = document.createDocumentFragment();
-        chatWindow.querySelectorAll('.message-row').forEach(row => {
+        for (let i = 0; i < count; i++) {
           const tick = document.createElement('div');
-          tick.className = 'scroll-tick';
-          tick.style.top = ((row.offsetTop / scrollHeight) * trackHeight) + 'px';
+          tick.className = 'scroll-tick' + (i % 3 === 0 ? ' long' : '');
+          tick.style.top = (i * TICK_SPACING) + 'px';
           frag.appendChild(tick);
-        });
+        }
         track.appendChild(frag);
       }
       updateScrollThumb();
