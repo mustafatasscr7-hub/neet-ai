@@ -1676,8 +1676,10 @@
       <div class="q-block-header">
         <span class="q-number">Q<input type="text" id="qnum-${b.id}" value="${escapeHtml(b.display_number != null ? b.display_number : String(displayIndex))}" onchange="setQNumber('${b.id}')" title="Edit to match the actual question number in the PDF, if it drifted from the auto count" style="width:34px;background:transparent;border:none;border-bottom:1px dashed #4f8ef780;color:#4f8ef7;font-weight:700;font-size:13px;font-family:'Inter',sans-serif;padding:0 0 1px 2px;"/></span>
         ${b.has_diagram ? '<span class="q-diagram-badge">Diagram</span>' : ''}
-        ${b.parse_confidence === 'fallback' ? `<span class="q-confidence-badge fallback" title="${escapeHtml(describeDetectedPattern(b.detected_pattern, true))}">⚠ Needs review</span>` : ''}
-        ${b.parse_confidence === 'delimiter' ? `<span class="q-confidence-badge delimiter" title="${escapeHtml(describeDetectedPattern(b.detected_pattern, false))}">${b.detected_pattern === 'table' ? 'Table row' : 'Pipe-delimited'}</span>` : ''}
+        <span id="confidence-badge-${b.id}" style="display:${b.saved ? 'none' : 'inline'}">
+          ${b.parse_confidence === 'fallback' ? `<span class="q-confidence-badge fallback" title="${escapeHtml(describeDetectedPattern(b.detected_pattern, true))}">⚠ Needs review</span>` : ''}
+          ${b.parse_confidence === 'delimiter' ? `<span class="q-confidence-badge delimiter" title="${escapeHtml(describeDetectedPattern(b.detected_pattern, false))}">${b.detected_pattern === 'table' ? 'Table row' : 'Pipe-delimited'}</span>` : ''}
+        </span>
         <span class="q-saved-badge" id="saved-badge-${b.id}" style="display:${b.saved ? 'inline-flex' : 'none'}">Saved</span>
         <div class="q-block-actions">
           <button type="button" onclick="mergeWithNext('${b.id}')" title="Merge this block with the next one">Merge next</button>
@@ -2272,6 +2274,8 @@
       btn.textContent = 'Saved';
       document.getElementById('saved-badge-' + id).style.display = 'inline-flex';
       document.getElementById('block-' + id).classList.add('is-saved');
+      const confBadge = document.getElementById('confidence-badge-' + id);
+      if (confBadge) confBadge.style.display = 'none'; // review flag is moot once it's been reviewed and saved
       updateSummaryBar();
       clearDraftIfBatchFullySaved();
     } catch (e) {
@@ -2328,6 +2332,8 @@
         if (badge) badge.style.display = 'inline-flex';
         const el = document.getElementById('block-' + t.id);
         if (el) el.classList.add('is-saved');
+        const confBadge = document.getElementById('confidence-badge-' + t.id);
+        if (confBadge) confBadge.style.display = 'none'; // review flag is moot once it's been reviewed and saved
       });
       updateSummaryBar();
       clearDraftIfBatchFullySaved();
