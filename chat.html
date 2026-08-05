@@ -283,17 +283,14 @@
     .chat-window::-webkit-scrollbar { display: none; }
 
     /* Custom ChatGPT-style scroll track, replacing the native scrollbar entirely (hidden
-       above). Ticks mark each message's actual scroll position (not evenly spaced by index --
-       a one-word reply and a long explanation should occupy visually different amounts of
-       track), and the thumb shows the current viewport range. Track itself has no visible
-       rail, matching this app's existing "thumb-only" scrollbar aesthetic. */
+       above). Plain evenly-spaced gray ticks only -- no colored "thumb"/highlighted range
+       overlay, matching the real reference exactly (its track is a flat dash ruler, there's no
+       scrollbar-style highlighted segment at all). Click/drag anywhere on the track still
+       scrolls proportionally, it's just not visually indicated by a colored bar. */
     .scroll-track { position: absolute; top: 0; bottom: 0; right: 8px; width: 18px; cursor: pointer; z-index: 5; touch-action: none; }
     .scroll-tick { position: absolute; right: 0; width: 13px; height: 1.5px; border-radius: 1px; background: #333; pointer-events: none; }
     .scroll-tick.long { width: 18px; }
-    .scroll-thumb { position: absolute; right: 0; width: 4px; border-radius: 2px; background: #4f8ef7; opacity: 0.5; transition: opacity 0.15s; pointer-events: none; }
-    .scroll-track:hover .scroll-thumb, .scroll-thumb.dragging { opacity: 0.9; }
     body.light-mode .scroll-tick { background: #cfcfd6 !important; }
-    body.light-mode .scroll-thumb { background: #4f8ef7 !important; }
 
     .welcome { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 24px; padding: 40px; text-align: center; }
     .welcome h2 { font-size: 26px; font-weight: 700; color: #ffffff; letter-spacing: -0.5px; }
@@ -608,9 +605,7 @@
           </div>
         </div>
       </div>
-      <div class="scroll-track" id="scrollTrack">
-        <div class="scroll-thumb" id="scrollThumb"></div>
-      </div>
+      <div class="scroll-track" id="scrollTrack"></div>
     </div>
 
 
@@ -703,40 +698,16 @@
       const atBottom = chatWindow.scrollHeight - chatWindow.scrollTop - chatWindow.clientHeight < 50;
       if (!atBottom && isStreaming) { userScrolled = true; }
       else if (atBottom) { userScrolled = false; }
-      updateScrollThumb(); // cheap thumb-position-only update -- keeps the custom track in sync with wheel/trackpad scrolling too, not just programmatic scrolls
     });
 
     // ---------------- Custom scroll track (ChatGPT-style) ----------------
-    // Replaces the native scrollbar (hidden via CSS) with a thin track on the right edge:
-    // tick marks at each message's actual scroll position (not evenly spaced by index -- a
-    // one-word reply and a long explanation occupy visually different amounts of track, same
-    // as ChatGPT's real map of the conversation) plus a thumb showing the current viewport.
-
-    // Repositions/resizes the thumb only -- called on every scroll/streaming-chunk tick, so it
-    // deliberately does NOT touch the tick marks (those only change when the message count or
-    // total scrollHeight-per-message shifts, not on every scroll frame).
-    function updateScrollThumb() {
-      const track = document.getElementById('scrollTrack');
-      const thumb = document.getElementById('scrollThumb');
-      if (!track || !thumb) return;
-      const { scrollHeight, clientHeight, scrollTop } = chatWindow;
-      if (scrollHeight <= clientHeight + 1) { thumb.style.display = 'none'; return; }
-      thumb.style.display = 'block';
-      const trackHeight = track.clientHeight;
-      const thumbH = Math.max(24, (clientHeight / scrollHeight) * trackHeight);
-      const maxThumbTop = trackHeight - thumbH;
-      const scrollableHeight = scrollHeight - clientHeight;
-      const thumbTop = scrollableHeight > 0 ? (scrollTop / scrollableHeight) * maxThumbTop : 0;
-      thumb.style.height = thumbH + 'px';
-      thumb.style.top = thumbTop + 'px';
-    }
-
-    // Rebuilds the ruler ticks, then updates the thumb. Ticks are a dense, evenly-spaced
-    // decorative ruler texture spanning the whole track -- NOT one-per-message (the actual
-    // ChatGPT reference has dozens of ticks for a single short reply, so they're clearly not
-    // tied to message count/position -- a first version here tried that and looked wrong).
-    // Width alternates between two lengths for the same slightly-irregular "measuring tape"
-    // texture the reference shows, rather than a perfectly uniform mechanical grid.
+    // Replaces the native scrollbar (hidden via CSS) with a thin track of plain, evenly-spaced
+    // gray ticks on the right edge -- a flat dash ruler, deliberately with NO colored
+    // "thumb"/highlighted-range overlay. A first version here added one (a blue bar showing the
+    // current viewport, like a normal custom scrollbar) but the real reference doesn't have
+    // anything like that at all, just uniform ticks top to bottom -- removed rather than kept
+    // "barely visible", since any visible highlighted segment reads as a scrollbar, which this
+    // specifically isn't supposed to look like.
     const TICK_SPACING = 14; // px between tick centers
     function updateScrollTrack() {
       const track = document.getElementById('scrollTrack');
@@ -755,15 +726,13 @@
         }
         track.appendChild(frag);
       }
-      updateScrollThumb();
     }
 
     // Click-anywhere-or-drag on the track scrolls proportionally to that point in the
-    // conversation. Ticks are visual position markers only, not independently clickable
-    // targets -- matches ChatGPT's own track, which is one continuous scroll surface.
+    // conversation. Ticks are visual texture only, not independently clickable targets --
+    // matches ChatGPT's own track, which is one continuous scroll surface.
     function initScrollTrackDrag() {
       const track = document.getElementById('scrollTrack');
-      const thumb = document.getElementById('scrollThumb');
       if (!track) return;
       let dragging = false;
       function scrollToTrackY(clientY) {
@@ -773,15 +742,11 @@
       }
       track.addEventListener('pointerdown', e => {
         dragging = true;
-        if (thumb) thumb.classList.add('dragging');
         scrollToTrackY(e.clientY);
         track.setPointerCapture(e.pointerId);
       });
       track.addEventListener('pointermove', e => { if (dragging) scrollToTrackY(e.clientY); });
-      ['pointerup', 'pointercancel'].forEach(ev => track.addEventListener(ev, () => {
-        dragging = false;
-        if (thumb) thumb.classList.remove('dragging');
-      }));
+      ['pointerup', 'pointercancel'].forEach(ev => track.addEventListener(ev, () => { dragging = false; }));
     }
     initScrollTrackDrag();
     window.addEventListener('resize', updateScrollTrack);
@@ -3028,7 +2993,7 @@ function plainTextFromMarkdown(text) {
               // render, not called on every character, or repeated calls interrupt each
               // other's in-flight animation and look like jittery flicker.
               scrollBottom();
-              updateScrollThumb(); // thumb-only -- message count is stable mid-stream, just resizing as scrollHeight grows
+              updateScrollTrack(); // a long streaming reply can flip the chat from "fits, no ticks" to "overflowing" mid-stream
             }
             await new Promise(r => setTimeout(r, 1));
           }
