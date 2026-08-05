@@ -96,6 +96,29 @@
     body.light-mode .pyq-q-text { color: #16161d !important; }
     body.light-mode .pyq-opt { color: #333338 !important; background: #ffffff !important; border-color: #d5d5dd !important; }
 
+    /* Thin, hover-reveal scrollbar for the modal's own internal scroll -- was the bulky
+       default native scrollbar, always fully visible regardless of hover. */
+    .pyq-modal-box { scrollbar-width: thin; scrollbar-color: #3a3a5e transparent; }
+    .pyq-modal-box::-webkit-scrollbar { width: 6px; }
+    .pyq-modal-box::-webkit-scrollbar-track { background: transparent; }
+    .pyq-modal-box::-webkit-scrollbar-thumb { background: transparent; border-radius: 4px; }
+    .pyq-modal-box:hover::-webkit-scrollbar-thumb { background: #3a3a5e; }
+    body.light-mode .pyq-modal-box { scrollbar-color: #d5d5dd transparent !important; }
+    body.light-mode .pyq-modal-box:hover::-webkit-scrollbar-thumb { background: #d5d5dd !important; }
+
+    /* Show Solution / Save buttons inside each PYQ card. Previously styled with inline
+       style.cssText, which meant no :hover was possible at all (an element's own inline style
+       always wins over any stylesheet rule for the same property, hover state or not) -- moved
+       to real classes so hover feedback actually shows. */
+    .sol-btn { background: transparent; border: 1px solid #a78bfa; color: #a78bfa; padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 12px; font-family: 'Inter', sans-serif; transition: background 0.15s; }
+    .sol-btn:hover { background: #a78bfa20; }
+    .pyq-save-btn { background: transparent; border: 1px solid #f97316; color: #f97316; padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 12px; font-family: 'Inter', sans-serif; margin-left: 8px; transition: background 0.15s; }
+    .pyq-save-btn:hover { background: #f9731620; }
+    .pyq-save-btn:disabled { cursor: default; }
+    body.light-mode .sol-btn { border-color: #a78bfa !important; color: #7c3aed !important; }
+    body.light-mode .sol-btn:hover { background: #a78bfa20 !important; }
+    body.light-mode .pyq-save-btn:hover { background: #f9731620 !important; }
+
     /* Report-a-question: subtle flag icon, low visibility until hovered, and its popup --
        same block as mocktest.html/pyqbank.html/personalised-test.html, kept identical so the
        feature looks and behaves the same everywhere a question appears. */
@@ -1674,10 +1697,10 @@ let selectedImages = [];
             });
           }
           const solBtn = document.createElement('button');
-          solBtn.style.cssText = 'background:transparent;border:1px solid #a78bfa;color:#a78bfa;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;';
+          solBtn.className = 'sol-btn';
           solBtn.textContent = '💡 Show Solution';
           const saveBtn = document.createElement('button');
-          saveBtn.style.cssText = 'background:transparent;border:1px solid #f97316;color:#f97316;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;margin-left:8px;';
+          saveBtn.className = 'pyq-save-btn';
           saveBtn.textContent = '🔖 Save';
           saveBtn.onclick = async function() {
             const { data: { session } } = await client.auth.getSession();
