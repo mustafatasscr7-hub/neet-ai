@@ -597,6 +597,7 @@
               <svg viewBox="0 0 24 24"><path d="M2 21l21-9L2 3v7l15 2-15 2v7z"/></svg>
             </button>
           </div>
+          <div class="input-hint" data-i18n="chat.disclaimerMistakes">NEET-AI can make mistakes. Please verify important answers.</div>
           <div class="suggestions">
             <div class="suggestion"><span class="suggestion-icon">🔬</span><span data-i18n="chat.suggestion1">What is crossing over in meiosis?</span></div>
             <div class="suggestion"><span class="suggestion-icon">⚗️</span><span data-i18n="chat.suggestion2">Explain Krebs cycle step by step</span></div>
@@ -650,6 +651,7 @@
     </div>
       </div>
       <div class="input-hint" data-i18n="chat.answerSource">Answers sourced from NCERT Class 11 & 12 only</div>
+      <div class="input-hint" data-i18n="chat.disclaimerMistakes">NEET-AI can make mistakes. Please verify important answers.</div>
     </div>
   </div>
 
@@ -2608,7 +2610,7 @@ function plainTextFromMarkdown(text) {
       const welcome = document.createElement('div');
       welcome.className = 'welcome';
       welcome.id = 'welcome';
-      welcome.innerHTML = `<h2>${t('chat','welcomeHeading')}</h2><div class="welcome-search"><input type="text" id="welcomeInput" placeholder="${t('chat','askPlaceholder')}" /><button id="welcomeVoiceBtn" class="voice-btn" onclick="toggleVoice()" style="background:transparent;border:none;color:#666;cursor:pointer;padding:6px;display:flex;align-items:center;flex-shrink:0;border-radius:8px;" title="Voice input"><svg class="voice-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg></button><button class="welcome-send" id="welcomeSend"><svg viewBox="0 0 24 24"><path d="M2 21l21-9L2 3v7l15 2-15 2v7z"/></svg></button></div><div class="suggestions"><div class="suggestion"><span class="suggestion-icon">🔬</span>${t('chat','suggestion1')}</div><div class="suggestion"><span class="suggestion-icon">⚗️</span>${t('chat','suggestion2')}</div><div class="suggestion"><span class="suggestion-icon">📊</span>${t('chat','suggestion3')}</div><div class="suggestion"><span class="suggestion-icon">🧪</span>${t('chat','suggestion4')}</div></div>`;
+      welcome.innerHTML = `<h2>${t('chat','welcomeHeading')}</h2><div class="welcome-search"><input type="text" id="welcomeInput" placeholder="${t('chat','askPlaceholder')}" /><button id="welcomeVoiceBtn" class="voice-btn" onclick="toggleVoice()" style="background:transparent;border:none;color:#666;cursor:pointer;padding:6px;display:flex;align-items:center;flex-shrink:0;border-radius:8px;" title="Voice input"><svg class="voice-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg></button><button class="welcome-send" id="welcomeSend"><svg viewBox="0 0 24 24"><path d="M2 21l21-9L2 3v7l15 2-15 2v7z"/></svg></button></div><div class="input-hint">${t('chat','disclaimerMistakes')}</div><div class="suggestions"><div class="suggestion"><span class="suggestion-icon">🔬</span>${t('chat','suggestion1')}</div><div class="suggestion"><span class="suggestion-icon">⚗️</span>${t('chat','suggestion2')}</div><div class="suggestion"><span class="suggestion-icon">📊</span>${t('chat','suggestion3')}</div><div class="suggestion"><span class="suggestion-icon">🧪</span>${t('chat','suggestion4')}</div></div>`;
       chatWindow.appendChild(welcome);
       document.getElementById('welcomeInput').addEventListener('keydown', function(e) {
         if (handleSlashMenuKeydown(e, this)) return;
