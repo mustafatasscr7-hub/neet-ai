@@ -714,6 +714,30 @@ function handleBack() {
       });
     }
 
+    // PostgREST (Supabase) caps a plain .select() at 1000 rows per request regardless of how
+    // many actually match -- confirmed live against this project: a Biology query for chapter
+    // counting was silently truncated to 1000 of 2102 real rows, so every chapter's displayed
+    // "Qs" count was computed from under half the real data. Physics (124 rows) and Chemistry
+    // (879 rows) happen to be under the cap today so weren't visibly broken, but would silently
+    // break the same way once either grows past 1000 -- paginating here fixes it for every
+    // subject, not just the one that already tripped it.
+    async function fetchAllChapterRows(subject) {
+      const pageSize = 1000;
+      let allRows = [];
+      let from = 0;
+      for (;;) {
+        const { data, error } = await client.from('pyq').select('chapter, class')
+          .eq('subject', subject).eq('is_active', true).not('chapter', 'is', null)
+          .range(from, from + pageSize - 1);
+        if (error) { console.error('fetchAllChapterRows failed:', error); break; }
+        if (!data || data.length === 0) break;
+        allRows = allRows.concat(data);
+        if (data.length < pageSize) break; // last page
+        from += pageSize;
+      }
+      return allRows;
+    }
+
  async function showClasses(subject) {
       selectedSubject = subject;
       const cfg = subjectConfig[subject];
@@ -732,16 +756,16 @@ function handleBack() {
       `;
 
       // Fetch question counts from Supabase
-      const [totalRes, chapterRes] = await Promise.all([
+      const [totalRes, chapterRows] = await Promise.all([
         client.from('pyq').select('*', { count: 'exact', head: true }).eq('subject', subject).eq('is_active', true),
-        client.from('pyq').select('chapter, class').eq('subject', subject).eq('is_active', true).not('chapter', 'is', null)
+        fetchAllChapterRows(subject)
       ]);
 
       const totalEl = document.getElementById('subjectTotalCount');
       if (totalEl) totalEl.textContent = t('pyqbank','questionsAvailable').replace('{n}', localizeNum(totalRes.count || 0));
 
       const counts = {};
-      (chapterRes.data || []).forEach(q => { if (q.chapter) counts[q.chapter] = (counts[q.chapter] || 0) + 1; });
+      chapterRows.forEach(q => { if (q.chapter) counts[q.chapter] = (counts[q.chapter] || 0) + 1; });
 
       const renderChapters = (chapters, classNum) => {
         return `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;">
