@@ -133,7 +133,14 @@
     .class-section-heading { font-size: 12px; font-weight: 700; color: var(--color, #4f8ef7); text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 18px; padding-bottom: 10px; border-bottom: 1px solid #1e1e1e; display: flex; align-items: center; gap: 8px; }
     .chapter-index-num { font-size: 10px; color: var(--color, #4f8ef7); font-weight: 700; }
     .year-filter-select { background: #0d0d12; border: 1px solid #2a2a35; border-radius: 8px; padding: 6px 12px; color: #ececec; font-size: 13px; font-family: 'Inter', sans-serif; cursor: pointer; }
-    .q-diagram-img { max-width: 100%; border-radius: 8px; margin: 12px 0; border: 1px solid #2a2a2a; }
+    .q-diagram-img { max-width: 100%; height: auto; display: block; border-radius: 8px; margin: 12px 0; border: 1px solid #2a2a2a; }
+    /* An <img> occasionally shows up embedded directly inside question/option text itself
+       (an admin pasted raw HTML into the stem/option), not just via the dedicated diagram_url
+       field above -- parseWithMath's marked+DOMPurify pipeline lets it through un-escaped. This
+       previously rendered at native pixel size with no cap, which could overflow the card. A
+       source-provided inline style="width:X%" is still respected (max-width only ever caps a
+       size, never overrides a smaller explicit one). */
+    .q-text img, .q-option img { max-width: 100%; height: auto; display: block; margin: 10px 0; border-radius: 8px; }
     .sol-loading-text { color: #888; }
     .sol-error-text { color: #ef4444; }
     .thinking-indicator { display: flex; align-items: center; gap: 10px; padding: 4px 0; }

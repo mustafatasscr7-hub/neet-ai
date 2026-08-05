@@ -1556,7 +1556,7 @@ let selectedImages = [];
                 const optEl = document.createElement('div');
                 optEl.className = 'pyq-opt';
                 optEl.style.cssText = 'padding:6px 10px;margin:4px 0;border-radius:6px;font-size:13px;color:#c4c4c4;background:#1a1a2e;border:1px solid #3a3a5e;cursor:pointer;transition:all 0.15s ease;';
-                const optImg = q['option_' + opt + '_diagram_url'] ? `<img src="${escapeHtml(q['option_' + opt + '_diagram_url'])}" style="max-width:100%;border-radius:6px;margin-top:6px;border:1px solid #3a3a5e;display:block;">` : '';
+                const optImg = q['option_' + opt + '_diagram_url'] ? `<img src="${escapeHtml(q['option_' + opt + '_diagram_url'])}" style="max-width:100%;height:auto;border-radius:6px;margin-top:6px;border:1px solid #3a3a5e;display:block;">` : '';
                 optEl.innerHTML = escapeHtml(opt.toUpperCase() + ') ' + (q['option_' + opt] || '')) + optImg;
                 optionEls[opt] = optEl;
                 // Don't reveal the answer up front -- let the student pick first, then show

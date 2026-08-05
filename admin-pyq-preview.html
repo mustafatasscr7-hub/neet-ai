@@ -75,7 +75,14 @@
     .q-options { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
     .q-option { padding: 10px 14px; border-radius: 8px; font-size: 13px; background: #1a1a1a; color: #888; border: 1px solid #2a2a2a; display: flex; gap: 10px; }
     .q-option.correct { background: #4ade8020; border-color: #4ade80; color: #4ade80; }
-    .q-diagram-img { max-width: 100%; border-radius: 8px; margin: 12px 0; border: 1px solid #2a2a2a; display: block; }
+    .q-diagram-img { max-width: 100%; height: auto; border-radius: 8px; margin: 12px 0; border: 1px solid #2a2a2a; display: block; }
+    /* An <img> occasionally shows up embedded directly inside question/option text itself
+       (an admin pasted raw HTML into the stem/option), not just via the dedicated diagram_url
+       field above -- parseWithMath's marked+DOMPurify pipeline lets it through un-escaped. This
+       previously rendered at native pixel size with no cap, which could overflow the card. A
+       source-provided inline style="width:X%" is still respected (max-width only ever caps a
+       size, never overrides a smaller explicit one). */
+    .q-text img, .q-option img, .edit-math-preview img { max-width: 100%; height: auto; display: block; margin: 10px 0; border-radius: 8px; }
 
     /* Admin-only extras -- not part of pyqbank.html's own styling */
     .q-admin-bar { display: flex; align-items: center; gap: 8px; margin-top: 14px; padding-top: 14px; border-top: 1px dashed #2a2a2a; flex-wrap: wrap; }
