@@ -72,6 +72,11 @@
   .q-number { font-size: 13px; font-weight: 700; color: #4f8ef7; }
   .q-diagram-badge { font-size: 11px; background: #f9731620; color: #f97316; padding: 2px 8px; border-radius: 20px; font-weight: 600; }
   .q-saved-badge { font-size: 11px; background: #4ade8020; color: #4ade80; padding: 2px 8px; border-radius: 20px; font-weight: 600; }
+  /* Paste-mode parse confidence -- only "fallback" gets a loud warning color since that's the
+     tier that needs real scrutiny; "delimiter" is informational (unusual but reliable format). */
+  .q-confidence-badge { font-size: 11px; padding: 2px 8px; border-radius: 20px; font-weight: 600; }
+  .q-confidence-badge.fallback { background: #f9731620; color: #f97316; }
+  .q-confidence-badge.delimiter { background: #4f8ef720; color: #4f8ef7; }
   .q-block-actions { margin-left: auto; display: flex; gap: 6px; }
   .q-block-actions button { background: transparent; border: 1px solid #2a2a2a; color: #888; padding: 5px 10px; border-radius: 6px; font-size: 11px; cursor: pointer; font-family: 'Inter', sans-serif; }
   .q-block-actions button:hover { border-color: #4f8ef7; color: #4f8ef7; }
@@ -759,6 +764,89 @@
     };
   }
 
+  // Some SimpleTex exports strip whitespace between words entirely, e.g.
+  // "159.Thecorrectstatementabouthydrolysisof..." -- this can't be fully undone (recovering
+  // spacing between two lowercase words with no boundary at all needs a dictionary-based word
+  // segmenter, out of scope here), but re-inserting a space at letter<->digit boundaries reliably
+  // un-glues a marker like "2." from adjacent prose it collided with, which is what actually
+  // breaks the option-splitter below. Never touches $...$ or $$...$$ math spans, since inserting
+  // spaces into a real LaTeX subscript/exponent (e.g. "a^{2}b") would corrupt the formula.
+  // Deliberately does NOT also split on a lowercase->uppercase boundary (e.g. "wordWord" ->
+  // "word Word") -- tried it, but plain-text chemical formulas outside $...$ (e.g. "SiH" in
+  // "(SiH$_3$)$_2$") hit that exact same pattern and got corrupted into "Si H" on real
+  // previously-verified paste content, which is worse than leaving a run-on word alone.
+  function insertBoundarySpaces(segment) {
+    return segment
+      .replace(/([a-zA-Z])(\d)/g, '$1 $2')
+      .replace(/(\d)([a-zA-Z])/g, '$1 $2');
+  }
+
+  function normalizeRunOnSpacing(rawText) {
+    const mathSpanRe = /\$\$[\s\S]*?\$\$|\$[^$\n]*?\$/g;
+    let result = '';
+    let lastIndex = 0;
+    let m;
+    while ((m = mathSpanRe.exec(rawText)) !== null) {
+      result += insertBoundarySpaces(rawText.slice(lastIndex, m.index));
+      result += m[0]; // math span passed through untouched
+      lastIndex = m.index + m[0].length;
+    }
+    result += insertBoundarySpaces(rawText.slice(lastIndex));
+    return result;
+  }
+
+  // Some SimpleTex exports delimit a question with "||" instead of any marker at all, e.g.
+  // "stem || option A || option B || option C || option D". Requires at least 5 non-empty
+  // segments (stem + 4) -- anything short of that isn't this format.
+  function splitByPipeDelimiter(chunk) {
+    if (!chunk.includes('||')) return null;
+    const parts = chunk.split(/\|\|/).map(s => s.trim()).filter(s => s.length > 0);
+    if (parts.length < 5) return null;
+    return { stem: parts[0], options: { a: parts[1], b: parts[2], c: parts[3], d: parts[4] } };
+  }
+
+  // Numbered-marker sibling of extractOptionsSimpleTex above -- same indexOf-chain approach
+  // (strict 1-then-2-then-3-then-4 order), same accepted risk of a false hit on a decimal that
+  // happens to contain all four digit-dot substrings in order, which is rare enough in practice
+  // to not be worth a heavier boundary-anchored regex.
+  function extractOptionsNumbered(chunk) {
+    const idx1 = chunk.indexOf('1.');
+    const idx2 = idx1 === -1 ? -1 : chunk.indexOf('2.', idx1 + 2);
+    const idx3 = idx2 === -1 ? -1 : chunk.indexOf('3.', idx2 + 2);
+    const idx4 = idx3 === -1 ? -1 : chunk.indexOf('4.', idx3 + 2);
+    if (idx1 === -1 || idx2 === -1 || idx3 === -1 || idx4 === -1) {
+      return { stem: chunk, options: { a: '', b: '', c: '', d: '' } };
+    }
+    return {
+      stem: chunk.slice(0, idx1),
+      options: {
+        a: chunk.slice(idx1 + 2, idx2).trim(),
+        b: chunk.slice(idx2 + 2, idx3).trim(),
+        c: chunk.slice(idx3 + 2, idx4).trim(),
+        d: chunk.slice(idx4 + 2).trim()
+      }
+    };
+  }
+
+  // Single entry point for the priority cascade: || delimiter, then (A)(B)(C)(D) markers, then
+  // numbered 1.2.3.4 markers. Positional paragraph-grouping (parseSimpleTexBareParagraphs) is
+  // deliberately NOT tier d here -- it operates on a whole document/multi-paragraph basis, not a
+  // single chunk, and is only reached once every chunk in the document fails all three tiers below
+  // (see parsePastedTextIntoBlocks).
+  function extractOptionsWithPriority(chunk) {
+    const pipe = splitByPipeDelimiter(chunk);
+    if (pipe) return { stem: pipe.stem, options: pipe.options, confidence: 'delimiter' };
+    const letters = extractOptionsSimpleTex(chunk);
+    if (letters.options.a && letters.options.b && letters.options.c && letters.options.d) {
+      return { stem: letters.stem, options: letters.options, confidence: 'marker' };
+    }
+    const numbered = extractOptionsNumbered(chunk);
+    if (numbered.options.a && numbered.options.b && numbered.options.c && numbered.options.d) {
+      return { stem: numbered.stem, options: numbered.options, confidence: 'marker' };
+    }
+    return { stem: chunk, options: { a: '', b: '', c: '', d: '' }, confidence: null };
+  }
+
   // SimpleTex sometimes emits the trailing [SOURCE YEAR] tag as its own markdown header
   // line, e.g. "# [AIPMT Canceled 2015]", instead of plain bracket text. Normalize those
   // away to plain "[...]" BEFORE paragraph-splitting so they're treated as an ordinary
@@ -777,14 +865,20 @@
   // a real question stem never does, so that's always an orphaned fragment (leaked-in
   // explanation text) worth dropping silently, per the "don't auto-match solutions" requirement.
   function parseSimpleTexText(rawText) {
-    const normalized = normalizeSimpleTexHeaders(rawText.replace(/\r\n/g, '\n'));
+    const spaced = normalizeRunOnSpacing(rawText);
+    const normalized = normalizeSimpleTexHeaders(spaced.replace(/\r\n/g, '\n'));
     const paragraphs = normalized.split(/\n\s*\n+/).map(p => p.trim()).filter(Boolean);
 
+    // Tries the full priority cascade (|| delimiter, then (A)(B)(C)(D), then numbered 1.2.3.4)
+    // on the accumulated buffer, not just letters -- || and numbered markers are observed to
+    // always land within a single paragraph rather than split across several like letters
+    // sometimes do, so this already catches them the moment a fresh single-paragraph buffer is
+    // formed below, without needing separate multi-paragraph accumulation logic for those tiers.
     function tryExtract(text) {
       const { sourceTag, year, cleaned } = extractSourceTag(text);
-      const { stem, options } = extractOptionsSimpleTex(cleaned);
+      const { stem, options, confidence } = extractOptionsWithPriority(cleaned);
       if (!options.a || !options.b || !options.c || !options.d) return null;
-      return { question: stem.trim(), option_a: options.a, option_b: options.b, option_c: options.c, option_d: options.d, source_tag: sourceTag, year };
+      return { question: stem.trim(), option_a: options.a, option_b: options.b, option_c: options.c, option_d: options.d, source_tag: sourceTag, year, parse_confidence: confidence };
     }
 
     // How many of A,B,C,D have been found so far, in strict order -- used to gate whether
@@ -865,7 +959,8 @@
   // blank options -- never silently dropped -- so the admin sees every source paragraph and can fix
   // it by hand instead of losing it outright.
   function parseSimpleTexBareParagraphs(rawText) {
-    const normalized = normalizeSimpleTexHeaders(rawText.replace(/\r\n/g, '\n'));
+    const spaced = normalizeRunOnSpacing(rawText);
+    const normalized = normalizeSimpleTexHeaders(spaced.replace(/\r\n/g, '\n'));
     const paragraphs = normalized.split(/\n\s*\n+/).map(p => p.trim()).filter(Boolean);
 
     function isHeader(p) { return /^#{1,6}\s+(.*)$/.test(p.split('\n')[0].trim()); }
@@ -895,7 +990,7 @@
     let i = 0;
 
     function emitUnparsed(p) {
-      parsed.push({ question: p.trim(), option_a: '', option_b: '', option_c: '', option_d: '', source_tag: null, year: null, chapter: currentChapter });
+      parsed.push({ question: p.trim(), option_a: '', option_b: '', option_c: '', option_d: '', source_tag: null, year: null, chapter: currentChapter, parse_confidence: 'fallback' });
     }
 
     while (i < paragraphs.length) {
@@ -923,7 +1018,7 @@
           question: stemCleaned.trim(),
           option_a: candidateOptions[0].trim(), option_b: candidateOptions[1].trim(),
           option_c: candidateOptions[2].trim(), option_d: candidateOptions[3].trim(),
-          source_tag: tag, year: yr, chapter: currentChapter
+          source_tag: tag, year: yr, chapter: currentChapter, parse_confidence: 'fallback'
         });
         i += consumed;
       } else {
@@ -972,6 +1067,7 @@
       option_a_diagram_url: null, option_b_diagram_url: null, option_c_diagram_url: null, option_d_diagram_url: null,
       year: q.year, source_tag: q.source_tag || '', source_page: null, display_number: null,
       chapter: manualChapter || q.chapter || null, // manual pick (if any) wins over a per-question "# Chapter Name" header guess -- see buildChapterOptionsHtml/applyChapterHint
+      parse_confidence: q.parse_confidence || null, // 'marker' | 'delimiter' | 'fallback' | null (Mathpix, or blank-option questions with nothing to tag) -- see blockTemplate's badge
       saved: false, savePending: false
     }));
     scanFilenameMatch = null; // no filename to match chapters against in paste mode
@@ -983,10 +1079,16 @@
     document.getElementById('summaryBar').style.display = 'flex';
     document.getElementById('flaggedPagesBanner').style.display = 'none';
     const missingOptions = blocks.filter(b => !b.option_a && !b.option_b && !b.option_c && !b.option_d).length;
+    const fallbackCount = blocks.filter(b => b.parse_confidence === 'fallback').length;
+    const delimiterCount = blocks.filter(b => b.parse_confidence === 'delimiter').length;
     const formatLabel = isMathpix ? 'Mathpix' : (usedBareFallback ? 'SimpleTex, no-marker fallback' : 'SimpleTex');
-    hintEl.style.color = usedBareFallback ? '#f97316' : '#4ade80';
+    // Per-tier counts, not a blanket "double-check every question" -- the ⚠ badge on each
+    // fallback-confidence card (see blockTemplate) is what actually needs scrutiny; marker- and
+    // delimiter-confidence questions came from an explicit, validated boundary and don't.
+    hintEl.style.color = fallbackCount ? '#f97316' : '#4ade80';
     hintEl.textContent = `Parsed ${blocks.length} question(s) as ${formatLabel} format.`
-      + (usedBareFallback ? ' No (A)(B)(C)(D) markers were found, so options were grouped by paragraph position -- double-check every question, not just the ones below.' : '')
+      + (fallbackCount ? ` ${fallbackCount} flagged ⚠ Needs review (grouped by paragraph position, no marker found) -- check those first.` : '')
+      + (delimiterCount ? ` ${delimiterCount} parsed from a || pipe-delimited block.` : '')
       + (missingOptions ? ` ${missingOptions} had no options detected -- fill those in manually.` : '');
     saveDraftNow(); // a fresh parse just replaced the whole batch -- worth persisting right away, same as scanPdf()
   }
@@ -1259,6 +1361,8 @@
       <div class="q-block-header">
         <span class="q-number">Q<input type="text" id="qnum-${b.id}" value="${escapeHtml(b.display_number != null ? b.display_number : String(displayIndex))}" onchange="setQNumber('${b.id}')" title="Edit to match the actual question number in the PDF, if it drifted from the auto count" style="width:34px;background:transparent;border:none;border-bottom:1px dashed #4f8ef780;color:#4f8ef7;font-weight:700;font-size:13px;font-family:'Inter',sans-serif;padding:0 0 1px 2px;"/></span>
         ${b.has_diagram ? '<span class="q-diagram-badge">Diagram</span>' : ''}
+        ${b.parse_confidence === 'fallback' ? '<span class="q-confidence-badge fallback" title="No (A)(B)(C)(D)/numbered/pipe markers were found -- options were grouped by paragraph position, so this needs a careful check">⚠ Needs review</span>' : ''}
+        ${b.parse_confidence === 'delimiter' ? '<span class="q-confidence-badge delimiter" title="Parsed from a || pipe-delimited block rather than (A)(B)(C)(D)/numbered markers">Pipe-delimited</span>' : ''}
         <span class="q-saved-badge" id="saved-badge-${b.id}" style="display:${b.saved ? 'inline-flex' : 'none'}">Saved</span>
         <div class="q-block-actions">
           <button type="button" onclick="mergeWithNext('${b.id}')" title="Merge this block with the next one">Merge next</button>
