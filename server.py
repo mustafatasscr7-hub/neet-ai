@@ -1103,6 +1103,9 @@ async def merge_guest_usage(req: MergeGuestUsageRequest, request: Request):
 
 REPORT_REASONS = {"wrong_answer", "unclear", "diagram_issue", "duplicate", "other"}
 MAX_REPORTS_PER_DAY = 20
+# mustafatasscr7@gmail.com (owner account) -- exempt from the daily report cap by request, so
+# testing/QA-flagging real content issues isn't throttled like an ordinary student account.
+UNLIMITED_REPORT_USER_IDS = {"105c4f7f-ec62-492d-a4b5-2a6e5bf31b5f"}
 
 def _ist_today_start_utc_iso() -> str:
     # datetime.min.time() (not a bare `time` import) deliberately -- `time` the module is
@@ -1122,13 +1125,14 @@ async def report_question(req: ReportQuestionRequest, _: None = Depends(rate_lim
     if req.reason not in REPORT_REASONS:
         return {"error": "Invalid reason"}
     try:
-        today_rows = await async_client.get(
-            f"{SUPABASE_URL}/rest/v1/question_reports", headers=ADMIN_HEADERS,
-            params={"user_id": f"eq.{req.user_id}", "created_at": f"gte.{_ist_today_start_utc_iso()}",
-                    "select": "id", "limit": MAX_REPORTS_PER_DAY}
-        )
-        if len(today_rows.json()) >= MAX_REPORTS_PER_DAY:
-            raise HTTPException(status_code=429, detail="You've reached today's report limit. Try again tomorrow.")
+        if req.user_id not in UNLIMITED_REPORT_USER_IDS:
+            today_rows = await async_client.get(
+                f"{SUPABASE_URL}/rest/v1/question_reports", headers=ADMIN_HEADERS,
+                params={"user_id": f"eq.{req.user_id}", "created_at": f"gte.{_ist_today_start_utc_iso()}",
+                        "select": "id", "limit": MAX_REPORTS_PER_DAY}
+            )
+            if len(today_rows.json()) >= MAX_REPORTS_PER_DAY:
+                raise HTTPException(status_code=429, detail="You've reached today's report limit. Try again tomorrow.")
         note = (req.optional_note or "").strip()[:500] or None
         response = await async_client.post(
             f"{SUPABASE_URL}/rest/v1/question_reports",
