@@ -805,6 +805,32 @@
     return { stem: parts[0], options: { a: parts[1], b: parts[2], c: parts[3], d: parts[4] } };
   }
 
+  // A flattened markdown table (one row per question, each row itself "| stem | opt1 | opt2 |
+  // opt3 | opt4 |") loses its row-boundary newlines when pasted, so consecutive rows' pipes run
+  // together into "...opt4 || 159. next stem...". Naively treating EVERY "||" in a chunk as an
+  // option separator (splitByPipeDelimiter above) can't tell a row boundary from an option
+  // boundary and silently swallows every question after the first 4 options into nothing --
+  // this is what caused the 183->19 regression. The fix: "||" immediately followed by a question
+  // number ("158.", "159.", ...) is specifically a NEW QUESTION boundary, never an option
+  // boundary, so it's split on first, before any per-question option extraction happens. The
+  // lookahead keeps the number out of the match itself so it stays part of the next question's
+  // own text ("keeping the number as part of the new question's text").
+  function splitIntoQuestionChunksByPipe(text) {
+    const boundaryRe = /\|\|\s*(?=\d+\.)/g;
+    const boundaries = [...text.matchAll(boundaryRe)];
+    if (boundaries.length === 0) return null;
+    const chunks = [];
+    const leading = text.slice(0, boundaries[0].index).trim();
+    if (leading) chunks.push(leading); // text before the first "||N." boundary is still a question (usually the first one in the blob)
+    for (let i = 0; i < boundaries.length; i++) {
+      const start = boundaries[i].index + boundaries[i][0].length;
+      const end = i + 1 < boundaries.length ? boundaries[i + 1].index : text.length;
+      const piece = text.slice(start, end).trim();
+      if (piece) chunks.push(piece);
+    }
+    return chunks;
+  }
+
   // Numbered-marker sibling of extractOptionsSimpleTex above -- same indexOf-chain approach
   // (strict 1-then-2-then-3-then-4 order), same accepted risk of a false hit on a decimal that
   // happens to contain all four digit-dot substrings in order, which is rare enough in practice
@@ -845,6 +871,26 @@
       return { stem: numbered.stem, options: numbered.options, confidence: 'marker' };
     }
     return { stem: chunk, options: { a: '', b: '', c: '', d: '' }, confidence: null };
+  }
+
+  // Shared by parseSimpleTexText and parseSimpleTexBareParagraphs: once a flattened multi-question
+  // blob has been split into per-question chunks (see splitIntoQuestionChunksByPipe), each chunk
+  // is independently run through the SAME priority cascade a single question would get -- its own
+  // remaining "||" option-separators, then (A)(B)(C)(D), then numbered markers. A chunk that still
+  // can't be split is emitted with blank options (tagged 'fallback') rather than dropped, matching
+  // the "never silently lose a question" posture used elsewhere in this parser.
+  function extractQuestionsFromPipeChunks(chunks, chapter) {
+    const results = [];
+    for (const rawChunk of chunks) {
+      const { sourceTag, year, cleaned } = extractSourceTag(rawChunk);
+      const { stem, options, confidence } = extractOptionsWithPriority(cleaned);
+      if (options.a && options.b && options.c && options.d) {
+        results.push({ question: stem.trim(), option_a: options.a, option_b: options.b, option_c: options.c, option_d: options.d, source_tag: sourceTag, year, parse_confidence: confidence, chapter });
+      } else {
+        results.push({ question: cleaned.trim(), option_a: '', option_b: '', option_c: '', option_d: '', source_tag: sourceTag, year, parse_confidence: 'fallback', chapter });
+      }
+    }
+    return results;
   }
 
   // SimpleTex sometimes emits the trailing [SOURCE YEAR] tag as its own markdown header
@@ -915,6 +961,19 @@
       if (headerMatch) {
         flush();
         currentChapter = headerMatch[1].trim();
+        continue;
+      }
+
+      // A single paragraph can itself be an entire flattened multi-question table blob (see
+      // splitIntoQuestionChunksByPipe) -- catching that HERE, before it ever reaches the normal
+      // single-question buffer/leadMatch flow below, is what fixes the regression where
+      // extractOptionsWithPriority's plain "||" tier used to swallow the whole blob as one bogus
+      // question. Only acts when there's more than one boundary; a single "||N." or none at all
+      // just falls through to the existing per-paragraph handling further down, unchanged.
+      const pipeQuestionChunks = splitIntoQuestionChunksByPipe(para);
+      if (pipeQuestionChunks && pipeQuestionChunks.length > 1) {
+        flush(); // whatever was accumulating is unrelated to this self-contained blob
+        parsed.push(...extractQuestionsFromPipeChunks(pipeQuestionChunks, currentChapter));
         continue;
       }
 
@@ -999,6 +1058,17 @@
       if (headerMatch) { currentChapter = headerMatch[1].trim(); i++; continue; }
       if (isSourceTagOnly(p)) { i++; continue; } // an orphaned tag with nothing preceding it to attach to
       if (isPseudoSectionHeader(p)) { i++; continue; } // sub-topic label, not a question or option
+
+      // Same flattened multi-question blob check as parseSimpleTexText -- this pass only ever
+      // runs when the marker-based pass above found nothing at all in the WHOLE document, but a
+      // single paragraph within it can still be a self-contained "||N." blob that shouldn't be
+      // handed to the positional 5-paragraph grouper below (which has no notion of it at all).
+      const pipeQuestionChunks = splitIntoQuestionChunksByPipe(p);
+      if (pipeQuestionChunks && pipeQuestionChunks.length > 1) {
+        parsed.push(...extractQuestionsFromPipeChunks(pipeQuestionChunks, currentChapter));
+        i++;
+        continue;
+      }
 
       const candidateOptions = paragraphs.slice(i + 1, i + 5);
       const canGroup = candidateOptions.length === 4

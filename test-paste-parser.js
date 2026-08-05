@@ -23,6 +23,7 @@ const parserSource = html.slice(startIdx, endIdx);
 const exportNames = [
   'cleanupLatexWrappers', 'extractSourceTag', 'extractOptions', 'parseQuestionChunk', 'parseMathpixText',
   'extractOptionsSimpleTex', 'insertBoundarySpaces', 'normalizeRunOnSpacing', 'splitByPipeDelimiter',
+  'splitIntoQuestionChunksByPipe', 'extractQuestionsFromPipeChunks',
   'extractOptionsNumbered', 'extractOptionsWithPriority', 'normalizeSimpleTexHeaders',
   'parseSimpleTexText', 'parseSimpleTexBareParagraphs'
 ];
@@ -171,6 +172,90 @@ test('does not misattach the next question as options when the current one is sh
   const stems = out.map(o => o.question);
   assert(!stems.some(s => s.includes('Lewis structure') && s.includes('do not participate')),
     'a later question\'s stem got merged into an earlier one\'s options');
+});
+
+console.log('\nsplitIntoQuestionChunksByPipe / the 183->19 regression (flattened multi-question || blob)');
+test('splits on "||N." as a question boundary, keeping the number with the new question', () => {
+  const input = '146.Stem A 1.opt1 2.opt2 3.opt3 4.opt4||158.Stem B 1.optA 2.optB 3.optC 4.optD';
+  const chunks = parser.splitIntoQuestionChunksByPipe(input);
+  assert.strictEqual(chunks.length, 2);
+  assert(chunks[0].startsWith('146.'));
+  assert(chunks[1].startsWith('158.'), 'the "158." must stay attached to the new question, not get eaten by the boundary match');
+});
+test('a plain "||" with no following question number is NOT treated as a question boundary', () => {
+  assert.strictEqual(parser.splitIntoQuestionChunksByPipe('stem || opt1 || opt2 || opt3 || opt4'), null);
+});
+test('a chunk\'s own remaining "||" still splits into options as before (not eaten by boundary detection)', () => {
+  const input = '146.What is the SI unit of force?||Newton||Joule||Watt||Pascal||158.Next stem 1.a 2.b 3.c 4.d';
+  const chunks = parser.splitIntoQuestionChunksByPipe(input);
+  assert.strictEqual(chunks.length, 2);
+  const questions = parser.extractQuestionsFromPipeChunks(chunks, '');
+  assert.strictEqual(questions[0].parse_confidence, 'delimiter');
+  assert.strictEqual(questions[0].option_a, 'Newton');
+  assert.strictEqual(questions[1].parse_confidence, 'marker');
+  assert.strictEqual(questions[1].option_a, 'a');
+});
+test('the reported real block (Pentane question + 158/159/160) parses into 4 separate questions, not 1', () => {
+  // Reconstructed from the actual sample text shown earlier in this conversation, joined with
+  // "||" the way a flattened markdown table (row = question, cells lose their newlines) would
+  // actually glue consecutive questions together in a real paste.
+  const input =
+    '145.The incorrect order of the force of attraction among the given species is -' +
+    '1.HI>HBr>$Cl_2$' +
+    '2.$CCl_4$>$CH_2Cl_2$>$CH_3Cl$>$CH_4$' +
+    '3.n-Pentane>iso-Pentane>neo-Pentane' +
+    '4.$OH_2$>$O(CH_3)_2$>$OBr_2$' +
+    '||158.O—O bond length (in Å) in $H_2O_2$ and $O_2F_2$ is respectively:' +
+    '1.1.22,1.48' +
+    '2.1.48,1.22' +
+    '3.1.22,1.22' +
+    '4.1.48,1.48' +
+    '||159.The correct statement about hydrolysis of $BCl_3$ and $NCl_3$ is-' +
+    '1.$NCl_3$ is hydrolysed and gives HOCl but $BCl_3$ is not hydrolysed' +
+    '2.Both $NCl_3$ and $BCl_3$ on hydrolysis gives $HCl$' +
+    '3.$NCl_3$ on hydrolysis gives HOCl but $BCl_3$ gives $HCl$' +
+    '4.Both $NCl_3$ and $BCl_3$ on hydrolysis gives HOCl' +
+    '||160.The correct order of solubility in an aqueous medium is:' +
+    '1.$CuS>ZnS>Na_2S$' +
+    '2.$ZnS>Na_2S>CuS$' +
+    '3.$Na_2S>CuS>ZnS$' +
+    '4.$Na_2S>ZnS>CuS$';
+  const out = parser.parseSimpleTexText(input);
+  assert.strictEqual(out.length, 4, 'expected 4 separate questions, got ' + out.length + ': ' + JSON.stringify(out.map(q => q.question.slice(0, 30))));
+  assert(out[0].question.startsWith('145.'));
+  assert(out[1].question.startsWith('158.'));
+  assert(out[2].question.startsWith('159.'));
+  assert(out[3].question.startsWith('160.'));
+  out.forEach((q, i) => {
+    assert(q.option_a && q.option_b && q.option_c && q.option_d, `question ${i} (${q.question.slice(0, 20)}...) has a blank option: ${JSON.stringify(q)}`);
+    assert.strictEqual(q.parse_confidence, 'marker');
+  });
+  assert(out[1].option_a.includes('1.22'), 'Q158 option a lost its content: ' + out[1].option_a);
+  assert(out[2].option_a.includes('NCl'), 'Q159 option a lost its content: ' + out[2].option_a);
+  assert(out[3].option_a.includes('CuS'), 'Q160 option a lost its content: ' + out[3].option_a);
+});
+test('regression guard: a single self-contained "stem || 4 options" question (no ||N. boundary) still works via the existing tier', () => {
+  const input = 'What is the SI unit of force? || Newton || Joule || Watt || Pascal';
+  const out = parser.parseSimpleTexText(input);
+  assert.strictEqual(out.length, 1);
+  assert.strictEqual(out[0].parse_confidence, 'delimiter');
+  assert.strictEqual(out[0].option_a, 'Newton');
+});
+test('a flattened || blob mixed with ordinary lettered questions in the same document all count -- not just the blob', () => {
+  // Simulates the actual 183-question document shape: most of it is normal paragraph-formatted
+  // questions, with one flattened multi-question table blob embedded partway through. Before the
+  // fix, that one blob paragraph alone would eat ~everything after it into a single bogus
+  // question; the fix must leave the surrounding ordinary questions completely unaffected.
+  const before = 'Which among the following is an electron-deficient compound?(A) opt a(B) opt b(C) opt c(D) opt d';
+  const blob =
+    '145.Stem one 1.a1 2.a2 3.a3 4.a4' +
+    '||158.Stem two 1.b1 2.b2 3.b3 4.b4' +
+    '||159.Stem three 1.c1 2.c2 3.c3 4.c4' +
+    '||160.Stem four 1.d1 2.d2 3.d3 4.d4';
+  const after = 'Which of the following is a paramagnetic compound?(A) N2(B) H2(C) Li2(D) O2';
+  const input = before + '\n\n' + blob + '\n\n' + after;
+  const out = parser.parseSimpleTexText(input);
+  assert.strictEqual(out.length, 6, 'expected 1 (before) + 4 (blob) + 1 (after) = 6, got ' + out.length);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
