@@ -1,0 +1,15 @@
+{
+  "name": "biology-letter-markers-synthetic",
+  "provenance": "synthetic",
+  "subject": "Biology",
+  "formats": [
+    "letter-options",
+    "multi-paragraph-option-list"
+  ],
+  "description": "Clean (A)(B)(C)(D) style across 2 questions. The first has each option in its OWN blank-line-separated paragraph -- exercises the untouched multi-paragraph letter-buffering accumulation loop (leadMatch/optionProgress gating), not the Stage E single-chunk cascade. The second keeps all 4 options in one paragraph, for contrast.",
+  "raw": "Which of the following is an example of a redox reaction?\n\n(A) NaCl + AgNO3\n\n(B) HCl + NaOH\n\n(C) Zn + CuSO4\n\n(D) BaCl2 + Na2SO4\n\n[NEET 2017]\n\nThe powerhouse of the cell is known as the\n(A) Nucleus\n(B) Mitochondria\n(C) Ribosome\n(D) Golgi apparatus",
+  "expected": {
+    "minQuestions": 2,
+    "maxQuestions": 2
+  }
+}

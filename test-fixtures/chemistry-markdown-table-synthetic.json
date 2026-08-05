@@ -1,0 +1,14 @@
+{
+  "name": "chemistry-markdown-table-synthetic",
+  "provenance": "synthetic",
+  "subject": "Chemistry",
+  "formats": [
+    "markdown-table-row"
+  ],
+  "description": "Single-pipe markdown table rows (\"| stem | opt | opt | opt | opt |\"), one question per row, WITHOUT any \"||\" double-pipe anywhere -- exercises the table-row detection tier (Stage C/E), a pattern not previously covered by any test.",
+  "raw": "| Which of the following has the highest electronegativity? | Fluorine | Oxygen | Nitrogen | Chlorine |\n\n| The SI unit of electric current is | Ampere | Volt | Ohm | Watt |",
+  "expected": {
+    "minQuestions": 2,
+    "maxQuestions": 2
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "chemistry-chemical-bonding-real",
+  "provenance": "real",
+  "subject": "Chemistry",
+  "formats": [
+    "bare-paragraph-options",
+    "numbered-in-stem",
+    "markdown-headers-mixed",
+    "image-only-options"
+  ],
+  "description": "Actual SimpleTex OCR dump pasted by the user (Chemical Bonding chapter). No (A)(B)(C)(D)/pipe/table markers anywhere -- mostly resolves via position-based fallback; the one numbered-in-stem question (octet rule) is the case that used to be silently dropped under the old whole-document fallback gate and now recovers via Stage E.",
+  "raw": "Octate, Isoelectronic Species, Lewis Structure & Formal Charge - Level I\n\nThe lone pairs of electrons can be defined as -1. Electron pairs that participate in bonding.\n\nElectron pairs that do not participate in bonding.\n\nElectron pairs that are present in inner most shell.4.Electron pairs that are present in valence shell of ions.\n\nThe correct Lewis structure of acetic acid is -\n\n<div style=\"display: block; width: 100%\"><img src=\"https://storage.simpletex.cn/view/ma0529816e0de7b0c2613d848c3915701\" style=\"width: 25%; max-width: 25%\" /></div>\n\nNone of the above.\n\nWhich among the following is an electron-deficient compound?\n\n(SiH$_3$)$_2$\n\n(BH$_3$)$_2$\n\nPH$_3$\n\n(CH$_3$)$_2$\n\nWhich of the following pairs of ions are isoelectronic and isostructural?\n\n$CO_{3}^{2-}$, $SO_{3}^{2-}$\n\n$ClO_{3}^{-}$, $CO_{3}^{2-}$\n\n$SO_{3}^{2-}$, $NO_{3}^{-}$\n\n$ClO_{3}^{-}$, $SO_{3}^{2-}$\n\n# Chapter 4 - Chemical Bonding and Molecular Structure\n\nThe significance of the octet rule is: 1. To determine the stability of atoms. 2. To find the hybridization of elements. 3. To calculate the number of lone pairs. 4. None of the above.\n\nThe set of oxides of nitrogen that are paramagnetic in nature is:\n\nNO, N$_2$O\n\nN$_2$O$_3$, NO\n\nNO, NO$_2$\n\nN$_2$O, NO$_2$\n\n# Types of Chemical Bond - Level I\n\nThe bond length can be defined as -\n\nThe equilibrium distance between the nuclei of two bonded atoms in a molecule.\n\nThe farthest distance between the nuclei of two bonded atoms in a molecule.\n\nThe shortest distance between the nuclei of two bonded atoms in a molecule.\n\nNone of the above.\n",
+  "expected": {
+    "minQuestions": 9,
+    "maxQuestions": 13
+  }
+}

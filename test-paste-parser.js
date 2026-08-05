@@ -22,10 +22,11 @@ const parserSource = html.slice(startIdx, endIdx);
 
 const exportNames = [
   'cleanupLatexWrappers', 'extractSourceTag', 'extractOptions', 'parseQuestionChunk', 'parseMathpixText',
-  'extractOptionsSimpleTex', 'insertBoundarySpaces', 'normalizeRunOnSpacing', 'splitByPipeDelimiter',
-  'splitIntoQuestionChunksByPipe', 'extractQuestionsFromPipeChunks',
-  'extractOptionsNumbered', 'extractOptionsWithPriority', 'normalizeSimpleTexHeaders',
-  'parseSimpleTexText', 'parseSimpleTexBareParagraphs'
+  'maskMathSpans', 'unmaskMathSpans', 'insertBoundarySpaces', 'segmentWord', 'segmentFusedRuns',
+  'countSequentialQuadruples', 'detectPatterns',
+  'splitByPipeDelimiter', 'splitByTableRow', 'extractOptionsSimpleTex', 'extractOptionsNumbered',
+  'extractOptionsByDetectedPattern', 'splitIntoQuestionChunksByPipe', 'extractQuestionsFromChunks',
+  'normalizeSimpleTexHeaders', 'groupLeftoverParagraphsPositionally', 'parseSimpleTexPipeline'
 ];
 const sandbox = {};
 vm.createContext(sandbox);
@@ -45,101 +46,149 @@ function test(name, fn) {
   }
 }
 
-console.log('normalizeRunOnSpacing / insertBoundarySpaces');
+// ==================== Stage A: math masking ====================
+console.log('maskMathSpans / unmaskMathSpans (Stage A)');
+test('masks and restores a $...$ span exactly', () => {
+  const { masked, spans } = parser.maskMathSpans('Given $a^{2}b_3$ and text here');
+  assert(!masked.includes('$'), 'math span was not masked: ' + masked);
+  assert.strictEqual(parser.unmaskMathSpans(masked, spans), 'Given $a^{2}b_3$ and text here');
+});
+test('masks and restores a $$...$$ display span exactly', () => {
+  const { masked, spans } = parser.maskMathSpans('stem $$x^{2}y_1$$ more');
+  assert.strictEqual(parser.unmaskMathSpans(masked, spans), 'stem $$x^{2}y_1$$ more');
+});
+test('round-trips multiple math spans in one string, in order', () => {
+  const raw = '$a$ and $b$ and $c$';
+  const { masked, spans } = parser.maskMathSpans(raw);
+  assert.strictEqual(parser.unmaskMathSpans(masked, spans), raw);
+});
+test('the placeholder token contains no letters -- immune to later letter<->digit boundary repair', () => {
+  const { masked } = parser.maskMathSpans('$a^{2}b_3$');
+  assert(!/[a-zA-Z]/.test(masked), 'placeholder token contains a letter, which Stage B1 could mangle: ' + JSON.stringify(masked));
+});
+
+// ==================== Stage B1: letter<->digit boundary repair ====================
+console.log('\ninsertBoundarySpaces (Stage B1)');
 test('does NOT insert a space at a lower->upper boundary (would corrupt plain-text formulas)', () => {
   // Regression guard: this rule was tried and reverted after it turned the real, previously
   // verified "(SiH$_3$)$_2$" option into "(Si H$_3$)$_2$" -- "Si"+"H" is indistinguishable from
-  // a genuine run-on word boundary by regex alone, so it's intentionally not attempted at all.
+  // a genuine run-on word boundary by regex alone. Stage B2's dictionary segmenter now owns that
+  // class of decision instead (see below).
   assert.strictEqual(parser.insertBoundarySpaces('bondLength'), 'bondLength');
-  assert.strictEqual(parser.insertBoundarySpaces('(SiH3)2'), '(SiH 3)2'); // digit boundary still fires -- see next test
 });
 test('inserts a space at letter->digit and digit->letter boundaries', () => {
   assert.strictEqual(parser.insertBoundarySpaces('HOCl2gives3He'), 'HOCl 2 gives 3 He');
 });
-test('does not touch content inside $...$ math spans', () => {
-  const input = 'Given $a^{2}b_3$ and text4here outside';
-  const out = parser.normalizeRunOnSpacing(input);
-  assert(out.includes('$a^{2}b_3$'), 'math span was altered: ' + out);
-  assert(out.includes('text 4 here'), 'boundary outside math span was not normalized: ' + out);
+
+// ==================== Stage B2: dictionary word segmentation ====================
+console.log('\nsegmentFusedRuns / segmentWord (Stage B2)');
+test('segments a genuine run-on into its real words', () => {
+  assert.strictEqual(parser.segmentFusedRuns('hasnovacantd'), 'has no vacant d');
 });
-test('does not touch content inside $$...$$ display math spans', () => {
-  const input = 'stem $$x^{2}y_1$$ moreText';
-  const out = parser.normalizeRunOnSpacing(input);
-  assert(out.includes('$$x^{2}y_1$$'), 'display math span was altered: ' + out);
+test('segments the reported failing example into readable words', () => {
+  assert.strictEqual(parser.segmentFusedRuns('thecorrectstatementabouthydrolysisof'), 'the correct statement about hydrolysis of');
+});
+test('does NOT split "SiH" -- the exact case-boundary regression, now owned by the segmenter', () => {
+  // Neither "Si" nor "H" alone is a recognized dictionary word, so no confident split exists --
+  // segmentFusedRuns must leave it untouched rather than guess.
+  assert.strictEqual(parser.segmentFusedRuns('SiH'), 'SiH');
+});
+test('leaves a short, no-case-transition run below the 12-char threshold untouched', () => {
+  assert.strictEqual(parser.segmentFusedRuns('isunstable'), 'isunstable');
+});
+test('leaves an unrecognized long technical term untouched rather than mis-splitting it', () => {
+  const weird = 'zzqxvbnmqwrtyplkjhgfdsazzz'; // not a real word under any split
+  assert.strictEqual(parser.segmentFusedRuns(weird), weird);
+});
+test('segmentWord returns null when no full-coverage dictionary split exists', () => {
+  assert.strictEqual(parser.segmentWord('sih'), null);
 });
 
-console.log('\nsplitByPipeDelimiter (priority tier a)');
-test('splits a || delimited stem+4options block', () => {
-  const r = parser.splitByPipeDelimiter('What is X? || Option one || Option two || Option three || Option four');
-  assert(r, 'expected a non-null result');
-  assert.strictEqual(r.stem, 'What is X?');
-  assert.strictEqual(r.options.a, 'Option one');
-  assert.strictEqual(r.options.d, 'Option four');
+// ==================== Stage C: pattern detection ====================
+console.log('\ndetectPatterns / countSequentialQuadruples (Stage C)');
+test('detects a single complete (A)(B)(C)(D) cycle', () => {
+  const r = parser.detectPatterns('stem(A) a(B) b(C) c(D) d');
+  assert.strictEqual(r.scores.letter, 1);
+  assert.strictEqual(r.winner, 'letter');
 });
-test('returns null when there are fewer than 5 segments', () => {
-  assert.strictEqual(parser.splitByPipeDelimiter('stem || only one option'), null);
+test('detects a single complete numbered cycle', () => {
+  const r = parser.detectPatterns('stem 1.a 2.b 3.c 4.d');
+  assert.strictEqual(r.scores.numbered, 1);
+  assert.strictEqual(r.winner, 'numbered');
 });
-test('returns null when there is no || at all', () => {
-  assert.strictEqual(parser.splitByPipeDelimiter('no delimiter here'), null);
+test('detects a pipe-delimited block (4 pipes = 1 question)', () => {
+  const r = parser.detectPatterns('stem || a || b || c || d');
+  assert.strictEqual(r.scores.pipe, 1);
+  assert.strictEqual(r.winner, 'pipe');
+});
+test('counts multiple back-to-back quadruple cycles, not just one', () => {
+  const r = parser.detectPatterns('(A)a(B)b(C)c(D)d (A)a(B)b(C)c(D)d');
+  assert.strictEqual(r.scores.letter, 2);
+});
+test('picks the highest-scoring pattern, not a fixed priority order, when multiple are present', () => {
+  // Two full numbered cycles vs one full letter cycle -- numbered should win on count, even
+  // though letter markers are earlier in the tie-break order.
+  const r = parser.detectPatterns('(A)a(B)b(C)c(D)d 1.a 2.b 3.c 4.d 1.a 2.b 3.c 4.d');
+  assert.strictEqual(r.winner, 'numbered');
+});
+test('table-row score only counts when no "||" is present at all', () => {
+  const withDouble = parser.detectPatterns('| a | b || c | d | e |');
+  assert.strictEqual(withDouble.scores.table, 0);
+  const singleOnly = parser.detectPatterns('| a | b | c | d | e |');
+  assert(singleOnly.scores.table >= 1);
 });
 
-console.log('\nextractOptionsNumbered (priority tier c)');
-test('splits a clean 1. 2. 3. 4. numbered block', () => {
-  const r = parser.extractOptionsNumbered('Stem text 1.Option A 2.Option B 3.Option C 4.Option D');
-  assert.strictEqual(r.options.a, 'Option A');
-  assert.strictEqual(r.options.b, 'Option B');
-  assert.strictEqual(r.options.c, 'Option C');
-  assert.strictEqual(r.options.d, 'Option D');
-});
-test('leaves options blank when markers are out of order/incomplete', () => {
-  const r = parser.extractOptionsNumbered('Stem with only 1.one and 2.two');
-  assert.strictEqual(r.options.a, '');
-});
-
-console.log('\nextractOptionsWithPriority (a -> b -> c cascade + confidence tagging)');
+// ==================== Stage E: option extraction per chunk ====================
+console.log('\nextractOptionsByDetectedPattern (Stage E)');
 test('prefers || delimiter over markers when both could apply', () => {
-  const r = parser.extractOptionsWithPriority('stem || (A) fake-looking opt || b || c || d');
+  const r = parser.extractOptionsByDetectedPattern('stem || (A) fake-looking opt || b || c || d');
   assert.strictEqual(r.confidence, 'delimiter');
+  assert.strictEqual(r.detected_pattern, 'pipe');
 });
 test('falls to (A)(B)(C)(D) markers when no || present', () => {
-  const r = parser.extractOptionsWithPriority('Which is correct?(A) opt a(B) opt b(C) opt c(D) opt d');
+  const r = parser.extractOptionsByDetectedPattern('Which is correct?(A) opt a(B) opt b(C) opt c(D) opt d');
   assert.strictEqual(r.confidence, 'marker');
+  assert.strictEqual(r.detected_pattern, 'letter');
   assert.strictEqual(r.options.a, 'opt a');
 });
 test('falls to numbered markers when neither || nor (A)(B)(C)(D) present', () => {
-  const r = parser.extractOptionsWithPriority('Which is correct? 1.opt a 2.opt b 3.opt c 4.opt d');
+  const r = parser.extractOptionsByDetectedPattern('Which is correct? 1.opt a 2.opt b 3.opt c 4.opt d');
   assert.strictEqual(r.confidence, 'marker');
+  assert.strictEqual(r.detected_pattern, 'numbered');
+});
+test('falls to a markdown table row when nothing else applies', () => {
+  const r = parser.extractOptionsByDetectedPattern('| stem | opt a | opt b | opt c | opt d |');
+  assert.strictEqual(r.confidence, 'delimiter');
+  assert.strictEqual(r.detected_pattern, 'table');
   assert.strictEqual(r.options.a, 'opt a');
 });
-test('returns null confidence with blank options when nothing matches', () => {
-  const r = parser.extractOptionsWithPriority('just a plain sentence with no markers at all');
+test('returns null confidence/pattern with blank options when nothing matches', () => {
+  const r = parser.extractOptionsByDetectedPattern('just a plain sentence with no markers at all');
   assert.strictEqual(r.confidence, null);
+  assert.strictEqual(r.detected_pattern, null);
   assert.strictEqual(r.options.a, '');
 });
 
-console.log('\nregression: existing (A)(B)(C)(D) marker parsing still works end to end');
-test('parseSimpleTexText parses a normal lettered question with a source tag', () => {
+// ==================== Full pipeline: regression coverage from prior rounds ====================
+console.log('\nparseSimpleTexPipeline -- regression: existing (A)(B)(C)(D) marker parsing still works end to end');
+test('parses a normal lettered question with a source tag', () => {
   const input = `A dimensionally consistent relation for volumetric flow rate Q can be written as(A) no units(B) no units and no dimensions(C) some units but no dimensions(D) some units and also dimensions\n\n[NEET 2016]`;
-  const out = parser.parseSimpleTexText(input);
+  const out = parser.parseSimpleTexPipeline(input);
   assert.strictEqual(out.length, 1);
   assert.strictEqual(out[0].option_a, 'no units');
   assert.strictEqual(out[0].source_tag, 'NEET 2016');
   assert.strictEqual(out[0].parse_confidence, 'marker');
+  assert.strictEqual(out[0].detected_pattern, 'letter');
 });
 
-console.log('\nthe reported bug: run-on/glued SimpleTex output with numbered markers');
+console.log('\nparseSimpleTexPipeline -- regression: run-on/glued SimpleTex output with numbered markers');
 test('parses a run-on numbered-marker block into separate options, not one run-on block', () => {
-  // Simulates the reported failure ("159.Thecorrectstatementabouthydrolysisof...") but with a
-  // full, realistic body -- the fragment given in the bug report is too short on its own to
-  // contain a real option boundary to assert against. Math spans are deliberately left glued to
-  // surrounding text (as SimpleTex actually emits them) to confirm the math-span skip doesn't
-  // block numbered-marker detection immediately outside a $...$ span.
   const input = '159.Thecorrectstatementabouthydrolysisof$BCl_3$and$NCl_3$is-' +
     '1.$NCl_3$ishydrolysedandgivesHOClbut$BCl_3$isnothydrolysed' +
     '2.Both$NCl_3$and$BCl_3$onhydrolysisgivesHCl' +
     '3.$NCl_3$onhydrolysisgivesHOClbut$BCl_3$givesHCl' +
     '4.Both$NCl_3$and$BCl_3$onhydrolysisgivesHOCl';
-  const out = parser.parseSimpleTexText(input);
+  const out = parser.parseSimpleTexPipeline(input);
   assert.strictEqual(out.length, 1, 'expected exactly one parsed question, got ' + out.length);
   const q = out[0];
   assert.strictEqual(q.parse_confidence, 'marker');
@@ -148,17 +197,18 @@ test('parses a run-on numbered-marker block into separate options, not one run-o
   assert.notStrictEqual(q.option_a, q.option_b, 'options collapsed into the same text -- splitting failed');
   assert(q.option_a.includes('NCl'), 'option a lost its content: ' + q.option_a);
   assert(q.option_d.includes('HOCl'), 'option d lost its content: ' + q.option_d);
+  // Now also readable, thanks to Stage B2 -- the stem reads as real words, not a run-on blob.
+  assert(q.question.includes('The correct statement about hydrolysis'), 'stem was not word-segmented: ' + q.question);
 });
 
-console.log('\nparseSimpleTexBareParagraphs (tier d, only reached when a/b/c all fail)');
-test('tags positionally-grouped questions as fallback confidence', () => {
-  // Subscripts wrapped in $...$, matching real SimpleTex output (e.g. "(SiH$_3$)$_2$") -- this
-  // is also what caught the case-boundary regression during manual testing, see above.
+console.log('\nparseSimpleTexPipeline -- regression: position-based fallback (no markers anywhere)');
+test('tags positionally-grouped questions as fallback confidence with detected_pattern "position"', () => {
   const input = 'Which among the following is an electron-deficient compound?\n\n(SiH$_3$)$_2$\n\n(BH$_3$)$_2$\n\nPH$_3$\n\n(CH$_3$)$_2$';
-  const out = parser.parseSimpleTexBareParagraphs(input);
+  const out = parser.parseSimpleTexPipeline(input);
   assert.strictEqual(out.length, 1);
   assert.strictEqual(out[0].parse_confidence, 'fallback');
-  assert.strictEqual(out[0].option_a, '(SiH$_3$)$_2$');
+  assert.strictEqual(out[0].detected_pattern, 'position');
+  assert.strictEqual(out[0].option_a, '(SiH$_3$)$_2$'); // SiH formula still intact -- no case-boundary corruption
 });
 test('does not misattach the next question as options when the current one is short', () => {
   // Regression for the exact misalignment caught during manual testing: a question whose real
@@ -168,10 +218,24 @@ test('does not misattach the next question as options when the current one is sh
     'The correct Lewis structure of acetic acid is -\n\n' +
     '<div><img src="x"/></div>\n\n' +
     'None of the above.';
-  const out = parser.parseSimpleTexBareParagraphs(input);
+  const out = parser.parseSimpleTexPipeline(input);
   const stems = out.map(o => o.question);
   assert(!stems.some(s => s.includes('Lewis structure') && s.includes('do not participate')),
-    'a later question\'s stem got merged into an earlier one\'s options');
+    "a later question's stem got merged into an earlier one's options");
+});
+test('a paragraph that fails markers now gets a real shot at Stage C/D/E before falling to position (recovers previously-dropped questions)', () => {
+  // Before this round: the octet-rule paragraph below only got tried against markers if the
+  // WHOLE document found zero questions elsewhere; mixed in with other successfully-parsed
+  // paragraphs, it used to be silently dropped instead of recognized as a numbered-in-stem
+  // question. Now every paragraph gets its own shot regardless of what else succeeded nearby.
+  const input = 'Which among the following is an electron-deficient compound?(A) opt a(B) opt b(C) opt c(D) opt d\n\n' +
+    'The significance of the octet rule is: 1. To determine stability. 2. To find hybridization. 3. To calculate lone pairs. 4. None of the above.';
+  const out = parser.parseSimpleTexPipeline(input);
+  assert.strictEqual(out.length, 2);
+  const octet = out.find(q => q.question.includes('octet'));
+  assert(octet, 'octet-rule question was dropped entirely');
+  assert.strictEqual(octet.parse_confidence, 'marker');
+  assert.strictEqual(octet.detected_pattern, 'numbered');
 });
 
 console.log('\nsplitIntoQuestionChunksByPipe / the 183->19 regression (flattened multi-question || blob)');
@@ -189,16 +253,13 @@ test('a chunk\'s own remaining "||" still splits into options as before (not eat
   const input = '146.What is the SI unit of force?||Newton||Joule||Watt||Pascal||158.Next stem 1.a 2.b 3.c 4.d';
   const chunks = parser.splitIntoQuestionChunksByPipe(input);
   assert.strictEqual(chunks.length, 2);
-  const questions = parser.extractQuestionsFromPipeChunks(chunks, '');
+  const questions = parser.extractQuestionsFromChunks(chunks, '');
   assert.strictEqual(questions[0].parse_confidence, 'delimiter');
   assert.strictEqual(questions[0].option_a, 'Newton');
   assert.strictEqual(questions[1].parse_confidence, 'marker');
   assert.strictEqual(questions[1].option_a, 'a');
 });
 test('the reported real block (Pentane question + 158/159/160) parses into 4 separate questions, not 1', () => {
-  // Reconstructed from the actual sample text shown earlier in this conversation, joined with
-  // "||" the way a flattened markdown table (row = question, cells lose their newlines) would
-  // actually glue consecutive questions together in a real paste.
   const input =
     '145.The incorrect order of the force of attraction among the given species is -' +
     '1.HI>HBr>$Cl_2$' +
@@ -220,7 +281,7 @@ test('the reported real block (Pentane question + 158/159/160) parses into 4 sep
     '2.$ZnS>Na_2S>CuS$' +
     '3.$Na_2S>CuS>ZnS$' +
     '4.$Na_2S>ZnS>CuS$';
-  const out = parser.parseSimpleTexText(input);
+  const out = parser.parseSimpleTexPipeline(input);
   assert.strictEqual(out.length, 4, 'expected 4 separate questions, got ' + out.length + ': ' + JSON.stringify(out.map(q => q.question.slice(0, 30))));
   assert(out[0].question.startsWith('145.'));
   assert(out[1].question.startsWith('158.'));
@@ -234,18 +295,14 @@ test('the reported real block (Pentane question + 158/159/160) parses into 4 sep
   assert(out[2].option_a.includes('NCl'), 'Q159 option a lost its content: ' + out[2].option_a);
   assert(out[3].option_a.includes('CuS'), 'Q160 option a lost its content: ' + out[3].option_a);
 });
-test('regression guard: a single self-contained "stem || 4 options" question (no ||N. boundary) still works via the existing tier', () => {
+test('regression guard: a single self-contained "stem || 4 options" question (no ||N. boundary) still works', () => {
   const input = 'What is the SI unit of force? || Newton || Joule || Watt || Pascal';
-  const out = parser.parseSimpleTexText(input);
+  const out = parser.parseSimpleTexPipeline(input);
   assert.strictEqual(out.length, 1);
   assert.strictEqual(out[0].parse_confidence, 'delimiter');
   assert.strictEqual(out[0].option_a, 'Newton');
 });
 test('a flattened || blob mixed with ordinary lettered questions in the same document all count -- not just the blob', () => {
-  // Simulates the actual 183-question document shape: most of it is normal paragraph-formatted
-  // questions, with one flattened multi-question table blob embedded partway through. Before the
-  // fix, that one blob paragraph alone would eat ~everything after it into a single bogus
-  // question; the fix must leave the surrounding ordinary questions completely unaffected.
   const before = 'Which among the following is an electron-deficient compound?(A) opt a(B) opt b(C) opt c(D) opt d';
   const blob =
     '145.Stem one 1.a1 2.a2 3.a3 4.a4' +
@@ -254,9 +311,43 @@ test('a flattened || blob mixed with ordinary lettered questions in the same doc
     '||160.Stem four 1.d1 2.d2 3.d3 4.d4';
   const after = 'Which of the following is a paramagnetic compound?(A) N2(B) H2(C) Li2(D) O2';
   const input = before + '\n\n' + blob + '\n\n' + after;
-  const out = parser.parseSimpleTexText(input);
+  const out = parser.parseSimpleTexPipeline(input);
   assert.strictEqual(out.length, 6, 'expected 1 (before) + 4 (blob) + 1 (after) = 6, got ' + out.length);
 });
+
+// ==================== Fixture library: combined regression run ====================
+console.log('\nfixture library (test-fixtures/*.json)');
+const fixturesDir = path.join(__dirname, 'test-fixtures');
+const fixtureFiles = fs.readdirSync(fixturesDir).filter(f => f.endsWith('.json'));
+assert(fixtureFiles.length >= 5, `expected at least 5 fixture files, found ${fixtureFiles.length}`);
+
+let combinedTotal = 0;
+let combinedFallback = 0;
+for (const file of fixtureFiles) {
+  const fixture = JSON.parse(fs.readFileSync(path.join(fixturesDir, file), 'utf8'));
+  test(`${file}: provenance is tagged real or synthetic`, () => {
+    assert(fixture.provenance === 'real' || fixture.provenance === 'synthetic', `invalid provenance "${fixture.provenance}" in ${file} -- must be "real" or "synthetic"`);
+  });
+  test(`${file}: parses within its expected question-count range`, () => {
+    const out = parser.parseSimpleTexPipeline(fixture.raw);
+    combinedTotal += out.length;
+    combinedFallback += out.filter(q => q.parse_confidence === 'fallback').length;
+    assert(
+      out.length >= fixture.expected.minQuestions && out.length <= fixture.expected.maxQuestions,
+      `expected ${fixture.expected.minQuestions}-${fixture.expected.maxQuestions} questions, got ${out.length}`
+    );
+  });
+}
+
+// The combined fallback rate is reported on every run (so a real regression -- e.g. a change
+// that suddenly makes a previously-clean fixture fall back -- is visible in the numbers) but
+// deliberately does NOT hard-fail the suite at a fixed threshold like <10%: the one real fixture
+// (chemistry-chemical-bonding-real) is genuinely ~91% fallback on its own merits -- image-only
+// options and ambiguous embedded lists that no parser can resolve without guessing -- and forcing
+// the aggregate under an arbitrary number with a small fixture set would mean padding with clean
+// synthetic content to game the number, not actually fixing anything. Grow the real-fixture side
+// of this list over time and this number should trend down on its own.
+console.log(`\n  combined fixture stats: ${combinedTotal} questions total, ${combinedFallback} fallback (${combinedTotal ? (100 * combinedFallback / combinedTotal).toFixed(1) : '0.0'}%) -- informational, not a hard gate`);
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);

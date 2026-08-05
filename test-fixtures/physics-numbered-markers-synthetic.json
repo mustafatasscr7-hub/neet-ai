@@ -1,0 +1,15 @@
+{
+  "name": "physics-numbered-markers-synthetic",
+  "provenance": "synthetic",
+  "subject": "Physics",
+  "formats": [
+    "numbered-options",
+    "run-on-fused-whitespace"
+  ],
+  "description": "Clean 1.2.3.4 numbered-option style across 4 questions, one of which (acceleration due to gravity) has completely fused whitespace with no case-transition signal (all lowercase) -- specifically exercises Stage B2 word segmentation on a run well over the 12-char threshold.",
+  "raw": "What is the SI unit of force?1.Newton2.Joule3.Watt4.Pascal\n\n[NEET 2018]\n\nTheaccelerationduetogravityonthesurfaceofearthisapproximately1.9.8metrespersecondsquared2.6.6metrespersecondsquared3.11.2metrespersecondsquared4.3.7metrespersecondsquared\n\nA body moving with uniform velocity has1.Zero acceleration2.Constant nonzero acceleration3.Increasing acceleration4.Decreasing acceleration\n\n[NEET 2015]\n\nThe dimensional formula of pressure is1.$ML^{-1}T^{-2}$2.$ML^{2}T^{-2}$3.$MLT^{-2}$4.$ML^{-1}T^{-1}$",
+  "expected": {
+    "minQuestions": 4,
+    "maxQuestions": 4
+  }
+}

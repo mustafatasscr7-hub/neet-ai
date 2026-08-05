@@ -764,35 +764,232 @@
     };
   }
 
-  // Some SimpleTex exports strip whitespace between words entirely, e.g.
-  // "159.Thecorrectstatementabouthydrolysisof..." -- this can't be fully undone (recovering
-  // spacing between two lowercase words with no boundary at all needs a dictionary-based word
-  // segmenter, out of scope here), but re-inserting a space at letter<->digit boundaries reliably
-  // un-glues a marker like "2." from adjacent prose it collided with, which is what actually
-  // breaks the option-splitter below. Never touches $...$ or $$...$$ math spans, since inserting
-  // spaces into a real LaTeX subscript/exponent (e.g. "a^{2}b") would corrupt the formula.
-  // Deliberately does NOT also split on a lowercase->uppercase boundary (e.g. "wordWord" ->
-  // "word Word") -- tried it, but plain-text chemical formulas outside $...$ (e.g. "SiH" in
-  // "(SiH$_3$)$_2$") hit that exact same pattern and got corrupted into "Si H" on real
-  // previously-verified paste content, which is worse than leaving a run-on word alone.
+  // ================== Format-agnostic pipeline: mask -> repair -> detect -> split -> extract -> fallback ==================
+  // Replaces the old fixed pipe->letter->numbered priority chain with independently testable
+  // stages that auto-detect whichever delimiter pattern a given OCR dump actually uses, so a new
+  // OCR format/subject doesn't need its own bespoke patch. See test-paste-parser.js and
+  // test-fixtures/ for the regression coverage this is built to keep passing.
+
+  // ---- Stage A: math-span masking ----
+  // Everything below (whitespace repair, pattern detection, splitting) runs on `masked` text and
+  // never has to know $...$/$$...$$ exist -- replaces the old approach where every single pass
+  // had to remember to skip math spans itself.
+  // Placeholder tokens are wrapped in "@@" (plain, printable, non-whitespace) rather than
+  // spaces. A space-delimited token (' 3 ') was tried first and found broken: stems/options are
+  // routinely .trim()'d right where a math span sits at the boundary (this parser is LaTeX-heavy
+  // science content), and trim() silently eats the token's boundary space, leaving a bare digit
+  // that unmaskMathSpans' regex no longer matches -- so the math span never gets restored. "@@"
+  // can't be touched by .trim() (not whitespace), Stage B's letter<->digit boundary rule (not a
+  // letter or digit), or Stage B2's word segmenter (not a letter), so it survives everything
+  // between here and the final unmask pass intact. (An earlier attempt used actual Unicode
+  // control-character escapes for the same reason -- also correct in principle, but they kept
+  // landing in this file as raw control bytes instead of source-level escape sequences, which
+  // silently turns the file into binary as far as tools like git/grep are concerned. Plain "@@"
+  // sidesteps that risk entirely while being just as safe against collision with real content.)
+  function maskMathSpans(text) {
+    const spans = [];
+    const masked = text.replace(/\$\$[\s\S]*?\$\$|\$[^$\n]*?\$/g, m => {
+      const token = '@@' + spans.length + '@@';
+      spans.push(m);
+      return token;
+    });
+    return { masked, spans };
+  }
+  function unmaskMathSpans(text, spans) {
+    if (!text) return text;
+    return text.replace(/@@(\d+)@@/g, (_, i) => spans[Number(i)] ?? '');
+  }
+
+  // ---- Stage B1: letter<->digit boundary repair ----
+  // Re-inserts a space where a marker like "2." collided directly with adjacent prose (e.g.
+  // "givesHOCl2.Both..."), which is what actually breaks the option-splitter below. Deliberately
+  // does NOT also split on a lowercase->uppercase boundary (e.g. "wordWord" -> "word Word") --
+  // tried it, but plain-text chemical formulas outside $...$ (e.g. "SiH" in "(SiH$_3$)$_2$") hit
+  // that exact same pattern and got corrupted into "Si H" on real previously-verified paste
+  // content. Stage B2's dictionary segmenter below now owns that class of decision instead, since
+  // it only splits when both halves are real recognized words.
   function insertBoundarySpaces(segment) {
     return segment
       .replace(/([a-zA-Z])(\d)/g, '$1 $2')
       .replace(/(\d)([a-zA-Z])/g, '$1 $2');
   }
 
-  function normalizeRunOnSpacing(rawText) {
-    const mathSpanRe = /\$\$[\s\S]*?\$\$|\$[^$\n]*?\$/g;
-    let result = '';
-    let lastIndex = 0;
-    let m;
-    while ((m = mathSpanRe.exec(rawText)) !== null) {
-      result += insertBoundarySpaces(rawText.slice(lastIndex, m.index));
-      result += m[0]; // math span passed through untouched
-      lastIndex = m.index + m[0].length;
+  // ---- Stage B2: dictionary word segmentation ----
+  // Compact word list, ordered roughly most-to-least common -- array index doubles as a
+  // frequency rank for the DP segmenter below (same approach as the Python "wordninja" library
+  // this is modeled on: no probabilities are estimated, position in an ordered list stands in
+  // for rank). General English first, then a NEET-specific vocabulary supplement (chemistry/
+  // physics/biology terms pulled from real exam prose seen in this parser's own fixtures) so
+  // common technical vocabulary isn't needlessly chopped. Not exhaustive by design -- an
+  // unrecognized real technical term is meant to stay fused rather than risk a wrong split; grow
+  // this list as real gaps turn up, no other code needs to change.
+  const WORD_SEGMENTATION_DICTIONARY = [
+    // -- tier 1: function/glue words (highest frequency) --
+    'the','of','and','a','i','to','in','is','it','that','was','for','on','are','as','with','his','they','at','be','this','have',
+    'from','or','one','had','by','but','not','what','all','were','when','your','can','there','use','an','each','which','she','do',
+    'how','their','if','will','up','other','about','out','many','then','them','these','so','some','her','would','make','like','him',
+    'into','time','has','look','two','more','write','go','see','no','way','could','people','my','than','first','been','who','now',
+    'find','long','down','day','did','get','made','may','part','over','new','sound','take','only','little','work','know','place',
+    'year','live','back','give','most','very','after','thing','our','just','name','good','sentence','man','think','say','great',
+    'where','help','through','much','before','line','right','too','mean','old','any','same','tell','boy','follow','came','want',
+    'show','also','around','form','three','small','set','put','end','does','another','well','large','must','big','even','such',
+    'because','turn','here','why','ask','went','men','read','need','land','different','home','us','move','try','kind','hand',
+    'picture','again','change','off','play','spell','air','away','animal','house','point','page','letter','mother','answer',
+    'found','study','still','learn','should','America','world','both','each','under','last','never','us','left','number','course',
+    'stay','since','while','during','before','after','through','without','within','across','around','toward','towards',
+    'regarding','according','due','depends','both','either','neither','whether','although','though','unless','until','once',
+    // -- tier 2: exam/academic-prose vocabulary --
+    'correct','following','statement','statements','question','questions','answer','given','below','above','among','between',
+    'order','respectively','value','values','unit','units','equal','unequal','greater','smaller','higher','lower','maximum',
+    'minimum','increase','decrease','increases','decreases','decreasing','increasing','constant','variable','direct','inverse',
+    'proportional','ratio','fraction','total','sum','result','results','reason','reasons','condition','conditions','shows','show',
+    'forms','form','contains','contain','present','absent','true','false','similar','same','none','also','only','because',
+    'therefore','however','thus','hence','since','regarding','define','defined','defines','describe','describes','described',
+    'explain','explains','identify','determine','calculate','find','obtain','represent','represents','represented','indicate',
+    'indicates','indicated','consider','considering','assume','assuming','suppose','let','required','possible','impossible',
+    'necessary','sufficient','equivalent','independent','dependent','positive','negative','neutral','stable','unstable','average',
+    'mean','median','range','graph','curve','line','lines','point','points','plane','surface','area','length','width','height',
+    'depth','distance','speed','velocity','acceleration','force','forces','mass','weight','energy','power','work','pressure',
+    'temperature','volume','density','concentration','solution','solutions','mixture','compound','compounds','element','elements',
+    'molecule','molecules','atom','atoms','electron','electrons','proton','protons','neutron','neutrons','nucleus','nuclear',
+    'orbital','orbitals','shell','shells','subshell','subshells','valence','valency','bond','bonds','bonding','ionic','covalent',
+    'metallic','polar','nonpolar','soluble','insoluble','reaction','reactions','react','reacts','product','products','reactant',
+    'reactants','catalyst','equilibrium','rate','mechanism','structure','structures','shape','shapes','geometry','hybridization',
+    'hybridisation','resonance','isomer','isomers','oxidation','reduction','acid','acids','base','bases','salt','salts','metal',
+    'metals','nonmetal','nonmetals','gas','gases','liquid','liquids','solid','solids','vapour','vapor','boiling','melting',
+    'freezing','hydrolysis','hydrolysed','hydrolyzed','dehydration','esterification','polymerization','polymerisation',
+    'fermentation','oxide','oxides','hydroxide','hydroxides','chloride','chlorides','sulphate','sulfate','sulphide','sulfide',
+    'nitrate','nitrates','carbonate','carbonates','phosphate','phosphates','ammonia','water','carbon','dioxide','monoxide',
+    'hydrogen','oxygen','nitrogen','chlorine','sulphur','sulfur','phosphorus','sodium','potassium','calcium','magnesium',
+    'aluminium','aluminum','silicon','iron','copper','zinc','silver','gold','lead','tin','mercury','bromine','iodine','fluorine',
+    'helium','neon','argon','xenon','krypton','lithium','beryllium','boron','vacant','occupied','empty','full','filled',
+    'unfilled','inert','reactive','strong','weak','high','low','large','small','big','little','short','fast','slow','hot','cold',
+    'heavy','hard','soft','smooth','rough','clear','cloudy','pure','impure','plant','plants','animal','animals','cell','cells',
+    'tissue','tissues','organ','organs','organism','organisms','species','system','systems','process','processes','function',
+    'functions','growth','development','division','reproduction','reproductive','sexual','asexual','gene','genes','genetic',
+    'chromosome','chromosomes','protein','proteins','enzyme','enzymes','hormone','hormones','blood','heart','lung','lungs',
+    'brain','nerve','nerves','muscle','muscles','bone','bones','skin','digestion','digestive','excretion','excretory',
+    'circulation','circulatory','respiration','respiratory','transpiration','translocation','germination','pollination',
+    'fertilization','fertilisation','mitosis','meiosis','replication','transcription','translation','mutation','mutations',
+    'variation','variations','evolution','natural','selection','adaptation','adaptations','ecosystem','ecosystems','population',
+    'populations','community','communities','habitat','habitats','environment','environmental','photosynthesis','chlorophyll',
+    'stomata','xylem','phloem','root','roots','stem','stems','leaf','leaves','flower','flowers','fruit','fruits','seed','seeds',
+    'embryo','zygote','gamete','gametes','sperm','ovum','ovary','testis','uterus','placenta','vitamin','vitamins','mineral',
+    'minerals','deficiency','disease','diseases','infection','immune','immunity','antibody','antibodies','antigen','bacteria',
+    'bacterial','virus','viral','fungus','fungal','parasite','host','symbiosis','nuclear','cytoplasm','membrane','mitochondria',
+    'mitochondrion','ribosome','ribosomes','chloroplast','chloroplasts','vacuole','lysosome','amino','peptide','carbohydrate',
+    'carbohydrates','lipid','lipids','glucose','fructose','sucrose','starch','cellulose','fatty','triglyceride','isoelectronic',
+    'electronegativity','electropositivity','ionization','ionisation','affinity','enthalpy','entropy','thermodynamics',
+    'stoichiometry','periodic','table','group','period','series','wavelength','frequency','amplitude','wave','waves','current',
+    'voltage','resistance','circuit','magnetic','electric','field','charge','charges','capacitor','inductor','resistor','motion',
+    'displacement','momentum','impulse','friction','gravity','gravitational','kinetic','potential','thermal','heat','specific',
+    'latent','refraction','reflection','diffraction','interference','polarization','lens','mirror','image','object','focal',
+    'earth','moon','sun','planet','planets','satellite','satellites','orbit','orbits','star','stars','universe','space','vacuum',
+    'air','wind','sound','sunlight','day','days','night','season','seasons','weather','climate','approximately','roughly',
+    'nearly','almost','exactly','precisely','equation','equations','formula','formulas','expression','expressions','function',
+    'functions','proportionality','conservation','collision','collisions','projectile','trajectory','vector','vectors','scalar',
+    'scalars','magnitude','direction','component','components','uniform','nonuniform','accelerated','instantaneous','average',
+    'apparent','real','virtual','converging','diverging','concave','convex','plano','normal','incident','emergent','critical',
+    'total','internal','dispersion','spectrum','photon','photons','quantum','radioactive','radioactivity','decay','isotope',
+    'isotopes','nuclide','fission','fission','fusion','half','life','binding','mass','defect','semiconductor','conductor',
+    'insulator','diode','transistor','rectifier','amplifier','oscillator','transformer','generator','motor','battery','cell',
+    'cells','emf','ohm','ohms','ampere','volt','watt','joule','newton','pascal','kelvin','celsius','fahrenheit','degree',
+    'degrees','radian','radians','steradian','coulomb','tesla','henry','farad','weber',
+    // -- tier 3: single-letter chemistry orbital labels (scoped, deliberate exception -- see segmentWord) --
+    's','p','d','f',
+  ];
+  const WORD_SEGMENTATION_RANK = new Map(WORD_SEGMENTATION_DICTIONARY.map((w, i) => [w, i]));
+  const MAX_SEGMENT_WORD_LEN = 20; // no dictionary entry above is longer than this; bounds the DP's inner loop
+
+  function wordSegmentationCost(word) {
+    const rank = WORD_SEGMENTATION_RANK.get(word.toLowerCase());
+    return rank === undefined ? null : Math.log(rank + 2);
+  }
+
+  // Viterbi/DP word segmentation (wordninja-style): finds the split of `run` into dictionary
+  // words that minimizes total cost, favoring fewer/more-common words over many rare fragments.
+  // Returns null -- not a partial guess -- if no split exists that fully covers `run` using only
+  // recognized dictionary words. Failing closed here is deliberate: this is only ever used to ADD
+  // spaces, and a wrong guess on real exam vocabulary not in the dictionary (e.g. silently
+  // chopping "isoelectronic" into garbage) is worse than leaving a fused run untouched.
+  function segmentWord(run) {
+    const n = run.length;
+    if (n === 0) return [];
+    const costs = new Array(n + 1).fill(Infinity);
+    const splits = new Array(n + 1).fill(-1);
+    costs[0] = 0;
+    for (let i = 1; i <= n; i++) {
+      for (let j = Math.max(0, i - MAX_SEGMENT_WORD_LEN); j < i; j++) {
+        if (costs[j] === Infinity) continue;
+        const cost = wordSegmentationCost(run.slice(j, i));
+        if (cost === null) continue;
+        const total = costs[j] + cost;
+        if (total < costs[i]) { costs[i] = total; splits[i] = j; }
+      }
     }
-    result += insertBoundarySpaces(rawText.slice(lastIndex));
-    return result;
+    if (costs[n] === Infinity) return null;
+    const words = [];
+    let i = n;
+    while (i > 0) { const j = splits[i]; words.unshift(run.slice(j, i)); i = j; }
+    return words;
+  }
+
+  // Applies segmentWord to every maximal alphabetic run that's either long (>=12 chars, per the
+  // reported "fused whitespace" bug) or contains an internal lower->upper case transition -- the
+  // class of bug that blindly splitting on case alone used to corrupt (see the SiH regression
+  // above). Safe here because segmentWord requires BOTH halves to be real dictionary words before
+  // accepting any split, so "SiH" stays untouched (neither "Si" nor "H" alone is a recognized
+  // word) while a genuine run-on like "hasnovacantd" (has+no+vacant+d) still splits.
+  function segmentFusedRuns(text) {
+    return text.replace(/[a-zA-Z]+/g, run => {
+      const hasCaseTransition = /[a-z][A-Z]/.test(run);
+      if (run.length < 12 && !hasCaseTransition) return run;
+      const words = segmentWord(run);
+      if (!words || words.length < 2) return run;
+      return words.join(' ');
+    });
+  }
+
+  // ---- Stage C: pattern detection ----
+  // Counts how many COMPLETE, in-order marker cycles exist in `text` for a 4-marker family (one
+  // full (A)->(B)->(C)->(D) cycle = one question's worth of that style). Generalizes the
+  // indexOf-chain approach already used by extractOptionsSimpleTex/extractOptionsNumbered below.
+  function countSequentialQuadruples(text, markers) {
+    let count = 0;
+    let cursor = 0;
+    for (;;) {
+      let cycleEnd = cursor;
+      let ok = true;
+      for (const marker of markers) {
+        const idx = text.indexOf(marker, cycleEnd);
+        if (idx === -1) { ok = false; break; }
+        cycleEnd = idx + marker.length;
+      }
+      if (!ok) break;
+      count++;
+      cursor = cycleEnd;
+    }
+    return count;
+  }
+
+  // Scores every candidate delimiter pattern against a chunk of text and returns the winner --
+  // "whichever pattern has the most consistent, repeated matches", not a fixed priority order.
+  // Ties fall back to a fixed order (pipe > letter > numbered > table) only as a last resort, not
+  // as the primary mechanism -- pipe and letter markers can't collide with ordinary prose the way
+  // bare "1."/"2." numbers occasionally can, so they're the more trustworthy tie-break default.
+  function detectPatterns(text) {
+    const pipeCount = (text.match(/\|\|/g) || []).length;
+    const scores = {
+      pipe: Math.floor(pipeCount / 4), // "stem || A || B || C || D" = 4 pipes per question
+      letter: countSequentialQuadruples(text, ['(A)', '(B)', '(C)', '(D)']),
+      numbered: countSequentialQuadruples(text, ['1.', '2.', '3.', '4.']),
+      table: pipeCount === 0 ? Math.floor((text.match(/\|/g) || []).length / 5) : 0, // "| stem | A | B | C | D |" = 5 single pipes; only meaningful when no "||" at all
+    };
+    let winner = null, best = 0;
+    for (const key of ['pipe', 'letter', 'numbered', 'table']) {
+      if (scores[key] > best) { best = scores[key]; winner = key; }
+    }
+    return { scores, winner };
   }
 
   // Some SimpleTex exports delimit a question with "||" instead of any marker at all, e.g.
@@ -805,6 +1002,97 @@
     return { stem: parts[0], options: { a: parts[1], b: parts[2], c: parts[3], d: parts[4] } };
   }
 
+  // A single markdown table row: "| stem | opt A | opt B | opt C | opt D |". Only attempted when
+  // there's no "||" at all in the chunk (a "||" block is handled by the pipe tier above instead --
+  // both use pipe characters, so this keeps the two from overlapping/double-matching).
+  function splitByTableRow(chunk) {
+    if (chunk.includes('||') || !chunk.includes('|')) return null;
+    const parts = chunk.split('|').map(s => s.trim()).filter(s => s.length > 0);
+    if (parts.length < 5) return null;
+    return { stem: parts[0], options: { a: parts[1], b: parts[2], c: parts[3], d: parts[4] } };
+  }
+
+  // Numbered-marker sibling of extractOptionsSimpleTex below -- same indexOf-chain approach
+  // (strict 1-then-2-then-3-then-4 order), same accepted risk of a false hit on a decimal that
+  // happens to contain all four digit-dot substrings in order, which is rare enough in practice
+  // to not be worth a heavier boundary-anchored regex.
+  function extractOptionsNumbered(chunk) {
+    const idx1 = chunk.indexOf('1.');
+    const idx2 = idx1 === -1 ? -1 : chunk.indexOf('2.', idx1 + 2);
+    const idx3 = idx2 === -1 ? -1 : chunk.indexOf('3.', idx2 + 2);
+    const idx4 = idx3 === -1 ? -1 : chunk.indexOf('4.', idx3 + 2);
+    if (idx1 === -1 || idx2 === -1 || idx3 === -1 || idx4 === -1) {
+      return { stem: chunk, options: { a: '', b: '', c: '', d: '' } };
+    }
+    return {
+      stem: chunk.slice(0, idx1),
+      options: {
+        a: chunk.slice(idx1 + 2, idx2).trim(),
+        b: chunk.slice(idx2 + 2, idx3).trim(),
+        c: chunk.slice(idx3 + 2, idx4).trim(),
+        d: chunk.slice(idx4 + 2).trim()
+      }
+    };
+  }
+
+  // SimpleTex glues options directly onto the preceding text with no separator, e.g.
+  // "...no units(B) no units and no dimensions(C)..." -- so unlike Mathpix's inline style,
+  // the marker can't be required to follow whitespace. Instead we require all four markers
+  // A,B,C,D to appear in strict order (each search starts after the previous match), which
+  // keeps this from firing on a stray "(A)"-shaped fragment inside a formula.
+  function extractOptionsSimpleTex(chunk) {
+    const idxA = chunk.indexOf('(A)');
+    const idxB = idxA === -1 ? -1 : chunk.indexOf('(B)', idxA + 3);
+    const idxC = idxB === -1 ? -1 : chunk.indexOf('(C)', idxB + 3);
+    const idxD = idxC === -1 ? -1 : chunk.indexOf('(D)', idxC + 3);
+    if (idxA === -1 || idxB === -1 || idxC === -1 || idxD === -1) {
+      return { stem: chunk, options: { a: '', b: '', c: '', d: '' } };
+    }
+    return {
+      stem: chunk.slice(0, idxA),
+      options: {
+        a: chunk.slice(idxA + 3, idxB).trim(),
+        b: chunk.slice(idxB + 3, idxC).trim(),
+        c: chunk.slice(idxC + 3, idxD).trim(),
+        d: chunk.slice(idxD + 3).trim()
+      }
+    };
+  }
+
+  // ---- Stage E: option extraction per chunk ----
+  // Runs detectPatterns on the isolated chunk and tries the winning pattern's own extractor
+  // first. If that specific extractor doesn't actually validate (rare -- the count-based score
+  // found candidate markers but they didn't resolve into a clean stem+4-options shape), every
+  // extractor is tried once as a safety net -- functionally the old fixed cascade, now used only
+  // as a fallback net rather than the primary mechanism, so nothing that passed before stops
+  // passing now.
+  function extractOptionsByDetectedPattern(chunk) {
+    const { winner } = detectPatterns(chunk);
+    if (winner === 'pipe') {
+      const r = splitByPipeDelimiter(chunk);
+      if (r) return { stem: r.stem, options: r.options, confidence: 'delimiter', detected_pattern: 'pipe' };
+    } else if (winner === 'letter') {
+      const r = extractOptionsSimpleTex(chunk);
+      if (r.options.a && r.options.b && r.options.c && r.options.d) return { stem: r.stem, options: r.options, confidence: 'marker', detected_pattern: 'letter' };
+    } else if (winner === 'numbered') {
+      const r = extractOptionsNumbered(chunk);
+      if (r.options.a && r.options.b && r.options.c && r.options.d) return { stem: r.stem, options: r.options, confidence: 'marker', detected_pattern: 'numbered' };
+    } else if (winner === 'table') {
+      const r = splitByTableRow(chunk);
+      if (r) return { stem: r.stem, options: r.options, confidence: 'delimiter', detected_pattern: 'table' };
+    }
+    const pipe = splitByPipeDelimiter(chunk);
+    if (pipe) return { stem: pipe.stem, options: pipe.options, confidence: 'delimiter', detected_pattern: 'pipe' };
+    const letters = extractOptionsSimpleTex(chunk);
+    if (letters.options.a && letters.options.b && letters.options.c && letters.options.d) return { stem: letters.stem, options: letters.options, confidence: 'marker', detected_pattern: 'letter' };
+    const numbered = extractOptionsNumbered(chunk);
+    if (numbered.options.a && numbered.options.b && numbered.options.c && numbered.options.d) return { stem: numbered.stem, options: numbered.options, confidence: 'marker', detected_pattern: 'numbered' };
+    const table = splitByTableRow(chunk);
+    if (table) return { stem: table.stem, options: table.options, confidence: 'delimiter', detected_pattern: 'table' };
+    return { stem: chunk, options: { a: '', b: '', c: '', d: '' }, confidence: null, detected_pattern: null };
+  }
+
+  // ---- Stage D: question-boundary splitting ----
   // A flattened markdown table (one row per question, each row itself "| stem | opt1 | opt2 |
   // opt3 | opt4 |") loses its row-boundary newlines when pasted, so consecutive rows' pipes run
   // together into "...opt4 || 159. next stem...". Naively treating EVERY "||" in a chunk as an
@@ -831,63 +1119,19 @@
     return chunks;
   }
 
-  // Numbered-marker sibling of extractOptionsSimpleTex above -- same indexOf-chain approach
-  // (strict 1-then-2-then-3-then-4 order), same accepted risk of a false hit on a decimal that
-  // happens to contain all four digit-dot substrings in order, which is rare enough in practice
-  // to not be worth a heavier boundary-anchored regex.
-  function extractOptionsNumbered(chunk) {
-    const idx1 = chunk.indexOf('1.');
-    const idx2 = idx1 === -1 ? -1 : chunk.indexOf('2.', idx1 + 2);
-    const idx3 = idx2 === -1 ? -1 : chunk.indexOf('3.', idx2 + 2);
-    const idx4 = idx3 === -1 ? -1 : chunk.indexOf('4.', idx3 + 2);
-    if (idx1 === -1 || idx2 === -1 || idx3 === -1 || idx4 === -1) {
-      return { stem: chunk, options: { a: '', b: '', c: '', d: '' } };
-    }
-    return {
-      stem: chunk.slice(0, idx1),
-      options: {
-        a: chunk.slice(idx1 + 2, idx2).trim(),
-        b: chunk.slice(idx2 + 2, idx3).trim(),
-        c: chunk.slice(idx3 + 2, idx4).trim(),
-        d: chunk.slice(idx4 + 2).trim()
-      }
-    };
-  }
-
-  // Single entry point for the priority cascade: || delimiter, then (A)(B)(C)(D) markers, then
-  // numbered 1.2.3.4 markers. Positional paragraph-grouping (parseSimpleTexBareParagraphs) is
-  // deliberately NOT tier d here -- it operates on a whole document/multi-paragraph basis, not a
-  // single chunk, and is only reached once every chunk in the document fails all three tiers below
-  // (see parsePastedTextIntoBlocks).
-  function extractOptionsWithPriority(chunk) {
-    const pipe = splitByPipeDelimiter(chunk);
-    if (pipe) return { stem: pipe.stem, options: pipe.options, confidence: 'delimiter' };
-    const letters = extractOptionsSimpleTex(chunk);
-    if (letters.options.a && letters.options.b && letters.options.c && letters.options.d) {
-      return { stem: letters.stem, options: letters.options, confidence: 'marker' };
-    }
-    const numbered = extractOptionsNumbered(chunk);
-    if (numbered.options.a && numbered.options.b && numbered.options.c && numbered.options.d) {
-      return { stem: numbered.stem, options: numbered.options, confidence: 'marker' };
-    }
-    return { stem: chunk, options: { a: '', b: '', c: '', d: '' }, confidence: null };
-  }
-
-  // Shared by parseSimpleTexText and parseSimpleTexBareParagraphs: once a flattened multi-question
-  // blob has been split into per-question chunks (see splitIntoQuestionChunksByPipe), each chunk
-  // is independently run through the SAME priority cascade a single question would get -- its own
-  // remaining "||" option-separators, then (A)(B)(C)(D), then numbered markers. A chunk that still
-  // can't be split is emitted with blank options (tagged 'fallback') rather than dropped, matching
-  // the "never silently lose a question" posture used elsewhere in this parser.
-  function extractQuestionsFromPipeChunks(chunks, chapter) {
+  // Given a list of already question-boundary-split chunks, extracts each one independently via
+  // Stage E (its own remaining "||" separators, then letters, then numbers, then table row). A
+  // chunk that still can't be split is emitted with blank options (tagged 'fallback') rather than
+  // dropped, matching the "never silently lose a question" posture used elsewhere in this parser.
+  function extractQuestionsFromChunks(chunks, chapter) {
     const results = [];
     for (const rawChunk of chunks) {
       const { sourceTag, year, cleaned } = extractSourceTag(rawChunk);
-      const { stem, options, confidence } = extractOptionsWithPriority(cleaned);
+      const { stem, options, confidence, detected_pattern } = extractOptionsByDetectedPattern(cleaned);
       if (options.a && options.b && options.c && options.d) {
-        results.push({ question: stem.trim(), option_a: options.a, option_b: options.b, option_c: options.c, option_d: options.d, source_tag: sourceTag, year, parse_confidence: confidence, chapter });
+        results.push({ question: stem.trim(), option_a: options.a, option_b: options.b, option_c: options.c, option_d: options.d, source_tag: sourceTag, year, parse_confidence: confidence, detected_pattern, chapter });
       } else {
-        results.push({ question: cleaned.trim(), option_a: '', option_b: '', option_c: '', option_d: '', source_tag: sourceTag, year, parse_confidence: 'fallback', chapter });
+        results.push({ question: cleaned.trim(), option_a: '', option_b: '', option_c: '', option_d: '', source_tag: sourceTag, year, parse_confidence: 'fallback', detected_pattern: null, chapter });
       }
     }
     return results;
@@ -901,6 +1145,74 @@
     return rawText.replace(/^[ \t]*#{1,6}[ \t]+(\[[^\[\]]*\])[ \t]*$/gm, '$1');
   }
 
+  // ---- Stage F: positional fallback ----
+  // Only ever sees "leftover" paragraphs that already failed Stages B-E, each carrying the
+  // chapter that was active around it in the main pipeline loop (see parseSimpleTexPipeline) --
+  // header paragraphs themselves never reach here, they're fully handled by the main loop, so
+  // this function doesn't need its own header-tracking pass over a document it only sees a
+  // scattered subset of. A run of 5 leftover entries (stem + 4) is grouped purely by position,
+  // guarded against grabbing a pseudo-header/next-question's-stem/self-contained-numbered-stem as
+  // a bogus option -- same heuristics as before. Anything that doesn't fit a clean run is still
+  // emitted with blank options, never silently dropped.
+  function groupLeftoverParagraphsPositionally(leftover) {
+    function isHeader(p) { return /^#{1,6}\s+(.*)$/.test(p.split('\n')[0].trim()); }
+    function isSourceTagOnly(p) { return /^\[[^\[\]]*\d{4}[^\[\]]*\]$/.test(p); }
+    function isPseudoSectionHeader(p) {
+      const line = p.split('\n')[0].trim();
+      return /^Level\s+(I{1,3}|IV)$/i.test(line) || /[\s\-–]Level\s+(I{1,3}|IV)\s*$/i.test(line);
+    }
+    function endsLikeStem(p) { return /[:\-–—?]$/.test(p.trim()); }
+    function looksSelfContained(p) { return /(?:^|[\s\-:])[1-4]\.\s*\S.*(?:^|[\s\-:])[1-4]\.\s*\S/s.test(p); }
+
+    const parsed = [];
+    let i = 0;
+    while (i < leftover.length) {
+      const entry = leftover[i];
+      const p = entry.text;
+      if (isSourceTagOnly(p) || isPseudoSectionHeader(p)) { i++; continue; }
+
+      const candidateOptions = leftover.slice(i + 1, i + 5);
+      const canGroup = candidateOptions.length === 4
+        && !looksSelfContained(p)
+        && candidateOptions.every(e => !isHeader(e.text) && !isSourceTagOnly(e.text) && !isPseudoSectionHeader(e.text) && !endsLikeStem(e.text) && e.text.length > 0 && e.text.length < 300);
+
+      if (canGroup) {
+        const { sourceTag, year, cleaned: stemCleaned } = extractSourceTag(p);
+        let tag = sourceTag, yr = year, consumed = 5;
+        const next = leftover[i + 5];
+        if (!tag && next && isSourceTagOnly(next.text)) {
+          const t = extractSourceTag(next.text);
+          tag = t.sourceTag; yr = t.year;
+          consumed = 6;
+        }
+        parsed.push({
+          question: stemCleaned.trim(),
+          option_a: candidateOptions[0].text.trim(), option_b: candidateOptions[1].text.trim(),
+          option_c: candidateOptions[2].text.trim(), option_d: candidateOptions[3].text.trim(),
+          source_tag: tag, year: yr, chapter: entry.chapter, parse_confidence: 'fallback', detected_pattern: 'position'
+        });
+        i += consumed;
+      } else {
+        parsed.push({ question: p.trim(), option_a: '', option_b: '', option_c: '', option_d: '', source_tag: null, year: null, chapter: entry.chapter, parse_confidence: 'fallback', detected_pattern: null });
+        i++;
+      }
+    }
+    return parsed;
+  }
+
+  function unmaskQuestionFields(q, spans) {
+    return Object.assign({}, q, {
+      question: unmaskMathSpans(q.question, spans),
+      option_a: unmaskMathSpans(q.option_a, spans),
+      option_b: unmaskMathSpans(q.option_b, spans),
+      option_c: unmaskMathSpans(q.option_c, spans),
+      option_d: unmaskMathSpans(q.option_d, spans),
+      chapter: q.chapter ? unmaskMathSpans(q.chapter, spans) : q.chapter,
+      source_tag: q.source_tag ? unmaskMathSpans(q.source_tag, spans) : q.source_tag,
+    });
+  }
+
+  // ---- The pipeline itself ----
   // Paragraphs (blank-line separated) are the only structural signal SimpleTex gives us, but
   // OCR line-wrapping often lands a single question's option list across MULTIPLE paragraphs
   // (one or two options per paragraph) rather than one clean block. We accumulate paragraphs
@@ -910,21 +1222,25 @@
   // A buffer is never *started* from a paragraph that itself opens with an option marker --
   // a real question stem never does, so that's always an orphaned fragment (leaked-in
   // explanation text) worth dropping silently, per the "don't auto-match solutions" requirement.
-  function parseSimpleTexText(rawText) {
-    const spaced = normalizeRunOnSpacing(rawText);
-    const normalized = normalizeSimpleTexHeaders(spaced.replace(/\r\n/g, '\n'));
+  //
+  // Fallback is a behavioral improvement over the old two-function design, not just a refactor:
+  // previously the positional grouper only ran when the WHOLE document parsed zero questions via
+  // markers, so a paragraph that failed to resolve in an otherwise-successful document (e.g. a
+  // self-contained numbered-in-stem paragraph like "...is: 1. ... 2. ... 3. ... 4. ...") was
+  // silently dropped instead of getting a real shot at Stage F. Now every unresolved paragraph is
+  // collected into `leftover` and always gets that shot, once, at the end.
+  function parseSimpleTexPipeline(rawText) {
+    const { masked, spans } = maskMathSpans(rawText);
+    const spaced = insertBoundarySpaces(masked);
+    const segmented = segmentFusedRuns(spaced);
+    const normalized = normalizeSimpleTexHeaders(segmented.replace(/\r\n/g, '\n'));
     const paragraphs = normalized.split(/\n\s*\n+/).map(p => p.trim()).filter(Boolean);
 
-    // Tries the full priority cascade (|| delimiter, then (A)(B)(C)(D), then numbered 1.2.3.4)
-    // on the accumulated buffer, not just letters -- || and numbered markers are observed to
-    // always land within a single paragraph rather than split across several like letters
-    // sometimes do, so this already catches them the moment a fresh single-paragraph buffer is
-    // formed below, without needing separate multi-paragraph accumulation logic for those tiers.
     function tryExtract(text) {
       const { sourceTag, year, cleaned } = extractSourceTag(text);
-      const { stem, options, confidence } = extractOptionsWithPriority(cleaned);
+      const { stem, options, confidence, detected_pattern } = extractOptionsByDetectedPattern(cleaned);
       if (!options.a || !options.b || !options.c || !options.d) return null;
-      return { question: stem.trim(), option_a: options.a, option_b: options.b, option_c: options.c, option_d: options.d, source_tag: sourceTag, year, parse_confidence: confidence };
+      return { question: stem.trim(), option_a: options.a, option_b: options.b, option_c: options.c, option_d: options.d, source_tag: sourceTag, year, parse_confidence: confidence, detected_pattern };
     }
 
     // How many of A,B,C,D have been found so far, in strict order -- used to gate whether
@@ -944,6 +1260,7 @@
     }
 
     const parsed = [];
+    const leftover = []; // { text, chapter } -- paragraphs that never resolved via B-E, given one shot at Stage F below
     let currentChapter = '';
     let buffer = [];
     let bufferChapter = '';
@@ -951,7 +1268,11 @@
     function flush() {
       if (buffer.length === 0) return;
       const result = tryExtract(buffer.join('\n\n'));
-      if (result) parsed.push(Object.assign(result, { chapter: bufferChapter }));
+      if (result) {
+        parsed.push(Object.assign(result, { chapter: bufferChapter }));
+      } else {
+        for (const p of buffer) leftover.push({ text: p, chapter: bufferChapter });
+      }
       buffer = [];
     }
 
@@ -964,30 +1285,29 @@
         continue;
       }
 
-      // A single paragraph can itself be an entire flattened multi-question table blob (see
-      // splitIntoQuestionChunksByPipe) -- catching that HERE, before it ever reaches the normal
-      // single-question buffer/leadMatch flow below, is what fixes the regression where
-      // extractOptionsWithPriority's plain "||" tier used to swallow the whole blob as one bogus
-      // question. Only acts when there's more than one boundary; a single "||N." or none at all
-      // just falls through to the existing per-paragraph handling further down, unchanged.
+      // A single paragraph can itself be an entire flattened multi-question blob (Stage D) --
+      // catching that HERE, before it ever reaches the single-question buffer/leadMatch flow
+      // below, is what stops it from being swallowed as one bogus question (the 183->19
+      // regression). Only acts when there's more than one boundary; a single "||N." or none at
+      // all just falls through to the existing per-paragraph handling further down, unchanged.
       const pipeQuestionChunks = splitIntoQuestionChunksByPipe(para);
       if (pipeQuestionChunks && pipeQuestionChunks.length > 1) {
         flush(); // whatever was accumulating is unrelated to this self-contained blob
-        parsed.push(...extractQuestionsFromPipeChunks(pipeQuestionChunks, currentChapter));
+        parsed.push(...extractQuestionsFromChunks(pipeQuestionChunks, currentChapter));
         continue;
       }
 
       const leadMatch = para.match(/^\(([A-D])\)/);
       if (buffer.length > 0 && leadMatch) {
         const expectedLetter = 'ABCD'[optionProgress(buffer.join('\n\n'))];
-        if (leadMatch[1] !== expectedLetter) continue; // not the next option in sequence -- orphaned fragment, drop it
+        if (leadMatch[1] !== expectedLetter) continue; // not the next option in sequence -- orphaned fragment, intentionally dropped
         buffer.push(para);
       } else if (!leadMatch) {
         flush();
         buffer = [para];
         bufferChapter = currentChapter;
       } else {
-        continue; // orphaned option-marker paragraph with no preceding stem -- drop it
+        continue; // orphaned option-marker paragraph with no preceding stem -- intentionally dropped
       }
 
       if (tryExtract(buffer.join('\n\n'))) {
@@ -1002,101 +1322,10 @@
       }
     }
     flush();
-    return parsed;
-  }
 
-  // Fallback for SimpleTex exports that omit (A)(B)(C)(D) markers entirely and instead lay out
-  // each option as its own bare paragraph, in order, right after the question stem -- no marker
-  // of any kind. Deliberately only invoked (see parsePastedTextIntoBlocks) when the letter-marker
-  // pass above finds ZERO questions in the whole paste: mixing both grouping strategies within the
-  // same document is far more likely to misfire than picking one strategy for the whole paste, and
-  // a real paste is normally homogeneous in export style.
-  // Because there's no marker to validate a grouping against, this is inherently a positional
-  // guess: a run of 5 paragraphs (stem + 4) is grouped as one question purely by position. To keep
-  // the guess honest, anything that doesn't fit a clean 5-paragraph run (embedded numbered-list
-  // stems, table rows, image-only options, stray fragments) is still emitted as its own block with
-  // blank options -- never silently dropped -- so the admin sees every source paragraph and can fix
-  // it by hand instead of losing it outright.
-  function parseSimpleTexBareParagraphs(rawText) {
-    const spaced = normalizeRunOnSpacing(rawText);
-    const normalized = normalizeSimpleTexHeaders(spaced.replace(/\r\n/g, '\n'));
-    const paragraphs = normalized.split(/\n\s*\n+/).map(p => p.trim()).filter(Boolean);
+    parsed.push(...groupLeftoverParagraphsPositionally(leftover));
 
-    function isHeader(p) { return /^#{1,6}\s+(.*)$/.test(p.split('\n')[0].trim()); }
-    function isSourceTagOnly(p) { return /^\[[^\[\]]*\d{4}[^\[\]]*\]$/.test(p); }
-    // Sub-topic labels this OCR source emits WITHOUT a "#" -- e.g. "Octate, Isoelectronic
-    // Species... - Level I" or a bare "Level I"/"Level II" paragraph on its own. These aren't
-    // questions or options; left undetected they get swept into a neighboring group as a bogus
-    // stem/option and misalign everything after them (worse than leaving a question blank).
-    function isPseudoSectionHeader(p) {
-      const line = p.split('\n')[0].trim();
-      return /^Level\s+(I{1,3}|IV)$/i.test(line) || /[\s\-–]Level\s+(I{1,3}|IV)\s*$/i.test(line);
-    }
-    // Real question stems in this export consistently end in "-", ":" or "?" right before their
-    // options start (e.g. "The bond length can be defined as -", "...compound?"). A candidate
-    // "option" paragraph ending the same way is actually the START of the NEXT question, not an
-    // option of the current one -- without this check a short-on-options question (one whose
-    // options got embedded in its own stem, or glued together) swallows the next question's stem
-    // and diagram as its own bogus options 3 and 4 instead of stopping cleanly.
-    function endsLikeStem(p) { return /[:\-–—?]$/.test(p.trim()); }
-    // A stem candidate that already embeds its own numbered option list ("...is: 1. ... 2. ...")
-    // is a different, unhandled pattern -- grouping the paragraphs AFTER it as A-D would actually
-    // be grabbing the start of the next question by mistake, so it's excluded from grouping here.
-    function looksSelfContained(p) { return /(?:^|[\s\-:])[1-4]\.\s*\S.*(?:^|[\s\-:])[1-4]\.\s*\S/s.test(p); }
-
-    const parsed = [];
-    let currentChapter = '';
-    let i = 0;
-
-    function emitUnparsed(p) {
-      parsed.push({ question: p.trim(), option_a: '', option_b: '', option_c: '', option_d: '', source_tag: null, year: null, chapter: currentChapter, parse_confidence: 'fallback' });
-    }
-
-    while (i < paragraphs.length) {
-      const p = paragraphs[i];
-      const headerMatch = p.split('\n')[0].trim().match(/^#{1,6}\s+(.*)$/);
-      if (headerMatch) { currentChapter = headerMatch[1].trim(); i++; continue; }
-      if (isSourceTagOnly(p)) { i++; continue; } // an orphaned tag with nothing preceding it to attach to
-      if (isPseudoSectionHeader(p)) { i++; continue; } // sub-topic label, not a question or option
-
-      // Same flattened multi-question blob check as parseSimpleTexText -- this pass only ever
-      // runs when the marker-based pass above found nothing at all in the WHOLE document, but a
-      // single paragraph within it can still be a self-contained "||N." blob that shouldn't be
-      // handed to the positional 5-paragraph grouper below (which has no notion of it at all).
-      const pipeQuestionChunks = splitIntoQuestionChunksByPipe(p);
-      if (pipeQuestionChunks && pipeQuestionChunks.length > 1) {
-        parsed.push(...extractQuestionsFromPipeChunks(pipeQuestionChunks, currentChapter));
-        i++;
-        continue;
-      }
-
-      const candidateOptions = paragraphs.slice(i + 1, i + 5);
-      const canGroup = candidateOptions.length === 4
-        && !looksSelfContained(p)
-        && candidateOptions.every(op => !isHeader(op) && !isSourceTagOnly(op) && !isPseudoSectionHeader(op) && !endsLikeStem(op) && op.length > 0 && op.length < 300);
-
-      if (canGroup) {
-        const { sourceTag, year, cleaned: stemCleaned } = extractSourceTag(p);
-        let tag = sourceTag, yr = year, consumed = 5;
-        const next = paragraphs[i + 5];
-        if (!tag && next && isSourceTagOnly(next)) {
-          const t = extractSourceTag(next);
-          tag = t.sourceTag; yr = t.year;
-          consumed = 6;
-        }
-        parsed.push({
-          question: stemCleaned.trim(),
-          option_a: candidateOptions[0].trim(), option_b: candidateOptions[1].trim(),
-          option_c: candidateOptions[2].trim(), option_d: candidateOptions[3].trim(),
-          source_tag: tag, year: yr, chapter: currentChapter, parse_confidence: 'fallback'
-        });
-        i += consumed;
-      } else {
-        emitUnparsed(p);
-        i++;
-      }
-    }
-    return parsed;
+    return parsed.map(q => unmaskQuestionFields(q, spans));
   }
 
   // Feeds parsed questions into this page's EXISTING block model/render pipeline -- same
@@ -1108,16 +1337,11 @@
     const hintEl = document.getElementById('parseHint');
     if (!currentSubject) { hintEl.textContent = 'Pick a subject first.'; hintEl.style.color = '#ef4444'; return; }
     if (!raw.trim()) { hintEl.textContent = 'Paste some Mathpix or SimpleTex text first.'; hintEl.style.color = '#ef4444'; return; }
+    // Mathpix's \item[N.] marker is unambiguous and already has its own dedicated, unchanged
+    // parser -- it doesn't go through the format-agnostic pipeline below, which exists
+    // specifically for the SimpleTex side, where every real-world format variation has shown up.
     const isMathpix = /\\item\[/.test(raw);
-    let parsedQuestions = isMathpix ? parseMathpixText(raw) : parseSimpleTexText(raw);
-    // No (A)(B)(C)(D) markers found anywhere in the whole paste -- fall back to grouping bare
-    // sequential paragraphs as options instead of reporting a hard failure. See
-    // parseSimpleTexBareParagraphs for why this only kicks in when the primary pass found nothing.
-    let usedBareFallback = false;
-    if (!isMathpix && parsedQuestions.length === 0) {
-      parsedQuestions = parseSimpleTexBareParagraphs(raw);
-      usedBareFallback = true;
-    }
+    const parsedQuestions = isMathpix ? parseMathpixText(raw) : parseSimpleTexPipeline(raw);
     if (parsedQuestions.length === 0) {
       hintEl.textContent = isMathpix
         ? 'No \\item[N.] question markers found -- check the pasted text matches the expected Mathpix format.'
@@ -1137,7 +1361,8 @@
       option_a_diagram_url: null, option_b_diagram_url: null, option_c_diagram_url: null, option_d_diagram_url: null,
       year: q.year, source_tag: q.source_tag || '', source_page: null, display_number: null,
       chapter: manualChapter || q.chapter || null, // manual pick (if any) wins over a per-question "# Chapter Name" header guess -- see buildChapterOptionsHtml/applyChapterHint
-      parse_confidence: q.parse_confidence || null, // 'marker' | 'delimiter' | 'fallback' | null (Mathpix, or blank-option questions with nothing to tag) -- see blockTemplate's badge
+      parse_confidence: q.parse_confidence || null, // 'marker' | 'delimiter' | 'fallback' | null (Mathpix) -- see blockTemplate's badge
+      detected_pattern: q.detected_pattern || null, // 'pipe' | 'letter' | 'numbered' | 'table' | 'position' | null -- which Stage C/D winner produced this question, for the badge tooltip + summary below
       saved: false, savePending: false
     }));
     scanFilenameMatch = null; // no filename to match chapters against in paste mode
@@ -1150,15 +1375,21 @@
     document.getElementById('flaggedPagesBanner').style.display = 'none';
     const missingOptions = blocks.filter(b => !b.option_a && !b.option_b && !b.option_c && !b.option_d).length;
     const fallbackCount = blocks.filter(b => b.parse_confidence === 'fallback').length;
-    const delimiterCount = blocks.filter(b => b.parse_confidence === 'delimiter').length;
-    const formatLabel = isMathpix ? 'Mathpix' : (usedBareFallback ? 'SimpleTex, no-marker fallback' : 'SimpleTex');
-    // Per-tier counts, not a blanket "double-check every question" -- the ⚠ badge on each
-    // fallback-confidence card (see blockTemplate) is what actually needs scrutiny; marker- and
-    // delimiter-confidence questions came from an explicit, validated boundary and don't.
+    const formatLabel = isMathpix ? 'Mathpix' : 'SimpleTex';
+    // Pattern-mix breakdown instead of a flat count -- e.g. "30 numbered, 8 pipe-delimited, 4
+    // flagged for review" -- so the admin sees the shape of the whole paste before opening a
+    // single card. Counted from detected_pattern (not parse_confidence) so "letter"/"numbered"
+    // (both tagged 'marker' confidence) show up as distinct, informative buckets.
+    const patternLabels = { pipe: 'pipe-delimited', letter: 'lettered (A)(B)(C)(D)', numbered: 'numbered 1.2.3.4', table: 'table-row', position: 'position-grouped' };
+    const patternCounts = {};
+    blocks.forEach(b => { const key = b.detected_pattern || 'unrecognized'; patternCounts[key] = (patternCounts[key] || 0) + 1; });
+    const patternSummary = Object.keys(patternCounts)
+      .filter(k => k !== 'unrecognized')
+      .map(k => `${patternCounts[k]} ${patternLabels[k] || k}`)
+      .join(', ');
     hintEl.style.color = fallbackCount ? '#f97316' : '#4ade80';
-    hintEl.textContent = `Parsed ${blocks.length} question(s) as ${formatLabel} format.`
-      + (fallbackCount ? ` ${fallbackCount} flagged ⚠ Needs review (grouped by paragraph position, no marker found) -- check those first.` : '')
-      + (delimiterCount ? ` ${delimiterCount} parsed from a || pipe-delimited block.` : '')
+    hintEl.textContent = `Parsed ${blocks.length} question(s) as ${formatLabel} format` + (patternSummary ? ` — ${patternSummary}` : '') + '.'
+      + (fallbackCount ? ` ${fallbackCount} flagged ⚠ Needs review -- check those first.` : '')
       + (missingOptions ? ` ${missingOptions} had no options detected -- fill those in manually.` : '');
     saveDraftNow(); // a fresh parse just replaced the whole batch -- worth persisting right away, same as scanPdf()
   }
@@ -1424,6 +1655,20 @@
     return html;
   }
 
+  // Human-readable explanation of a badge's detected_pattern, for its tooltip -- so an admin can
+  // see *why* a question landed in a given confidence tier, not just that it did.
+  function describeDetectedPattern(pattern, isFallback) {
+    if (isFallback) {
+      return pattern === 'position'
+        ? 'Grouped by paragraph position -- no (A)(B)(C)(D)/numbered/pipe/table marker was found nearby, so this is a guess based on paragraph order alone.'
+        : 'No (A)(B)(C)(D)/numbered/pipe/table marker was found at all -- options are blank, fill them in manually.';
+    }
+    switch (pattern) {
+      case 'table': return 'Parsed from a markdown table row ("| stem | opt | opt | opt | opt |") rather than (A)(B)(C)(D)/numbered markers.';
+      case 'pipe': default: return 'Parsed from a || pipe-delimited block rather than (A)(B)(C)(D)/numbered markers.';
+    }
+  }
+
   function blockTemplate(block, displayIndex) {
     const b = block;
     return `
@@ -1431,8 +1676,8 @@
       <div class="q-block-header">
         <span class="q-number">Q<input type="text" id="qnum-${b.id}" value="${escapeHtml(b.display_number != null ? b.display_number : String(displayIndex))}" onchange="setQNumber('${b.id}')" title="Edit to match the actual question number in the PDF, if it drifted from the auto count" style="width:34px;background:transparent;border:none;border-bottom:1px dashed #4f8ef780;color:#4f8ef7;font-weight:700;font-size:13px;font-family:'Inter',sans-serif;padding:0 0 1px 2px;"/></span>
         ${b.has_diagram ? '<span class="q-diagram-badge">Diagram</span>' : ''}
-        ${b.parse_confidence === 'fallback' ? '<span class="q-confidence-badge fallback" title="No (A)(B)(C)(D)/numbered/pipe markers were found -- options were grouped by paragraph position, so this needs a careful check">⚠ Needs review</span>' : ''}
-        ${b.parse_confidence === 'delimiter' ? '<span class="q-confidence-badge delimiter" title="Parsed from a || pipe-delimited block rather than (A)(B)(C)(D)/numbered markers">Pipe-delimited</span>' : ''}
+        ${b.parse_confidence === 'fallback' ? `<span class="q-confidence-badge fallback" title="${escapeHtml(describeDetectedPattern(b.detected_pattern, true))}">⚠ Needs review</span>` : ''}
+        ${b.parse_confidence === 'delimiter' ? `<span class="q-confidence-badge delimiter" title="${escapeHtml(describeDetectedPattern(b.detected_pattern, false))}">${b.detected_pattern === 'table' ? 'Table row' : 'Pipe-delimited'}</span>` : ''}
         <span class="q-saved-badge" id="saved-badge-${b.id}" style="display:${b.saved ? 'inline-flex' : 'none'}">Saved</span>
         <div class="q-block-actions">
           <button type="button" onclick="mergeWithNext('${b.id}')" title="Merge this block with the next one">Merge next</button>

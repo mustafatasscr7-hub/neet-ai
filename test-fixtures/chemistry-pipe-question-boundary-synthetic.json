@@ -1,0 +1,15 @@
+{
+  "name": "chemistry-pipe-question-boundary-synthetic",
+  "provenance": "synthetic",
+  "subject": "Chemistry",
+  "formats": [
+    "pipe-question-boundary",
+    "numbered-options"
+  ],
+  "description": "Reconstructed from real sample text shown earlier in this conversation (Pentane force-of-attraction question + a flattened markdown table of 158/159/160), joined with || the way a real flattened table loses its row-boundary newlines. Regression fixture for the 183->19 bug: must split into 4 questions, not 1.",
+  "raw": "145.The incorrect order of the force of attraction among the given species is -1.HI>HBr>$Cl_2$2.$CCl_4$>$CH_2Cl_2$>$CH_3Cl$>$CH_4$3.n-Pentane>iso-Pentane>neo-Pentane4.$OH_2$>$O(CH_3)_2$>$OBr_2$||158.O—O bond length (in Å) in $H_2O_2$ and $O_2F_2$ is respectively:1.1.22,1.482.1.48,1.223.1.22,1.224.1.48,1.48||159.The correct statement about hydrolysis of $BCl_3$ and $NCl_3$ is-1.$NCl_3$ is hydrolysed and gives HOCl but $BCl_3$ is not hydrolysed2.Both $NCl_3$ and $BCl_3$ on hydrolysis gives $HCl$3.$NCl_3$ on hydrolysis gives HOCl but $BCl_3$ gives $HCl$4.Both $NCl_3$ and $BCl_3$ on hydrolysis gives HOCl||160.The correct order of solubility in an aqueous medium is:1.$CuS>ZnS>Na_2S$2.$ZnS>Na_2S>CuS$3.$Na_2S>CuS>ZnS$4.$Na_2S>ZnS>CuS$",
+  "expected": {
+    "minQuestions": 4,
+    "maxQuestions": 4
+  }
+}
