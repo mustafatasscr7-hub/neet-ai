@@ -53,6 +53,7 @@
 
     /* Report-a-question: same block as mocktest.html/pyqbank.html/personalised-test.html/
        chat.html, kept identical so the feature looks and behaves the same everywhere. */
+    .difficulty-badge { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 10px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; line-height: 1.6; }
     .report-flag-btn { background: none; border: none; cursor: pointer; display: inline-flex; align-items: center; opacity: 0.35; padding: 2px 4px; margin-left: auto; transition: opacity 0.15s, transform 0.15s; }
     .report-flag-btn:hover, .report-flag-btn:focus-visible { opacity: 1; transform: scale(1.15); }
     .report-popup { position: fixed; z-index: 2000; background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 10px; padding: 12px; width: 220px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); font-size: 12px; }
@@ -728,6 +729,21 @@ function generateScorecard() {
       return `<button type="button" class="report-flag-btn" title="Report a problem with this question" onclick="event.stopPropagation(); openReportPopup('${pyqId}', this)"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><polygon points="12,3 22,21 2,21" fill="#ef4444" stroke="#ef4444" stroke-width="2.5" stroke-linejoin="round"/><rect x="10.8" y="9" width="2.4" height="6.5" rx="1.2" fill="#fff"/><circle cx="12" cy="18" r="1.3" fill="#fff"/></svg></button>`;
     }
 
+    // Difficulty badge -- computed once by DeepSeek and cached permanently in the DB, never
+    // recomputed. No fetch/classify call needed on this page: mocktest.html already resolved
+    // difficulty for every question before handing results off via sessionStorage, so q.difficulty
+    // arrives here already set.
+    function difficultyBadgeHtml(difficulty) {
+      const COLORS = { Easy: ['#4ade80', '#14532d'], Moderate: ['#fbbf24', '#78350f'], Difficult: ['#f87171', '#7f1d1d'] };
+      if (!difficulty || !COLORS[difficulty]) return '';
+      const [bg, fg] = COLORS[difficulty];
+      return `<span class="difficulty-badge" style="background:${bg};color:${fg};">${difficulty}</span>`;
+    }
+
+    function metaActionsHtml(difficulty, pyqId) {
+      return `<span style="margin-left:auto;display:inline-flex;align-items:center;gap:6px;">${difficultyBadgeHtml(difficulty)}${reportFlagBtnHtml(pyqId)}</span>`;
+    }
+
     function closeReportPopup() {
       const existing = document.getElementById('reportPopup');
       if (existing) existing.remove();
@@ -851,7 +867,7 @@ function generateScorecard() {
             <span>${subjectName(q.subject) || ''}</span>
             <span>${q.year || ''}</span>
             <span class="q-status ${q.status}">${statusText}</span>
-            ${q.id ? reportFlagBtnHtml(q.id) : ''}
+            ${q.id ? metaActionsHtml(q.difficulty, q.id) : ''}
           </div>
           <div class="q-text">${applySpecialFormattingOnly_ML(q.question)}</div>
           ${q.diagram_url ? `<img class="q-diagram-img" src="${escapeHtml(q.diagram_url)}">` : ''}

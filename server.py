@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 from typing import Optional, List, Dict
 from contextlib import asynccontextmanager
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import anthropic
 import requests
 import httpx
@@ -234,6 +235,10 @@ class AdminPyqBulkUpdate(BaseModel):
     ids: List[str]
     chapter: Optional[str] = None
     is_active: Optional[bool] = None
+
+class ClassifyDifficultyRequest(BaseModel):
+    table: str  # "pyq" or "mock_test_questions" -- the only two tables difficulty exists on
+    ids: List[str]
 
 class SetUserPlanRequest(BaseModel):
     user_id: str
@@ -1349,7 +1354,7 @@ async def get_mock_test_questions_by_id(mock_test_id: int):
             headers=headers,
             params={
                 "mock_test_id": f"eq.{mock_test_id}",
-                "select": "id,subject,chapter,year,question,option_a,option_b,option_c,option_d,correct_answer,diagram_url,option_a_diagram_url,option_b_diagram_url,option_c_diagram_url,option_d_diagram_url",
+                "select": "id,subject,chapter,year,question,option_a,option_b,option_c,option_d,correct_answer,difficulty,diagram_url,option_a_diagram_url,option_b_diagram_url,option_c_diagram_url,option_d_diagram_url",
                 "order": "question_order.asc"
             }
         )
@@ -1782,6 +1787,188 @@ async def admin_pyq_delete(pyq_id: str, _: None = Depends(verify_admin)):
         return {"success": True}
     except Exception as e:
         return {"error": str(e)}
+
+# ---------- Difficulty classification (Easy/Moderate/Difficult), cached permanently ----------
+# Computed once per question by DeepSeek-V4-Flash, never recomputed once the difficulty column
+# is set -- both the on-display path (/classify-difficulty) and the one-time sweep
+# (/admin/backfill-difficulty) always check for an existing value first and skip the DeepSeek
+# call entirely if one's already there.
+
+def classify_difficulty(question: str, option_a: str, option_b: str, option_c: str, option_d: str,
+                         chapter: str = None, source_tag: str = None):
+    """Single DeepSeek call classifying one question's difficulty. Returns (label, tokens_used)
+    where label is exactly 'Easy'/'Moderate'/'Difficult', or (None, tokens_used) if the model's
+    reply can't be parsed cleanly -- callers must leave the DB column null in that case rather
+    than cache a bad value, so it gets retried on the next display/backfill pass instead of
+    permanently sticking with a wrong guess."""
+    context_lines = [f"Question: {question}", f"(A) {option_a}", f"(B) {option_b}",
+                      f"(C) {option_c}", f"(D) {option_d}"]
+    if chapter:
+        context_lines.append(f"Chapter: {chapter}")
+    if source_tag:
+        context_lines.append(f"Source: {source_tag}")
+    try:
+        response = deepseek_client.messages.create(
+            model="deepseek-v4-flash",
+            max_tokens=10,
+            thinking={"type": "disabled"},
+            system=(
+                "You are classifying the difficulty of a NEET (Indian medical entrance exam) "
+                "multiple-choice question for a student-facing difficulty badge.\n\n"
+                "Classify as:\n"
+                "- Easy: single-fact recall, directly stated in NCERT, answerable from memory alone.\n"
+                "- Moderate: requires applying one NCERT concept, a single calculation step, or "
+                "distinguishing between similar-sounding options.\n"
+                "- Difficult: requires combining multiple NCERT concepts, multi-step reasoning, "
+                "or is from a source exam type known to run harder than standard NEET (e.g. AIIMS-"
+                "pattern, JIPMER-pattern) -- weigh the Source line if present, but the question's "
+                "own content matters more than the label on it.\n\n"
+                "Reply with EXACTLY one word: Easy, Moderate, or Difficult. Nothing else -- no "
+                "punctuation, no explanation."
+            ),
+            messages=[{"role": "user", "content": "\n".join(context_lines)}]
+        )
+        raw = response.content[0].text.strip()
+        tokens = response.usage.input_tokens + response.usage.output_tokens
+        for label in ("Easy", "Moderate", "Difficult"):
+            if label.lower() in raw.lower():
+                return label, tokens
+        print(f"DIFFICULTY CLASSIFY: unparseable reply {raw!r}")
+        return None, tokens
+    except Exception as e:
+        print(f"DIFFICULTY CLASSIFY ERROR: {e}")
+        return None, 0
+
+ALLOWED_DIFFICULTY_TABLES = {"pyq", "mock_test_questions"}
+
+@app.post("/classify-difficulty")
+async def classify_difficulty_endpoint(req: ClassifyDifficultyRequest, _: None = Depends(rate_limiter(30, 60))):
+    """The on-display trigger: called by every student-facing page right after it loads a batch
+    of questions. Reads current difficulty for all requested ids in one query: already-set ones
+    are returned as-is (zero DeepSeek calls), null ones get classified now and cached before
+    returning, so the badge is present on first paint rather than popping in later."""
+    if req.table not in ALLOWED_DIFFICULTY_TABLES:
+        return {"error": f"table must be one of {sorted(ALLOWED_DIFFICULTY_TABLES)}"}
+    if not req.ids:
+        return {"difficulties": {}}
+    id_list = ",".join(req.ids)
+    try:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/{req.table}",
+            headers=ADMIN_HEADERS,
+            params={"id": f"in.({id_list})",
+                    "select": "id,difficulty,question,option_a,option_b,option_c,option_d,chapter,source_tag"}
+        )
+        if resp.status_code >= 400:
+            return {"error": resp.text}
+        rows = resp.json()
+    except Exception as e:
+        return {"error": str(e)}
+
+    result = {}
+    to_classify = []
+    for row in rows:
+        if row.get("difficulty"):
+            result[row["id"]] = row["difficulty"]
+        else:
+            to_classify.append(row)
+
+    if to_classify:
+        loop = asyncio.get_event_loop()
+        with ThreadPoolExecutor(max_workers=min(5, len(to_classify))) as executor:
+            futures = {
+                row["id"]: loop.run_in_executor(
+                    executor, classify_difficulty, row["question"], row.get("option_a", ""),
+                    row.get("option_b", ""), row.get("option_c", ""), row.get("option_d", ""),
+                    row.get("chapter"), row.get("source_tag")
+                )
+                for row in to_classify
+            }
+            classified = await asyncio.gather(*futures.values())
+            for row_id, (label, _tokens) in zip(futures.keys(), classified):
+                if label:
+                    result[row_id] = label
+                    try:
+                        await async_client.patch(
+                            f"{SUPABASE_URL}/rest/v1/{req.table}",
+                            headers={**ADMIN_HEADERS, "Content-Type": "application/json"},
+                            params={"id": f"eq.{row_id}"},
+                            json={"difficulty": label}
+                        )
+                    except Exception as e:
+                        print(f"DIFFICULTY SAVE ERROR ({req.table}/{row_id}): {e}")
+
+    return {"difficulties": result}
+
+@app.post("/admin/backfill-difficulty")
+async def admin_backfill_difficulty(table: str = "pyq", limit: int = 200, _: None = Depends(verify_admin)):
+    """One-time bulk sweep so the whole bank gets classified upfront instead of trickling in via
+    organic page views. Processes up to `limit` null-difficulty rows per call (not the whole
+    table in one request -- pyq alone is thousands of rows, a single request classifying all of
+    them would time out long before finishing); call it repeatedly (e.g. from a small script)
+    until remaining_null hits 0."""
+    if table not in ALLOWED_DIFFICULTY_TABLES:
+        return {"error": f"table must be one of {sorted(ALLOWED_DIFFICULTY_TABLES)}"}
+    try:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/{table}",
+            headers=ADMIN_HEADERS,
+            params={"difficulty": "is.null",
+                    "select": "id,question,option_a,option_b,option_c,option_d,chapter,source_tag",
+                    "limit": str(limit)}
+        )
+        if resp.status_code >= 400:
+            return {"error": resp.text}
+        rows = resp.json()
+    except Exception as e:
+        return {"error": str(e)}
+
+    if not rows:
+        return {"classified": 0, "failed": 0, "remaining_null": 0, "tokens_used": 0}
+
+    loop = asyncio.get_event_loop()
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = [
+            loop.run_in_executor(
+                executor, classify_difficulty, row["question"], row.get("option_a", ""),
+                row.get("option_b", ""), row.get("option_c", ""), row.get("option_d", ""),
+                row.get("chapter"), row.get("source_tag")
+            )
+            for row in rows
+        ]
+        classified = await asyncio.gather(*futures)
+
+    classified_count = 0
+    failed_count = 0
+    total_tokens = 0
+    for row, (label, tokens) in zip(rows, classified):
+        total_tokens += tokens
+        if label:
+            try:
+                save_resp = await async_client.patch(
+                    f"{SUPABASE_URL}/rest/v1/{table}",
+                    headers={**ADMIN_HEADERS, "Content-Type": "application/json"},
+                    params={"id": f"eq.{row['id']}"},
+                    json={"difficulty": label}
+                )
+                if save_resp.status_code < 400:
+                    classified_count += 1
+                else:
+                    failed_count += 1
+            except Exception:
+                failed_count += 1
+        else:
+            failed_count += 1
+
+    count_resp = await async_client.head(
+        f"{SUPABASE_URL}/rest/v1/{table}",
+        headers={**ADMIN_HEADERS, "Prefer": "count=exact"},
+        params={"difficulty": "is.null", "select": "id"}
+    )
+    remaining = int(count_resp.headers.get("content-range", "*/0").split("/")[-1])
+
+    return {"classified": classified_count, "failed": failed_count, "remaining_null": remaining,
+            "tokens_used": total_tokens}
 
 # ---------- Admin: PDF scan -> review -> save pipeline (admin-pdf-review.html) ----------
 

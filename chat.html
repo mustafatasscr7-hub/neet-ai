@@ -123,6 +123,7 @@
     /* Report-a-question: subtle flag icon, low visibility until hovered, and its popup --
        same block as mocktest.html/pyqbank.html/personalised-test.html, kept identical so the
        feature looks and behaves the same everywhere a question appears. */
+    .difficulty-badge { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 10px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; line-height: 1.6; }
     .report-flag-btn { background: none; border: none; cursor: pointer; display: inline-flex; align-items: center; opacity: 0.35; padding: 2px 4px; margin-left: auto; transition: opacity 0.15s, transform 0.15s; }
     .report-flag-btn:hover, .report-flag-btn:focus-visible { opacity: 1; transform: scale(1.15); }
     .report-popup { position: fixed; z-index: 2000; background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 10px; padding: 12px; width: 220px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); font-size: 12px; }
@@ -1408,6 +1409,40 @@ let selectedImages = [];
       return `<button type="button" class="report-flag-btn" title="Report a problem with this question" onclick="event.stopPropagation(); openReportPopup('${pyqId}', this)"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><polygon points="12,3 22,21 2,21" fill="#ef4444" stroke="#ef4444" stroke-width="2.5" stroke-linejoin="round"/><rect x="10.8" y="9" width="2.4" height="6.5" rx="1.2" fill="#fff"/><circle cx="12" cy="18" r="1.3" fill="#fff"/></svg></button>`;
     }
 
+    // Difficulty badge -- computed once by DeepSeek and cached permanently in the DB, never
+    // recomputed. Colors picked so text stays readable directly on the pastel fill (no white text).
+    function difficultyBadgeHtml(difficulty) {
+      const COLORS = { Easy: ['#4ade80', '#14532d'], Moderate: ['#fbbf24', '#78350f'], Difficult: ['#f87171', '#7f1d1d'] };
+      if (!difficulty || !COLORS[difficulty]) return '';
+      const [bg, fg] = COLORS[difficulty];
+      return `<span class="difficulty-badge" style="background:${bg};color:${fg};">${difficulty}</span>`;
+    }
+
+    function metaActionsHtml(difficulty, pyqId) {
+      return `<span style="margin-left:auto;display:inline-flex;align-items:center;gap:6px;">${difficultyBadgeHtml(difficulty)}${reportFlagBtnHtml(pyqId)}</span>`;
+    }
+
+    // The on-display trigger: called right after a batch of questions is fetched, before first
+    // render. Already-classified questions cost zero DeepSeek calls -- the backend only
+    // classifies (and caches) the ones that come back with difficulty still null.
+    async function ensureDifficulties(questions, table, idField = 'id') {
+      const ids = [...new Set((questions || []).map(q => q[idField]).filter(Boolean).map(String))];
+      if (!ids.length) return;
+      try {
+        const resp = await fetch(`${API_BASE}/classify-difficulty`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ table, ids })
+        });
+        const data = await resp.json();
+        if (data && data.difficulties) {
+          questions.forEach(q => { const d = data.difficulties[q[idField]]; if (d) q.difficulty = d; });
+        }
+      } catch (e) {
+        console.error('difficulty classify failed', e);
+      }
+    }
+
     function closeReportPopup() {
       const existing = document.getElementById('reportPopup');
       if (existing) existing.remove();
@@ -1494,9 +1529,13 @@ let selectedImages = [];
       }
     }
 
-    function showPYQModal(questions) {
+    async function showPYQModal(questions) {
       const existing = document.getElementById('pyq-modal');
       if (existing) existing.remove();
+
+      // Works whether or not the match_pyq RPC's own column list already includes difficulty --
+      // already-set values cost zero DeepSeek calls either way, this just fills in anything null.
+      await ensureDifficulties(questions, 'pyq');
 
       const modal = document.createElement('div');
       modal.id = 'pyq-modal';
@@ -1553,7 +1592,7 @@ let selectedImages = [];
           card.style.cssText = 'background:#2a2a3e;border-radius:8px;padding:16px;margin-bottom:12px;border-left:3px solid ' + (subjectColors[subject] || '#a78bfa') + ';overflow:hidden;';
           const meta = document.createElement('div');
           meta.style.cssText = 'color:' + (subjectColors[subject] || '#a78bfa') + ';font-size:12px;margin-bottom:8px;display:flex;align-items:center;';
-          meta.innerHTML = `<span>${escapeHtml('NEET ' + localizeNum(q.year || '') + ' • ' + (subjectName(q.subject) || ''))}</span>${q.id ? reportFlagBtnHtml(q.id) : ''}`;
+          meta.innerHTML = `<span>${escapeHtml('NEET ' + localizeNum(q.year || '') + ' • ' + (subjectName(q.subject) || ''))}</span>${q.id ? metaActionsHtml(q.difficulty, q.id) : ''}`;
           const question = document.createElement('div');
           question.className = 'pyq-q-text';
           question.style.cssText = 'line-height:1.6;margin-bottom:12px;color:#e2e8f0;font-size:14px;';

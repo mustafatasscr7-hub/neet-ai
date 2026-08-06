@@ -69,6 +69,9 @@
     .question-card { background: #111; border: 1px solid #1e1e1e; border-radius: 12px; padding: 20px; margin-bottom: 12px; }
     .q-meta { font-size: 11px; color: #555; margin-bottom: 10px; display: flex; gap: 12px; align-items: center; }
 
+    /* Difficulty badge: small pill next to the report button, one of 3 fixed colors */
+    .difficulty-badge { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 10px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; line-height: 1.6; }
+
     /* Report-a-question: subtle flag icon, low visibility until hovered, and its popup */
     .report-flag-btn { background: none; border: none; cursor: pointer; display: inline-flex; align-items: center; opacity: 0.35; padding: 2px 4px; margin-left: auto; transition: opacity 0.15s, transform 0.15s; }
     .report-flag-btn:hover, .report-flag-btn:focus-visible { opacity: 1; transform: scale(1.15); }
@@ -510,6 +513,43 @@
       return `<button type="button" class="report-flag-btn" title="Report a problem with this question" onclick="event.stopPropagation(); openReportPopup('${pyqId}', this)"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><polygon points="12,3 22,21 2,21" fill="#ef4444" stroke="#ef4444" stroke-width="2.5" stroke-linejoin="round"/><rect x="10.8" y="9" width="2.4" height="6.5" rx="1.2" fill="#fff"/><circle cx="12" cy="18" r="1.3" fill="#fff"/></svg></button>`;
     }
 
+    // Difficulty badge -- computed once by DeepSeek and cached permanently in the DB, never
+    // recomputed. Colors picked so text stays readable directly on the pastel fill (no white text).
+    function difficultyBadgeHtml(difficulty) {
+      const COLORS = { Easy: ['#4ade80', '#14532d'], Moderate: ['#fbbf24', '#78350f'], Difficult: ['#f87171', '#7f1d1d'] };
+      if (!difficulty || !COLORS[difficulty]) return '';
+      const [bg, fg] = COLORS[difficulty];
+      return `<span class="difficulty-badge" style="background:${bg};color:${fg};">${difficulty}</span>`;
+    }
+
+    // Meta-row wrapper grouping the difficulty badge with the report button so they sit
+    // together at the row's right edge (report-flag-btn owns the margin-left:auto that pushes
+    // this whole group there -- wrapping it here rather than duplicating that push).
+    function metaActionsHtml(difficulty, pyqId) {
+      return `<span style="margin-left:auto;display:inline-flex;align-items:center;gap:6px;">${difficultyBadgeHtml(difficulty)}${reportFlagBtnHtml(pyqId)}</span>`;
+    }
+
+    // The on-display trigger: called right after a batch of questions is fetched, before first
+    // render. Already-classified questions cost zero DeepSeek calls -- the backend only
+    // classifies (and caches) the ones that come back with difficulty still null.
+    async function ensureDifficulties(questions, table, idField = 'id') {
+      const ids = [...new Set(questions.map(q => q[idField]).filter(Boolean).map(String))];
+      if (!ids.length) return;
+      try {
+        const resp = await fetch(`${API_BASE}/classify-difficulty`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ table, ids })
+        });
+        const data = await resp.json();
+        if (data && data.difficulties) {
+          questions.forEach(q => { const d = data.difficulties[q[idField]]; if (d) q.difficulty = d; });
+        }
+      } catch (e) {
+        console.error('difficulty classify failed', e);
+      }
+    }
+
     function closeReportPopup() {
       const existing = document.getElementById('reportPopup');
       if (existing) existing.remove();
@@ -831,6 +871,7 @@ const { data, error } = await query;
       currentChapterAllYears = [...new Set(data.map(q => q.year).filter(Boolean))].sort((a, b) => b - a);
       currentYearFilter = '';
       currentQuestionIndex = 0;
+      await ensureDifficulties(data, 'pyq');
       renderSingleQuestion(subject, classNum, chapter);
     }
 
@@ -867,7 +908,7 @@ document.getElementById('mainContent').innerHTML = `
             <span class="q-year">${localizeNum(q.year || '')}</span>
             <span>${subjectName(q.subject) || ''}</span>
             ${q.chapter ? `<span>${chapterName(q.chapter)}</span>` : ''}
-            ${reportFlagBtnHtml(q.id)}
+            ${metaActionsHtml(q.difficulty, q.id)}
           </div>
          <div class="q-text">${parseWithMath(q.question)}</div>
 ${q.diagram_url ? `<img class="q-diagram-img" src="${q.diagram_url}">` : ''}
