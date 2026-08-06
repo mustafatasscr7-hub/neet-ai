@@ -1100,11 +1100,12 @@ async def chat(message: Message, request: Request, _: None = Depends(rate_limite
 async def generate_title(message: Message, request: Request, _: None = Depends(rate_limiter(15, 60))):
     ip = _client_ip(request)
     await enforce_daily_budget(message.user_id, ip)
-    client = anthropic_client
+    client = deepseek_client
     title_lang = "entirely in Hindi (Devanagari script) — every word in Hindi, no English words mixed in" if message.language == "hi" else "in English"
     response = client.messages.create(
-     model="claude-haiku-4-5",
+        model="deepseek-v4-flash",
         max_tokens=15,
+        thinking={"type": "disabled"},
         system=(
             f"Generate a short 3-5 word title {title_lang} summarizing the TOPIC of this message, "
             "the way a chat app names a conversation in its sidebar. The message is the first thing "
