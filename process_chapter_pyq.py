@@ -3,10 +3,13 @@ import re
 import json
 import requests
 import anthropic
+from dotenv import load_dotenv
 
-SUPABASE_URL = "https://hvhnfttrfouajlyhvunq.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh2aG5mdHRyZm91YWpseWh2dW5xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg5NDI1NTIsImV4cCI6MjA5NDUxODU1Mn0.8RaSu5yiTpQCEUGKrFO2y6oiRXSqdBehIz933j9Z7WA"
-ANTHROPIC_KEY = "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"
+load_dotenv()
+
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+ANTHROPIC_KEY = os.getenv("ANTHROPIC_KEY")
 
 client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
 
