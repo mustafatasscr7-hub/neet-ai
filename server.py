@@ -9,6 +9,8 @@ import anthropic
 import requests
 import httpx
 import openai
+from google import genai
+from google.genai import types as genai_types
 import base64
 import re
 from dotenv import load_dotenv
@@ -50,6 +52,7 @@ app.add_middleware(
 
 ANTHROPIC_KEY = os.getenv("ANTHROPIC_KEY")
 DEEPSEEK_KEY = os.getenv("DEEPSEEK_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 OPENAI_KEY = os.getenv("OPENAI_KEY")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
@@ -65,11 +68,18 @@ openai_client = openai.OpenAI(api_key=OPENAI_KEY)
 # top, sometimes far more), on top of whatever Anthropic's own response time actually is.
 anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
 # Text doubt-answering (/chat, /solve) runs on DeepSeek V4 Flash via its Anthropic-compatible
-# endpoint, not Claude -- same anthropic SDK, just pointed at a different base_url. Claude
-# (anthropic_client above) stays in use for image/PDF-attached questions only: DeepSeek's vision
-# support isn't reliable (confirmed via live testing -- it silently hallucinates on images
-# instead of erroring) and its PDF-document support was never verified.
+# endpoint, not Claude -- same anthropic SDK, just pointed at a different base_url. DeepSeek's
+# vision support isn't reliable (confirmed via live testing -- it silently hallucinates on images
+# instead of erroring), so it's never used for image-attached questions.
 deepseek_client = anthropic.Anthropic(api_key=DEEPSEEK_KEY, base_url="https://api.deepseek.com/anthropic")
+# Image-attached doubts (/chat) run on Gemini 3.5 Flash-Lite, swapped from Claude Sonnet after
+# 4 rounds of live comparison testing: 95-100% accuracy on handwritten doubts, NCERT diagrams,
+# organic mechanisms and IUPAC-adjacent naming, both on clean crops and camera-photo-style
+# (tilted/blurred/shadowed) images; the one consistent weak spot is graph/curve-matching
+# questions (~73% across rounds) -- mitigated, not fixed, by the graph_context prompt addition
+# in stream_response() below. anthropic_client (Claude) stays in use for PDF-attached questions
+# only -- Gemini's PDF handling was never tested, so it wasn't included in this swap.
+gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 import requests as http_requests
 from process_pyq_vision import scan_pdf_bytes, scan_mock_test_pdf
 
@@ -856,10 +866,58 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
         name_context = f"\n\nThe student name is {student_name}. Use their name naturally and occasionally in responses to make it personal." if student_name else ""
         style_context = "\n\nIMPORTANT: The student has selected CONCISE mode. Give a very short answer — maximum 3 sentences only. No bullet points, no key points section, no memory tricks. Just the core answer." if answer_style == "concise" else ""
         lang_context = "\n\nIMPORTANT: Respond ONLY in Hindi (Devanagari script). Every word — headings, key points, explanations, memory tricks — must be in Hindi. Do not mix in English words or Hinglish, even for common scientific terms (e.g. write \"गुणसूत्र\" not \"chromosome\"). The ONLY exceptions are: LaTeX/KaTeX math notation, chemical formulas/symbols (e.g. $H_2O$), units (e.g. m/s, kg), and proper nouns like NEET or NCERT — keep those exactly as-is, do not translate or romanize them." if language == "hi" else ""
-        full_system = SYSTEM_PROMPT + name_context + style_context + lang_context + student_context
-        if images or pdf:
-            # Image/PDF attachments stay on Claude Sonnet -- see the comment on deepseek_client
-            # above for why.
+        # Graph/curve-matching questions are Gemini's one consistently weak category (~73%
+        # across 4 rounds of testing, vs 95-100% on everything else) -- this can't be gated on
+        # chapter/question-type ahead of time since the chapter is an OUTPUT of the answer (the
+        # 📚 Chapter: line), not something known before generation, so the instruction is just
+        # always-on for the image branch. Harmless for non-graph images, a cheap mitigation
+        # (not a fix) for the ones that are.
+        graph_context = "\n\nIMPORTANT: If this question involves matching a labeled curve, point, or line in a graph/diagram to a specific value, property, or identity (e.g. \"which curve represents gas X\", \"identify point Y on the graph\"), carefully re-examine which curve/point corresponds to which label before answering -- this type of graph-reading question has a measurably higher error rate, so double-check your reading of the labels against the image before finalizing your answer." if images else ""
+        full_system = SYSTEM_PROMPT + name_context + style_context + lang_context + student_context + graph_context
+        if images:
+            # See the gemini_client comment above for why images specifically moved off Claude.
+            selected_model = "gemini-3.5-flash-lite"
+            print(f"MODEL SELECTED: {selected_model}", flush=True)
+            sys.stdout.flush()
+            image_parts = [
+                genai_types.Part.from_bytes(
+                    data=base64.b64decode(img.data),
+                    mime_type=img.media_type or "image/jpeg"
+                )
+                for img in images
+            ]
+            gemini_stream = gemini_client.models.generate_content_stream(
+                model=selected_model,
+                contents=image_parts + [user_message],
+                config=genai_types.GenerateContentConfig(
+                    system_instruction=full_system,
+                    max_output_tokens=1024
+                )
+            )
+            full_answer = ""
+            last_usage = None
+            try:
+                for chunk in gemini_stream:
+                    if chunk.text:
+                        full_answer += chunk.text
+                        yield chunk.text
+                    if chunk.usage_metadata:
+                        last_usage = chunk.usage_metadata
+            finally:
+                # Same reasoning as the Anthropic branch below: log on the way out (including on
+                # an early client disconnect) rather than only on a clean finish. Gemini reports
+                # usage_metadata cumulatively on every streamed chunk, so the last chunk seen
+                # (even a partial stream) already holds the running totals -- no separate
+                # "final message" fetch needed the way Anthropic's SDK requires.
+                if last_usage:
+                    print(f"GEMINI TOKENS: input={last_usage.prompt_token_count} output={last_usage.candidates_token_count}", flush=True)
+                    try:
+                        await log_token_usage(user_id, last_usage.prompt_token_count + last_usage.candidates_token_count, ip)
+                    except Exception:
+                        pass
+            return
+        elif pdf:
+            # PDF attachments stay on Claude -- see the gemini_client comment above for why.
             selected_model = "claude-sonnet-4-5"
             print(f"MODEL SELECTED: {selected_model}", flush=True)
             sys.stdout.flush()
