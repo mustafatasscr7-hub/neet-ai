@@ -11,10 +11,16 @@ import requests as http_requests
 load_dotenv()
 
 ANTHROPIC_KEY = os.getenv("ANTHROPIC_KEY")
+DEEPSEEK_KEY = os.getenv("DEEPSEEK_KEY")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 client = Anthropic(api_key=ANTHROPIC_KEY)
+# Text-only extraction (extract_questions_from_text, below) runs on DeepSeek V4 Flash via its
+# Anthropic-compatible endpoint -- same migration already done for server.py's /chat and /title.
+# The vision path (extract_questions_from_page, image bytes sent to Claude) stays on `client`
+# above -- it's a genuine vision task DeepSeek can't do, and it's the actual scanned-PDF path.
+deepseek_client = Anthropic(api_key=DEEPSEEK_KEY, base_url="https://api.deepseek.com/anthropic")
 
 VISION_MODEL = "claude-haiku-4-5-20251001"
 
@@ -108,7 +114,7 @@ def extract_questions_from_page(image_b64, page_num, subject="Biology", model=VI
         print(f"    JSON parse error on page {page_num}: {e}")
         return []
 
-TEXT_MODEL = "claude-haiku-4-5-20251001"
+TEXT_MODEL = "deepseek-v4-flash"
 MIN_TEXT_LENGTH = 40
 MIN_ALNUM_RATIO = 0.3
 DIAGRAM_MARKER = "<<<DIAGRAM_HERE>>>"
@@ -224,9 +230,10 @@ def extract_pages_text_and_diagrams(pdf_bytes):
 
 def extract_questions_from_text(page_text, page_num, subject="Biology", model=TEXT_MODEL):
     prompt = build_text_extraction_prompt(subject).replace("{page_text}", page_text)
-    message = client.messages.create(
+    message = deepseek_client.messages.create(
         model=model,
         max_tokens=4096,
+        thinking={"type": "disabled"},
         messages=[{"role": "user", "content": prompt}]
     )
 
