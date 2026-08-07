@@ -350,6 +350,12 @@
     .input-area { padding: 16px 24px 24px; background: #0d0d0d; }
     .input-wrapper { max-width: 820px; margin: 0 auto; background: #111111; border: 1px solid #2a2a2a; border-radius: 14px; display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; transition: border-color 0.2s; }
     .input-row { display: flex; align-items: flex-end; gap: 8px; width: 100%; }
+    .quoted-context-box { display: flex; align-items: flex-start; gap: 8px; background: #161616; border: 1px solid #2a2a2a; border-left: 3px solid #4f8ef7; border-radius: 8px; padding: 7px 10px; font-size: 12px; color: #999; }
+    .quoted-context-box .quote-icon { flex-shrink: 0; opacity: 0.6; font-size: 13px; line-height: 1.4; }
+    .quoted-context-box .quote-text { flex: 1; min-width: 0; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+    .quoted-context-box .quote-dismiss { flex-shrink: 0; background: transparent; border: none; color: #666; cursor: pointer; font-size: 14px; line-height: 1; padding: 0 2px; }
+    .quoted-context-box .quote-dismiss:hover { color: #ccc; }
+    body.light-mode .quoted-context-box { background: #f0f0f5 !important; border-color: #e0e0e5 !important; color: #666 !important; }
     .input-wrapper:focus-within { border-color: #4f8ef750; }
     .input-wrapper textarea { flex: 1; background: transparent; border: none; color: #ececec; font-size: var(--chat-font-size, 14px); font-family: 'Inter', sans-serif; outline: none; resize: none; max-height: 160px; min-height: 24px; line-height: 1.6; }
     .input-wrapper textarea::placeholder { color: #444; }
@@ -605,6 +611,7 @@
           <button id="limitBannerBtn" onclick="window.location.href='./pricing.html'" style="background:linear-gradient(135deg,#4f8ef7,#7c3aed);border:none;color:white;padding:5px 14px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;font-family:Inter,sans-serif;white-space:nowrap;flex-shrink:0;" data-i18n="chat.upgradeToPro">Upgrade to Pro →</button>
         </div>
         <div id="attachment-preview-inner"></div>
+        <div id="quotedContextPreview" style="display:none;"></div>
         <div class="input-row">
         <input type="file" id="imageInput" accept="image/*" multiple style="display:none;" />
         <input type="file" id="pdfInput" accept=".pdf" style="display:none;" />
@@ -2170,6 +2177,47 @@ function plainTextFromMarkdown(text) {
       selectionToolbar.classList.remove('visible');
     }
 
+    // Quoted-context block shown above the input box after "Ask about this" -- separate from
+    // the input's own value (unlike the old behavior, which just wrote a prefixed string into
+    // the textarea). Cleared on send or via its own dismiss button.
+    let quotedContext = null;
+
+    function renderQuotedContextPreview() {
+      const box = document.getElementById('quotedContextPreview');
+      box.innerHTML = '';
+      if (!quotedContext) { box.style.display = 'none'; return; }
+      box.style.display = 'block';
+      const wrap = document.createElement('div');
+      wrap.className = 'quoted-context-box';
+      const icon = document.createElement('span');
+      icon.className = 'quote-icon';
+      icon.textContent = '❝';
+      const textEl = document.createElement('span');
+      textEl.className = 'quote-text';
+      textEl.textContent = quotedContext;
+      const dismiss = document.createElement('button');
+      dismiss.type = 'button';
+      dismiss.className = 'quote-dismiss';
+      dismiss.title = 'Remove quote';
+      dismiss.textContent = '✕';
+      dismiss.onclick = clearQuotedContext;
+      wrap.appendChild(icon);
+      wrap.appendChild(textEl);
+      wrap.appendChild(dismiss);
+      box.appendChild(wrap);
+    }
+
+    function setQuotedContext(text) {
+      quotedContext = text;
+      renderQuotedContextPreview();
+      input.focus();
+    }
+
+    function clearQuotedContext() {
+      quotedContext = null;
+      renderQuotedContextPreview();
+    }
+
     // KaTeX renders both a visible .katex-html span and a hidden .katex-mathml
     // span (for screen readers) for every formula -- a raw DOM selection walks
     // both, so plain selection.toString() doubles every formula. Strip the
@@ -2237,10 +2285,7 @@ function plainTextFromMarkdown(text) {
       if (btn.dataset.action === 'copy') {
         navigator.clipboard.writeText(selectedText);
       } else if (btn.dataset.action === 'ask') {
-        input.value = `Explain this in more detail: ${selectedText}`;
-        input.focus();
-        input.style.height = 'auto';
-        input.style.height = Math.min(input.scrollHeight, 160) + 'px';
+        setQuotedContext(selectedText);
       } else if (btn.dataset.action === 'explain') {
         input.value = `Explain this in simpler terms: ${selectedText}`;
         input.focus();
@@ -2828,7 +2873,9 @@ function plainTextFromMarkdown(text) {
 
  async function sendMessage() {
       if (isStreaming) return;
-      const text = input.value.trim();
+      let text = input.value.trim();
+      const activeQuote = quotedContext;
+      if (!text && activeQuote) text = 'Please explain this.';
       if (!text && selectedImages.length === 0 && !selectedPDF) return;
 
       // Slash commands -- recognized here regardless of whether they arrived via the dropdown
@@ -2882,12 +2929,23 @@ function plainTextFromMarkdown(text) {
         type: img.data.split(';')[0].split(':')[1]
       }));
       const pdfData = selectedPDF;
-      await streamAIResponse(text || 'Describe this image and answer any NEET related content in it.', {
+
+      // When a quote is active, the model needs to see it as explicit context rather than just
+      // the student's follow-up alone -- the PYQ search button, though, should still search on
+      // just what the student actually asked, not the wrapped sentence.
+      let questionForModel = text || 'Describe this image and answer any NEET related content in it.';
+      const streamOptions = {
         images: imagesPayload,
         pdf: pdfData ? pdfData.split(',')[1] : null
-      });
+      };
+      if (activeQuote) {
+        questionForModel = `Regarding this part: "${activeQuote}"\n\nStudent asks: ${text}`;
+        streamOptions.pyqSearchText = text;
+      }
+      await streamAIResponse(questionForModel, streamOptions);
 
       clearAttachments();
+      clearQuotedContext();
     }
 
     // Shared by sendMessage / retryMessage / editMessage: calls /chat for questionText
