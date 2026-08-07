@@ -1443,6 +1443,30 @@ let selectedImages = [];
       }
     }
 
+    // Shared by the PYQ modal's option-click handler and its Show Solution button --
+    // correct_answer is blank for a real chunk of the PYQ bank (never verified during
+    // extraction). Resolves it for real via DeepSeek the first time anyone needs it for a given
+    // question, caches it server-side permanently -- every call after that (this student,
+    // any other student, either entry point) is a pure DB read that returns instantly.
+    async function ensureCorrectAnswer(q) {
+      if (q && q.correct_answer) return q.correct_answer.toLowerCase().trim();
+      try {
+        const resp = await fetch(`${API_BASE}/ensure-correct-answer`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pyq_id: q.id })
+        });
+        const data = await resp.json();
+        if (data && data.correct_answer) {
+          q.correct_answer = data.correct_answer;
+          return data.correct_answer.toLowerCase().trim();
+        }
+      } catch (e) {
+        console.error('ensure-correct-answer failed', e);
+      }
+      return '';
+    }
+
     function closeReportPopup() {
       const existing = document.getElementById('reportPopup');
       if (existing) existing.remove();
@@ -1623,24 +1647,46 @@ let selectedImages = [];
                 const optImg = q['option_' + opt + '_diagram_url'] ? `<img src="${escapeHtml(q['option_' + opt + '_diagram_url'])}" style="max-width:100%;height:auto;border-radius:6px;margin-top:6px;border:1px solid #3a3a5e;display:block;">` : '';
                 optEl.innerHTML = escapeHtml(opt.toUpperCase() + ') ' + (q['option_' + opt] || '')) + optImg;
                 optionEls[opt] = optEl;
-                // Don't reveal the answer up front -- let the student pick first, then show
-                // green/red, same as pyqbank.html's selectPyqOption().
-                optEl.onclick = function() {
-                  // correctOpt is null when correct_answer was blank/unparseable for this row --
-                  // used to fall through and mark whatever the student clicked as red regardless
-                  // of whether it was actually right. Now a distinct neutral "unverified" state.
-                  const hasVerifiedAnswer = !!correctOpt;
-                  ['a','b','c','d'].forEach(function(o) {
-                    const el = optionEls[o];
-                    if (!el) return;
-                    el.onclick = null;
-                    el.style.cursor = 'default';
-                    if (hasVerifiedAnswer && o === correctOpt) el.style.cssText += 'border-color:#4ade80;background:#4ade8020;color:#4ade80;';
-                    else if (o === opt) el.style.cssText += hasVerifiedAnswer ? 'border-color:#ef4444;background:#ef444415;color:#ef4444;' : 'border-color:#6b7fd7;background:#6b7fd715;color:#8b9bde;';
-                  });
-                };
                 optionsDiv.appendChild(optEl);
               }
+            });
+            // Don't reveal the answer up front -- let the student pick first, then show
+            // green/red, same as pyqbank.html's selectPyqOption(). A named function (not an
+            // inline closure per option) so a genuine solve failure can safely re-attach the
+            // exact same handler to every option and let the student retry.
+            function onPyqOptionClick(opt) {
+              return async function() {
+                let resolvedOpt = correctOpt;
+                if (!resolvedOpt) {
+                  // First-ever click on this question: nothing cached yet, resolve it now.
+                  ['a','b','c','d'].forEach(function(o) { const el = optionEls[o]; if (el) el.onclick = null; });
+                  const checkingNote = document.createElement('span');
+                  checkingNote.style.cssText = 'font-size:11px;color:#888;margin-left:8px;font-style:italic;';
+                  checkingNote.textContent = t('pyqbank', 'checkingAnswer');
+                  optionEls[opt].appendChild(checkingNote);
+                  resolvedOpt = await ensureCorrectAnswer(q);
+                  checkingNote.remove();
+                }
+                const hasVerifiedAnswer = !!resolvedOpt;
+                ['a','b','c','d'].forEach(function(o) {
+                  const el = optionEls[o];
+                  if (!el) return;
+                  if (hasVerifiedAnswer && o === resolvedOpt) { el.onclick = null; el.style.cursor = 'default'; el.style.cssText += 'border-color:#4ade80;background:#4ade8020;color:#4ade80;'; }
+                  else if (hasVerifiedAnswer && o === opt) { el.onclick = null; el.style.cursor = 'default'; el.style.cssText += 'border-color:#ef4444;background:#ef444415;color:#ef4444;'; }
+                  else if (hasVerifiedAnswer) { el.onclick = null; el.style.cursor = 'default'; }
+                });
+                if (!hasVerifiedAnswer) {
+                  // Genuine solve failure (network hiccup, DeepSeek error) -- rare, but don't
+                  // show a false red for it. Re-attach the same handlers so the student can retry.
+                  ['a','b','c','d'].forEach(function(o) {
+                    const el = optionEls[o];
+                    if (el) el.onclick = onPyqOptionClick(o);
+                  });
+                }
+              };
+            }
+            ['a','b','c','d'].forEach(function(opt) {
+              if (optionEls[opt]) optionEls[opt].onclick = onPyqOptionClick(opt);
             });
           }
           const solBtn = document.createElement('button');
@@ -1697,11 +1743,16 @@ let selectedImages = [];
                 thinkingTextEl.textContent = t('chat', THINKING_PHRASE_KEYS[thinkingPhraseIdx]);
               }, 2000);
               try {
+                // Resolve+cache through the same shared path the option click uses, so /solve is
+                // always given the real answer instead of silently guessing at a blank one --
+                // and so clicking Show Solution first (without picking an option first) still
+                // gets correct_answer properly cached for next time.
+                const resolvedAnswer = await ensureCorrectAnswer(q);
                 const { data: { session } } = await client.auth.getSession();
                 const res = await fetch(`${API_BASE}/solve`, {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ pyq_id: q.id, question: q.question, option_a: q.option_a, option_b: q.option_b, option_c: q.option_c, option_d: q.option_d, correct_answer: q.correct_answer, language: getLang(), user_id: session?.user?.id || '' })
+                  body: JSON.stringify({ pyq_id: q.id, question: q.question, option_a: q.option_a, option_b: q.option_b, option_c: q.option_c, option_d: q.option_d, correct_answer: resolvedAnswer, language: getLang(), user_id: session?.user?.id || '' })
                 });
                 if (res.status === 402) {
                   clearInterval(thinkingInterval);

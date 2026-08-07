@@ -117,7 +117,7 @@
     .q-option:hover { background: #222; border-color: #3a3a3a; color: #ccc; transform: translateX(2px); }
     .q-option.correct { background: #4ade8020; border-color: #4ade80; color: #4ade80; }
     .q-option.wrong { border-color: #ef4444; background: #ef444415; color: #ef4444; }
-    .q-option.selected-unverified { border-color: #6b7fd7; background: #6b7fd715; color: #8b9bde; }
+    .checking-note { font-size: 11px; color: #888; margin-left: 8px; font-style: italic; }
     .q-actions { display: flex; gap: 8px; }
     .sol-btn { background: transparent; border: 1px solid #a78bfa; color: #a78bfa; padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 12px; font-family: 'Inter', sans-serif; transition: all 0.2s; }
     .sol-btn:hover { background: #a78bfa20; }
@@ -200,7 +200,6 @@
     body.light-mode .q-option:hover { background: #eeeef1 !important; border-color: #c8c8d0 !important; color: #222228 !important; }
     body.light-mode .q-option.correct { background: #4ade8018 !important; border-color: #4ade80 !important; color: #2f9d5e !important; }
     body.light-mode .q-option.wrong { background: #ef444418 !important; border-color: #ef4444 !important; color: #d13a3a !important; }
-    body.light-mode .q-option.selected-unverified { background: #6b7fd718 !important; border-color: #6b7fd7 !important; color: #4a5bb8 !important; }
 
     body.light-mode .sol-btn:hover { background: #a78bfa20 !important; }
     body.light-mode .sol-div { background: #f5f5f7 !important; border-color: #d5d5dd !important; color: #333338 !important; }
@@ -888,7 +887,7 @@ const { data, error } = await query;
         // entirely. Only skip when there's truly nothing to show either way.
         if (!q['option_' + opt] && !q['option_' + opt + '_diagram_url']) return '';
         const optImg = q['option_' + opt + '_diagram_url'] ? `<img class="q-diagram-img" src="${q['option_' + opt + '_diagram_url']}">` : '';
-        return `<div class="q-option" id="opt-${opt}" onclick="selectPyqOption('${opt}', '${q.correct_answer.toLowerCase().trim()}')"><strong>${opt.toUpperCase()})</strong> ${parseWithMath(q['option_' + opt])}${optImg}</div>`;
+        return `<div class="q-option" id="opt-${opt}" onclick="selectPyqOption('${opt}', '${q.correct_answer.toLowerCase().trim()}', '${q.id}')"><strong>${opt.toUpperCase()})</strong> ${parseWithMath(q['option_' + opt])}${optImg}</div>`;
       }).join('');
 
      
@@ -942,12 +941,46 @@ ${q.diagram_url ? `<img class="q-diagram-img" src="${q.diagram_url}">` : ''}
       }
     }
      
-    function selectPyqOption(selectedOpt, correctOpt) {
-      // correct_answer is blank for a real chunk of the PYQ bank (never verified during
-      // extraction). Used to fall through silently: opt===correctOpt never matched anything,
-      // so whichever option the student clicked always landed in the "wrong" branch below --
-      // showing red even when they picked the actual right answer. Now treated as a distinct
-      // "unverified" state instead of a false negative.
+    // Shared by selectPyqOption and toggleSolution -- correct_answer is blank for a real chunk
+    // of the PYQ bank (never verified during extraction). Resolves it for real via DeepSeek the
+    // first time anyone needs it for a given question, caches it server-side permanently, and
+    // every call after that (this student re-clicking, any other student, Show Solution) is a
+    // pure DB read that returns instantly. Updates the in-memory question too, so whichever of
+    // the two entry points runs first, the other one sees the fresh value right away.
+    async function ensureCorrectAnswer(pyqId) {
+      const q = currentChapterQuestions.find(cq => cq.id === pyqId);
+      if (q && q.correct_answer) return q.correct_answer.toLowerCase().trim();
+      try {
+        const resp = await fetch(`${API_BASE}/ensure-correct-answer`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pyq_id: pyqId })
+        });
+        const data = await resp.json();
+        if (data && data.correct_answer) {
+          if (q) q.correct_answer = data.correct_answer;
+          return data.correct_answer.toLowerCase().trim();
+        }
+      } catch (e) {
+        console.error('ensure-correct-answer failed', e);
+      }
+      return '';
+    }
+
+    async function selectPyqOption(selectedOpt, correctOpt, pyqId) {
+      const clickedEl = document.getElementById('opt-' + selectedOpt);
+      if (!correctOpt) {
+        // First-ever click on this question: nothing cached yet, resolve it now. Every other
+        // option stays clickable-looking but inert while this is in flight (onclick cleared
+        // below) so a second click can't fire a second solve for the same question.
+        ['a','b','c','d'].forEach(o => { const el = document.getElementById('opt-' + o); if (el) el.onclick = null; });
+        const checkingNote = document.createElement('span');
+        checkingNote.className = 'checking-note';
+        checkingNote.textContent = t('pyqbank', 'checkingAnswer');
+        if (clickedEl) clickedEl.appendChild(checkingNote);
+        correctOpt = await ensureCorrectAnswer(pyqId);
+        checkingNote.remove();
+      }
       const hasVerifiedAnswer = !!correctOpt;
       ['a','b','c','d'].forEach(opt => {
         const el = document.getElementById('opt-' + opt);
@@ -956,10 +989,19 @@ ${q.diagram_url ? `<img class="q-diagram-img" src="${q.diagram_url}">` : ''}
         if (hasVerifiedAnswer && opt === correctOpt) {
           el.classList.add('correct');
         } else if (opt === selectedOpt) {
-          el.classList.add(hasVerifiedAnswer ? 'wrong' : 'selected-unverified');
+          el.classList.add('wrong');
         }
       });
-      if (hasVerifiedAnswer && selectedOpt !== correctOpt) {
+      if (!hasVerifiedAnswer) {
+        // Genuine solve failure (network hiccup, DeepSeek error) -- rare, but don't show a false
+        // red for it. Leave the options clickable so the student can just try again.
+        ['a','b','c','d'].forEach(o => {
+          const el = document.getElementById('opt-' + o);
+          if (el) el.onclick = () => selectPyqOption(o, '', pyqId);
+        });
+        return;
+      }
+      if (selectedOpt !== correctOpt) {
         const q = currentChapterQuestions[currentQuestionIndex];
         autoSaveMistake(q);
       }
@@ -1030,11 +1072,18 @@ ${q.diagram_url ? `<img class="q-diagram-img" src="${q.diagram_url}">` : ''}
         thinkingTextEl.textContent = t('chat', THINKING_PHRASE_KEYS[thinkingPhraseIdx]);
       }, 2000);
       try {
+        // q is a snapshot serialized into this button's onclick at render time -- if a student
+        // answers this same question in a different tab, or if this is the very first time
+        // anyone's looked at it, q.correct_answer can be stale/blank even though the DB (or the
+        // in-memory currentChapterQuestions entry) already has -- or is about to get -- the real
+        // value. Resolve through the same shared cache-or-solve path selectPyqOption uses so
+        // /solve is always given the real answer, never a blank one it has to silently guess at.
+        const resolvedAnswer = await ensureCorrectAnswer(q.id);
         const { data: { session } } = await client.auth.getSession();
         const res = await fetch(`${API_BASE}/solve`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ pyq_id: q.id, question: q.question, option_a: q.option_a, option_b: q.option_b, option_c: q.option_c, option_d: q.option_d, correct_answer: q.correct_answer, language: getLang(), user_id: session?.user?.id || '' })
+          body: JSON.stringify({ pyq_id: q.id, question: q.question, option_a: q.option_a, option_b: q.option_b, option_c: q.option_c, option_d: q.option_d, correct_answer: resolvedAnswer, language: getLang(), user_id: session?.user?.id || '' })
         });
         if (res.status === 402) {
           clearInterval(thinkingInterval);
@@ -1046,8 +1095,10 @@ ${q.diagram_url ? `<img class="q-diagram-img" src="${q.diagram_url}">` : ''}
           return;
         }
         if (!res.ok) throw new Error('solve failed');
-        const correctOpt = document.getElementById('opt-' + q.correct_answer.toLowerCase().trim());
-        if (correctOpt) correctOpt.classList.add('correct');
+        if (resolvedAnswer) {
+          const correctOptEl = document.getElementById('opt-' + resolvedAnswer);
+          if (correctOptEl) correctOptEl.classList.add('correct');
+        }
         // A cache hit is near-instant -- hold the thinking indicator for a fixed ~1s so the
         // answer doesn't jarringly pop in. Real generations are already well past 1s by now,
         // so this is a no-op wait in that case. The server tells us which case via X-Cache

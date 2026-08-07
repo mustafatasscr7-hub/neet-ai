@@ -1970,6 +1970,86 @@ async def admin_backfill_difficulty(table: str = "pyq", limit: int = 200, _: Non
     return {"classified": classified_count, "failed": failed_count, "remaining_null": remaining,
             "tokens_used": total_tokens}
 
+# ---------- On-demand correct_answer solve, cached permanently ----------
+# A real chunk of the PYQ bank was extracted with correct_answer left blank (never verified
+# during scanning). Rather than a UI-side workaround, this actually resolves it: the first time
+# a student clicks an option on a blank-answer question, DeepSeek-V4-Flash determines and caches
+# the real answer -- same "check first, solve once, save" shape as classify_difficulty above.
+# Every click after that (any student, any time) is a pure DB read, no DeepSeek call.
+
+def solve_correct_answer(question: str, option_a: str, option_b: str, option_c: str, option_d: str):
+    """Single DeepSeek call determining which option is correct. Returns (letter, tokens_used)
+    where letter is exactly 'a'/'b'/'c'/'d', or (None, tokens_used) if the reply can't be parsed
+    -- caller must leave correct_answer blank in that case so it's retried next time rather than
+    permanently caching a wrong guess."""
+    try:
+        response = deepseek_client.messages.create(
+            model="deepseek-v4-flash",
+            max_tokens=10,
+            thinking={"type": "disabled"},
+            system=(
+                "You are answering a NEET (Indian medical entrance exam) multiple-choice question. "
+                "Determine which option is correct based on NCERT-level knowledge.\n\n"
+                "Reply with EXACTLY one letter: A, B, C, or D. Nothing else -- no punctuation, "
+                "no explanation."
+            ),
+            messages=[{"role": "user", "content": f"Question: {question}\n(A) {option_a}\n(B) {option_b}\n(C) {option_c}\n(D) {option_d}"}]
+        )
+        raw = response.content[0].text.strip().upper()
+        tokens = response.usage.input_tokens + response.usage.output_tokens
+        for letter in ("A", "B", "C", "D"):
+            if letter in raw:
+                return letter.lower(), tokens
+        print(f"SOLVE ANSWER: unparseable reply {raw!r}")
+        return None, tokens
+    except Exception as e:
+        print(f"SOLVE ANSWER ERROR: {e}")
+        return None, 0
+
+class EnsureCorrectAnswerRequest(BaseModel):
+    pyq_id: str
+
+@app.post("/ensure-correct-answer")
+async def ensure_correct_answer_endpoint(req: EnsureCorrectAnswerRequest, _: None = Depends(rate_limiter(30, 60))):
+    try:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/pyq",
+            headers=ADMIN_HEADERS,
+            params={"id": f"eq.{req.pyq_id}",
+                    "select": "id,correct_answer,question,option_a,option_b,option_c,option_d"}
+        )
+        if resp.status_code >= 400:
+            return {"error": resp.text}
+        rows = resp.json()
+        if not rows:
+            return {"error": "Question not found"}
+        row = rows[0]
+    except Exception as e:
+        return {"error": str(e)}
+
+    if row.get("correct_answer"):
+        return {"correct_answer": row["correct_answer"]}
+
+    loop = asyncio.get_event_loop()
+    label, _tokens = await loop.run_in_executor(
+        None, solve_correct_answer, row["question"], row.get("option_a", ""),
+        row.get("option_b", ""), row.get("option_c", ""), row.get("option_d", "")
+    )
+    if not label:
+        return {"error": "Could not determine the answer"}
+
+    try:
+        await async_client.patch(
+            f"{SUPABASE_URL}/rest/v1/pyq",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json"},
+            params={"id": f"eq.{req.pyq_id}"},
+            json={"correct_answer": label}
+        )
+    except Exception as e:
+        print(f"CORRECT_ANSWER SAVE ERROR ({req.pyq_id}): {e}")
+
+    return {"correct_answer": label}
+
 # ---------- Admin: PDF scan -> review -> save pipeline (admin-pdf-review.html) ----------
 
 def _create_processed_pdf_row(filename: str, subject: str):
