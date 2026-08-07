@@ -1626,13 +1626,17 @@ let selectedImages = [];
                 // Don't reveal the answer up front -- let the student pick first, then show
                 // green/red, same as pyqbank.html's selectPyqOption().
                 optEl.onclick = function() {
+                  // correctOpt is null when correct_answer was blank/unparseable for this row --
+                  // used to fall through and mark whatever the student clicked as red regardless
+                  // of whether it was actually right. Now a distinct neutral "unverified" state.
+                  const hasVerifiedAnswer = !!correctOpt;
                   ['a','b','c','d'].forEach(function(o) {
                     const el = optionEls[o];
                     if (!el) return;
                     el.onclick = null;
                     el.style.cursor = 'default';
-                    if (o === correctOpt) el.style.cssText += 'border-color:#4ade80;background:#4ade8020;color:#4ade80;';
-                    else if (o === opt) el.style.cssText += 'border-color:#ef4444;background:#ef444415;color:#ef4444;';
+                    if (hasVerifiedAnswer && o === correctOpt) el.style.cssText += 'border-color:#4ade80;background:#4ade8020;color:#4ade80;';
+                    else if (o === opt) el.style.cssText += hasVerifiedAnswer ? 'border-color:#ef4444;background:#ef444415;color:#ef4444;' : 'border-color:#6b7fd7;background:#6b7fd715;color:#8b9bde;';
                   });
                 };
                 optionsDiv.appendChild(optEl);

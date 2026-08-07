@@ -117,6 +117,7 @@
     .q-option:hover { background: #222; border-color: #3a3a3a; color: #ccc; transform: translateX(2px); }
     .q-option.correct { background: #4ade8020; border-color: #4ade80; color: #4ade80; }
     .q-option.wrong { border-color: #ef4444; background: #ef444415; color: #ef4444; }
+    .q-option.selected-unverified { border-color: #6b7fd7; background: #6b7fd715; color: #8b9bde; }
     .q-actions { display: flex; gap: 8px; }
     .sol-btn { background: transparent; border: 1px solid #a78bfa; color: #a78bfa; padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 12px; font-family: 'Inter', sans-serif; transition: all 0.2s; }
     .sol-btn:hover { background: #a78bfa20; }
@@ -199,6 +200,7 @@
     body.light-mode .q-option:hover { background: #eeeef1 !important; border-color: #c8c8d0 !important; color: #222228 !important; }
     body.light-mode .q-option.correct { background: #4ade8018 !important; border-color: #4ade80 !important; color: #2f9d5e !important; }
     body.light-mode .q-option.wrong { background: #ef444418 !important; border-color: #ef4444 !important; color: #d13a3a !important; }
+    body.light-mode .q-option.selected-unverified { background: #6b7fd718 !important; border-color: #6b7fd7 !important; color: #4a5bb8 !important; }
 
     body.light-mode .sol-btn:hover { background: #a78bfa20 !important; }
     body.light-mode .sol-div { background: #f5f5f7 !important; border-color: #d5d5dd !important; color: #333338 !important; }
@@ -941,17 +943,23 @@ ${q.diagram_url ? `<img class="q-diagram-img" src="${q.diagram_url}">` : ''}
     }
      
     function selectPyqOption(selectedOpt, correctOpt) {
+      // correct_answer is blank for a real chunk of the PYQ bank (never verified during
+      // extraction). Used to fall through silently: opt===correctOpt never matched anything,
+      // so whichever option the student clicked always landed in the "wrong" branch below --
+      // showing red even when they picked the actual right answer. Now treated as a distinct
+      // "unverified" state instead of a false negative.
+      const hasVerifiedAnswer = !!correctOpt;
       ['a','b','c','d'].forEach(opt => {
         const el = document.getElementById('opt-' + opt);
         if (!el) return;
         el.onclick = null;
-        if (opt === correctOpt) {
+        if (hasVerifiedAnswer && opt === correctOpt) {
           el.classList.add('correct');
         } else if (opt === selectedOpt) {
-          el.classList.add('wrong');
+          el.classList.add(hasVerifiedAnswer ? 'wrong' : 'selected-unverified');
         }
       });
-      if (selectedOpt !== correctOpt) {
+      if (hasVerifiedAnswer && selectedOpt !== correctOpt) {
         const q = currentChapterQuestions[currentQuestionIndex];
         autoSaveMistake(q);
       }
