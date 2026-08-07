@@ -70,7 +70,7 @@
     .q-meta { font-size: 11px; color: #555; margin-bottom: 10px; display: flex; gap: 12px; align-items: center; }
 
     /* Difficulty badge: small pill next to the report button, one of 3 fixed colors */
-    .difficulty-badge { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 10px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; line-height: 1.6; }
+    .difficulty-badge { display: inline-block; padding: 1.5px 7px; border-radius: 999px; font-size: 10.5px; font-weight: 500; letter-spacing: 0; line-height: 1.5; }
 
     /* Report-a-question: subtle flag icon, low visibility until hovered, and its popup */
     .report-flag-btn { background: none; border: none; cursor: pointer; display: inline-flex; align-items: center; opacity: 0.35; padding: 2px 4px; margin-left: auto; transition: opacity 0.15s, transform 0.15s; }
@@ -515,19 +515,19 @@
     }
 
     // Difficulty badge -- computed once by DeepSeek and cached permanently in the DB, never
-    // recomputed. Colors picked so text stays readable directly on the pastel fill (no white text).
+    // recomputed. Soft-tag treatment: translucent fill of the color, full-strength color for text.
     function difficultyBadgeHtml(difficulty) {
-      const COLORS = { Easy: ['#4ade80', '#14532d'], Moderate: ['#fbbf24', '#78350f'], Difficult: ['#f87171', '#7f1d1d'] };
+      const COLORS = { Easy: '52,182,115', Moderate: '201,144,47', Difficult: '217,100,90' };
       if (!difficulty || !COLORS[difficulty]) return '';
-      const [bg, fg] = COLORS[difficulty];
-      return `<span class="difficulty-badge" style="background:${bg};color:${fg};">${difficulty}</span>`;
+      const rgb = COLORS[difficulty];
+      return `<span class="difficulty-badge" style="background:rgba(${rgb},0.14);color:rgb(${rgb});border:1px solid rgba(${rgb},0.3);">${difficulty}</span>`;
     }
 
     // Meta-row wrapper grouping the difficulty badge with the report button so they sit
     // together at the row's right edge (report-flag-btn owns the margin-left:auto that pushes
     // this whole group there -- wrapping it here rather than duplicating that push).
     function metaActionsHtml(difficulty, pyqId) {
-      return `<span style="margin-left:auto;display:inline-flex;align-items:center;gap:6px;">${difficultyBadgeHtml(difficulty)}${reportFlagBtnHtml(pyqId)}</span>`;
+      return `<span style="margin-left:auto;display:inline-flex;align-items:center;gap:10px;">${difficultyBadgeHtml(difficulty)}${reportFlagBtnHtml(pyqId)}</span>`;
     }
 
     // The on-display trigger: called right after a batch of questions is fetched, before first
