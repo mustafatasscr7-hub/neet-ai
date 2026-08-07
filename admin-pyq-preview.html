@@ -1529,8 +1529,14 @@
         const notesHtml = (g.notes || []).length
           ? `<div class="report-notes">${g.notes.map(n => `<div>"${escapeHtml(n)}"</div>`).join('')}</div>`
           : '';
+        // Prefer reportedRowsMap over g.question: saveEdit() patches the map with a fresh merged
+        // object on every save (admin-pyq-preview.html ~line 1085), but never touches g.question
+        // itself, since reportGroups is a separate array built once at load time. Reading g.question
+        // straight here meant a save's PATCH succeeded on the server and updated the map, but this
+        // card kept rendering the pre-edit object -- same live-read pattern the Duplicates view
+        // already uses successfully (questionCardHtml(duplicateRowsMap[id]) below).
         const bodyHtml = g.question
-          ? questionCardHtml(g.question)
+          ? questionCardHtml(reportedRowsMap[g.pyq_id] || g.question)
           : '<div class="report-deleted-note">This question no longer exists (already deleted).</div>';
         return `
           <div class="report-wrap">
