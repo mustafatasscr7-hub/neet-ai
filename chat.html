@@ -570,7 +570,7 @@
             <div style="font-size:10px;color:#333;margin-top:10px;text-align:center;" data-i18n="chat.neetDateFormatted">May 4, 2027</div>
           </div>
        </div>
-        <button onclick="window.location.href='./pricing.html'" style="background:transparent;border:1px solid #3a3a3a;color:#ececec;padding:6px 14px;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600;font-family:Inter,sans-serif;transition:all 0.2s;" data-i18n="chat.upgradeBtn">⭐ Upgrade</button>
+        <button id="headerUpgradeBtn" onclick="window.location.href='./pricing.html'" style="background:transparent;border:1px solid #3a3a3a;color:#ececec;padding:6px 14px;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600;font-family:Inter,sans-serif;transition:all 0.2s;" data-i18n="chat.upgradeBtn">⭐ Upgrade</button>
       </div>
     </div>
 
@@ -682,6 +682,7 @@
     let currentConversation = [];
     let currentId = null;
     let isLoggedIn = false;
+    let userPlan = 'free'; // kept in sync by refreshUsageBanner() whenever it re-fetches user_plan
 
     chatWindow.addEventListener('scroll', function() {
       const atBottom = chatWindow.scrollHeight - chatWindow.scrollTop - chatWindow.clientHeight < 50;
@@ -762,8 +763,10 @@ let selectedImages = [];
     let selectedPDFName = null;
 
     function isPro() {
-      // No subscription system exists yet - always false until billing is wired up.
-      return false;
+      // No self-serve billing yet -- plans are flipped manually via the admin endpoint -- but
+      // once a user_plan row says otherwise, the UI should honor it. userPlan is kept in sync
+      // by refreshUsageBanner() (the only place that already reads user_plan).
+      return !!userPlan && userPlan !== 'free';
     }
     function maxImages() {
       return isPro() ? 3 : 1;
@@ -2825,6 +2828,17 @@ function plainTextFromMarkdown(text) {
       } catch (e) { /* best-effort -- a failed merge just means refreshUsageBanner reflects pre-merge state */ }
     }
 
+    // Reflects the freshly-resolved userPlan into every bit of UI that assumes free-vs-pro --
+    // called by refreshUsageBanner() right after it learns the real plan, so this stays a single
+    // source of truth instead of each caller re-deciding what "upgraded" should hide or show.
+    function applyProUIState() {
+      const pro = isPro();
+      const headerBtn = document.getElementById('headerUpgradeBtn');
+      if (headerBtn) headerBtn.style.display = pro ? 'none' : '';
+      const planLabelEl = document.querySelector('.profile-plan');
+      if (planLabelEl) planLabelEl.textContent = pro ? t('chat', 'proPlan') : t('chat', 'freePlan');
+    }
+
     async function refreshUsageBanner() {
       const warningEl = document.getElementById('usageWarning');
       const limitEl = document.getElementById('limitBanner');
@@ -2832,7 +2846,9 @@ function plainTextFromMarkdown(text) {
 
       if (!session) {
         // No account, so no RLS-scoped row to read directly -- ask the server, which knows the
-        // real connecting IP (the only identity a guest has here).
+        // real connecting IP (the only identity a guest has here). A guest can never be pro.
+        userPlan = 'free';
+        applyProUIState();
         try {
           const res = await fetch(`${API_BASE}/guest-usage-status`);
           const data = await res.json();
@@ -2844,7 +2860,9 @@ function plainTextFromMarkdown(text) {
       }
 
       const { data: planRow } = await client.from('user_plan').select('plan').eq('user_id', session.user.id).single();
-      if (planRow && planRow.plan && planRow.plan !== 'free') {
+      userPlan = (planRow && planRow.plan) || 'free';
+      applyProUIState();
+      if (isPro()) {
         warningEl.style.display = 'none';
         limitEl.style.display = 'none';
         setSendEnabled(true);
@@ -3440,15 +3458,21 @@ function openSettings() {
         `;
         applyTranslations();
       } else if (section === 'plan') {
+        const pro = isPro();
         content.innerHTML = `
           <h2 style="font-size:18px;font-weight:700;color:#fff;margin-bottom:24px;" data-i18n="chat.settingsPlan">Plan</h2>
           <div style="background:#111;border:1px solid #1e1e1e;border-radius:12px;padding:24px;margin-bottom:16px;">
             <div style="font-size:13px;color:#555;margin-bottom:4px;" data-i18n="chat.currentPlan">Current Plan</div>
+            ${pro ? `
+            <div style="font-size:22px;font-weight:700;color:#fff;margin-bottom:8px;" data-i18n="chat.proPlan">Pro Plan</div>
+            <div style="font-size:13px;color:#666;" data-i18n="chat.proPlanDesc">Unlimited questions · Full access</div>
+            ` : `
             <div style="font-size:22px;font-weight:700;color:#fff;margin-bottom:8px;" data-i18n="chat.free">Free</div>
             <div style="font-size:13px;color:#666;margin-bottom:20px;" data-i18n="chat.freePlanDesc">5 questions per day · Basic access</div>
             <button onclick="window.open('./pricing.html','_blank')" style="background:#4f8ef7;border:none;color:white;padding:10px 24px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;font-family:Inter,sans-serif;" data-i18n="chat.upgradeToProFull">⭐ Upgrade to Pro — ₹299/month</button>
+            `}
           </div>
-          <div style="font-size:12px;color:#333;text-align:center;" data-i18n="chat.razorpayNote">Payments powered by Razorpay · Launching soon</div>
+          ${pro ? '' : '<div style="font-size:12px;color:#333;text-align:center;" data-i18n="chat.razorpayNote">Payments powered by Razorpay · Launching soon</div>'}
         `;
         applyTranslations();
       } else if (section === 'privacy') {
