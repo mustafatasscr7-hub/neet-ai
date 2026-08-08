@@ -98,6 +98,10 @@
      the height calculation -- overflow stays hidden and height is set directly in style. */
   .q-field textarea { overflow: hidden; }
   .q-field textarea:focus, .q-field input:focus, .q-field select:focus { border-color: #4f8ef7; }
+  /* Shaded distinctly so Option D -- the last of the 4 option boxes -- is easy to spot at a
+     glance instead of blending in with A/B/C, which are otherwise visually identical. */
+  .q-field-last-option textarea { background: #141a26; border-color: #2a3a5c; }
+  .q-field-last-option textarea:focus { border-color: #4f8ef7; }
   .q-options-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   .q-meta-grid { display: grid; grid-template-columns: 90px 90px 90px 1fr; gap: 10px; align-items: start; }
   .q-meta-grid .checkbox-field { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; margin-top: 2px; }
@@ -1710,7 +1714,7 @@
           <textarea id="opt-c-${b.id}" rows="1" oninput="autoResizeTextarea(this); updateMathPreview('opt-c-${b.id}')">${escapeHtml(b.option_c)}</textarea>
           <div class="math-preview" id="opt-c-${b.id}-preview"></div>
         </div>
-        <div class="q-field">
+        <div class="q-field q-field-last-option">
           <div class="q-field-label-row"><label>Option D</label><button type="button" class="formula-btn" onclick="openFormulaEditor('opt-d-${b.id}')">∑ Formula</button></div>
           <textarea id="opt-d-${b.id}" rows="1" oninput="autoResizeTextarea(this); updateMathPreview('opt-d-${b.id}')">${escapeHtml(b.option_d)}</textarea>
           <div class="math-preview" id="opt-d-${b.id}-preview"></div>
