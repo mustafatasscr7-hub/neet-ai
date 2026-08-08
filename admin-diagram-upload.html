@@ -49,8 +49,17 @@
   .paste-hint { font-size: 11px; color: #555; margin-top: 6px; }
   .paste-hint kbd { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 4px; padding: 1px 5px; font-family: 'Inter', sans-serif; font-size: 10px; color: #999; }
 
-  #imagePreviewWrap { display: none; margin-top: 12px; }
-  #imagePreviewWrap img { max-width: 220px; max-height: 220px; border-radius: 8px; border: 1px solid #2a2a2a; display: block; }
+  .batch-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; margin-top: 12px; }
+  .batch-item { background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 8px; padding: 8px; position: relative; }
+  .batch-item.upload-failed { border-color: #ef444480; }
+  .batch-item.upload-success { border-color: #4ade8080; }
+  .batch-item img { width: 100%; height: 100px; object-fit: cover; border-radius: 6px; display: block; margin-bottom: 6px; }
+  .batch-item input[type="text"] { font-size: 11px; padding: 5px 7px; }
+  .batch-item .remove-btn { position: absolute; top: 4px; right: 4px; width: 20px; height: 20px; border-radius: 50%; background: rgba(0,0,0,0.75); border: 1px solid #3a3a3a; color: #ccc; font-size: 12px; line-height: 1; cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0; }
+  .batch-item .remove-btn:hover { border-color: #ef4444; color: #ef4444; }
+  .batch-item .item-status { font-size: 10px; margin-top: 4px; min-height: 12px; }
+  .batch-item .item-status.error { color: #ef4444; }
+  .batch-item .item-status.success { color: #4ade80; }
 
   #uploadStatus { font-size: 12px; margin-top: 12px; display: none; }
   #uploadStatus.info { color: #4f8ef7; }
@@ -123,28 +132,23 @@
     </div>
 
     <div class="q-field">
-      <label>Diagram name / title</label>
-      <input type="text" id="nameInput" placeholder="e.g. Human Heart Cross-Section, Ray Diagram - Convex Lens"/>
-    </div>
-
-    <div class="q-field">
       <label>Subtopic (optional)</label>
       <input type="text" id="subtopicInput" placeholder="e.g. 2.3.1 Phycomycetes"/>
     </div>
 
     <div class="q-field">
-      <label>Description / caption (optional)</label>
+      <label>Description / caption (optional, applied to every image below)</label>
       <input type="text" id="descriptionInput" placeholder="Short caption or extra context"/>
     </div>
 
     <div class="q-field">
-      <label>Image (PNG, JPG, WEBP)</label>
+      <label>Images (PNG, JPG, WEBP) — select multiple to upload as a batch</label>
       <div class="upload-row">
-        <input type="file" id="imageFile" accept="image/png,image/jpeg,image/webp" onchange="onImageFileChange()"/>
-        <button type="button" class="scan-btn" id="uploadBtn" onclick="uploadDiagram()">Upload</button>
+        <input type="file" id="imageFile" accept="image/png,image/jpeg,image/webp" multiple onchange="onImageFileChange()"/>
+        <button type="button" class="scan-btn" id="uploadBtn" onclick="uploadDiagrams()" disabled>Upload</button>
       </div>
-      <div class="paste-hint">or copy an image and press <kbd>Ctrl</kbd>+<kbd>V</kbd> to paste it</div>
-      <div id="imagePreviewWrap"><img id="imagePreview" alt="Preview"/></div>
+      <div class="paste-hint">or copy an image and press <kbd>Ctrl</kbd>+<kbd>V</kbd> to paste it -- each paste adds one more to the batch</div>
+      <div class="batch-grid" id="batchGrid"></div>
     </div>
 
     <div id="uploadStatus"></div>
@@ -176,9 +180,12 @@
 <script>
   const API_BASE = 'https://neet-ai-production.up.railway.app';
   let adminKey = sessionStorage.getItem('admin_key') || '';
-  let selectedImageBase64 = null;
-  let selectedImageFilename = null;
-  let selectedImageMediaType = null;
+  // Each pending upload: { id, base64, mediaType, filename, name }. Subject/Class/Chapter/
+  // Subtopic/Description are shared fields applied to the whole batch -- only name is per-item
+  // since it has to be distinct for each diagram; everything else is realistically the same
+  // across a batch uploaded from the same chapter in one sitting.
+  let pendingImages = [];
+  let nextPendingId = 1;
 
   // Same source of truth as pyqbank.html's / admin-pdf-review.html's neetSyllabus, kept in
   // sync manually -- used to populate the chapter dropdown once subject + class are chosen.
@@ -284,31 +291,35 @@
     });
   }
 
-  async function onImageFileChange() {
-    const file = document.getElementById('imageFile').files[0];
-    const previewWrap = document.getElementById('imagePreviewWrap');
-    if (!file) {
-      selectedImageBase64 = null;
-      selectedImageFilename = null;
-      selectedImageMediaType = null;
-      previewWrap.style.display = 'none';
-      return;
-    }
-    await setSelectedImage(file, file.name);
+  function deriveNameFromFilename(filename) {
+    return (filename || '').replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').trim();
   }
 
-  async function setSelectedImage(file, filename) {
-    selectedImageFilename = filename || file.name || `pasted-image-${Date.now()}.png`;
-    selectedImageMediaType = file.type || 'image/png';
-    selectedImageBase64 = await fileToBase64(file);
-    document.getElementById('imagePreview').src = `data:${selectedImageMediaType};base64,${selectedImageBase64}`;
-    document.getElementById('imagePreviewWrap').style.display = 'block';
+  async function addPendingImage(file, filename) {
+    const base64 = await fileToBase64(file);
+    pendingImages.push({
+      id: nextPendingId++,
+      base64,
+      mediaType: file.type || 'image/png',
+      filename: filename || file.name || `pasted-image-${Date.now()}.png`,
+      name: deriveNameFromFilename(filename || file.name)
+    });
+  }
+
+  async function onImageFileChange() {
+    const files = Array.from(document.getElementById('imageFile').files || []);
+    document.getElementById('imageFile').value = ''; // so re-picking the same file(s) later still fires change
+    for (const file of files) {
+      await addPendingImage(file, file.name);
+    }
+    renderBatchGrid();
   }
 
   // Global paste-to-upload: only intercepts when the clipboard actually holds an image, so
   // normal text pasting anywhere else on the page (password field, name/description inputs)
   // is completely unaffected. Gated on the dashboard being visible so a paste before login
-  // (over the password gate) does nothing.
+  // (over the password gate) does nothing. Adds one more item to the batch rather than
+  // replacing whatever's already pending.
   document.addEventListener('paste', async function(e) {
     if (document.getElementById('dashboard').style.display !== 'block') return;
     const items = e.clipboardData && e.clipboardData.items;
@@ -318,13 +329,37 @@
         const file = item.getAsFile();
         if (!file) continue;
         e.preventDefault();
-        document.getElementById('imageFile').value = '';
-        await setSelectedImage(file, `pasted-image-${Date.now()}.png`);
-        setUploadStatus('Image pasted from clipboard.', 'info');
+        await addPendingImage(file, `Pasted image ${pendingImages.length + 1}`);
+        renderBatchGrid();
+        setUploadStatus('Image added to the batch from clipboard.', 'info');
         break;
       }
     }
   });
+
+  function renderBatchGrid() {
+    const grid = document.getElementById('batchGrid');
+    grid.innerHTML = pendingImages.map(item => `
+      <div class="batch-item" id="batch-item-${item.id}">
+        <button type="button" class="remove-btn" onclick="removeBatchItem(${item.id})" title="Remove">✕</button>
+        <img src="data:${item.mediaType};base64,${item.base64}" alt=""/>
+        <input type="text" value="${escapeHtml(item.name)}" placeholder="Name (required)" oninput="updateItemName(${item.id}, this.value)"/>
+        <div class="item-status" id="item-status-${item.id}"></div>
+      </div>
+    `).join('');
+    document.getElementById('uploadBtn').disabled = pendingImages.length === 0;
+    document.getElementById('uploadBtn').textContent = pendingImages.length > 1 ? `Upload All (${pendingImages.length})` : 'Upload';
+  }
+
+  function updateItemName(id, value) {
+    const item = pendingImages.find(p => p.id === id);
+    if (item) item.name = value;
+  }
+
+  function removeBatchItem(id) {
+    pendingImages = pendingImages.filter(p => p.id !== id);
+    renderBatchGrid();
+  }
 
   function setUploadStatus(text, cls) {
     const el = document.getElementById('uploadStatus');
@@ -333,63 +368,96 @@
     el.style.display = text ? 'block' : 'none';
   }
 
-  async function uploadDiagram() {
-    const subject = document.getElementById('subjectInput').value;
-    const cls = document.getElementById('classInput').value;
-    const chapter = document.getElementById('chapterInput').value;
-    const name = document.getElementById('nameInput').value.trim();
-    const description = document.getElementById('descriptionInput').value.trim();
-    const subtopic = document.getElementById('subtopicInput').value.trim();
+  function setItemStatus(id, text, cls) {
+    const el = document.getElementById(`item-status-${id}`);
+    if (el) { el.textContent = text; el.className = 'item-status ' + (cls || ''); }
+    const card = document.getElementById(`batch-item-${id}`);
+    if (card) card.classList.toggle('upload-failed', cls === 'error');
+    if (card) card.classList.toggle('upload-success', cls === 'success');
+  }
 
-    if (!subject || !chapter || !name || !selectedImageBase64) {
-      setUploadStatus('Subject, chapter, name, and an image are all required.', 'error');
-      return;
-    }
-
-    const uploadBtn = document.getElementById('uploadBtn');
-    uploadBtn.disabled = true;
-    setUploadStatus('Uploading image...', 'info');
-
+  // One item's full upload (image bytes -> storage, then the diagrams row). Runs independently
+  // per item so a failure on one image doesn't block or roll back the others in the batch.
+  async function uploadOneImage(item, shared) {
+    setItemStatus(item.id, 'Uploading...', '');
     try {
       const uploadRes = await fetch(`${API_BASE}/admin/diagram-upload`, {
         method: 'POST',
         headers: authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ filename: selectedImageFilename, data: selectedImageBase64, media_type: selectedImageMediaType })
+        body: JSON.stringify({ filename: item.filename, data: item.base64, media_type: item.mediaType })
       });
-      if (uploadRes.status === 401) { logout(); return; }
-      if (!uploadRes.ok) { setUploadStatus(await describeHttpError(uploadRes), 'error'); return; }
+      if (uploadRes.status === 401) return { id: item.id, error: 'unauthorized' };
+      if (!uploadRes.ok) return { id: item.id, error: await describeHttpError(uploadRes) };
       const uploadData = await uploadRes.json();
-      if (uploadData.error) { setUploadStatus(uploadData.error, 'error'); return; }
+      if (uploadData.error) return { id: item.id, error: uploadData.error };
 
-      setUploadStatus('Saving diagram record...', 'info');
+      setItemStatus(item.id, 'Saving...', '');
       const createRes = await fetch(`${API_BASE}/admin/diagrams-create`, {
         method: 'POST',
         headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
-          subject, class: cls ? parseInt(cls, 10) : null, chapter, subtopic: subtopic || null, name,
-          description: description || null, image_url: uploadData.url
+          subject: shared.subject, class: shared.cls, chapter: shared.chapter,
+          subtopic: shared.subtopic, name: item.name.trim(),
+          description: shared.description, image_url: uploadData.url
         })
       });
-      if (createRes.status === 401) { logout(); return; }
-      if (!createRes.ok) { setUploadStatus(await describeHttpError(createRes), 'error'); return; }
+      if (createRes.status === 401) return { id: item.id, error: 'unauthorized' };
+      if (!createRes.ok) return { id: item.id, error: await describeHttpError(createRes) };
       const createData = await createRes.json();
-      if (createData.error) { setUploadStatus(createData.error, 'error'); return; }
+      if (createData.error) return { id: item.id, error: createData.error };
 
-      setUploadStatus('Uploaded successfully.', 'success');
-      document.getElementById('nameInput').value = '';
+      setItemStatus(item.id, 'Uploaded', 'success');
+      return { id: item.id, success: true };
+    } catch (e) {
+      return { id: item.id, error: 'Could not reach server.' };
+    }
+  }
+
+  async function uploadDiagrams() {
+    const subject = document.getElementById('subjectInput').value;
+    const cls = document.getElementById('classInput').value;
+    const chapter = document.getElementById('chapterInput').value;
+    const description = document.getElementById('descriptionInput').value.trim();
+    const subtopic = document.getElementById('subtopicInput').value.trim();
+
+    if (!subject || !chapter || pendingImages.length === 0) {
+      setUploadStatus('Subject, chapter, and at least one image are all required.', 'error');
+      return;
+    }
+    const unnamed = pendingImages.filter(p => !p.name.trim());
+    if (unnamed.length > 0) {
+      setUploadStatus('Every image needs a name -- fill in the blank one(s) below.', 'error');
+      unnamed.forEach(p => setItemStatus(p.id, 'Name required', 'error'));
+      return;
+    }
+
+    const shared = {
+      subject, cls: cls ? parseInt(cls, 10) : null, chapter,
+      subtopic: subtopic || null, description: description || null
+    };
+
+    const uploadBtn = document.getElementById('uploadBtn');
+    uploadBtn.disabled = true;
+    setUploadStatus(`Uploading ${pendingImages.length} image${pendingImages.length === 1 ? '' : 's'}...`, 'info');
+
+    const results = await Promise.all(pendingImages.map(item => uploadOneImage(item, shared)));
+    if (results.some(r => r.error === 'unauthorized')) return logout();
+
+    const failed = results.filter(r => r.error);
+    const succeededIds = new Set(results.filter(r => r.success).map(r => r.id));
+    pendingImages = pendingImages.filter(p => !succeededIds.has(p.id));
+
+    if (failed.length === 0) {
+      setUploadStatus(`All ${results.length} image${results.length === 1 ? '' : 's'} uploaded successfully.`, 'success');
       document.getElementById('descriptionInput').value = '';
       document.getElementById('subtopicInput').value = '';
-      document.getElementById('imageFile').value = '';
-      document.getElementById('imagePreviewWrap').style.display = 'none';
-      selectedImageBase64 = null;
-      selectedImageFilename = null;
-      selectedImageMediaType = null;
-      loadDiagrams();
-    } catch (e) {
-      setUploadStatus('Could not reach server.', 'error');
-    } finally {
-      uploadBtn.disabled = false;
+    } else {
+      setUploadStatus(`${succeededIds.size} uploaded, ${failed.length} failed (see below) -- fix and retry the ones marked in red.`, 'error');
     }
+    renderBatchGrid(); // rebuilds each item's status div, so failed items' red status is set after this, not before
+    failed.forEach(r => setItemStatus(r.id, r.error, 'error'));
+    loadDiagrams();
+    uploadBtn.disabled = pendingImages.length === 0;
   }
 
   // ---------------- List ----------------
