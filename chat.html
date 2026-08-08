@@ -1889,7 +1889,10 @@ let selectedImages = [];
                       renderStreamingText(solDiv, fullText);
                       lastRenderTime = now;
                     }
-                    await new Promise(r => setTimeout(r, 1));
+                    // Same fix as streamAIResponse's main loop -- yielding every character
+                    // (rather than just occasionally, to let the browser paint between the
+                    // already-throttled renders above) cost 8-12+ real seconds per answer.
+                    if (ci % 50 === 0) await new Promise(r => setTimeout(r, 1));
                   }
                 }
                 solDiv.innerHTML = parseWithMath(fullText);
@@ -3235,7 +3238,13 @@ function plainTextFromMarkdown(text) {
               // other's in-flight animation and look like jittery flicker.
               scrollBottom();
             }
-            await new Promise(r => setTimeout(r, 1));
+            // Yielding here is only to let the browser get a paint in between throttled
+            // renders above, not to pace the reveal -- doing it every character (previously
+            // await'd unconditionally) cost 8-12+ real seconds per answer once you account for
+            // setTimeout's actual ~4ms floor on rapidly-repeated calls (browsers clamp nested/
+            // rapid timers well above the requested 1ms), on top of the 100ms render throttle
+            // already doing the real pacing work.
+            if (i % 50 === 0) await new Promise(r => setTimeout(r, 1));
           }
         }
         removeTypingRow(); // safety net -- covers a done-with-no-value edge case (empty response)

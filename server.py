@@ -800,6 +800,14 @@ async def get_student_context(user_id: str) -> str:
 async def _empty_str():
     return ""
 
+# chat.html's streamAIResponse sends this exact string as `text` when an image doubt has no
+# real typed question (`text || 'Describe this image...'`) -- must stay in sync with that
+# literal. A placeholder like this has no real topic for NCERT search to match against, so
+# running it just adds latency (embedding + vector search) and risks stuffing irrelevant NCERT
+# content into the prompt alongside the image. Only skipped when this exact placeholder is the
+# whole text -- any real typed question alongside an image still gets a real NCERT search.
+IMAGE_ONLY_PLACEHOLDER_TEXT = "Describe this image and answer any NEET related content in it."
+
 async def stream_response(text: str, history: list = [], images: list = [], pdf: str = None, answer_style: str = "detailed", student_name: str = "", language: str = "en", user_id: str = "", personalize: bool = True, skip_cache: bool = False, ip: str = ""):
     images = (images or [])[:3]
     import hashlib
@@ -825,9 +833,15 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
             yield cached[0]["answer"]
             return
     # Student context and NCERT search are independent of each other -- run them concurrently
-    # instead of stacking their latency sequentially.
+    # instead of stacking their latency sequentially. Skip the search entirely for an image-only
+    # doubt (see IMAGE_ONLY_PLACEHOLDER_TEXT above) -- there's no real question text to search on.
     student_context_coro = get_student_context(user_id) if (personalize and user_id) else _empty_str()
-    results, student_context = await asyncio.gather(search_ncert(text), student_context_coro)
+    skip_ncert_search = bool(images) and text.strip() == IMAGE_ONLY_PLACEHOLDER_TEXT
+    if skip_ncert_search:
+        results = []
+        student_context = await student_context_coro
+    else:
+        results, student_context = await asyncio.gather(search_ncert(text), student_context_coro)
 
     if results:
         context = "\n\n".join([
