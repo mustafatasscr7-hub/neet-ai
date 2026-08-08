@@ -483,8 +483,12 @@
       if (items.length < 3) return null;
       // Guards against a compact answer-option like "(i) -> (ii) -> (iii)" (a scrambled/
       // identity-order ordering CHOICE, not a real list of steps) -- real steps always have
-      // actual words after the marker; a bare marker/arrow chain never does.
-      const hasRealContent = items.some(item => /[a-zA-Z]{2,}/.test(item.replace(SEQ_ITEM_RE, '')));
+      // actual words after the marker; a bare marker/arrow chain never does. Must be EVERY
+      // item, not just some -- "(a), (b), (c) Only" used to pass here because the trailing
+      // "Only" on the last item alone satisfied a .some() check, wrongly exploding a one-line
+      // answer combo like "(b), (c) Only" into a 3-line list. Genuine sequence questions have
+      // real words after every marker, not just the last one.
+      const hasRealContent = items.every(item => /[a-zA-Z]{2,}/.test(item.replace(SEQ_ITEM_RE, '')));
       return hasRealContent ? { preamble, items } : null;
     }
 
