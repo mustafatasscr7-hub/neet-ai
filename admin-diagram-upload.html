@@ -46,6 +46,8 @@
   .scan-btn { background: #4f8ef7; border: none; border-radius: 8px; padding: 10px 20px; color: white; font-size: 13px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
   .scan-btn:hover:not(:disabled) { background: #3b7de8; }
   .scan-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .paste-hint { font-size: 11px; color: #555; margin-top: 6px; }
+  .paste-hint kbd { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 4px; padding: 1px 5px; font-family: 'Inter', sans-serif; font-size: 10px; color: #999; }
 
   #imagePreviewWrap { display: none; margin-top: 12px; }
   #imagePreviewWrap img { max-width: 220px; max-height: 220px; border-radius: 8px; border: 1px solid #2a2a2a; display: block; }
@@ -136,6 +138,7 @@
         <input type="file" id="imageFile" accept="image/png,image/jpeg,image/webp" onchange="onImageFileChange()"/>
         <button type="button" class="scan-btn" id="uploadBtn" onclick="uploadDiagram()">Upload</button>
       </div>
+      <div class="paste-hint">or copy an image and press <kbd>Ctrl</kbd>+<kbd>V</kbd> to paste it</div>
       <div id="imagePreviewWrap"><img id="imagePreview" alt="Preview"/></div>
     </div>
 
@@ -285,12 +288,37 @@
       previewWrap.style.display = 'none';
       return;
     }
-    selectedImageFilename = file.name;
+    await setSelectedImage(file, file.name);
+  }
+
+  async function setSelectedImage(file, filename) {
+    selectedImageFilename = filename || file.name || `pasted-image-${Date.now()}.png`;
     selectedImageMediaType = file.type || 'image/png';
     selectedImageBase64 = await fileToBase64(file);
     document.getElementById('imagePreview').src = `data:${selectedImageMediaType};base64,${selectedImageBase64}`;
-    previewWrap.style.display = 'block';
+    document.getElementById('imagePreviewWrap').style.display = 'block';
   }
+
+  // Global paste-to-upload: only intercepts when the clipboard actually holds an image, so
+  // normal text pasting anywhere else on the page (password field, name/description inputs)
+  // is completely unaffected. Gated on the dashboard being visible so a paste before login
+  // (over the password gate) does nothing.
+  document.addEventListener('paste', async function(e) {
+    if (document.getElementById('dashboard').style.display !== 'block') return;
+    const items = e.clipboardData && e.clipboardData.items;
+    if (!items) return;
+    for (const item of items) {
+      if (item.type && item.type.startsWith('image/')) {
+        const file = item.getAsFile();
+        if (!file) continue;
+        e.preventDefault();
+        document.getElementById('imageFile').value = '';
+        await setSelectedImage(file, `pasted-image-${Date.now()}.png`);
+        setUploadStatus('Image pasted from clipboard.', 'info');
+        break;
+      }
+    }
+  });
 
   function setUploadStatus(text, cls) {
     const el = document.getElementById('uploadStatus');
