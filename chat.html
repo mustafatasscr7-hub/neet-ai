@@ -283,12 +283,24 @@
     .nudge-login-btn { width: 100%; background: transparent; border: 1px solid #3a3a3a; color: #ececec; padding: 8px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 500; font-family: 'Inter', sans-serif; transition: all 0.2s; }
     .nudge-login-btn:hover { background: #222; }
 
-    .main { flex: 1; display: flex; flex-direction: column; background: #0d0d0d; overflow: hidden; }
+    .main { position: relative; flex: 1; display: flex; flex-direction: column; background: #0d0d0d; overflow: hidden; }
     .header { padding: 14px 24px; border-bottom: 1px solid #1a1a1a; display: flex; align-items: center; justify-content: space-between; background: #0d0d0d; }
 
     .chat-window { flex: 1; overflow-y: auto; padding: 32px 0; display: flex; flex-direction: column; scroll-behavior: smooth; }
     .chat-window::-webkit-scrollbar { width: 4px; }
     .chat-window::-webkit-scrollbar-thumb { background: #2a2a2a; border-radius: 4px; }
+
+    /* A sibling of .chat-window (not a child of it) anchored to .main instead -- a child of a
+       scrolling element positioned absolute is still placed relative to that element's full
+       SCROLLABLE CONTENT height, not its visible viewport, so with many messages it would render
+       far below what's actually on screen. .main itself never scrolls, so anchoring here keeps
+       this genuinely fixed in the viewport regardless of .chat-window's internal scroll offset. */
+    .scroll-to-bottom-btn { display: none; position: absolute; bottom: 110px; left: 50%; transform: translateX(-50%); width: 40px; height: 40px; border-radius: 50%; background: #1a1a1a; border: 1px solid #4f8ef7; color: #4f8ef7; align-items: center; justify-content: center; cursor: pointer; box-shadow: 0 4px 14px rgba(0,0,0,0.4); z-index: 50; transition: background 0.15s, transform 0.15s; }
+    .scroll-to-bottom-btn:hover { background: #4f8ef720; transform: translateX(-50%) translateY(-2px); }
+    .scroll-to-bottom-btn.has-new { background: #4f8ef7; border-color: #4f8ef7; color: #fff; animation: scrollBtnPulse 1.6s ease-in-out infinite; }
+    @keyframes scrollBtnPulse { 0%, 100% { box-shadow: 0 4px 14px rgba(79,142,247,0.4); } 50% { box-shadow: 0 4px 22px rgba(79,142,247,0.7); } }
+    body.light-mode .scroll-to-bottom-btn { background: #ffffff !important; border-color: #4f8ef750 !important; color: #4f8ef7 !important; box-shadow: 0 4px 14px rgba(0,0,0,0.12) !important; }
+    body.light-mode .scroll-to-bottom-btn:hover { background: #4f8ef710 !important; }
 
     .welcome { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 24px; padding: 40px; text-align: center; }
     .welcome h2 { font-size: 26px; font-weight: 700; color: #ffffff; letter-spacing: -0.5px; }
@@ -628,7 +640,9 @@
       </div>
     </div>
 
-
+    <button type="button" id="scrollToBottomBtn" class="scroll-to-bottom-btn" onclick="scrollToBottomManual()" title="Scroll to latest message">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+    </button>
 
     <div class="input-area" id="inputArea" style="display:none">
 <div class="input-wrapper">
@@ -720,7 +734,36 @@
       const atBottom = chatWindow.scrollHeight - chatWindow.scrollTop - chatWindow.clientHeight < 50;
       if (!atBottom && isStreaming) { userScrolled = true; }
       else if (atBottom) { userScrolled = false; }
+      // Independent of userScrolled/isStreaming above -- that flag only tracks "did the student
+      // scroll away DURING a live response", not "are they at the bottom right now" in general
+      // (e.g. reading old messages with nothing streaming). The button's own visibility is based
+      // purely on real scroll position, computed fresh here on every scroll event.
+      updateScrollToBottomBtn(false);
     });
+
+    // highlightNew: true when called because new content just arrived while the student is
+    // scrolled away (see scrollBottom()'s else-branch below) -- gives the button the same
+    // pulsing accent color as a "new message" indicator, distinct from a student just idly
+    // scrolled up with nothing new below.
+    function updateScrollToBottomBtn(highlightNew) {
+      const btn = document.getElementById('scrollToBottomBtn');
+      if (!btn) return;
+      const atBottom = chatWindow.scrollHeight - chatWindow.scrollTop - chatWindow.clientHeight < 50;
+      if (atBottom) {
+        btn.style.display = 'none';
+        btn.classList.remove('has-new');
+      } else {
+        btn.style.display = 'flex';
+        if (highlightNew) btn.classList.add('has-new');
+      }
+    }
+
+    function scrollToBottomManual() {
+      userScrolled = false; // resumes auto-follow for whatever streams next, matches clicking
+                             // this button meaning "I'm back to following the conversation"
+      chatWindow.scrollTo({ top: chatWindow.scrollHeight, behavior: 'smooth' });
+      updateScrollToBottomBtn(false);
+    }
 
   function updateCountdown() {
       const neetDate = new Date('2027-05-04T00:00:00');
@@ -779,7 +822,13 @@ function toggleSearchChats() {
     });
 
     function scrollBottom() {
-      if (!userScrolled) chatWindow.scrollTo({ top: chatWindow.scrollHeight, behavior: 'smooth' });
+      if (!userScrolled) {
+        chatWindow.scrollTo({ top: chatWindow.scrollHeight, behavior: 'smooth' });
+      } else {
+        // New content landed while the student is reading older messages further up -- don't
+        // yank them down to it, just flag the button so they know it's there.
+        updateScrollToBottomBtn(true);
+      }
     }
 
    function toggleSidebar() {
