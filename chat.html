@@ -1794,6 +1794,7 @@ let selectedImages = [];
           saveBtn.onclick = async function() {
             const { data: { session } } = await client.auth.getSession();
             if (!session) { alert('Please log in to save questions.'); return; }
+            saveBtn.disabled = true;
             const { error: saveError } = await client.from('saved_questions').insert({
               user_id: session.user.id,
               question_id: q.id,
@@ -1813,7 +1814,13 @@ let selectedImages = [];
               year: q.year,
               source: 'PYQ Modal'
             });
-            if (saveError) { alert('Failed to save.'); return; }
+            if (saveError) {
+              saveBtn.textContent = '❌ Failed, retry';
+              saveBtn.style.borderColor = '#ef4444';
+              saveBtn.style.color = '#ef4444';
+              saveBtn.disabled = false;
+              return;
+            }
             saveBtn.textContent = '✅ Saved';
             saveBtn.style.borderColor = '#4ade80';
             saveBtn.style.color = '#4ade80';

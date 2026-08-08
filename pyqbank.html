@@ -933,7 +933,7 @@ ${q.diagram_url ? `<img class="q-diagram-img" src="${q.diagram_url}">` : ''}
           <div class="q-options">${opts}</div>
           <div class="q-actions">
             <button class="sol-btn" onclick="toggleSolution(this, '${q.id}', ${JSON.stringify(q).replace(/"/g, '&quot;')})">${t('pyqbank','showSolution')}</button>
-            <button class="sol-btn" style="border-color:#f97316;color:#f97316;" onclick="saveQuestion(${JSON.stringify(q).replace(/"/g, '&quot;')}, 'PYQ Bank')">${t('pyqbank','save')}</button>
+            <button class="sol-btn" style="border-color:#f97316;color:#f97316;" onclick="saveQuestion(${JSON.stringify(q).replace(/"/g, '&quot;')}, 'PYQ Bank', this)">${t('pyqbank','save')}</button>
           </div>
           <div class="sol-div" id="sol-${q.id}"></div>
           <div style="display:flex;justify-content:space-between;margin-top:20px;">
@@ -1208,9 +1208,10 @@ ${q.diagram_url ? `<img class="q-diagram-img" src="${q.diagram_url}">` : ''}
       }
     }
 
-    async function saveQuestion(q, source) {
+    async function saveQuestion(q, source, btn) {
       const { data: { session } } = await client.auth.getSession();
       if (!session) { alert(t('pyqbank','pleaseLoginSave')); return; }
+      if (btn) btn.disabled = true;
       const { error } = await client.from('saved_questions').insert({
         user_id: session.user.id,
         question_id: q.id,
@@ -1230,8 +1231,21 @@ ${q.diagram_url ? `<img class="q-diagram-img" src="${q.diagram_url}">` : ''}
         year: q.year,
         source: source
       });
-      if (error) { alert(t('pyqbank','failedSaveQuestion')); return; }
-      alert(t('pyqbank','questionSaved'));
+      if (!btn) return; // no button reference passed -- fall back silently, nothing to update
+      if (error) {
+        btn.textContent = t('pyqbank', 'saveFailedBtn');
+        btn.style.borderColor = '#ef4444';
+        btn.style.color = '#ef4444';
+        btn.disabled = false; // let them retry
+        return;
+      }
+      btn.textContent = t('pyqbank', 'saved');
+      btn.style.borderColor = '#4ade80';
+      btn.style.color = '#4ade80';
+      // Stays disabled -- a real unique constraint (user_id, question_id) already blocks a
+      // duplicate row at the DB level, but re-enabling would mean a second accidental click
+      // shows this button's own "Failed, retry" error state on a question that's actually
+      // already saved fine, which is more confusing than just leaving it done.
     }
 
     showSubjects();

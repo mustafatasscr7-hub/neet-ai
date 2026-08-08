@@ -309,6 +309,8 @@ if (rankBtn) rankBtn.href = `./rank-predictor.html?score=${Math.max(0, data.scor
       const client = createClient('https://hvhnfttrfouajlyhvunq.supabase.co', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh2aG5mdHRyZm91YWpseWh2dW5xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg5NDI1NTIsImV4cCI6MjA5NDUxODU1Mn0.8RaSu5yiTpQCEUGKrFO2y6oiRXSqdBehIz933j9Z7WA');
       const { data: { session } } = await client.auth.getSession();
       if (!session) { alert('Please log in to save questions.'); return; }
+      const btn = document.getElementById('save-' + i);
+      if (btn) btn.disabled = true;
       const { error } = await client.from('saved_questions').insert({
         user_id: session.user.id,
         question_id: q.id,
@@ -328,8 +330,10 @@ if (rankBtn) rankBtn.href = `./rank-predictor.html?score=${Math.max(0, data.scor
         year: q.year,
         source: 'Mock Test Results'
       });
-      if (error) { alert('Failed to save.'); return; }
-      const btn = document.getElementById('save-' + i);
+      if (error) {
+        if (btn) { btn.textContent = '❌ Failed, retry'; btn.style.borderColor = '#ef4444'; btn.style.color = '#ef4444'; btn.disabled = false; }
+        return;
+      }
       if (btn) { btn.textContent = '✅ Saved'; btn.style.borderColor = '#4ade80'; btn.style.color = '#4ade80'; btn.disabled = true; }
     }
 

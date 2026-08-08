@@ -1702,6 +1702,8 @@
       const q = questions[index];
       const { data: { session } } = await client.auth.getSession();
       if (!session) { alert('Please log in to save questions.'); return; }
+      const saveBtn = document.getElementById('saveBtn-' + index);
+      if (saveBtn) saveBtn.disabled = true;
       const { error } = await client.from('saved_questions').insert({
         user_id: session.user.id,
         question_id: q.id,
@@ -1721,9 +1723,16 @@
         year: q.year,
         source: 'Personalised Test'
       });
-      if (error) { alert('Failed to save.'); return; }
+      if (error) {
+        if (saveBtn) {
+          saveBtn.textContent = '❌ Failed, retry';
+          saveBtn.style.borderColor = '#ef4444';
+          saveBtn.style.color = '#ef4444';
+          saveBtn.disabled = false;
+        }
+        return;
+      }
       savedQuestions.add(index);
-      const saveBtn = document.getElementById('saveBtn-' + index);
       if (saveBtn) {
         saveBtn.textContent = '✅ Saved';
         saveBtn.style.borderColor = '#4ade80';
