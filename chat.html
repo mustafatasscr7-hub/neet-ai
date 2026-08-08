@@ -363,6 +363,19 @@
     .send-btn svg { width: 16px; height: 16px; fill: white; }
     .input-hint { text-align: center; font-size: 11px; color: #333; margin-top: 10px; }
     .answer-actions-row { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; }
+    /* NEET Importance + Chapter metadata row -- extracted from the raw "NEET Importance: N/5"
+       and "Chapter: ..." lines DeepSeek outputs and re-rendered here as compact styled elements
+       instead of the raw text, decoupling generation from presentation. Real ★ glyphs (not the
+       ⭐ emoji) since only a real glyph's color is overridable via CSS -- an emoji always renders
+       in its platform's fixed color regardless of any `color` set on it. */
+    .answer-meta-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+    .answer-stars { font-size: 12px; letter-spacing: 1px; color: #b8963f; }
+    .answer-stars .star-empty { color: #45403a; }
+    .answer-rating-num { font-size: 10.5px; color: #666; }
+    .answer-chapter-pill { display: inline-block; padding: 1.5px 7px; border-radius: 999px; font-size: 10.5px; font-weight: 500; background: rgba(79,142,247,0.14); color: rgb(79,142,247); border: 1px solid rgba(79,142,247,0.3); }
+    body.light-mode .answer-stars { color: #9c7a26 !important; }
+    body.light-mode .answer-stars .star-empty { color: #d8d2c4 !important; }
+    body.light-mode .answer-rating-num { color: #7a7a85 !important; }
     .pyq-btn { margin: 0; background: transparent; border: 1px solid #4f8ef7; color: #4f8ef7; padding: 7px 14px; border-radius: 8px; cursor: pointer; font-size: 12px; font-family: 'Inter', sans-serif; transition: all 0.2s; }
     .pyq-btn:hover { background: #4f8ef720; }
     .diagram-btn { margin: 0; background: transparent; border: 1px solid #a78bfa; color: #a78bfa; padding: 7px 14px; border-radius: 8px; cursor: pointer; font-size: 12px; font-family: 'Inter', sans-serif; transition: all 0.2s; }
@@ -1003,6 +1016,49 @@ let selectedImages = [];
       };
 
       recognition.start();
+    }
+
+    // Pulls the "NEET Importance: N/5" and "Chapter: ..." lines DeepSeek's /chat prompt always
+    // puts at the top of a doubt answer out of the raw text, so they can be re-rendered as a
+    // compact custom row (muted-gold stars + a chapter pill) instead of showing DeepSeek's raw
+    // text verbatim. Real output isn't fully consistent (markdown bold sometimes wraps "Chapter:",
+    // brackets are inconsistent) so this matches loosely rather than expecting an exact format.
+    // Returns unchanged text with no metaHtml when the lines aren't found (e.g. history rows from
+    // before this existed, or a non-doubt AI message like an error string).
+    function extractAnswerMeta(text) {
+      if (!text) return { cleanText: text, metaHtml: '' };
+      const ratingMatch = text.match(/NEET Importance:\s*\[?(\d)\]?\s*\/\s*5/i);
+      const chapterMatch = text.match(/📚?\s*\**\s*Chapter:\**\s*\[?([^\n\]]+)\]?/i);
+      if (!ratingMatch && !chapterMatch) return { cleanText: text, metaHtml: '' };
+
+      const cleanText = text
+        .replace(/NEET Importance:\s*\[?\d\]?\s*\/\s*5\s*\n*/i, '')
+        .replace(/📚?\s*\**\s*Chapter:\**\s*\[?[^\n\]]+\]?\s*\n*/i, '')
+        .replace(/^\s+/, '');
+
+      let starsHtml = '';
+      if (ratingMatch) {
+        const rating = Math.max(1, Math.min(5, parseInt(ratingMatch[1], 10)));
+        const filled = '★'.repeat(rating);
+        const empty = '<span class="star-empty">' + '★'.repeat(5 - rating) + '</span>';
+        starsHtml = `<span class="answer-stars">${filled}${empty}</span><span class="answer-rating-num">${rating}/5</span>`;
+      }
+
+      let chapterHtml = '';
+      if (chapterMatch) {
+        // Same "text after the last dash separator" convention server.py's
+        // extract_chapter_candidate() already uses for diagram matching, so the pill shows just
+        // the chapter name ("Cell: The Unit of Life") rather than the full "NCERT Class 11,
+        // Chapter 8 — Cell: The Unit of Life" string.
+        let chapter = chapterMatch[1].trim();
+        for (const sep of ['—', '–', ' - ']) {
+          if (chapter.includes(sep)) { chapter = chapter.split(sep).pop().trim(); break; }
+        }
+        if (chapter) chapterHtml = `<span class="answer-chapter-pill">${escapeHtml(chapter)}</span>`;
+      }
+
+      const metaHtml = (starsHtml || chapterHtml) ? `<div class="answer-meta-row">${starsHtml}${chapterHtml}</div>` : '';
+      return { cleanText, metaHtml };
     }
 
     function parseWithMath(text) {
@@ -1993,7 +2049,8 @@ let selectedImages = [];
       const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
       if (role === 'ai') {
-        bubble.innerHTML = parseWithMath(text);
+        const { cleanText, metaHtml } = extractAnswerMeta(text);
+        bubble.innerHTML = metaHtml + parseWithMath(cleanText);
         renderMermaidBlocksIn(bubble);
 
         if (userQuestion) {
@@ -3160,7 +3217,8 @@ function plainTextFromMarkdown(text) {
         removeTypingRow(); // safety net -- covers a done-with-no-value edge case (empty response)
         ensureAiRow();
 
-        bubble.innerHTML = parseWithMath(fullText);
+        const { cleanText: cleanFullText, metaHtml } = extractAnswerMeta(fullText);
+        bubble.innerHTML = metaHtml + parseWithMath(cleanFullText);
         await renderMermaidBlocksIn(bubble);
 
         const actionsRow = document.createElement('div');
