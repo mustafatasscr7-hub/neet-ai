@@ -368,6 +368,13 @@
     .diagram-btn { margin: 0; background: transparent; border: 1px solid #a78bfa; color: #a78bfa; padding: 7px 14px; border-radius: 8px; cursor: pointer; font-size: 12px; font-family: 'Inter', sans-serif; transition: all 0.2s; }
     .diagram-btn:hover:not(:disabled) { background: #a78bfa20; }
     .diagram-btn:disabled { cursor: default; opacity: 0.75; }
+    .alt-method-wrap { margin-top: 10px; }
+    .alt-method-toggle { margin: 0; background: transparent; border: none; color: #888; padding: 4px 0; cursor: pointer; font-size: 12px; font-family: 'Inter', sans-serif; text-decoration: underline; text-underline-offset: 2px; }
+    .alt-method-toggle:hover { color: #ccc; }
+    .alt-method-content { margin-top: 8px; padding: 12px 14px; border-left: 2px solid #4f8ef7; background: rgba(255,255,255,0.03); border-radius: 8px; font-size: var(--chat-font-size, 14px); line-height: 1.7; }
+    body.light-mode .alt-method-toggle { color: #6b6b76 !important; }
+    body.light-mode .alt-method-toggle:hover { color: #16161d !important; }
+    body.light-mode .alt-method-content { background: rgba(0,0,0,0.025) !important; }
     .pyq-results { margin-top: 12px; border-top: 1px solid #1e1e1e; padding-top: 12px; }
     .pyq-item { padding: 8px 0; border-bottom: 1px solid #1a1a1a; font-size: 13px; color: #aaa; line-height: 1.5; }
    .pyq-year { color: #4f8ef7; font-weight: 600; margin-right: 8px; }
@@ -2962,6 +2969,56 @@ function plainTextFromMarkdown(text) {
       clearQuotedContext();
     }
 
+    // Multiple Solution Methods: fired after the primary answer finishes streaming, never
+    // before -- this must never add latency to the primary answer itself. Checked/cached once
+    // per question_hash server-side (see /chat-alternate-method), so a repeat view of the same
+    // question costs zero extra DeepSeek calls. Returns '' both when there's genuinely no
+    // alternate method and when the request fails -- either way, no button should appear.
+    async function ensureAlternateMethod(questionText, primaryAnswer, language) {
+      try {
+        const { data: { session } } = await client.auth.getSession();
+        const res = await fetch(`${API_BASE}/chat-alternate-method`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            question: questionText,
+            primary_answer: primaryAnswer,
+            language,
+            user_id: session?.user?.id || ''
+          })
+        });
+        const data = await res.json();
+        return data.alternate_method || '';
+      } catch (e) {
+        return '';
+      }
+    }
+
+    // Appends the collapsed "Show another way to solve this" toggle below an answer bubble --
+    // only ever called when a genuine alternate method text is already in hand, so there's no
+    // empty-state to handle here.
+    function appendAlternateMethodToggle(bubble, altText) {
+      const wrap = document.createElement('div');
+      wrap.className = 'alt-method-wrap';
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'alt-method-toggle';
+      btn.textContent = t('chat', 'showAnotherWay');
+      const content = document.createElement('div');
+      content.className = 'alt-method-content';
+      content.style.display = 'none';
+      content.innerHTML = parseWithMath(altText);
+      btn.onclick = async function() {
+        const opening = content.style.display === 'none';
+        content.style.display = opening ? 'block' : 'none';
+        btn.textContent = opening ? t('chat', 'hideAlternateMethod') : t('chat', 'showAnotherWay');
+        if (opening) await renderMermaidBlocksIn(content);
+      };
+      wrap.appendChild(btn);
+      wrap.appendChild(content);
+      bubble.appendChild(wrap);
+    }
+
     // Shared by sendMessage / retryMessage / editMessage: calls /chat for questionText
     // (assumed to already be the last entry in currentConversation), streams the
     // response into a new AI bubble, and persists the updated conversation.
@@ -3136,6 +3193,15 @@ function plainTextFromMarkdown(text) {
         actionsRow.appendChild(pyqBtn);
 
         bubble.appendChild(actionsRow);
+
+        // Fire-and-forget, deliberately not awaited -- must never delay the primary answer's
+        // own finish (usage banner refresh, scroll settle, send button re-enable, etc.). Skipped
+        // for image/PDF doubts since those never go through the shared cache this reuses anyway.
+        if (!(options.images && options.images.length) && !options.pdf) {
+          ensureAlternateMethod(questionText, fullText, getLang()).then(altText => {
+            if (altText) appendAlternateMethodToggle(bubble, altText);
+          });
+        }
 
         const aiTimeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         aiRow.querySelector('.message-content').appendChild(buildActionsDiv('ai', aiTimeStr));

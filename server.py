@@ -2050,6 +2050,166 @@ async def ensure_correct_answer_endpoint(req: EnsureCorrectAnswerRequest, _: Non
 
     return {"correct_answer": label}
 
+# ---------- Multiple Solution Methods (alternate solving approach, on-demand + permanently cached) ----------
+
+def generate_alternate_method(question: str, primary_answer: str, options_context: str = "", language: str = "en"):
+    """Single DeepSeek call that both decides whether a genuinely different, pedagogically valid
+    method exists for this specific question AND generates it if so -- not every doubt has a real
+    second method (most don't), so this must not fabricate one just to fill the feature.
+
+    The judgment/content split is a deliberate two-line protocol (ALTERNATE EXISTS / NO ALTERNATE
+    on line 1, content after) rather than a single "reply NONE or the answer" instruction -- live
+    testing during development found the single-instruction version defaulted to NONE almost every
+    time, even on textbook energy-vs-kinematics cases, because with thinking disabled the model
+    had no room to reason before committing to the cheap token. Forcing an explicit judgment line
+    first measurably fixed that without needing to enable thinking.
+
+    Returns (text, tokens_used) where text is '' (not None) when the model determined no genuine
+    alternate exists -- a real, cacheable verdict, not a retry state -- or (None, 0) on a hard
+    failure the caller must NOT cache, so it's retried next time instead of permanently
+    remembering a failure as "no alternate exists"."""
+    lang_instruction = (
+        "\n\nRespond ONLY in Hindi (Devanagari script) -- every word in Hindi, no English words or "
+        "Hinglish mixing. The ONLY exceptions are LaTeX/KaTeX math notation, chemical formulas/"
+        "symbols, and units, which stay exactly as-is."
+    ) if language == "hi" else ""
+    try:
+        response = deepseek_client.messages.create(
+            model="deepseek-v4-flash",
+            max_tokens=800,
+            thinking={"type": "disabled"},
+            system=f"""You are a NEET exam expert reviewing a solved question. This feature only applies to numerical or derivation-style questions that involve a calculation or step-by-step derivation to reach the answer. If the question is a simple factual recall, identification, or definition question with no calculation/derivation involved (e.g. "which organelle is X", "what is the term for Y", "name the scientist who discovered Z"), always reply NO ALTERNATE -- restating supporting facts through a different angle is NOT a genuine alternate solving method, only a real second calculation or derivation path counts.
+
+For questions that DO involve a calculation or derivation, find a genuinely different valid method to solve the SAME question, starting from a different core PHYSICAL OR CHEMICAL PRINCIPLE than the one already used (e.g. energy conservation instead of force/kinematics, mole method instead of equivalent-weight method, angular momentum instead of force analysis).
+
+A valid alternate must use a genuinely different principle, not just a different algebraic route to the identical relationship. If your alternate ends up re-deriving the same underlying formula the primary method already used (even via a different intermediate path, like re-deriving a known formula from its definition instead of quoting it), that is NOT a genuine alternate -- it is the same method in disguise. A valid alternate must also be a GENERAL, repeatable technique that would still work if the numbers changed, not a shortcut based on a memorized reference value. Simple single-formula plug-in questions (a basic unit conversion, direct substitution into one named formula with no derivation choice) genuinely have only one method -- do not invent an alternate for these.
+
+First, on one line, write your judgment: either "ALTERNATE EXISTS" or "NO ALTERNATE".
+Then on the next line, if ALTERNATE EXISTS, write the full alternate method as bullet-point steps using KaTeX ($formula$ inline, $$formula$$ display). If NO ALTERNATE, write nothing else.
+
+Do not default to "NO ALTERNATE" just because the final numeric answer is the same -- a different starting PRINCIPLE that reaches the same answer IS a genuine alternate and has real teaching value, for questions that involve a real calculation. Only say NO ALTERNATE if you truly cannot identify any different underlying principle, if the only "alternate" you can think of just re-derives the same formula a different way, or if the question is factual recall with no calculation at all.{lang_instruction}""",
+            messages=[{"role": "user", "content": f"Question: {question}\n{options_context}\n\nPrimary method already given to the student:\n{primary_answer}\n\nFind a genuinely different valid alternate method."}]
+        )
+        raw = response.content[0].text.strip()
+        tokens = response.usage.input_tokens + response.usage.output_tokens
+        first_line, _, rest = raw.partition("\n")
+        if first_line.strip().upper().startswith("NO ALTERNATE"):
+            return "", tokens
+        if first_line.strip().upper().startswith("ALTERNATE EXISTS"):
+            return rest.strip(), tokens
+        # Unparseable judgment line -- don't guess, don't cache a false verdict either way.
+        print(f"ALTERNATE METHOD: unparseable judgment line {first_line!r}")
+        return None, tokens
+    except Exception as e:
+        print(f"ALTERNATE METHOD ERROR: {e}")
+        return None, 0
+
+class ChatAlternateMethodRequest(BaseModel):
+    question: str
+    primary_answer: str
+    language: str = "en"
+    user_id: str = ""
+
+@app.post("/chat-alternate-method")
+async def chat_alternate_method_endpoint(req: ChatAlternateMethodRequest, request: Request, _: None = Depends(rate_limiter(20, 60))):
+    if not req.question or not req.primary_answer:
+        return {"alternate_method": ""}
+
+    # Same hash the /chat shared cache already uses (language:text.strip().lower()) -- computed
+    # here rather than trusting a client-supplied hash, so this can never be pointed at the wrong
+    # cache row.
+    answer_hash = hashlib.sha256(f"{req.language}:{req.question.strip().lower()}".encode()).hexdigest()
+    cache_headers = {"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"}
+
+    resp = await async_client.get(
+        f"{SUPABASE_URL}/rest/v1/answer_cache",
+        headers=cache_headers,
+        params={"question_hash": f"eq.{answer_hash}", "select": "alternate_method"}
+    )
+    rows = resp.json()
+    if rows and rows[0].get("alternate_method") is not None:
+        return {"alternate_method": rows[0]["alternate_method"]}
+
+    loop = asyncio.get_event_loop()
+    text, tokens = await loop.run_in_executor(None, generate_alternate_method, req.question, req.primary_answer, "", req.language)
+    if text is None:
+        return {"alternate_method": ""}
+
+    if tokens:
+        await log_token_usage(req.user_id, tokens, _client_ip(request))
+
+    # PATCH, never upsert/insert: a row only exists here at all if the primary answer went
+    # through the SHARED cache (personalize=false or guest) -- writing a new row keyed on this
+    # hash would risk a personalized answer's alternate method leaking into the shared cache for
+    # a totally different user asking the same question text later. If there's no shared row,
+    # this just doesn't persist -- the feature still works for this one render, it just isn't
+    # free next time, exactly mirroring how the primary answer itself already isn't cached for
+    # personalized requests either.
+    if rows:
+        try:
+            await async_client.patch(
+                f"{SUPABASE_URL}/rest/v1/answer_cache",
+                headers={**cache_headers, "Content-Type": "application/json"},
+                params={"question_hash": f"eq.{answer_hash}"},
+                json={"alternate_method": text}
+            )
+        except Exception as e:
+            print(f"ALTERNATE METHOD SAVE ERROR (chat, hash={answer_hash}): {e}")
+
+    return {"alternate_method": text}
+
+class SolveAlternateMethodRequest(BaseModel):
+    pyq_id: str
+    question: str
+    option_a: str = ""
+    option_b: str = ""
+    option_c: str = ""
+    option_d: str = ""
+    primary_solution: str
+    language: str = "en"
+    user_id: str = ""
+
+@app.post("/solve-alternate-method")
+async def solve_alternate_method_endpoint(req: SolveAlternateMethodRequest, request: Request, _: None = Depends(rate_limiter(20, 60))):
+    if not req.pyq_id or not req.primary_solution:
+        return {"alternate_method": ""}
+
+    resp = await async_client.get(
+        f"{SUPABASE_URL}/rest/v1/pyq_solution_cache",
+        headers=SOLVE_CACHE_HEADERS,
+        params={"pyq_id": f"eq.{req.pyq_id}", "language": f"eq.{req.language}", "select": "alternate_method"}
+    )
+    rows = resp.json()
+    if rows and rows[0].get("alternate_method") is not None:
+        return {"alternate_method": rows[0]["alternate_method"]}
+
+    options_context = f"A) {req.option_a}\nB) {req.option_b}\nC) {req.option_c}\nD) {req.option_d}"
+    loop = asyncio.get_event_loop()
+    text, tokens = await loop.run_in_executor(
+        None, generate_alternate_method, req.question, req.primary_solution, options_context, req.language
+    )
+    if text is None:
+        return {"alternate_method": ""}
+
+    if tokens:
+        await log_token_usage(req.user_id, tokens, _client_ip(request))
+
+    # A pyq_solution_cache row always exists by the time this is called (the primary solution is
+    # unconditionally cached the first time /solve runs for this pyq_id+language, no
+    # personalization gate the way /chat has), so PATCH-only is safe here too.
+    if rows:
+        try:
+            await async_client.patch(
+                f"{SUPABASE_URL}/rest/v1/pyq_solution_cache",
+                headers={**SOLVE_CACHE_HEADERS, "Content-Type": "application/json"},
+                params={"pyq_id": f"eq.{req.pyq_id}", "language": f"eq.{req.language}"},
+                json={"alternate_method": text}
+            )
+        except Exception as e:
+            print(f"ALTERNATE METHOD SAVE ERROR (solve, pyq_id={req.pyq_id}): {e}")
+
+    return {"alternate_method": text}
+
 # ---------- Admin: PDF scan -> review -> save pipeline (admin-pdf-review.html) ----------
 
 def _create_processed_pdf_row(filename: str, subject: str):

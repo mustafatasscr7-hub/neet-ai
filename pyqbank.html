@@ -125,6 +125,10 @@
     .sol-div ul, .sol-div ol { margin: 0; padding-left: 20px; }
     .sol-div p { margin: 0 0 8px 0; }
     .sol-div p:last-child { margin-bottom: 0; }
+    .alt-method-wrap { margin-top: 10px; }
+    .alt-method-toggle { margin: 0; background: transparent; border: none; color: #a78bfa; padding: 4px 0; cursor: pointer; font-size: 12px; font-family: 'Inter', sans-serif; text-decoration: underline; text-underline-offset: 2px; }
+    .alt-method-toggle:hover { color: #c4b5fd; }
+    .alt-method-content { margin-top: 8px; padding: 10px 12px; border-left: 2px solid #a78bfa; background: rgba(255,255,255,0.04); border-radius: 6px; }
 
     .loading { text-align: center; padding: 60px; color: #555; }
     .spinner { width: 32px; height: 32px; border: 3px solid #1e1e1e; border-top-color: #4f8ef7; border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 16px; }
@@ -203,6 +207,9 @@
 
     body.light-mode .sol-btn:hover { background: #a78bfa20 !important; }
     body.light-mode .sol-div { background: #f5f5f7 !important; border-color: #d5d5dd !important; color: #333338 !important; }
+    body.light-mode .alt-method-toggle { color: #7c3aed !important; }
+    body.light-mode .alt-method-toggle:hover { color: #6d28d9 !important; }
+    body.light-mode .alt-method-content { background: rgba(0,0,0,0.03) !important; }
     body.light-mode .sol-loading-text { color: #7a7a85 !important; }
 
     body.light-mode .year-filter-select { background: #ffffff !important; border-color: #d5d5dd !important; color: #0d0d0d !important; }
@@ -1051,6 +1058,54 @@ ${q.diagram_url ? `<img class="q-diagram-img" src="${q.diagram_url}">` : ''}
 }
 
 
+    // Multiple Solution Methods: fired after the primary solution finishes streaming, never
+    // before -- must not add latency to the primary solution itself. Cached permanently per
+    // (pyq_id, language) server-side, same lifecycle as pyq_solution_cache's own primary
+    // solution, so a repeat view costs zero extra DeepSeek calls.
+    async function ensureAlternateMethodForPyq(q, primarySolution, language) {
+      try {
+        const { data: { session } } = await client.auth.getSession();
+        const res = await fetch(`${API_BASE}/solve-alternate-method`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            pyq_id: q.id, question: q.question,
+            option_a: q.option_a, option_b: q.option_b, option_c: q.option_c, option_d: q.option_d,
+            primary_solution: primarySolution, language, user_id: session?.user?.id || ''
+          })
+        });
+        const data = await res.json();
+        return data.alternate_method || '';
+      } catch (e) {
+        return '';
+      }
+    }
+
+    // Only ever called with a genuine alternate method already in hand -- appended into solDiv
+    // itself so it's naturally part of solDiv.innerHTML, which toggleSolution's own re-open path
+    // (line ~1061 below) already checks to skip re-fetching -- no extra bookkeeping needed for
+    // "already generated, just re-show".
+    function appendAlternateMethodToggle(container, altText) {
+      const wrap = document.createElement('div');
+      wrap.className = 'alt-method-wrap';
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'alt-method-toggle';
+      btn.textContent = t('chat', 'showAnotherWay');
+      const content = document.createElement('div');
+      content.className = 'alt-method-content';
+      content.style.display = 'none';
+      content.innerHTML = parseWithMath(altText);
+      btn.onclick = function() {
+        const opening = content.style.display === 'none';
+        content.style.display = opening ? 'block' : 'none';
+        btn.textContent = opening ? t('chat', 'hideAlternateMethod') : t('chat', 'showAnotherWay');
+      };
+      wrap.appendChild(btn);
+      wrap.appendChild(content);
+      container.appendChild(wrap);
+    }
+
     async function toggleSolution(btn, id, q) {
       const solDiv = document.getElementById('sol-' + id);
       if (solDiv.style.display === 'block') {
@@ -1134,6 +1189,11 @@ ${q.diagram_url ? `<img class="q-diagram-img" src="${q.diagram_url}">` : ''}
         solDiv.innerHTML = parseWithMath(fullText);
         btn.textContent = t('pyqbank','hideSolution');
         btn.disabled = false;
+
+        // Fire-and-forget -- must not delay re-enabling the button above.
+        ensureAlternateMethodForPyq(q, fullText, getLang()).then(altText => {
+          if (altText) appendAlternateMethodToggle(solDiv, altText);
+        });
       } catch(e) {
         clearInterval(thinkingInterval);
         solDiv.innerHTML = `<span class="sol-error-text">${t('pyqbank','failedSolution')}</span>`;
