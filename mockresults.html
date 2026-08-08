@@ -622,7 +622,10 @@ function generateScorecard() {
       if (lastIndex < text.length) parts.push({ type: 'text', value: text.slice(lastIndex) });
 
       return parts.map(p => {
-        if (p.type === 'text') return escapeHtml(p.value);
+        // \n -> <br> so a saved question's own line breaks (e.g. one option per line) still
+        // show up as line breaks here -- this page previously showed q.question completely
+        // raw, silently collapsing them to spaces despite the source text being saved correctly.
+        if (p.type === 'text') return escapeHtml(p.value).replace(/\n/g, '<br>');
         try {
           return katex.renderToString(p.value, { displayMode: p.type === 'display', throwOnError: false });
         } catch (e) {
@@ -699,9 +702,8 @@ function generateScorecard() {
         + `<div class="seq-list-items">${itemsHtml}</div>`;
     }
 
-    // q.question has always been shown completely raw on this page (no escaping, no <br>
-    // conversion) -- this keeps that exactly unchanged for every question that isn't
-    // confidently detected as one of the three special formats.
+    // Falls through to plain renderMathInText (which now converts \n -> <br>, see above) for
+    // every question that isn't confidently detected as one of the three special formats.
     function applySpecialFormattingOnly_ML(text) {
       const matchListHtml = renderMatchListHtml_ML(text, renderMathInText);
       if (matchListHtml !== null) return matchListHtml;

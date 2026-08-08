@@ -671,7 +671,11 @@
       html = html.replace(/\$([^$\n]+)\$/g, function(_, math) {
         try { return katex.renderToString(math.trim(), { displayMode: false, throwOnError: false }); } catch(e) { return _; }
       });
-      return DOMPurify.sanitize(marked.parse(html));
+      // breaks:true so a single newline in question/option text (e.g. one option per line)
+      // renders as a real line break -- marked's default CommonMark behavior collapses a lone
+      // \n into a space, only a blank line (\n\n) becomes a new paragraph, which silently ran
+      // multi-line option lists together into one line on display despite being saved correctly.
+      return DOMPurify.sanitize(marked.parse(html, { breaks: true }));
     }
 
     // Same boundary-safe streaming render used in chat.html: render everything up to the
