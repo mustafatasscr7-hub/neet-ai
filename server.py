@@ -276,6 +276,7 @@ class DiagramCreate(BaseModel):
     subject: str
     class_: Optional[int] = Field(None, alias="class")
     chapter: str
+    subtopic: Optional[str] = None
     name: str
     description: Optional[str] = None
     image_url: str
@@ -284,6 +285,7 @@ class DiagramUpdate(BaseModel):
     subject: Optional[str] = None
     class_: Optional[int] = Field(None, alias="class")
     chapter: Optional[str] = None
+    subtopic: Optional[str] = None
     name: Optional[str] = None
     description: Optional[str] = None
     reviewed: Optional[bool] = None
@@ -681,6 +683,11 @@ def fuzzy_match_chapter(candidate: str, known_chapters: list):
     return best if best_score >= DIAGRAM_CHAPTER_FUZZY_THRESHOLD else None
 
 def build_diagram_embedding_text(name: str, description: str, chapter: str):
+    # OPEN QUESTION (raised when the `subtopic` field was added to the diagrams table): should
+    # this also take subtopic and fold it in here? Left out deliberately for now -- diagram
+    # matching in chat.html is unchanged by that migration, this is intentionally a decision
+    # for a human to make, not something to change automatically alongside the schema/admin-UI
+    # work that added the column.
     parts = [name]
     if description:
         parts.append(description)
@@ -2386,9 +2393,11 @@ async def admin_diagrams_create(body: DiagramCreate, _: None = Depends(verify_ad
     name = body.name.strip()
     chapter = body.chapter.strip()
     description = body.description.strip() if body.description else None
+    subtopic = body.subtopic.strip() if body.subtopic else None
     try:
         # Embedding is a match-quality enhancement for chat.html's diagram-matching, not a hard
         # requirement for the row to exist -- a failure here shouldn't block the upload itself.
+        # Not fed subtopic yet -- see build_diagram_embedding_text's comment.
         embedding = await get_embedding(build_diagram_embedding_text(name, description, chapter))
     except Exception:
         embedding = None
@@ -2396,6 +2405,7 @@ async def admin_diagrams_create(body: DiagramCreate, _: None = Depends(verify_ad
         "subject": body.subject,
         "class": body.class_,
         "chapter": chapter,
+        "subtopic": subtopic,
         "name": name,
         "description": description,
         "image_url": body.image_url,
@@ -2421,7 +2431,7 @@ async def admin_diagrams_list(_: None = Depends(verify_admin)):
             f"{SUPABASE_URL}/rest/v1/diagrams",
             headers=ADMIN_HEADERS,
             params={
-                "select": "id,subject,class,chapter,name,description,image_url,reviewed,created_at",
+                "select": "id,subject,class,chapter,subtopic,name,description,image_url,reviewed,created_at",
                 "order": "created_at.desc",
                 "limit": 1000
             }
@@ -2445,10 +2455,13 @@ async def admin_diagram_update(diagram_id: int, body: DiagramUpdate, _: None = D
         update_fields["chapter"] = body.chapter
     if body.name is not None:
         update_fields["name"] = body.name
-    # description can legitimately be cleared to null (removing a caption), so distinguish
-    # "not sent" from "sent as null" the same way /admin/pyq-update does for diagram fields.
+    # description/subtopic can legitimately be cleared to null (removing a caption/tag), so
+    # distinguish "not sent" from "sent as null" the same way /admin/pyq-update does for
+    # diagram fields.
     if "description" in body.model_fields_set:
         update_fields["description"] = body.description
+    if "subtopic" in body.model_fields_set:
+        update_fields["subtopic"] = body.subtopic
     if body.reviewed is not None:
         update_fields["reviewed"] = body.reviewed
     if not update_fields:
@@ -2457,6 +2470,8 @@ async def admin_diagram_update(diagram_id: int, body: DiagramUpdate, _: None = D
     # Keep the embedding in sync whenever the text it's derived from changes -- otherwise an
     # edited diagram would silently keep matching doubts on its OLD name/description/chapter
     # forever. Best-effort: an embedding refresh failure shouldn't block the metadata edit.
+    # subtopic is deliberately NOT included here yet -- see build_diagram_embedding_text's
+    # comment on whether it should feed the embedding at all.
     if any(k in update_fields for k in ("name", "description", "chapter")):
         try:
             current_resp = await async_client.get(
@@ -2478,7 +2493,7 @@ async def admin_diagram_update(diagram_id: int, body: DiagramUpdate, _: None = D
         response = await async_client.patch(
             f"{SUPABASE_URL}/rest/v1/diagrams",
             headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
-            params={"id": f"eq.{diagram_id}", "select": "id,subject,class,chapter,name,description,image_url,reviewed,created_at"},
+            params={"id": f"eq.{diagram_id}", "select": "id,subject,class,chapter,subtopic,name,description,image_url,reviewed,created_at"},
             json=update_fields
         )
         if response.status_code >= 400:

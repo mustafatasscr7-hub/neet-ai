@@ -123,6 +123,11 @@
     </div>
 
     <div class="q-field">
+      <label>Subtopic (optional)</label>
+      <input type="text" id="subtopicInput" placeholder="e.g. 2.3.1 Phycomycetes"/>
+    </div>
+
+    <div class="q-field">
       <label>Diagram name / title</label>
       <input type="text" id="nameInput" placeholder="e.g. Human Heart Cross-Section, Ray Diagram - Convex Lens"/>
     </div>
@@ -156,11 +161,12 @@
             <th>Subject</th>
             <th>Class</th>
             <th>Chapter</th>
+            <th>Subtopic</th>
             <th></th>
           </tr>
         </thead>
         <tbody id="diagramsTableBody">
-          <tr class="empty-row"><td colspan="6">Loading...</td></tr>
+          <tr class="empty-row"><td colspan="7">Loading...</td></tr>
         </tbody>
       </table>
     </div>
@@ -333,6 +339,7 @@
     const chapter = document.getElementById('chapterInput').value;
     const name = document.getElementById('nameInput').value.trim();
     const description = document.getElementById('descriptionInput').value.trim();
+    const subtopic = document.getElementById('subtopicInput').value.trim();
 
     if (!subject || !chapter || !name || !selectedImageBase64) {
       setUploadStatus('Subject, chapter, name, and an image are all required.', 'error');
@@ -359,7 +366,7 @@
         method: 'POST',
         headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
-          subject, class: cls ? parseInt(cls, 10) : null, chapter, name,
+          subject, class: cls ? parseInt(cls, 10) : null, chapter, subtopic: subtopic || null, name,
           description: description || null, image_url: uploadData.url
         })
       });
@@ -371,6 +378,7 @@
       setUploadStatus('Uploaded successfully.', 'success');
       document.getElementById('nameInput').value = '';
       document.getElementById('descriptionInput').value = '';
+      document.getElementById('subtopicInput').value = '';
       document.getElementById('imageFile').value = '';
       document.getElementById('imagePreviewWrap').style.display = 'none';
       selectedImageBase64 = null;
@@ -388,13 +396,13 @@
 
   async function loadDiagrams() {
     const tbody = document.getElementById('diagramsTableBody');
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="6">Loading...</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="7">Loading...</td></tr>';
     try {
       const res = await fetch(`${API_BASE}/admin/diagrams-list`, { headers: authHeaders() });
       if (res.status === 401) { logout(); return; }
-      if (!res.ok) { tbody.innerHTML = `<tr class="empty-row"><td colspan="6">${escapeHtml(await describeHttpError(res))}</td></tr>`; return; }
+      if (!res.ok) { tbody.innerHTML = `<tr class="empty-row"><td colspan="7">${escapeHtml(await describeHttpError(res))}</td></tr>`; return; }
       const data = await res.json();
-      if (data.error) { tbody.innerHTML = `<tr class="empty-row"><td colspan="6">${escapeHtml(data.error)}</td></tr>`; return; }
+      if (data.error) { tbody.innerHTML = `<tr class="empty-row"><td colspan="7">${escapeHtml(data.error)}</td></tr>`; return; }
       renderDiagrams(data.diagrams || []);
     } catch (e) {
       tbody.innerHTML = '<tr class="empty-row"><td colspan="6">Could not reach server.</td></tr>';
@@ -405,7 +413,7 @@
     document.getElementById('diagramCount').textContent = diagrams.length;
     const tbody = document.getElementById('diagramsTableBody');
     if (diagrams.length === 0) {
-      tbody.innerHTML = '<tr class="empty-row"><td colspan="6">No diagrams uploaded yet.</td></tr>';
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="7">No diagrams uploaded yet.</td></tr>';
       return;
     }
     tbody.innerHTML = diagrams.map(d => `
@@ -418,6 +426,7 @@
         <td><span class="subject-chip ${escapeHtml(d.subject)}">${escapeHtml(d.subject)}</span></td>
         <td>${d.class != null ? escapeHtml(String(d.class)) : '—'}</td>
         <td>${escapeHtml(d.chapter)}</td>
+        <td>${d.subtopic ? escapeHtml(d.subtopic) : '—'}</td>
         <td><button type="button" class="action-btn danger" onclick="deleteDiagram(${d.id})">Delete</button></td>
       </tr>
     `).join('');

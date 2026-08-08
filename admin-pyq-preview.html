@@ -254,6 +254,7 @@
       <select id="diagramFilterChapter" onchange="renderDiagramReview()" style="display:none">
         <option value="">All Chapters</option>
       </select>
+      <input type="text" id="diagramFilterSubtopic" placeholder="Search subtopic..." oninput="renderDiagramReview()" style="display:none"/>
       <select id="diagramFilterStatus" onchange="renderDiagramReview()" style="display:none">
         <option value="pending">Pending Review</option>
         <option value="confirmed">Confirmed</option>
@@ -1312,6 +1313,7 @@
       document.querySelector('.filter-bar label.check-label').style.display = '';
       document.getElementById('diagramFilterSubject').style.display = 'none';
       document.getElementById('diagramFilterChapter').style.display = 'none';
+      document.getElementById('diagramFilterSubtopic').style.display = 'none';
       document.getElementById('diagramFilterStatus').style.display = 'none';
     }
 
@@ -1383,6 +1385,7 @@
         document.querySelector('.filter-bar label.check-label').style.display = 'none';
         document.getElementById('diagramFilterSubject').style.display = 'inline-block';
         document.getElementById('diagramFilterChapter').style.display = 'inline-block';
+        document.getElementById('diagramFilterSubtopic').style.display = 'inline-block';
         document.getElementById('diagramFilterStatus').style.display = 'inline-block';
         document.getElementById('paginationBar').style.display = 'none';
       }
@@ -1443,10 +1446,12 @@
       const area = document.getElementById('resultsArea');
       const subject = document.getElementById('diagramFilterSubject').value;
       const chapter = document.getElementById('diagramFilterChapter').value;
+      const subtopicQuery = document.getElementById('diagramFilterSubtopic').value.trim().toLowerCase();
       const status = document.getElementById('diagramFilterStatus').value;
       let rows = allDiagrams;
       if (subject) rows = rows.filter(d => d.subject === subject);
       if (chapter) rows = rows.filter(d => d.chapter === chapter);
+      if (subtopicQuery) rows = rows.filter(d => (d.subtopic || '').toLowerCase().includes(subtopicQuery));
       if (status === 'pending') rows = rows.filter(d => !d.reviewed);
       else if (status === 'confirmed') rows = rows.filter(d => d.reviewed);
       document.getElementById('resultCount').textContent = `${rows.length} diagram${rows.length === 1 ? '' : 's'}`;
@@ -1468,6 +1473,7 @@
             <span>${escapeHtml(d.subject)}</span>
             ${d.class != null ? `<span>Class ${escapeHtml(String(d.class))}</span>` : ''}
             ${d.chapter ? `<span>${escapeHtml(d.chapter)}</span>` : ''}
+            ${d.subtopic ? `<span>${escapeHtml(d.subtopic)}</span>` : ''}
             <span>${new Date(d.created_at).toLocaleDateString()}</span>
             ${statusBadge}
           </div>
@@ -1509,6 +1515,10 @@
               <select data-field="chapter">${chapterOptionsHtml(chapters, d.chapter)}</select>
             </div>
           </div>
+          <div class="q-edit-field">
+            <label>Subtopic</label>
+            <input type="text" data-field="subtopic" value="${escapeHtml(d.subtopic || '')}" placeholder="e.g. 2.3.1 Phycomycetes"/>
+          </div>
           <img class="q-diagram-img diagram-thumb" src="${escapeHtml(d.image_url)}" alt="" onclick="openDiagramLightbox('${escapeHtml(d.image_url)}')"/>
           <div class="q-admin-bar">
             <span class="q-admin-id">${d.id}</span>
@@ -1546,6 +1556,7 @@
       const payload = {
         name, chapter,
         description: getVal('description').trim() || null,
+        subtopic: getVal('subtopic').trim() || null,
         subject: getVal('subject')
       };
       const originalLabel = btnEl.textContent;
