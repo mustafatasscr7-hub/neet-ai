@@ -1082,7 +1082,13 @@ let selectedImages = [];
       });
       html = html.replace(/\$([^$\n]+)\$/g, function(_, math) {
         try {
-          return katex.renderToString(math.trim(), { displayMode: false, throwOnError: false });
+          // Wrapped at 1.15em rather than sized via a competing CSS rule on .katex directly --
+          // KaTeX's own stylesheet already sets .katex's font-size to a deliberately-tuned ratio
+          // (its math font's proportions read too small at a flat 1:1 with body text), so a CSS
+          // rule targeting .katex would replace that tuning outright instead of building on it.
+          // A wrapper span scales relative to ITS OWN font-size context, which KaTeX's internal
+          // em-based sizing then still correctly inherits and scales from.
+          return '<span style="font-size:1.15em;">' + katex.renderToString(math.trim(), { displayMode: false, throwOnError: false }) + '</span>';
         } catch(e) { return _; }
       });
       // breaks:true so a single newline in question/option text (e.g. one option per line)
