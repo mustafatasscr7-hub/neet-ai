@@ -447,13 +447,15 @@ function generateScorecard() {
       // LAST "List I" and the first "List II" after it skips the intro and lands on the pair
       // that actually precedes the content. [-–—\s] covers plain hyphen plus en-dash/em-dash,
       // which PDF extraction frequently substitutes for a typeset dash.
-      const re = /(list|column)\s*[-–—\s]*\b(I{1,2})\b/gi;
+      // Also matches "Column-A ... Column-B" style headers (letters, not just roman numerals) --
+      // just as common in real questions as "List I ... List II".
+      const re = /(list|column)\s*[-–—\s]*\b(I{1,2}|A|B)\b/gi;
       let m;
       const iPositions = [], iiPositions = [];
       while ((m = re.exec(text)) !== null) {
-        const roman = m[2].toUpperCase();
+        const marker = m[2].toUpperCase();
         const entry = { start: m.index, end: m.index + m[0].length };
-        if (roman === 'I') iPositions.push(entry); else iiPositions.push(entry);
+        if (marker === 'I' || marker === 'A') iPositions.push(entry); else iiPositions.push(entry);
       }
       if (iPositions.length === 0 || iiPositions.length === 0) return null;
       const lastI = iPositions[iPositions.length - 1];
@@ -487,7 +489,7 @@ function generateScorecard() {
     // duplication artifact, not real content. It doesn't match any item marker, so it silently
     // glues onto whatever the last real item happened to be without this cleanup.
     function stripTrailingListArtifact_ML(itemText) {
-      return itemText.replace(/\s*[;,.]?\s*(list|column)\s*[-–—\s]*I{1,2}\s*(\[[^\]]*\])?\s*:?\s*$/i, '').trim();
+      return itemText.replace(/\s*[;,.]?\s*(list|column)\s*[-–—\s]*(I{1,2}|A|B)\s*(\[[^\]]*\])?\s*:?\s*$/i, '').trim();
     }
 
     function parseMatchList_ML(text) {

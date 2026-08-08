@@ -1230,13 +1230,15 @@
       // LAST "List I" and the first "List II" after it skips the intro and lands on the pair
       // that actually precedes the content. [-–—\s] covers plain hyphen plus en-dash/em-dash,
       // which PDF extraction frequently substitutes for a typeset dash.
-      const re = /(list|column)\s*[-–—\s]*\b(I{1,2})\b/gi;
+      // Also matches "Column-A ... Column-B" style headers (letters, not just roman numerals) --
+      // just as common in real questions as "List I ... List II".
+      const re = /(list|column)\s*[-–—\s]*\b(I{1,2}|A|B)\b/gi;
       let m;
       const iPositions = [], iiPositions = [];
       while ((m = re.exec(text)) !== null) {
-        const roman = m[2].toUpperCase();
+        const marker = m[2].toUpperCase();
         const entry = { start: m.index, end: m.index + m[0].length };
-        if (roman === 'I') iPositions.push(entry); else iiPositions.push(entry);
+        if (marker === 'I' || marker === 'A') iPositions.push(entry); else iiPositions.push(entry);
       }
       if (iPositions.length === 0 || iiPositions.length === 0) return null;
       const lastI = iPositions[iPositions.length - 1];
@@ -1270,7 +1272,7 @@
     // duplication artifact, not real content. It doesn't match any item marker, so it silently
     // glues onto whatever the last real item happened to be without this cleanup.
     function stripTrailingListArtifact_ML(itemText) {
-      return itemText.replace(/\s*[;,.]?\s*(list|column)\s*[-–—\s]*I{1,2}\s*(\[[^\]]*\])?\s*:?\s*$/i, '').trim();
+      return itemText.replace(/\s*[;,.]?\s*(list|column)\s*[-–—\s]*(I{1,2}|A|B)\s*(\[[^\]]*\])?\s*:?\s*$/i, '').trim();
     }
 
     function parseMatchList_ML(text) {
@@ -1603,21 +1605,22 @@
 
     function formatQuestionTextInner(text) {
       if (!text) return '';
-      return renderMathInText(text, escaped => escaped
-        .replace(/\n/g, '<br>')
-        .replace(/(\s)(\([A-E]\)\s)/g, '<br>$2'));
+      // Only convert real line breaks -- this used to also force a break before every (A)-(E)
+      // marker regardless of the source formatting, which mangled questions that deliberately
+      // put several markers on one line (e.g. "Column-A: (A) True ribs, (B) False ribs, (C)
+      // Floating ribs" as a single column-header line) into an unwanted multi-line list.
+      return renderMathInText(text, escaped => escaped.replace(/\n/g, '<br>'));
     }
 
-    // Used only by the post-test review screen below, which has always shown q.question
-    // completely raw (no <br> conversion, no escaping) -- this keeps that exactly unchanged
-    // for every question that isn't confidently detected as one of the three special formats.
+    // Used only by the post-test review screen below.
     function applySpecialFormattingOnly_ML(text) {
-      const matchListHtml = renderMatchListHtml_ML(text, renderMathInText);
+      const withBreaks = t => renderMathInText(t, escaped => escaped.replace(/\n/g, '<br>'));
+      const matchListHtml = renderMatchListHtml_ML(text, withBreaks);
       if (matchListHtml !== null) return matchListHtml;
-      const arHtml = renderAssertionReasonHtml_AR(text, renderMathInText);
+      const arHtml = renderAssertionReasonHtml_AR(text, withBreaks);
       if (arHtml !== null) return arHtml;
-      const seqHtml = renderSequenceListHtml_SEQ(text, renderMathInText);
-      return seqHtml !== null ? seqHtml : renderMathInText(text);
+      const seqHtml = renderSequenceListHtml_SEQ(text, withBreaks);
+      return seqHtml !== null ? seqHtml : withBreaks(text);
     }
 
     function renderQuestion(index) {
