@@ -38,7 +38,6 @@
   .subject-btn { flex: 1; background: #0d0d0d; border: 1px solid #2a2a2a; color: #ccc; padding: 12px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; text-align: center; }
   .subject-btn:hover { border-color: #4f8ef750; }
   .subject-btn.active { border-color: #4f8ef7; background: #4f8ef712; color: #4f8ef7; }
-  .subject-btn .coverage { display: block; font-size: 10px; font-weight: 400; color: #666; margin-top: 3px; }
 
   /* Separate class from .subject-btn (not just a style choice) -- selectSubject() re-queries
      every .subject-btn on the page to toggle its own active state, and a shared class would
@@ -203,9 +202,9 @@
 
     <h2>1. Choose subject</h2>
     <div class="subject-picker" id="subjectPicker">
-      <button type="button" class="subject-btn" data-subject="Biology" onclick="selectSubject('Biology')">Biology<span class="coverage" id="coverage-Biology"></span></button>
-      <button type="button" class="subject-btn" data-subject="Physics" onclick="selectSubject('Physics')">Physics<span class="coverage" id="coverage-Physics"></span></button>
-      <button type="button" class="subject-btn" data-subject="Chemistry" onclick="selectSubject('Chemistry')">Chemistry<span class="coverage" id="coverage-Chemistry"></span></button>
+      <button type="button" class="subject-btn" data-subject="Biology" onclick="selectSubject('Biology')">Biology</button>
+      <button type="button" class="subject-btn" data-subject="Physics" onclick="selectSubject('Physics')">Physics</button>
+      <button type="button" class="subject-btn" data-subject="Chemistry" onclick="selectSubject('Chemistry')">Chemistry</button>
     </div>
 
     <div id="pdfModeSection">
@@ -460,8 +459,6 @@
       chapterList = chaptersData.chapters || [];
       existingRows = classifierData.rows || [];
       classifier = buildClassifier(existingRows);
-      const coverageEl = document.getElementById('coverage-' + subject);
-      if (coverageEl) coverageEl.textContent = `${existingRows.filter(r => r.chapter).length}/${existingRows.length} chaptered`;
     } catch (e) {
       alert('Could not reach the server to load chapter/classifier data for ' + subject + '.');
       chapterList = [];
