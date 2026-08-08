@@ -95,7 +95,19 @@
     body.light-mode .pyq-modal-close { color: #8a8a94 !important; }
     body.light-mode .pyq-q-card { background: #f5f5f7 !important; }
     body.light-mode .pyq-q-text { color: #16161d !important; }
+    /* Base option look now lives here instead of an inline cssText -- inline styles always beat
+       stylesheet rules for the same property regardless of :hover, so a hover rule could never
+       have actually shown while the base colors were set inline. .pyq-opt-correct/-wrong/-disabled
+       (added via classList once answered, see onPyqOptionClick below) tie :hover on specificity
+       and win via source order below, and use pointer-events:none so :hover can't even trigger
+       once an option is no longer interactive. */
+    .pyq-opt { padding: 6px 10px; margin: 4px 0; border-radius: 6px; font-size: 13px; color: #c4c4c4; background: #1a1a2e; border: 1px solid #3a3a5e; cursor: pointer; transition: all 0.15s ease; }
+    .pyq-opt:hover { background: #242442; border-color: #4a4a7e; color: #e2e8f0; transform: translateX(2px); }
+    .pyq-opt.pyq-opt-correct { pointer-events: none; border-color: #4ade80; background: #4ade8020; color: #4ade80; }
+    .pyq-opt.pyq-opt-wrong { pointer-events: none; border-color: #ef4444; background: #ef444415; color: #ef4444; }
+    .pyq-opt.pyq-opt-disabled { pointer-events: none; }
     body.light-mode .pyq-opt { color: #333338 !important; background: #ffffff !important; border-color: #d5d5dd !important; }
+    body.light-mode .pyq-opt:hover { background: #eeeef1 !important; border-color: #c8c8d0 !important; color: #16161d !important; }
 
     /* Thin, hover-reveal scrollbar for the modal's own internal scroll -- was the bulky
        default native scrollbar, always fully visible regardless of hover. */
@@ -1722,7 +1734,6 @@ let selectedImages = [];
               if (q['option_' + opt] || q['option_' + opt + '_diagram_url']) {
                 const optEl = document.createElement('div');
                 optEl.className = 'pyq-opt';
-                optEl.style.cssText = 'padding:6px 10px;margin:4px 0;border-radius:6px;font-size:13px;color:#c4c4c4;background:#1a1a2e;border:1px solid #3a3a5e;cursor:pointer;transition:all 0.15s ease;';
                 const optImg = q['option_' + opt + '_diagram_url'] ? `<img src="${escapeHtml(q['option_' + opt + '_diagram_url'])}" style="max-width:100%;height:auto;border-radius:6px;margin-top:6px;border:1px solid #3a3a5e;display:block;">` : '';
                 optEl.innerHTML = escapeHtml(opt.toUpperCase() + ') ' + (q['option_' + opt] || '')) + optImg;
                 optionEls[opt] = optEl;
@@ -1750,9 +1761,9 @@ let selectedImages = [];
                 ['a','b','c','d'].forEach(function(o) {
                   const el = optionEls[o];
                   if (!el) return;
-                  if (hasVerifiedAnswer && o === resolvedOpt) { el.onclick = null; el.style.cursor = 'default'; el.style.cssText += 'border-color:#4ade80;background:#4ade8020;color:#4ade80;'; }
-                  else if (hasVerifiedAnswer && o === opt) { el.onclick = null; el.style.cursor = 'default'; el.style.cssText += 'border-color:#ef4444;background:#ef444415;color:#ef4444;'; }
-                  else if (hasVerifiedAnswer) { el.onclick = null; el.style.cursor = 'default'; }
+                  if (hasVerifiedAnswer && o === resolvedOpt) { el.onclick = null; el.classList.add('pyq-opt-correct'); }
+                  else if (hasVerifiedAnswer && o === opt) { el.onclick = null; el.classList.add('pyq-opt-wrong'); }
+                  else if (hasVerifiedAnswer) { el.onclick = null; el.classList.add('pyq-opt-disabled'); }
                 });
                 if (!hasVerifiedAnswer) {
                   // Genuine solve failure (network hiccup, DeepSeek error) -- rare, but don't
