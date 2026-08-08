@@ -5,22 +5,25 @@ import base64
 import concurrent.futures
 import fitz
 from anthropic import Anthropic
+from google import genai
+from google.genai import types as genai_types
 from dotenv import load_dotenv
 import requests as http_requests
 
 load_dotenv()
 
 ANTHROPIC_KEY = os.getenv("ANTHROPIC_KEY")
-DEEPSEEK_KEY = os.getenv("DEEPSEEK_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 client = Anthropic(api_key=ANTHROPIC_KEY)
-# Text-only extraction (extract_questions_from_text, below) runs on DeepSeek V4 Flash via its
-# Anthropic-compatible endpoint -- same migration already done for server.py's /chat and /title.
-# The vision path (extract_questions_from_page, image bytes sent to Claude) stays on `client`
-# above -- it's a genuine vision task DeepSeek can't do, and it's the actual scanned-PDF path.
-deepseek_client = Anthropic(api_key=DEEPSEEK_KEY, base_url="https://api.deepseek.com/anthropic")
+# Text-only extraction (extract_questions_from_text, below) runs on Gemini 3.5 Flash-Lite --
+# moved off DeepSeek V4 Flash, which wasn't extracting accurately enough for this task (real
+# comparison on 3 PDF pages, see the migration commit). The vision path
+# (extract_questions_from_page, image bytes sent to Claude) stays on `client` above -- it's a
+# genuine vision task and the actual scanned-PDF path, untouched by this swap.
+gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
 VISION_MODEL = "claude-haiku-4-5-20251001"
 
@@ -114,7 +117,7 @@ def extract_questions_from_page(image_b64, page_num, subject="Biology", model=VI
         print(f"    JSON parse error on page {page_num}: {e}")
         return []
 
-TEXT_MODEL = "deepseek-v4-flash"
+TEXT_MODEL = "gemini-3.5-flash-lite"
 MIN_TEXT_LENGTH = 40
 MIN_ALNUM_RATIO = 0.3
 DIAGRAM_MARKER = "<<<DIAGRAM_HERE>>>"
@@ -186,7 +189,7 @@ def looks_garbled_or_empty(text, min_length=MIN_TEXT_LENGTH, min_alnum_ratio=MIN
 
 def extract_pages_text_and_diagrams(pdf_bytes):
     """Free/local, no API call: raw text per page (PyMuPDF), with a marker inserted at the
-    actual on-page position of each real (non-watermark) image, so Claude can attribute
+    actual on-page position of each real (non-watermark) image, so the extraction model can attribute
     has_diagram to the correct individual question rather than the whole page.
 
     Images that repeat identically (same xref) across multiple pages are treated as a
@@ -230,14 +233,13 @@ def extract_pages_text_and_diagrams(pdf_bytes):
 
 def extract_questions_from_text(page_text, page_num, subject="Biology", model=TEXT_MODEL):
     prompt = build_text_extraction_prompt(subject).replace("{page_text}", page_text)
-    message = deepseek_client.messages.create(
+    response = gemini_client.models.generate_content(
         model=model,
-        max_tokens=4096,
-        thinking={"type": "disabled"},
-        messages=[{"role": "user", "content": prompt}]
+        contents=prompt,
+        config=genai_types.GenerateContentConfig(max_output_tokens=4096)
     )
 
-    text = message.content[0].text.strip()
+    text = (response.text or "").strip()
     if text.startswith("```"):
         text = text.split("```")[1]
         if text.startswith("json"):
@@ -252,11 +254,11 @@ def extract_questions_from_text(page_text, page_num, subject="Biology", model=TE
 def scan_pdf_bytes(pdf_bytes, subject, max_workers=5):
     """Callable entry point for the admin review pipeline (server.py's /admin/scan-pdf).
     Text-layer PDFs only (not scanned/image PDFs) - extracts real text + programmatic diagram
-    detection for free, then a TEXT-ONLY (no Vision, cheaper) Claude call per page to structure
+    detection for free, then a TEXT-ONLY (no Vision, cheaper) Gemini call per page to structure
     it into questions. Returns raw extracted questions - no chapter/class/correct_answer
     guessing, that's left to the TF-IDF classifier and manual review on the frontend.
 
-    Pages are sent to Claude concurrently - doing them one at a time made scanning a
+    Pages are sent to Gemini concurrently - doing them one at a time made scanning a
     multi-page PDF take minutes."""
     pages = extract_pages_text_and_diagrams(pdf_bytes)
     flagged_pages = []
