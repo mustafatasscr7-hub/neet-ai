@@ -46,6 +46,17 @@
     .report-submit-btn:hover { background: #dc2626; }
     .report-submit-btn:disabled { opacity: 0.6; cursor: default; }
     .report-popup-thanks { text-align: center; padding: 8px 4px; color: #4ade80; font-weight: 600; }
+    .confirm-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 3000; display: flex; align-items: center; justify-content: center; }
+    .confirm-modal { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 14px; padding: 24px; width: 340px; max-width: calc(100vw - 32px); box-shadow: 0 12px 32px rgba(0,0,0,0.5); }
+    .confirm-modal-message { font-size: 14px; color: #ececec; line-height: 1.6; white-space: pre-line; margin-bottom: 20px; }
+    .confirm-modal-actions { display: flex; justify-content: flex-end; gap: 10px; }
+    .confirm-modal-cancel { background: transparent; border: 1px solid #2a2a2a; color: #999; padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
+    .confirm-modal-cancel:hover { border-color: #3a3a3a; color: #ccc; }
+    .confirm-modal-ok { background: #4f8ef7; border: none; color: white; padding: 8px 18px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
+    .confirm-modal-ok:hover { background: #3f7ee0; }
+    body.light-mode .confirm-modal { background: #ffffff !important; border-color: #e3e3ea !important; }
+    body.light-mode .confirm-modal-message { color: #16161d !important; }
+    body.light-mode .confirm-modal-cancel { border-color: #d5d5dd !important; color: #55555f !important; }
     body.light-mode .report-popup { background: #ffffff !important; border-color: #e3e3ea !important; box-shadow: 0 8px 24px rgba(0,0,0,0.12) !important; }
     body.light-mode .report-popup-title { color: #0d0d0d !important; }
     body.light-mode .report-reason-row { color: #33333d !important; }
@@ -892,18 +903,44 @@ async function saveQuestionFromMock(index) {
       }
     }
 
+    // Replaces the browser's native confirm() with a modal matching the app's own theme --
+    // native confirm() shows the raw page URL/hostname in its title bar and can't be styled,
+    // which looks jarring against a dark exam UI. Built on demand (not static HTML) so it
+    // never sits in the DOM taking up z-index/event-listener space between uses.
+    function showConfirmModal(message, onConfirm, confirmLabel, cancelLabel) {
+      const existing = document.getElementById('confirmModalOverlay');
+      if (existing) existing.remove();
+      const overlay = document.createElement('div');
+      overlay.id = 'confirmModalOverlay';
+      overlay.className = 'confirm-modal-overlay';
+      overlay.innerHTML = `
+        <div class="confirm-modal">
+          <div class="confirm-modal-message"></div>
+          <div class="confirm-modal-actions">
+            <button type="button" class="confirm-modal-cancel"></button>
+            <button type="button" class="confirm-modal-ok"></button>
+          </div>
+        </div>`;
+      overlay.querySelector('.confirm-modal-message').textContent = message;
+      overlay.querySelector('.confirm-modal-cancel').textContent = cancelLabel || 'Cancel';
+      overlay.querySelector('.confirm-modal-ok').textContent = confirmLabel || 'OK';
+      function close() { overlay.remove(); }
+      overlay.querySelector('.confirm-modal-cancel').onclick = close;
+      overlay.querySelector('.confirm-modal-ok').onclick = function() { close(); onConfirm(); };
+      overlay.addEventListener('mousedown', function(e) { if (e.target === overlay) close(); });
+      document.body.appendChild(overlay);
+    }
+
     function confirmExit() {
-      if (confirm('Are you sure you want to exit? Your progress will be lost.')) {
+      showConfirmModal('Are you sure you want to exit? Your progress will be lost.', function() {
         clearInterval(timerInterval);
         window.location.href = './chat.html';
-      }
+      }, 'Exit');
     }
     function confirmSubmit() {
       const answered = Object.keys(answers).length;
       const skipped = questions.length - answered;
-      if (confirm(`You have answered ${answered} questions and skipped ${skipped}.\n\nSubmit the test?`)) {
-        submitTest();
-      }
+      showConfirmModal(`You have answered ${answered} questions and skipped ${skipped}.\n\nSubmit the test?`, submitTest, 'Submit');
     }
 
     async function submitTest() {
