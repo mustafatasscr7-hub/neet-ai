@@ -50,9 +50,18 @@
     .dup-toggle-btn:hover { border-color: #4f8ef7; color: #4f8ef7; }
     .dup-toggle-btn.active { background: #4f8ef7; border-color: #4f8ef7; color: white; }
 
+    /* Bulk select/action bar -- appears above the results list once 1+ question is checked via
+       the corner checkbox on question-card. Only ever populated from questionCardHtml (the
+       normal/review-queue card list), so it's hidden whenever duplicates/reports/diagram mode
+       is active -- those views have their own per-item or per-pair actions already. */
+    .bulk-action-bar { display: none; align-items: center; gap: 12px; background: #111; border: 1px solid #4f8ef7; border-radius: 10px; padding: 10px 14px; margin-bottom: 12px; flex-wrap: wrap; }
+    .bulk-action-bar .bulk-count { font-size: 12px; color: #4f8ef7; font-weight: 600; white-space: nowrap; }
+
     /* Question card -- copied from pyqbank.html's own styling so this is a faithful preview,
        not just a similar-looking one. */
-    .question-card { background: #111; border: 1px solid #1e1e1e; border-radius: 12px; padding: 20px; margin-bottom: 12px; }
+    .question-card { position: relative; background: #111; border: 1px solid #1e1e1e; border-radius: 12px; padding: 20px 48px 20px 20px; margin-bottom: 12px; }
+    .q-select-corner { position: absolute; top: 16px; right: 16px; cursor: pointer; }
+    .q-select-corner input[type="checkbox"] { width: 18px; height: 18px; cursor: pointer; accent-color: #4f8ef7; }
     .q-meta { font-size: 11px; color: #555; margin-bottom: 10px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
     .q-year { color: #4f8ef7; font-weight: 600; }
     .q-text { font-size: 14px; color: #ececec; line-height: 1.7; margin-bottom: 16px; }
@@ -254,6 +263,14 @@
       <div class="result-note" id="resultNote"></div>
     </div>
 
+    <div class="bulk-action-bar" id="bulkActionBar">
+      <label class="check-label"><input type="checkbox" id="selectAllCheckbox" onchange="toggleSelectAll(this.checked)"/> Select all on this page</label>
+      <span class="bulk-count" id="bulkSelectedCount">0 selected</span>
+      <button type="button" class="q-approve-btn" id="bulkApproveBtn" onclick="bulkApproveSelected()" style="display:none">✅ Approve Selected</button>
+      <button type="button" class="q-delete-btn" id="bulkDeleteBtn" onclick="bulkDeleteSelected()">🗑 Delete Selected</button>
+      <button type="button" class="q-edit-btn" onclick="clearSelection()">Clear</button>
+    </div>
+
     <div id="resultsArea"><div class="loading-text">Loading...</div></div>
 
     <div class="pagination" id="paginationBar">
@@ -269,6 +286,7 @@
     let currentPage = 1;
     let totalRows = 0;
     let currentRows = [];
+    let selectedIds = new Set();
     let duplicatesMode = false;
     let reviewMode = false;
     let reportsMode = false;
@@ -723,6 +741,8 @@
     async function loadResults() {
       const area = document.getElementById('resultsArea');
       area.innerHTML = '<div class="loading-text">Loading...</div>';
+      selectedIds.clear();
+      updateBulkBar();
 
       const params = new URLSearchParams();
       const subject = document.getElementById('filterSubject').value;
@@ -769,6 +789,111 @@
       document.getElementById('resultCount').textContent = reviewMode
         ? `${totalRows} question${totalRows === 1 ? '' : 's'} awaiting review`
         : `${totalRows} matching row${totalRows === 1 ? '' : 's'}`;
+    }
+
+    // ---------------- Bulk select ----------------
+    // Checkboxes only ever exist on cards rendered by questionCardHtml (normal list + review
+    // queue share that one function) -- duplicates/reports/diagram mode have their own per-item
+    // or per-pair actions already, so this bar is cleared/hidden on every mode switch and every
+    // fresh loadResults() fetch (see resetModeToggleUi() and loadResults() above).
+
+    function toggleQuestionSelect(id, checked) {
+      if (checked) selectedIds.add(id); else selectedIds.delete(id);
+      updateBulkBar();
+    }
+
+    function toggleSelectAll(checked) {
+      currentRows.forEach(r => { if (checked) selectedIds.add(r.id); else selectedIds.delete(r.id); });
+      renderResults();
+      updateBulkBar();
+    }
+
+    function clearSelection() {
+      selectedIds.clear();
+      renderResults();
+      updateBulkBar();
+    }
+
+    function updateBulkBar() {
+      const bar = document.getElementById('bulkActionBar');
+      const count = selectedIds.size;
+      bar.style.display = count > 0 ? 'flex' : 'none';
+      document.getElementById('bulkSelectedCount').textContent = `${count} selected`;
+      document.getElementById('bulkApproveBtn').style.display = reviewMode ? 'inline-block' : 'none';
+      const selectAllCb = document.getElementById('selectAllCheckbox');
+      selectAllCb.checked = currentRows.length > 0 && currentRows.every(r => selectedIds.has(r.id));
+    }
+
+    async function approveOneQuietly(id) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 20000);
+      try {
+        const res = await fetch(`${API_BASE}/admin/pyq-update/${id}`, {
+          method: 'PATCH',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ reviewed: true }),
+          signal: controller.signal
+        });
+        if (res.status === 401) return { error: 'unauthorized' };
+        if (!res.ok) return { error: await describeHttpError(res) };
+        const data = await res.json();
+        return data.error ? { error: data.error } : { success: true };
+      } catch (e) {
+        if (e.name === 'AbortError') return { error: 'Timed out waiting for the server -- check your connection and try again.' };
+        return { error: 'Could not reach server.' };
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    }
+
+    async function bulkApproveSelected() {
+      const ids = currentRows.map(r => r.id).filter(id => selectedIds.has(id));
+      if (ids.length === 0) return;
+      if (!confirm(`Mark ${ids.length} question${ids.length === 1 ? '' : 's'} as reviewed?`)) return;
+      const btn = document.getElementById('bulkApproveBtn');
+      const originalLabel = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = 'Approving...';
+      const results = await Promise.all(ids.map(id => approveOneQuietly(id)));
+      if (results.some(r => r.error === 'unauthorized')) return logout();
+      const succeeded = new Set();
+      const failures = [];
+      ids.forEach((id, i) => { if (results[i].error) failures.push(results[i].error); else succeeded.add(id); });
+      succeeded.forEach(id => selectedIds.delete(id));
+      currentRows = currentRows.filter(r => !succeeded.has(r.id));
+      totalRows = Math.max(0, totalRows - succeeded.size);
+      renderResults();
+      renderPagination();
+      updateResultCountText();
+      updateBulkBar();
+      btn.disabled = false;
+      btn.textContent = originalLabel;
+      if (failures.length) alert(`${failures.length} question${failures.length === 1 ? '' : 's'} failed to approve: ${failures.slice(0, 3).join(' / ')}${failures.length > 3 ? '...' : ''}. They remain selected -- try again.`);
+    }
+
+    async function bulkDeleteSelected() {
+      const ids = currentRows.map(r => r.id).filter(id => selectedIds.has(id));
+      if (ids.length === 0) return;
+      if (!confirm(`Permanently delete ${ids.length} question${ids.length === 1 ? '' : 's'} from Supabase? This cannot be undone from here.`)) return;
+      const btn = document.getElementById('bulkDeleteBtn');
+      const originalLabel = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = 'Deleting...';
+      const results = await Promise.all(ids.map(id => deleteOneQuietly(id)));
+      if (results.some(r => r.error === 'unauthorized')) return logout();
+      const succeeded = new Set();
+      const failures = [];
+      ids.forEach((id, i) => { if (results[i].error) failures.push(results[i].error); else succeeded.add(id); });
+      succeeded.forEach(id => selectedIds.delete(id));
+      currentRows = currentRows.filter(r => !succeeded.has(r.id));
+      totalRows = Math.max(0, totalRows - succeeded.size);
+      renderResults();
+      renderPagination();
+      updateResultCountText();
+      updateBulkBar();
+      btn.disabled = false;
+      btn.textContent = originalLabel;
+      if (failures.length) alert(`${failures.length} question${failures.length === 1 ? '' : 's'} failed to delete: ${failures.slice(0, 3).join(' / ')}${failures.length > 3 ? '...' : ''}. They remain selected -- try again.`);
     }
 
     // ---------------- Edit form: diagram upload/paste/remove ----------------
@@ -1134,6 +1259,7 @@
       const flags = computeFlags(q);
       return `
         <div class="question-card">
+          <label class="q-select-corner"><input type="checkbox" class="q-select-checkbox" ${selectedIds.has(q.id) ? 'checked' : ''} onchange="toggleQuestionSelect('${q.id}', this.checked)"/></label>
           <div class="q-meta">
             <span class="q-year">${q.year || ''}</span>
             <span>${escapeHtml(q.subject || '')}</span>
@@ -1169,6 +1295,8 @@
     // whichever toggle function activates its own, so a 3-way combination never leaves a
     // stale "active" button or disabled filter behind from whatever was on before it.
     function resetModeToggleUi() {
+      selectedIds.clear();
+      updateBulkBar();
       document.getElementById('dupToggleBtn').classList.remove('active');
       document.getElementById('reviewToggleBtn').classList.remove('active');
       document.getElementById('reportsToggleBtn').classList.remove('active');
@@ -1798,11 +1926,13 @@
         reportGroups = reportGroups.filter(g => g.pyq_id !== id);
         renderReportedQuestions();
       } else {
+        selectedIds.delete(id);
         currentRows = currentRows.filter(r => r.id !== id);
         totalRows = Math.max(0, totalRows - 1);
         renderResults();
         renderPagination();
         updateResultCountText();
+        updateBulkBar();
       }
     }
 
@@ -1812,31 +1942,21 @@
       const originalLabel = btnEl.textContent;
       btnEl.disabled = true;
       btnEl.textContent = 'Approving...';
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 20000);
-      try {
-        const res = await fetch(`${API_BASE}/admin/pyq-update/${id}`, {
-          method: 'PATCH',
-          headers: authHeaders({ 'Content-Type': 'application/json' }),
-          body: JSON.stringify({ reviewed: true }),
-          signal: controller.signal
-        });
-        if (res.status === 401) return logout();
-        if (!res.ok) { alert('Approve failed: ' + await describeHttpError(res)); btnEl.disabled = false; btnEl.textContent = originalLabel; return; }
-        const data = await res.json();
-        if (data.error) { alert('Approve failed: ' + data.error); btnEl.disabled = false; btnEl.textContent = originalLabel; return; }
-        currentRows = currentRows.filter(r => r.id !== id);
-        totalRows = Math.max(0, totalRows - 1);
-        renderResults();
-        renderPagination();
-        updateResultCountText();
-      } catch (e) {
-        alert(e.name === 'AbortError' ? 'Timed out waiting for the server -- check your connection and try again.' : 'Could not reach server.');
+      const result = await approveOneQuietly(id);
+      if (result.error === 'unauthorized') return logout();
+      if (result.error) {
+        alert('Approve failed: ' + result.error);
         btnEl.disabled = false;
         btnEl.textContent = originalLabel;
-      } finally {
-        clearTimeout(timeoutId);
+        return;
       }
+      selectedIds.delete(id);
+      currentRows = currentRows.filter(r => r.id !== id);
+      totalRows = Math.max(0, totalRows - 1);
+      renderResults();
+      renderPagination();
+      updateResultCountText();
+      updateBulkBar();
     }
 
     function renderPagination() {
