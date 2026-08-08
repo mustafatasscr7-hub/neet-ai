@@ -1086,6 +1086,21 @@ let selectedImages = [];
     // brackets are inconsistent) so this matches loosely rather than expecting an exact format.
     // Returns unchanged text with no metaHtml when the lines aren't found (e.g. history rows from
     // before this existed, or a non-doubt AI message like an error string).
+    // For short inline labels (like the chapter pill below) that may contain $...$ math --
+    // e.g. the model writing "The $p$-Block Elements" -- but shouldn't go through parseWithMath's
+    // full markdown parser, which would wrap plain text in a <p> block inside what needs to stay
+    // an inline pill. Escapes first so any literal HTML in the surrounding text stays safe, then
+    // substitutes the (now-escaped) $...$ segments with real KaTeX.
+    function renderInlineMathText(text) {
+      let html = escapeHtml(text);
+      html = html.replace(/\$([^$\n]+)\$/g, function(_, math) {
+        try {
+          return katex.renderToString(math.trim(), { displayMode: false, throwOnError: false });
+        } catch(e) { return _; }
+      });
+      return html;
+    }
+
     function extractAnswerMeta(text) {
       if (!text) return { cleanText: text, metaHtml: '' };
       const ratingMatch = text.match(/NEET Importance:\s*\[?(\d)\]?\s*\/\s*5/i);
@@ -1115,7 +1130,7 @@ let selectedImages = [];
         for (const sep of ['—', '–', ' - ']) {
           if (chapter.includes(sep)) { chapter = chapter.split(sep).pop().trim(); break; }
         }
-        if (chapter) chapterHtml = `<span class="answer-chapter-pill">${escapeHtml(chapter)}</span>`;
+        if (chapter) chapterHtml = `<span class="answer-chapter-pill">${renderInlineMathText(chapter)}</span>`;
       }
 
       const metaHtml = (starsHtml || chapterHtml) ? `<div class="answer-meta-row">${starsHtml}${chapterHtml}</div>` : '';
