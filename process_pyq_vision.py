@@ -135,6 +135,17 @@ marker falls within a question's own text, or immediately after its stem/options
 the next question starts, set has_diagram=true for THAT question only - not for other
 questions on the same page that have no marker near them.
 
+A number or unit immediately followed by "^{{...}}" (e.g. "10^{{24}}", "m^{{3}}") marks a
+genuine superscript from the original PDF, detected from the source's actual font size and
+vertical position, not a guess. Preserve these as LaTeX exponent notation wrapped in single
+dollar signs in your output -- e.g. source text "6.023 × 10^{{24}}" should become "$6.023 \times
+10^{{24}}$" in the extracted question/option. Never strip the ^{{...}} markup or flatten it back
+into plain concatenated digits (e.g. "1024"). This font-size detection occasionally
+mis-highlights an unrelated glyph as superscript (e.g. a degree symbol ° rendered in a broken
+font shows up as a raised "^{{1}}" mid-word) -- if a ^{{...}} span clearly isn't a real
+mathematical exponent or unit power given the surrounding context, use your own scientific
+judgement to write what the notation most likely actually is instead of outputting it literally.
+
 For EACH complete question in this text, extract:
 - question (full question text, including any sub-statements A/B/C/D or i/ii/iii if part of the question) - do not include the marker itself in the question text
 - option_a, option_b, option_c, option_d (exact text of each option)
@@ -187,10 +198,52 @@ def looks_garbled_or_empty(text, min_length=MIN_TEXT_LENGTH, min_alnum_ratio=MIN
     alnum_count = sum(c.isalnum() for c in stripped)
     return (alnum_count / len(stripped)) < min_alnum_ratio
 
+def _reconstruct_line_text(line):
+    """Joins a line's spans into plain text, wrapping any span that's genuinely superscript-
+    formatted (meaningfully smaller font AND raised above the line's own baseline, vs. the
+    line's own dominant-size spans) in ^{...}. get_text("blocks")/plain get_text("text") only
+    return character content with no font-size/position info, so a real exponent like "10"
+    followed by a raised, smaller "24" span gets silently concatenated into the wrong number
+    "1024" with no trace two separate spans were ever superscripted -- confirmed via
+    get_text("dict") on a real NEET PDF (QP_2019.pdf p1: normal-text spans share one origin y
+    at font size 10.08, the exponent digit span sits ~4pt higher at size 7.44, ~74% as tall)."""
+    spans = [s for s in line.get("spans", []) if s.get("text")]
+    if not spans:
+        return ""
+    sizes = [s["size"] for s in spans if s["text"].strip()]
+    if not sizes:
+        return "".join(s["text"] for s in spans)
+    base_size = max(sizes)
+    baseline_y = min(s["origin"][1] for s in spans if s["size"] >= base_size - 0.1)
+
+    out = ""
+    in_super = False
+    for s in spans:
+        text = s["text"]
+        if not text:
+            continue
+        is_super = bool(text.strip()) and s["size"] < base_size * 0.85 and s["origin"][1] < baseline_y - 1
+        if is_super and not in_super:
+            out += "^{"
+            in_super = True
+        elif not is_super and in_super:
+            out += "}"
+            in_super = False
+        out += text
+    if in_super:
+        out += "}"
+    return out
+
+def _block_text_from_dict(block):
+    line_texts = [_reconstruct_line_text(line) for line in block.get("lines", [])]
+    return "\n".join(t for t in line_texts if t)
+
 def extract_pages_text_and_diagrams(pdf_bytes):
     """Free/local, no API call: raw text per page (PyMuPDF), with a marker inserted at the
     actual on-page position of each real (non-watermark) image, so the extraction model can attribute
-    has_diagram to the correct individual question rather than the whole page.
+    has_diagram to the correct individual question rather than the whole page. Also preserves
+    real superscript exponents (see _reconstruct_line_text) that plain block-mode text would
+    silently flatten into wrong plain-digit numbers.
 
     Images that repeat identically (same xref) across multiple pages are treated as a
     watermark/logo/letterhead, not a real per-question diagram - confirmed empirically on
@@ -210,9 +263,12 @@ def extract_pages_text_and_diagrams(pdf_bytes):
     for i, page in enumerate(doc):
         real_diagram_xrefs = page_xrefs[i] - template_xrefs
         text_entries = []  # (y0, text)
-        for x0, y0, x1, y1, block_text, block_no, block_type in page.get_text("blocks"):
-            if block_type == 0 and block_text.strip():
-                text_entries.append((y0, block_text.strip()))
+        for block in page.get_text("dict")["blocks"]:
+            if block.get("type") != 0:
+                continue
+            block_text = _block_text_from_dict(block)
+            if block_text.strip():
+                text_entries.append((block["bbox"][1], block_text.strip()))
 
         # A one-time (non-repeating) image sitting ABOVE the first real question on the page -
         # e.g. a chapter-title banner - is a decorative header, not a per-question diagram.
