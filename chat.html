@@ -221,14 +221,14 @@
 
     .sidebar-label { font-size: 12px; font-weight: 600; color: #666; padding: 10px 12px 6px; }
 
-    .history-list { display: flex; flex-direction: column; gap: 1px; overflow-y: auto; flex: 1; }
+    .history-list { display: flex; flex-direction: column; gap: 2px; overflow-y: auto; overflow-x: hidden; flex: 1; }
     .history-list::-webkit-scrollbar { width: 3px; }
     .history-list::-webkit-scrollbar-thumb { background: #2a2a2a; border-radius: 4px; }
 
-    .history-item { padding: 9px 12px; border-radius: 8px; font-size: 13px; color: #888; cursor: pointer; transition: all 0.15s; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border: 1px solid transparent; position: relative; display: flex; align-items: center; }
+    .history-item { box-sizing: border-box; height: 38px; padding: 0 12px; border-radius: 8px; font-size: 13px; line-height: 1.4; color: #888; cursor: pointer; transition: background 0.15s, color 0.15s; border: 1px solid transparent; position: relative; display: flex; align-items: center; flex-shrink: 0; }
     .history-item:hover { background: #1a1a1a; color: #ccc; }
     .history-item.active { background: #1a1a1a; color: #ececec; }
-    .history-item .item-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .history-item .item-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
     .item-menu-btn { display: none; flex-shrink: 0; width: 24px; height: 24px; align-items: center; justify-content: center; border-radius: 5px; cursor: pointer; color: #666; margin-left: 4px; }
     .history-item:hover .item-menu-btn { display: flex; }
