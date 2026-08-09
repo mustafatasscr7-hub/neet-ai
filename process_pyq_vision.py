@@ -138,13 +138,23 @@ questions on the same page that have no marker near them.
 A number or unit immediately followed by "^{{...}}" (e.g. "10^{{24}}", "m^{{3}}") marks a
 genuine superscript from the original PDF, detected from the source's actual font size and
 vertical position, not a guess. Preserve these as LaTeX exponent notation wrapped in single
-dollar signs in your output -- e.g. source text "6.023 × 10^{{24}}" should become "$6.023 \times
+dollar signs in your output -- e.g. source text "6.023 × 10^{{24}}" should become "$6.023 \\times
 10^{{24}}$" in the extracted question/option. Never strip the ^{{...}} markup or flatten it back
 into plain concatenated digits (e.g. "1024"). This font-size detection occasionally
 mis-highlights an unrelated glyph as superscript (e.g. a degree symbol ° rendered in a broken
 font shows up as a raised "^{{1}}" mid-word) -- if a ^{{...}} span clearly isn't a real
 mathematical exponent or unit power given the surrounding context, use your own scientific
 judgement to write what the notation most likely actually is instead of outputting it literally.
+
+More generally, whenever you write ANY mathematical notation in the extracted question/option
+text -- subscripts (e.g. mu-naught as $\\mu_{{0}}$), superscripts/exponents, Greek letters used
+as symbols (e.g. $\\varepsilon$, $\\theta$), fractions, or any other LaTeX command -- always wrap
+the whole math expression in single dollar signs ($...$), covering just the mathematical part,
+not the surrounding plain-English words. Never output raw LaTeX (backslash commands, ^, _, {{}})
+outside of $...$ delimiters -- unwrapped LaTeX displays as literal text with visible braces and
+backslashes to the student, not as rendered math. Example: source text "dimensions of
+(mu0 epsilon0)^-1/2 are" should become "dimensions of $(\\mu_{{0}}\\varepsilon_{{0}})^{{-1/2}}$
+are", not left as plain "(mu0 epsilon0)^-1/2" or only partially wrapped.
 
 For EACH complete question in this text, extract:
 - question (full question text, including any sub-statements A/B/C/D or i/ii/iii if part of the question) - do not include the marker itself in the question text
@@ -287,6 +297,16 @@ def extract_pages_text_and_diagrams(pdf_bytes):
     doc.close()
     return pages
 
+def _fix_unescaped_json_backslashes(text):
+    """Gemini is inconsistent about JSON-escaping the literal backslashes in LaTeX commands it
+    writes (e.g. \\mu, \\varepsilon, \\times) inside the extracted question/option strings --
+    confirmed live: the exact same prompt, same content, sometimes correctly emits \\\\mu and
+    sometimes invalid raw \\mu, non-deterministically. Prompting harder didn't fix it (tried,
+    including response_mime_type="application/json"), so this defensively doubles any backslash
+    NOT already followed by a valid JSON escape character, fixing the invalid ones without
+    touching already-correct ones."""
+    return re.sub(r'\\(?![\\"/bfnrtu])', r'\\\\', text)
+
 def extract_questions_from_text(page_text, page_num, subject="Biology", model=TEXT_MODEL):
     prompt = build_text_extraction_prompt(subject).replace("{page_text}", page_text)
     response = gemini_client.models.generate_content(
@@ -303,6 +323,10 @@ def extract_questions_from_text(page_text, page_num, subject="Biology", model=TE
 
     try:
         return json.loads(text)
+    except Exception:
+        pass
+    try:
+        return json.loads(_fix_unescaped_json_backslashes(text))
     except Exception as e:
         print(f"    JSON parse error on page {page_num}: {e}")
         return []
