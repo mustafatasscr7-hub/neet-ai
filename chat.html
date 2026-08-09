@@ -444,6 +444,9 @@
     .action-btn { background: transparent; border: none; color: #666; cursor: pointer; padding: 4px 6px; border-radius: 6px; display: flex; align-items: center; justify-content: center; transition: all 0.2s; }
     .action-btn:hover { background: #1a1a1a; color: #ccc; }
     .action-btn svg { width: 15px; height: 15px; }
+    .action-btn.speaking { color: #4f8ef7; }
+    .action-btn.speaking:hover { color: #4f8ef7; }
+    body.light-mode .action-btn.speaking { color: #4f8ef7 !important; }
     #pyq-modal ul, #pyq-modal ol { padding-left: 16px; margin: 4px 0; }
     #pyq-modal li { word-wrap: break-word; overflow-wrap: break-word; }
     #pyq-modal .katex-display { overflow-x: auto; overflow-y: hidden; }
@@ -2192,15 +2195,118 @@ let selectedImages = [];
       }
     }
 
+    // ---------------- Read Aloud (Web Speech API, entirely client-side, zero API cost) ----------------
+    const SPEAK_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>';
+    const STOP_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>';
+    let activeSpeechBtn = null; // the one .action-btn currently in "speaking" state, if any
+
+    // Greek letters and common math commands as their spoken names -- deliberately not a full
+    // math-to-speech parser (not worth it here), just enough that a formula reads as words
+    // instead of literal backslashes/braces. Anything not in this map just gets its backslash
+    // stripped below, falling back to reading the bare command name (close enough for rare ones).
+    const SPEECH_SYMBOL_WORDS = {
+      varepsilon: 'epsilon', epsilon: 'epsilon', alpha: 'alpha', beta: 'beta', gamma: 'gamma',
+      Gamma: 'gamma', delta: 'delta', Delta: 'delta', zeta: 'zeta', eta: 'eta', theta: 'theta',
+      vartheta: 'theta', Theta: 'theta', iota: 'iota', kappa: 'kappa', lambda: 'lambda',
+      Lambda: 'lambda', mu: 'mu', nu: 'nu', xi: 'xi', pi: 'pi', Pi: 'pi', rho: 'rho',
+      sigma: 'sigma', Sigma: 'sigma', tau: 'tau', phi: 'phi', varphi: 'phi', Phi: 'phi',
+      chi: 'chi', psi: 'psi', Psi: 'psi', omega: 'omega', Omega: 'omega',
+      times: 'times', div: 'divided by', cdot: 'times', pm: 'plus or minus', mp: 'minus or plus',
+      leq: 'less than or equal to', geq: 'greater than or equal to', neq: 'not equal to',
+      approx: 'approximately equal to', infty: 'infinity', rightarrow: 'leads to', to: 'leads to',
+      propto: 'is proportional to', partial: 'partial', nabla: 'del', circ: 'degrees'
+    };
+
+    // Converts one $...$/$$...$$ math span's LaTeX into words a TTS engine reads sensibly.
+    // Digits/variables are left as plain text -- speechSynthesis already pronounces numerals
+    // correctly on its own, no need to spell "24" out as "twenty-four" by hand.
+    function mathForSpeech(math) {
+      let m = math;
+      for (let pass = 0; pass < 3; pass++) {
+        m = m.replace(/\\frac\{([^{}]*)\}\{([^{}]*)\}/g, '($1) over ($2)');
+      }
+      m = m.replace(/\\sqrt\{([^{}]*)\}/g, 'the square root of ($1)');
+      m = m.replace(/\\sqrt\s*([a-zA-Z0-9])/g, 'the square root of $1');
+      m = m.replace(/\^\{([^{}]*)\}/g, ' to the power of $1 ');
+      m = m.replace(/\^([a-zA-Z0-9])/g, ' to the power of $1 ');
+      m = m.replace(/_\{([^{}]*)\}/g, ' sub $1 ');
+      m = m.replace(/_([a-zA-Z0-9])/g, ' sub $1 ');
+      m = m.replace(/\\([a-zA-Z]+)/g, (full, word) => ' ' + (SPEECH_SYMBOL_WORDS[word] !== undefined ? SPEECH_SYMBOL_WORDS[word] : word) + ' ');
+      // Whatever LaTeX punctuation is still left (braces, stray backslashes) has nothing left
+      // to say -- drop it rather than read it aloud literally.
+      m = m.replace(/[{}\\]/g, ' ');
+      return m.replace(/\s{2,}/g, ' ').trim();
+    }
+
+    // Full answer text -> speakable plain text. Assumes extractAnswerMeta() already stripped
+    // the NEET Importance/Chapter header lines (those are shown as the stars/pill, not meant
+    // to be read aloud) -- callers pass that cleanText in, not the raw stored message.
+    function textForSpeech(text) {
+      if (!text) return '';
+      let out = text;
+      out = out.replace(/\$\$([\s\S]*?)\$\$/g, (_, inner) => ' ' + mathForSpeech(inner) + '. ');
+      out = out.replace(/\$([^$\n]+?)\$/g, (_, inner) => ' ' + mathForSpeech(inner) + ' ');
+      out = out.replace(/```[\s\S]*?```/g, ' '); // code/mermaid blocks aren't meaningful read aloud
+      out = out.replace(/`([^`]+)`/g, '$1');
+      out = out.replace(/\*\*(.*?)\*\*/g, '$1');
+      out = out.replace(/\*(.*?)\*/g, '$1');
+      out = out.replace(/^#{1,6}\s+/gm, '');
+      out = out.replace(/^[-*]\s+/gm, '');
+      out = out.replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, ''); // 📚📝🔑🧠✅⭐ etc. section markers
+      out = out.replace(/\s{2,}/g, ' ').trim();
+      return out;
+    }
+
+    function setSpeechBtnState(btn, speaking) {
+      btn.classList.toggle('speaking', speaking);
+      btn.title = speaking ? 'Stop reading' : 'Read aloud';
+      btn.innerHTML = speaking ? STOP_ICON : SPEAK_ICON;
+    }
+
+    // Clicking the button that's already reading stops it. Clicking a different message's
+    // button stops whatever's currently playing (only one at a time) and starts the new one.
+    function toggleSpeech(btn) {
+      if (activeSpeechBtn === btn) {
+        speechSynthesis.cancel();
+        setSpeechBtnState(btn, false);
+        activeSpeechBtn = null;
+        return;
+      }
+      if (activeSpeechBtn) setSpeechBtnState(activeSpeechBtn, false);
+      speechSynthesis.cancel();
+
+      const row = btn.closest('.message-row');
+      const msgIndex = parseInt(row.dataset.msgIndex, 10);
+      const msg = !isNaN(msgIndex) ? currentConversation[msgIndex] : undefined;
+      const rawText = msg ? msg.text : btn.closest('.message-content').querySelector('.message-bubble').innerText;
+      const { cleanText } = extractAnswerMeta(rawText);
+      const speechText = textForSpeech(cleanText);
+      if (!speechText) { activeSpeechBtn = null; return; }
+
+      const utterance = new SpeechSynthesisUtterance(speechText);
+      utterance.onend = () => { setSpeechBtnState(btn, false); if (activeSpeechBtn === btn) activeSpeechBtn = null; };
+      utterance.onerror = () => { setSpeechBtnState(btn, false); if (activeSpeechBtn === btn) activeSpeechBtn = null; };
+      activeSpeechBtn = btn;
+      setSpeechBtnState(btn, true);
+      speechSynthesis.speak(utterance);
+    }
+
     function buildActionsDiv(role, timeStr) {
       const actions = document.createElement('div');
       actions.className = 'message-actions';
       if (role === 'ai') {
+        // Read Aloud is entirely absent (not just hidden) when the browser has no
+        // speechSynthesis support -- an unsupported feature shouldn't leave a dead button.
+        const speechSupported = 'speechSynthesis' in window && typeof SpeechSynthesisUtterance !== 'undefined';
+        const readAloudBtnHtml = speechSupported ? `
+          <button class="action-btn" title="Read aloud" onclick="toggleSpeech(this)">${SPEAK_ICON}</button>
+        ` : '';
         actions.innerHTML = `
           <span class="message-time">${timeStr}</span>
           <button class="action-btn" title="Copy" onclick="copyMessage(this)">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
           </button>
+          ${readAloudBtnHtml}
           <button class="action-btn" title="Share" onclick="shareMessage(this)">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>
           </button>
