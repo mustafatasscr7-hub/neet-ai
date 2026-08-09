@@ -662,12 +662,7 @@
           </button>
         </div>
         <div class="input-hint" data-i18n="chat.disclaimerMistakes">NEET-AI can make mistakes. Please verify important answers.</div>
-        <div class="suggestions">
-          <div class="suggestion"><span class="suggestion-icon">🔬</span><span data-i18n="chat.suggestion1">What is crossing over in meiosis?</span></div>
-          <div class="suggestion"><span class="suggestion-icon">⚗️</span><span data-i18n="chat.suggestion2">Explain Krebs cycle step by step</span></div>
-          <div class="suggestion"><span class="suggestion-icon">📊</span><span data-i18n="chat.suggestion3">Most important Biology topics for NEET 2025</span></div>
-          <div class="suggestion"><span class="suggestion-icon">🧪</span><span data-i18n="chat.suggestion4">Difference between DNA and RNA</span></div>
-        </div>
+        <div class="suggestions" id="suggestions"></div>
       </div>
     </div>
 
@@ -831,6 +826,93 @@
       if (hasCountdown) variants = variants.concat(pool.countdown(countdownText));
 
       el.textContent = variants[Math.floor(Math.random() * variants.length)];
+    }
+
+    // Pool for the 4 empty-state suggestion cards -- weighted toward Biology (16) since it's
+    // NEET's highest-weightage subject, with Physics and Chemistry (12 each) well represented.
+    // icon is language-independent so it isn't duplicated per language.
+    const SUGGESTION_POOL = [
+      { icon: '🔬', en: 'What is crossing over in meiosis?', hi: 'अर्धसूत्रण में क्रॉसिंग ओवर क्या है?' },
+      { icon: '🧬', en: 'Explain the structure of DNA in simple terms', hi: 'DNA की संरचना सरल शब्दों में समझाएं' },
+      { icon: '📊', en: 'Most important Biology topics for NEET 2025', hi: 'NEET 2025 के लिए सबसे महत्वपूर्ण जीव विज्ञान विषय' },
+      { icon: '🧬', en: 'Difference between DNA and RNA', hi: 'DNA और RNA में अंतर' },
+      { icon: '🔋', en: 'Explain the Krebs cycle step by step', hi: 'क्रेब्स चक्र चरणबद्ध तरीके से समझाएं' },
+      { icon: '🫀', en: 'How does the human heart pump blood?', hi: 'मानव हृदय रक्त कैसे पंप करता है?' },
+      { icon: '🌱', en: 'Explain photosynthesis — light and dark reactions', hi: 'प्रकाश संश्लेषण — प्रकाश और अंधकार अभिक्रिया समझाएं' },
+      { icon: '🧬', en: 'Difference between mitosis and meiosis', hi: 'समसूत्रण और अर्धसूत्रण में अंतर' },
+      { icon: '🦠', en: 'How does the immune system recognize pathogens?', hi: 'प्रतिरक्षा तंत्र रोगजनकों को कैसे पहचानता है?' },
+      { icon: '🌿', en: 'Explain transpiration in plants', hi: 'पौधों में वाष्पोत्सर्जन समझाएं' },
+      { icon: '🧫', en: 'Role of ribosomes in protein synthesis', hi: 'प्रोटीन संश्लेषण में राइबोसोम की भूमिका' },
+      { icon: '🩺', en: 'Explain the human excretory system briefly', hi: 'मानव उत्सर्जन तंत्र संक्षेप में समझाएं' },
+      { icon: '🧬', en: "What are Mendel's laws of inheritance?", hi: 'मेंडल के वंशागति के नियम क्या हैं?' },
+      { icon: '🌾', en: 'What is double fertilization in angiosperms?', hi: 'आवृत्तबीजी पौधों में द्विनिषेचन क्या है?' },
+      { icon: '🧠', en: 'How does a nerve impulse cross a synapse?', hi: 'तंत्रिका आवेग सिनैप्स को कैसे पार करता है?' },
+      { icon: '🫁', en: 'Explain the mechanism of breathing in humans', hi: 'मनुष्यों में श्वसन क्रिया समझाएं' },
+      { icon: '⚗️', en: 'Explain hybridization with a simple example', hi: 'एक उदाहरण के साथ संकरण समझाएं' },
+      { icon: '🧪', en: 'Difference between molarity and molality', hi: 'मोलरता और मोललता में अंतर' },
+      { icon: '⚛️', en: 'Explain the octet rule with examples', hi: 'उदाहरणों के साथ अष्टक नियम समझाएं' },
+      { icon: '🧫', en: 'What are structural and geometrical isomers?', hi: 'संरचनात्मक और ज्यामितीय समावयवी क्या हैं?' },
+      { icon: '🔥', en: "State Le Chatelier's principle", hi: 'ले शातेलिए का सिद्धांत बताएं' },
+      { icon: '🧪', en: 'Difference between SN1 and SN2 reactions', hi: 'SN1 और SN2 अभिक्रियाओं में अंतर' },
+      { icon: '⚗️', en: 'Explain oxidation number with an example', hi: 'एक उदाहरण के साथ ऑक्सीकरण संख्या समझाएं' },
+      { icon: '🧫', en: 'Difference between molecularity and order of reaction', hi: 'अणुसंख्या और अभिक्रिया की कोटि में क्या अंतर है?' },
+      { icon: '🧪', en: 'Explain the trend in ionization enthalpy across a period', hi: 'एक आवर्त में आयनन एन्थैल्पी की प्रवृत्ति समझाएं' },
+      { icon: '⚗️', en: 'What is a buffer solution and how does it work?', hi: 'बफर विलयन क्या है और यह कैसे काम करता है?' },
+      { icon: '📊', en: 'Most important Chemistry topics for NEET 2025', hi: 'NEET 2025 के लिए सबसे महत्वपूर्ण रसायन विज्ञान विषय' },
+      { icon: '🧪', en: "Explain Markovnikov's rule with an example", hi: 'एक उदाहरण के साथ मार्कोनिकॉफ का नियम समझाएं' },
+      { icon: '⚡', en: "Explain Ohm's law with a simple example", hi: 'एक सरल उदाहरण के साथ ओम का नियम समझाएं' },
+      { icon: '🧲', en: 'Difference between electric field and magnetic field', hi: 'विद्युत क्षेत्र और चुंबकीय क्षेत्र में अंतर' },
+      { icon: '🌊', en: 'Explain the principle of wave interference', hi: 'तरंग व्यतिकरण का सिद्धांत समझाएं' },
+      { icon: '🎯', en: "State and explain Newton's three laws of motion", hi: 'न्यूटन के गति के तीन नियम बताएं और समझाएं' },
+      { icon: '📐', en: 'How do you calculate the moment of inertia of a disc?', hi: 'एक चकती के जड़त्व आघूर्ण की गणना कैसे करें?' },
+      { icon: '⚛️', en: 'Explain the photoelectric effect simply', hi: 'प्रकाश विद्युत प्रभाव सरलता से समझाएं' },
+      { icon: '🔋', en: 'Difference between EMF and terminal voltage', hi: 'EMF और टर्मिनल वोल्टेज में अंतर' },
+      { icon: '🚀', en: 'Explain projectile motion with an example', hi: 'एक उदाहरण के साथ प्रक्षेप्य गति समझाएं' },
+      { icon: '🌡️', en: 'State the first law of thermodynamics', hi: 'ऊष्मागतिकी का पहला नियम बताएं' },
+      { icon: '🔭', en: 'Explain the Bohr model of the atom', hi: 'परमाणु का बोर मॉडल समझाएं' },
+      { icon: '📊', en: 'Most important Physics chapters for NEET 2025', hi: 'NEET 2025 के लिए सबसे महत्वपूर्ण भौतिकी अध्याय' },
+      { icon: '🪞', en: 'Difference between real and virtual images', hi: 'वास्तविक और आभासी प्रतिबिंब में अंतर' }
+    ];
+
+    // Fisher-Yates partial shuffle -- picks n distinct random entries from the pool with no
+    // duplicates in a single set of cards.
+    function pickRandomSuggestions(n) {
+      const indices = SUGGESTION_POOL.map((_, i) => i);
+      for (let i = indices.length - 1; i > indices.length - 1 - n; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [indices[i], indices[j]] = [indices[j], indices[i]];
+      }
+      return indices.slice(indices.length - n).map(i => SUGGESTION_POOL[i]);
+    }
+
+    // Remembers the currently-displayed picks so a language switch can re-render the SAME 4
+    // cards in the new language instead of re-rolling a new random set.
+    let lastSuggestionPicks = [];
+
+    function paintSuggestionCards(picks) {
+      const container = document.getElementById('suggestions');
+      if (!container) return;
+      const lang = getLang();
+      container.innerHTML = picks.map(s =>
+        `<div class="suggestion"><span class="suggestion-icon">${s.icon}</span><span>${s[lang] || s.en}</span></div>`
+      ).join('');
+      container.querySelectorAll('.suggestion').forEach(function(s) {
+        s.addEventListener('click', function() { input.value = s.querySelector('span:last-child').textContent.trim(); sendMessage(); });
+      });
+    }
+
+    // Called on initial load and on "New Chat" (showWelcome) -- rolls a fresh random set of 4.
+    // No-ops once a real conversation is showing (#suggestions no longer in the DOM).
+    function renderSuggestionCards() {
+      if (!document.getElementById('suggestions')) return;
+      lastSuggestionPicks = pickRandomSuggestions(4);
+      paintSuggestionCards(lastSuggestionPicks);
+    }
+
+    // Called on language switch -- keeps the same 4 cards, just re-rendered in the new language.
+    function retranslateSuggestionCards() {
+      if (!lastSuggestionPicks.length) return;
+      paintSuggestionCards(lastSuggestionPicks);
     }
 
   function updateCountdown() {
@@ -3054,9 +3136,10 @@ function plainTextFromMarkdown(text) {
       const welcome = document.createElement('div');
       welcome.className = 'welcome';
       welcome.id = 'welcome';
-      welcome.innerHTML = `<h2 id="welcomeGreeting">${t('chat','welcomeHeading')}</h2><div class="welcome-search"><input type="text" id="welcomeInput" placeholder="${t('chat','askPlaceholder')}" /><button id="welcomeVoiceBtn" class="voice-btn" onclick="toggleVoice()" style="background:transparent;border:none;color:#666;cursor:pointer;padding:6px;display:flex;align-items:center;flex-shrink:0;border-radius:8px;" title="Voice input"><svg class="voice-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg></button><button class="welcome-send" id="welcomeSend"><svg viewBox="0 0 24 24"><path d="M2 21l21-9L2 3v7l15 2-15 2v7z"/></svg></button></div><div class="input-hint">${t('chat','disclaimerMistakes')}</div><div class="suggestions"><div class="suggestion"><span class="suggestion-icon">🔬</span>${t('chat','suggestion1')}</div><div class="suggestion"><span class="suggestion-icon">⚗️</span>${t('chat','suggestion2')}</div><div class="suggestion"><span class="suggestion-icon">📊</span>${t('chat','suggestion3')}</div><div class="suggestion"><span class="suggestion-icon">🧪</span>${t('chat','suggestion4')}</div></div>`;
+      welcome.innerHTML = `<h2 id="welcomeGreeting">${t('chat','welcomeHeading')}</h2><div class="welcome-search"><input type="text" id="welcomeInput" placeholder="${t('chat','askPlaceholder')}" /><button id="welcomeVoiceBtn" class="voice-btn" onclick="toggleVoice()" style="background:transparent;border:none;color:#666;cursor:pointer;padding:6px;display:flex;align-items:center;flex-shrink:0;border-radius:8px;" title="Voice input"><svg class="voice-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg></button><button class="welcome-send" id="welcomeSend"><svg viewBox="0 0 24 24"><path d="M2 21l21-9L2 3v7l15 2-15 2v7z"/></svg></button></div><div class="input-hint">${t('chat','disclaimerMistakes')}</div><div class="suggestions" id="suggestions"></div>`;
       chatWindow.appendChild(welcome);
       renderWelcomeGreeting();
+      renderSuggestionCards();
       document.getElementById('welcomeInput').addEventListener('keydown', function(e) {
         if (handleSlashMenuKeydown(e, this)) return;
         if (e.key === 'Enter') { input.value = this.value; sendMessage(); }
@@ -3067,14 +3150,9 @@ function plainTextFromMarkdown(text) {
         input.value = document.getElementById('welcomeInput').value;
         sendMessage();
       });
-      document.querySelectorAll('.suggestion').forEach(function(s) {
-        s.addEventListener('click', function() { input.value = s.textContent.trim(); sendMessage(); });
-      });
     }
 
-    document.querySelectorAll('.suggestion').forEach(function(s) {
-      s.addEventListener('click', function() { input.value = s.textContent.trim(); sendMessage(); });
-    });
+    renderSuggestionCards();
 
     document.getElementById('newChatBtn').addEventListener('click', function() {
       currentConversation = [];
@@ -4000,6 +4078,7 @@ function openSettings() {
         Object.keys(SETTINGS_DROPDOWNS).forEach(refreshSettingsDropdown);
       }
       renderWelcomeGreeting(); // no-op if a real conversation is showing, not the welcome screen
+      retranslateSuggestionCards();
     });
 
     // Tracks the last-saved value so input can be compared against it on every keystroke --
