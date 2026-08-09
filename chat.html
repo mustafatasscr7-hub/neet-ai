@@ -3537,6 +3537,16 @@ function plainTextFromMarkdown(text) {
           if (response.status === 402) {
             await refreshUsageBanner();
             addMessageRow('ai', t('chat', session ? 'limitReachedMessage' : 'guestLimitReachedMessage'));
+          } else if (response.status === 413) {
+            let detail = {};
+            try { detail = (await response.json()).detail || {}; } catch (e) {}
+            let msg = t('chat', 'pdfLimitExceeded')
+              .replace('{size}', localizeNum(detail.max_mb ?? ''))
+              .replace('{pages}', localizeNum(detail.max_pages ?? ''));
+            if (detail.next_tier) {
+              msg += ' ' + t('chat', 'pdfLimitUpgrade').replace('{tier}', detail.next_tier);
+            }
+            addMessageRow('ai', msg);
           } else {
             addMessageRow('ai', 'Something went wrong. Please try again.');
           }

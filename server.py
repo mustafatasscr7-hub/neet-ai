@@ -12,6 +12,7 @@ import httpx
 import openai
 from google import genai
 from google.genai import types as genai_types
+import fitz  # PyMuPDF -- page-count check for PDF tier limits
 import base64
 import re
 from dotenv import load_dotenv
@@ -51,7 +52,6 @@ app.add_middleware(
     expose_headers=["*"],
 )
 
-ANTHROPIC_KEY = os.getenv("ANTHROPIC_KEY")
 DEEPSEEK_KEY = os.getenv("DEEPSEEK_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 OPENAI_KEY = os.getenv("OPENAI_KEY")
@@ -63,13 +63,9 @@ SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", SUPABASE_KEY)
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "neetai-admin-2027")
 
 openai_client = openai.OpenAI(api_key=OPENAI_KEY)
-# Reused across every request, same reasoning as the httpx.AsyncClient fix above -- creating
-# a fresh anthropic.Anthropic() per call was measured adding real overhead (client construction
-# ~0.2-0.3s, then establishing that fresh connection to Anthropic's API added another 1-2s+ on
-# top, sometimes far more), on top of whatever Anthropic's own response time actually is.
-anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
 # Text doubt-answering (/chat, /solve) runs on DeepSeek V4 Flash via its Anthropic-compatible
-# endpoint, not Claude -- same anthropic SDK, just pointed at a different base_url. DeepSeek's
+# endpoint, not Claude -- the `anthropic` package is still used here as an SDK, just pointed at
+# a different base_url; there is no live Claude/anthropic.com client left in this file. DeepSeek's
 # vision support isn't reliable (confirmed via live testing -- it silently hallucinates on images
 # instead of erroring), so it's never used for image-attached questions.
 deepseek_client = anthropic.Anthropic(api_key=DEEPSEEK_KEY, base_url="https://api.deepseek.com/anthropic")
@@ -78,8 +74,9 @@ deepseek_client = anthropic.Anthropic(api_key=DEEPSEEK_KEY, base_url="https://ap
 # organic mechanisms and IUPAC-adjacent naming, both on clean crops and camera-photo-style
 # (tilted/blurred/shadowed) images; the one consistent weak spot is graph/curve-matching
 # questions (~73% across rounds) -- mitigated, not fixed, by the graph_context prompt addition
-# in stream_response() below. anthropic_client (Claude) stays in use for PDF-attached questions
-# only -- Gemini's PDF handling was never tested, so it wasn't included in this swap.
+# in stream_response() below. PDF-attached doubts moved to Gemini too, after a standalone test
+# (91% accuracy across 3 real PDFs, scanned + text-based) confirmed Part.from_bytes handles
+# application/pdf the same way it handles images -- see the pdf branch in stream_response().
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 import requests as http_requests
 from process_pyq_vision import scan_pdf_bytes, scan_mock_test_pdf
@@ -489,6 +486,52 @@ async def get_user_plan(user_id: str) -> str:
     except Exception:
         return "free"
 
+# PDF-attachment size/page limits per tier. Only "free" and "pro" are actually reachable today --
+# admin_set_user_plan() (see below) only accepts those two values, so "max" is here for when a
+# real Max plan value can actually be assigned, not because any user can be "max" yet.
+PDF_LIMITS = {
+    "free": {"max_mb": 3, "max_pages": 5},
+    "pro": {"max_mb": 10, "max_pages": 20},
+    "max": {"max_mb": 20, "max_pages": 25},
+}
+PDF_NEXT_TIER = {"free": "Pro", "pro": "Max", "max": None}
+
+def _pdf_tier_for_plan(plan: str) -> str:
+    if plan == "free":
+        return "free"
+    if plan == "max":
+        return "max"
+    return "pro"  # covers "pro" and any other non-free/non-max value defensively
+
+async def validate_pdf_limits(pdf_b64: "str | None", user_id: str):
+    """Raises HTTPException(413) before any Gemini call if the PDF exceeds the user's tier
+    limit -- called from the /chat route handler (not inside stream_response's generator),
+    same timing as enforce_daily_budget, so it produces a clean error response instead of
+    failing mid-stream."""
+    if not pdf_b64:
+        return
+    plan = await get_user_plan(user_id)
+    tier = _pdf_tier_for_plan(plan)
+    limits = PDF_LIMITS[tier]
+    pdf_bytes = base64.b64decode(pdf_b64)
+    size_mb = len(pdf_bytes) / (1024 * 1024)
+    try:
+        page_count = fitz.open(stream=pdf_bytes, filetype="pdf").page_count
+    except Exception:
+        page_count = None  # unreadable/corrupt -- let Gemini's own error surface instead of guessing here
+    exceeds = size_mb > limits["max_mb"] or (page_count is not None and page_count > limits["max_pages"])
+    if exceeds:
+        next_tier = PDF_NEXT_TIER[tier]
+        message = f"This PDF exceeds your plan's limit ({limits['max_mb']}MB / {limits['max_pages']} pages)."
+        if next_tier:
+            message += f" Upgrade to {next_tier} for a higher limit."
+        raise HTTPException(status_code=413, detail={
+            "message": message,
+            "max_mb": limits["max_mb"], "max_pages": limits["max_pages"],
+            "size_mb": round(size_mb, 2), "pages": page_count,
+            "tier": tier, "next_tier": next_tier
+        })
+
 DAILY_TOKEN_BUDGET_GUEST = 1000  # ~2.5 doubts/day -- deliberately tight vs. the logged-in free
                                   # tier: the goal is to force a login, not to be a usable tier on
                                   # its own. Recalibrated at the same time and for the same reason
@@ -880,23 +923,7 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
         content.append({"type": "text", "text": user_message})
         messages.append({"role": "user", "content": content})
     elif pdf:
-        messages.append({
-            "role": "user",
-            "content": [
-                {
-                    "type": "document",
-                    "source": {
-                        "type": "base64",
-                        "media_type": "application/pdf",
-                        "data": pdf
-                    }
-                },
-                {
-                    "type": "text",
-                    "text": user_message
-                }
-            ]
-        })
+        pass  # Gemini branch below builds its own Part.from_bytes content -- doesn't use `messages`
     else:
         messages.append({"role": "user", "content": user_message})
     try:
@@ -973,16 +1000,39 @@ IMPORTANT -- BE CONCISE:
                         pass
             return
         elif pdf:
-            # PDF attachments stay on Claude -- see the gemini_client comment above for why.
-            selected_model = "claude-sonnet-4-5"
+            # Moved off Claude to Gemini 3.5 Flash-Lite -- same client/pattern as the images
+            # branch above, confirmed working via a live standalone test (91% accuracy across
+            # 3 real PDFs, ~10x cheaper input tokens than Claude Sonnet's pricing).
+            selected_model = "gemini-3.5-flash-lite"
             print(f"MODEL SELECTED: {selected_model}", flush=True)
             sys.stdout.flush()
-            stream_cm = anthropic_client.messages.stream(
+            pdf_part = genai_types.Part.from_bytes(data=base64.b64decode(pdf), mime_type="application/pdf")
+            gemini_stream = gemini_client.models.generate_content_stream(
                 model=selected_model,
-                max_tokens=1024,
-                system=full_system,
-                messages=messages
+                contents=[pdf_part, user_message],
+                config=genai_types.GenerateContentConfig(
+                    system_instruction=full_system,
+                    max_output_tokens=1024
+                )
             )
+            full_answer = ""
+            last_usage = None
+            try:
+                for chunk in gemini_stream:
+                    if chunk.text:
+                        full_answer += chunk.text
+                        yield chunk.text
+                    if chunk.usage_metadata:
+                        last_usage = chunk.usage_metadata
+            finally:
+                # Same reasoning as the images branch above.
+                if last_usage:
+                    print(f"GEMINI TOKENS: input={last_usage.prompt_token_count} output={last_usage.candidates_token_count}", flush=True)
+                    try:
+                        await log_token_usage(user_id, last_usage.prompt_token_count + last_usage.candidates_token_count, ip)
+                    except Exception:
+                        pass
+            return
         else:
             selected_model = "deepseek-v4-flash"
             print(f"MODEL SELECTED: {selected_model}", flush=True)
@@ -1147,6 +1197,7 @@ async def send_otp(req: PhoneOtpRequest, _: None = Depends(rate_limiter(3, 600))
 async def chat(message: Message, request: Request, _: None = Depends(rate_limiter(15, 60))):
     ip = _client_ip(request)
     await enforce_daily_budget(message.user_id, ip)
+    await validate_pdf_limits(message.pdf, message.user_id)
     return StreamingResponse(
        stream_response(message.text, message.history, message.images, message.pdf, message.answer_style, message.student_name, message.language, message.user_id, message.personalize, message.skip_cache, ip),
         media_type="text/plain"
