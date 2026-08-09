@@ -675,7 +675,14 @@
         try { return '<div style="text-align:center;margin:8px 0;">' + katex.renderToString(math.trim(), { displayMode: true, throwOnError: false }) + '</div>'; } catch(e) { return _; }
       });
       html = html.replace(/\$([^$\n]+)\$/g, function(_, math) {
-        try { return katex.renderToString(math.trim(), { displayMode: false, throwOnError: false }); } catch(e) { return _; }
+        // Wrapped at 1.2em rather than sized via a competing CSS rule on .katex directly --
+        // KaTeX's own stylesheet already sets .katex's font-size to a deliberately-tuned ratio,
+        // so a rule targeting .katex would replace that tuning outright instead of building on
+        // it. A wrapper span scales relative to ITS OWN font-size context, which KaTeX's
+        // internal em-based sizing then still correctly inherits and scales from. Fractions in
+        // particular (common in dimensional-formula options) read noticeably small at KaTeX's
+        // own default scale since the numerator/denominator are already downscaled internally.
+        try { return '<span style="font-size:1.55em;">' + katex.renderToString(math.trim(), { displayMode: false, throwOnError: false }) + '</span>'; } catch(e) { return _; }
       });
       // breaks:true so a single newline in question/option text (e.g. one option per line)
       // renders as a real line break -- marked's default CommonMark behavior collapses a lone
