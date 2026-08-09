@@ -3541,10 +3541,6 @@ function openSettings() {
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
               <span data-i18n="chat.settingsAccount">Account</span>
             </div>
-            <div class="settings-nav-item" onclick="showSettingsSection('study', this)" style="padding:9px 14px;border-radius:8px;cursor:pointer;font-size:13px;color:#666;display:flex;align-items:center;gap:10px;">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
-              <span data-i18n="chat.settingsStudy">Study</span>
-            </div>
             <div class="settings-nav-item" onclick="showSettingsSection('plan', this)" style="padding:9px 14px;border-radius:8px;cursor:pointer;font-size:13px;color:#666;display:flex;align-items:center;gap:10px;">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
               <span data-i18n="chat.settingsPlan">Plan</span>
@@ -3668,80 +3664,6 @@ function openSettings() {
         `;
         applyTranslations();
         renderPhoneLinkStatus();
-      } else if (section === 'study') {
-        const savedTarget = localStorage.getItem('targetScore') || '600';
-        const savedGoal = localStorage.getItem('dailyGoal') || '10';
-        
-        const today = new Date().toISOString().split('T')[0];
-        let todayCount = 0, weekCount = 0, totalCount = 0;
-        try {
-          const { data: { session } } = await client.auth.getSession();
-          if (session) {
-            const { data: td } = await client.from('usage_limits').select('message_count').eq('user_id', session.user.id).eq('reset_date', today).single();
-            todayCount = td ? td.message_count : 0;
-            const weekAgo = new Date(Date.now() - 7*24*60*60*1000).toISOString().split('T')[0];
-            const { data: wd } = await client.from('usage_limits').select('message_count').eq('user_id', session.user.id).gte('reset_date', weekAgo);
-            weekCount = wd ? wd.reduce((s,r) => s + r.message_count, 0) : 0;
-            const { data: totd } = await client.from('usage_limits').select('message_count').eq('user_id', session.user.id);
-            totalCount = totd ? totd.reduce((s,r) => s + r.message_count, 0) : 0;
-          }
-        } catch(e) {}
-
-        content.innerHTML = `
-          <h2 style="font-size:18px;font-weight:700;color:#fff;margin-bottom:24px;" data-i18n="chat.settingsStudy">Study</h2>
-          <div style="margin-bottom:32px;">
-            <h3 style="font-size:13px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:16px;" data-i18n="chat.usageStats">Usage Stats</h3>
-            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px;">
-              <div style="background:#0d0d0d;border:1px solid #1e1e1e;border-radius:10px;padding:16px;text-align:center;">
-                <div style="font-size:28px;font-weight:700;color:#4f8ef7;">${localizeNum(todayCount)}</div>
-                <div style="font-size:11px;color:#555;margin-top:4px;" data-i18n="chat.today">Today</div>
-              </div>
-              <div style="background:#0d0d0d;border:1px solid #1e1e1e;border-radius:10px;padding:16px;text-align:center;">
-                <div style="font-size:28px;font-weight:700;color:#4f8ef7;">${localizeNum(weekCount)}</div>
-                <div style="font-size:11px;color:#555;margin-top:4px;" data-i18n="chat.thisWeek">This Week</div>
-              </div>
-              <div style="background:#0d0d0d;border:1px solid #1e1e1e;border-radius:10px;padding:16px;text-align:center;">
-                <div style="font-size:28px;font-weight:700;color:#4f8ef7;">${localizeNum(totalCount)}</div>
-                <div style="font-size:11px;color:#555;margin-top:4px;" data-i18n="chat.total">Total</div>
-              </div>
-            </div>
-          </div>
-
-          <div style="margin-bottom:32px;">
-            <h3 style="font-size:13px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:16px;" data-i18n="chat.goals">Goals</h3>
-            <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid #1e1e1e;">
-              <div>
-                <div style="font-size:14px;color:#ececec;margin-bottom:2px;" data-i18n="chat.targetScore">Target NEET Score</div>
-                <div style="font-size:12px;color:#555;" data-i18n="chat.outOf720">Out of 720</div>
-              </div>
-              <div style="display:flex;gap:8px;align-items:center;">
-                <input id="targetScoreInput" type="number" min="0" max="720" value="${savedTarget}" style="background:#0d0d0d;border:1px solid #2a2a2a;border-radius:8px;padding:6px 12px;color:#ececec;font-size:13px;font-family:Inter,sans-serif;outline:none;width:100px;" />
-                <button onclick="saveStudyPrefs()" style="padding:6px 14px;border-radius:8px;background:#4f8ef7;border:none;color:white;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;">Save</button>
-              </div>
-            </div>
-            <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid #1e1e1e;">
-              <div>
-                <div style="font-size:14px;color:#ececec;margin-bottom:2px;" data-i18n="chat.dailyGoal">Daily Question Goal</div>
-                <div style="font-size:12px;color:#555;" data-i18n="chat.questionsPerDay">Questions per day</div>
-              </div>
-              <div style="display:flex;gap:8px;align-items:center;">
-                <input id="dailyGoalInput" type="number" min="1" max="100" value="${savedGoal}" style="background:#0d0d0d;border:1px solid #2a2a2a;border-radius:8px;padding:6px 12px;color:#ececec;font-size:13px;font-family:Inter,sans-serif;outline:none;width:100px;" />
-                <button onclick="saveStudyPrefs()" style="padding:6px 14px;border-radius:8px;background:#4f8ef7;border:none;color:white;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;">Save</button>
-              </div>
-            </div>
-          </div>
-          <div>
-            <h3 style="font-size:13px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:16px;" data-i18n="chat.notifications">Notifications</h3>
-            <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid #1e1e1e;">
-              <div>
-                <div style="font-size:14px;color:#ececec;margin-bottom:2px;" data-i18n="chat.studyReminders">Study Reminders</div>
-                <div style="font-size:12px;color:#555;" data-i18n="chat.comingSoonDeploy">Coming soon after deployment</div>
-              </div>
-              <div style="font-size:12px;color:#333;padding:6px 14px;border:1px solid #1e1e1e;border-radius:8px;" data-i18n="chat.comingSoon">Coming Soon</div>
-            </div>
-          </div>
-        `;
-        applyTranslations();
       } else if (section === 'plan') {
         const pro = isPro();
         content.innerHTML = `
@@ -4000,14 +3922,6 @@ function openSettings() {
       document.getElementById('phoneLinkPanel').innerHTML = '';
       await renderPhoneLinkStatus();
       alert(t('chat', 'phoneLinkedSuccess'));
-    }
-
-    function saveStudyPrefs() {
-      const target = document.getElementById('targetScoreInput').value;
-      const goal = document.getElementById('dailyGoalInput').value;
-      localStorage.setItem('targetScore', target);
-      localStorage.setItem('dailyGoal', goal);
-      alert('Study preferences saved!');
     }
 
     async function deleteAccount() {
