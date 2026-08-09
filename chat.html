@@ -156,6 +156,15 @@
     body.light-mode .report-note { background: #f7f7fa !important; border-color: #e3e3ea !important; color: #0d0d0d !important; }
     body.light-mode .report-cancel-btn { border-color: #e3e3ea !important; color: #7a7a85 !important; }
 
+    /* Save button next to an editable settings field (e.g. Display Name) -- hidden until the
+       field's value actually differs from what's saved, fades/slides in rather than popping in
+       instantly. success/error just recolor the same button rather than needing separate markup. */
+    .dn-save-btn { opacity: 0; transform: translateY(-3px) scale(0.96); pointer-events: none; transition: opacity 0.18s ease, transform 0.18s ease, background 0.15s ease; }
+    .dn-save-btn.visible { opacity: 1; transform: translateY(0) scale(1); pointer-events: auto; }
+    .dn-save-btn.success { background: #4ade80 !important; }
+    .dn-save-btn.error { background: #ef4444 !important; }
+    .dn-save-btn:disabled { cursor: default; }
+
     /* Settings modal scroll area -- thin, mostly-invisible thumb that only shows a subtle accent
        tint on hover, replacing the browser's default chunky scrollbar. Same reveal-on-hover idea
        as .pyq-modal-box's scrollbar elsewhere in this file. */
@@ -3640,8 +3649,8 @@ function openSettings() {
             <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid #1e1e1e;">
               <div style="font-size:14px;color:#ececec;" data-i18n="chat.displayName">Display Name</div>
               <div style="display:flex;gap:8px;align-items:center;">
-                <input id="displayNameInput" type="text" value="${document.querySelector('.profile-name')?.textContent || ''}" style="background:#0d0d0d;border:1px solid #2a2a2a;border-radius:8px;padding:6px 12px;color:#ececec;font-size:13px;font-family:Inter,sans-serif;outline:none;width:200px;" />
-                <button onclick="saveDisplayName()" style="padding:6px 14px;border-radius:8px;background:#4f8ef7;border:none;color:white;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;">Save</button>
+                <input id="displayNameInput" type="text" value="${document.querySelector('.profile-name')?.textContent || ''}" oninput="onDisplayNameInput()" style="background:#0d0d0d;border:1px solid #2a2a2a;border-radius:8px;padding:6px 12px;color:#ececec;font-size:13px;font-family:Inter,sans-serif;outline:none;width:200px;" />
+                <button id="displayNameSaveBtn" class="dn-save-btn" onclick="saveDisplayName()" style="padding:6px 14px;border-radius:8px;background:#4f8ef7;border:none;color:white;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;">Save</button>
               </div>
             </div>
             <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid #1e1e1e;">
@@ -3664,6 +3673,7 @@ function openSettings() {
         `;
         applyTranslations();
         renderPhoneLinkStatus();
+        initDisplayNameSaveState();
       } else if (section === 'plan') {
         const pro = isPro();
         content.innerHTML = `
@@ -3835,12 +3845,51 @@ function openSettings() {
       }
     });
 
+    // Tracks the last-saved value so input can be compared against it on every keystroke --
+    // re-set whenever the Account tab (re)renders, since content.innerHTML rebuilds the field
+    // fresh each time and a stale baseline from a previous render would show a false "changed".
+    let displayNameSavedValue = '';
+
+    function initDisplayNameSaveState() {
+      const input = document.getElementById('displayNameInput');
+      if (!input) return;
+      displayNameSavedValue = input.value;
+    }
+
+    function onDisplayNameInput() {
+      const btn = document.getElementById('displayNameSaveBtn');
+      const input = document.getElementById('displayNameInput');
+      if (!btn || !input) return;
+      btn.classList.remove('success', 'error');
+      btn.classList.toggle('visible', input.value.trim() !== displayNameSavedValue.trim());
+    }
+
     function saveDisplayName() {
-      const name = document.getElementById('displayNameInput').value.trim();
+      const btn = document.getElementById('displayNameSaveBtn');
+      const input = document.getElementById('displayNameInput');
+      const name = input.value.trim();
       if (!name) return;
-      document.querySelector('.profile-name').textContent = name;
-      document.querySelector('.profile-avatar').textContent = name[0].toUpperCase();
-      alert('Display name updated!');
+      btn.disabled = true;
+      btn.classList.remove('success', 'error');
+      btn.textContent = 'Saving...';
+      try {
+        document.querySelector('.profile-name').textContent = name;
+        document.querySelector('.profile-avatar').textContent = name[0].toUpperCase();
+        displayNameSavedValue = name;
+        setTimeout(() => {
+          btn.classList.add('success');
+          btn.textContent = '✓ Saved';
+          setTimeout(() => {
+            btn.disabled = false;
+            btn.classList.remove('success', 'visible');
+            btn.textContent = 'Save';
+          }, 1300);
+        }, 250);
+      } catch (e) {
+        btn.disabled = false;
+        btn.classList.add('error');
+        btn.textContent = 'Failed, retry';
+      }
     }
 
     async function resetPassword() {
