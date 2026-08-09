@@ -853,17 +853,59 @@ let selectedImages = [];
       return isPro() ? 3 : 1;
     }
 
-    function addImageFiles(files) {
-      const room = maxImages() - selectedImages.length;
-      if (room <= 0) { renderAttachmentPreview(); return; }
-      files.slice(0, room).forEach(file => {
+    const COMPRESS_MAX_EDGE = 1600; // longest edge, px
+    const COMPRESS_QUALITY = 0.8;   // JPEG quality
+
+    function fileToDataUrl(file) {
+      return new Promise((resolve, reject) => {
         const reader = new FileReader();
-        reader.onload = function(event) {
-          selectedImages.push({ data: event.target.result, name: file.name || 'Pasted image' });
-          renderAttachmentPreview();
-        };
+        reader.onload = event => resolve(event.target.result);
+        reader.onerror = reject;
         reader.readAsDataURL(file);
       });
+    }
+
+    function loadImageFromFile(file) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        const url = URL.createObjectURL(file);
+        img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+        img.onerror = e => { URL.revokeObjectURL(url); reject(e); };
+        img.src = url;
+      });
+    }
+
+    // Resizes/re-encodes to a capped longest edge + JPEG quality before the image ever gets
+    // base64'd into the request -- cuts both upload time and Gemini's per-image input tokens
+    // (roughly proportional to pixel count). Skips entirely for images already at or under the
+    // target edge -- never upscales, and never re-compresses something already small/optimized.
+    async function compressImageFile(file) {
+      if (!file.type || !file.type.startsWith('image/')) return fileToDataUrl(file);
+      let img;
+      try {
+        img = await loadImageFromFile(file);
+      } catch (e) {
+        return fileToDataUrl(file); // not decodable as an image -- send the original file untouched
+      }
+      const longestEdge = Math.max(img.width, img.height);
+      if (longestEdge <= COMPRESS_MAX_EDGE) return fileToDataUrl(file);
+
+      const scale = COMPRESS_MAX_EDGE / longestEdge;
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+      return canvas.toDataURL('image/jpeg', COMPRESS_QUALITY);
+    }
+
+    async function addImageFiles(files) {
+      const room = maxImages() - selectedImages.length;
+      if (room <= 0) { renderAttachmentPreview(); return; }
+      for (const file of files.slice(0, room)) {
+        const data = await compressImageFile(file);
+        selectedImages.push({ data, name: file.name || 'Pasted image' });
+        renderAttachmentPreview();
+      }
     }
 
     document.getElementById('imageInput').addEventListener('change', function(e) {
