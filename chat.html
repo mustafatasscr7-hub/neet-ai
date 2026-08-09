@@ -641,7 +641,7 @@
 
     <div class="chat-window" id="chatWindow">
       <div class="welcome" id="welcome">
-        <h2 data-i18n="chat.welcomeHeading">What do you want to learn today?</h2>
+        <h2 id="welcomeGreeting">What do you want to learn today?</h2>
         <div class="welcome-search">
           <input type="text" id="welcomeInput" placeholder="Ask your NEET doubt..." data-i18n-placeholder="chat.askPlaceholder" />
           <button id="welcomeVoiceBtn" class="voice-btn" onclick="toggleVoice()" style="background:transparent;border:none;color:#666;cursor:pointer;padding:6px;display:flex;align-items:center;flex-shrink:0;border-radius:8px;" title="Voice input" data-i18n-title="chat.voiceInput">
@@ -786,6 +786,43 @@
       updateScrollToBottomBtn(false);
     }
 
+    // Rotating welcome-screen greeting -- one random pick per render, not a fixed string.
+    // name/countdown variants are functions (not plain strings) so they're only built once we
+    // actually have a real value to interpolate, keeping the "skip if unavailable" check in
+    // renderWelcomeGreeting() the single place that decides whether they're eligible at all.
+    const GREETING_POOLS = {
+      en: {
+        generic: ["What's confusing you today?", "Where do you want to start?", "What's the doubt today?", "Ready when you are."],
+        name: name => [`${name}, what's on your mind?`, `Hey ${name}, what are we studying today?`],
+        countdown: days => [`${days} days left — what are we tackling?`, `${days} days to go. Let's make today count.`]
+      },
+      hi: {
+        generic: ["आज क्या समझ नहीं आ रहा?", "कहाँ से शुरू करना चाहेंगे?", "आज का संदेह क्या है?", "जब आप तैयार हों।"],
+        name: name => [`${name}, आपके मन में क्या है?`, `नमस्ते ${name}, आज क्या पढ़ेंगे?`],
+        countdown: days => [`${days} दिन बचे हैं — आज क्या करें?`, `${days} दिन बाकी हैं। आज को सार्थक बनाते हैं।`]
+      }
+    };
+
+    // Called on initial load, again once the async session check resolves the student's real
+    // name (so a logged-in student can pick up a name-personalized variant they weren't
+    // eligible for on the very first synchronous render), on "New Chat", and on language switch.
+    // No-ops once a real conversation is showing (#welcomeGreeting no longer in the DOM).
+    function renderWelcomeGreeting() {
+      const el = document.getElementById('welcomeGreeting');
+      if (!el) return;
+      const pool = GREETING_POOLS[getLang()] || GREETING_POOLS.en;
+      const name = document.querySelector('.profile-name')?.textContent?.trim();
+      const hasRealName = !!name && name !== 'Student';
+      const countdownText = document.getElementById('countdownDays')?.textContent?.trim();
+      const hasCountdown = !!countdownText && countdownText !== '--';
+
+      let variants = pool.generic.slice();
+      if (hasRealName) variants = variants.concat(pool.name(name));
+      if (hasCountdown) variants = variants.concat(pool.countdown(countdownText));
+
+      el.textContent = variants[Math.floor(Math.random() * variants.length)];
+    }
+
   function updateCountdown() {
       const neetDate = new Date('2027-05-04T00:00:00');
       const now = new Date();
@@ -810,6 +847,7 @@
     }
     updateCountdown();
     setInterval(updateCountdown, 1000);
+    renderWelcomeGreeting();
 
     document.getElementById('countdownWrapper').addEventListener('mouseenter', function() {
       document.getElementById('countdownTooltip').style.display = 'block';
@@ -2903,8 +2941,9 @@ function plainTextFromMarkdown(text) {
       const welcome = document.createElement('div');
       welcome.className = 'welcome';
       welcome.id = 'welcome';
-      welcome.innerHTML = `<h2>${t('chat','welcomeHeading')}</h2><div class="welcome-search"><input type="text" id="welcomeInput" placeholder="${t('chat','askPlaceholder')}" /><button id="welcomeVoiceBtn" class="voice-btn" onclick="toggleVoice()" style="background:transparent;border:none;color:#666;cursor:pointer;padding:6px;display:flex;align-items:center;flex-shrink:0;border-radius:8px;" title="Voice input"><svg class="voice-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg></button><button class="welcome-send" id="welcomeSend"><svg viewBox="0 0 24 24"><path d="M2 21l21-9L2 3v7l15 2-15 2v7z"/></svg></button></div><div class="input-hint">${t('chat','disclaimerMistakes')}</div><div class="suggestions"><div class="suggestion"><span class="suggestion-icon">🔬</span>${t('chat','suggestion1')}</div><div class="suggestion"><span class="suggestion-icon">⚗️</span>${t('chat','suggestion2')}</div><div class="suggestion"><span class="suggestion-icon">📊</span>${t('chat','suggestion3')}</div><div class="suggestion"><span class="suggestion-icon">🧪</span>${t('chat','suggestion4')}</div></div>`;
+      welcome.innerHTML = `<h2 id="welcomeGreeting">${t('chat','welcomeHeading')}</h2><div class="welcome-search"><input type="text" id="welcomeInput" placeholder="${t('chat','askPlaceholder')}" /><button id="welcomeVoiceBtn" class="voice-btn" onclick="toggleVoice()" style="background:transparent;border:none;color:#666;cursor:pointer;padding:6px;display:flex;align-items:center;flex-shrink:0;border-radius:8px;" title="Voice input"><svg class="voice-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg></button><button class="welcome-send" id="welcomeSend"><svg viewBox="0 0 24 24"><path d="M2 21l21-9L2 3v7l15 2-15 2v7z"/></svg></button></div><div class="input-hint">${t('chat','disclaimerMistakes')}</div><div class="suggestions"><div class="suggestion"><span class="suggestion-icon">🔬</span>${t('chat','suggestion1')}</div><div class="suggestion"><span class="suggestion-icon">⚗️</span>${t('chat','suggestion2')}</div><div class="suggestion"><span class="suggestion-icon">📊</span>${t('chat','suggestion3')}</div><div class="suggestion"><span class="suggestion-icon">🧪</span>${t('chat','suggestion4')}</div></div>`;
       chatWindow.appendChild(welcome);
+      renderWelcomeGreeting();
       document.getElementById('welcomeInput').addEventListener('keydown', function(e) {
         if (handleSlashMenuKeydown(e, this)) return;
         if (e.key === 'Enter') { input.value = this.value; sendMessage(); }
@@ -3492,6 +3531,10 @@ function plainTextFromMarkdown(text) {
         document.getElementById('guestAvatarBtn').style.display = 'flex';
         document.getElementById('profileSection').style.display = 'none';
       }
+      // Re-render now that we actually know whether there's a real display name -- the
+      // synchronous render at page load ran before this session check resolved, so it could
+      // only ever have picked from generic/countdown variants.
+      renderWelcomeGreeting();
     });
 
     input.addEventListener('input', function() {
@@ -3843,6 +3886,7 @@ function openSettings() {
       if (document.getElementById('settingsModal')) {
         Object.keys(SETTINGS_DROPDOWNS).forEach(refreshSettingsDropdown);
       }
+      renderWelcomeGreeting(); // no-op if a real conversation is showing, not the welcome screen
     });
 
     // Tracks the last-saved value so input can be compared against it on every keystroke --
