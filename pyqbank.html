@@ -72,6 +72,26 @@
     /* Difficulty badge: small pill next to the report button, one of 3 fixed colors */
     .difficulty-badge { display: inline-block; padding: 1.5px 7px; border-radius: 999px; font-size: 10.5px; font-weight: 500; letter-spacing: 0; line-height: 1.5; }
 
+    /* Per-question timer: plain muted text, no pill/background, so it doesn't visually compete
+       with the difficulty badge. tabular-nums keeps the digit width stable so the number ticking
+       up each second doesn't shift the report-flag button next to it. */
+    .q-timer { font-size: 10.5px; color: #555; font-variant-numeric: tabular-nums; }
+    body.light-mode .q-timer { color: #7a7a85 !important; }
+
+    /* Compact timer on/off control in the year-filter row -- reuses the same toggle-switch
+       visual language as chat.html's Settings toggles, just scaled down to fit a toolbar row
+       instead of a roomy settings panel. */
+    .timer-toggle-row { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #888; white-space: nowrap; }
+    .toggle-switch-sm { position: relative; display: inline-block; width: 32px; height: 18px; flex-shrink: 0; cursor: pointer; }
+    .toggle-switch-sm input { opacity: 0; width: 0; height: 0; }
+    .toggle-switch-sm .toggle-track { position: absolute; inset: 0; background: #2a2a2a; border-radius: 18px; transition: background 0.2s; }
+    .toggle-switch-sm .toggle-thumb { position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; background: #ececec; border-radius: 50%; transition: transform 0.2s; }
+    .toggle-switch-sm input:checked + .toggle-track { background: #4f8ef7; }
+    .toggle-switch-sm input:checked + .toggle-track .toggle-thumb { transform: translateX(14px); }
+    body.light-mode .toggle-switch-sm .toggle-track { background: #d5d5dd !important; }
+    body.light-mode .toggle-switch-sm .toggle-thumb { background: #ffffff !important; }
+    body.light-mode .toggle-switch-sm input:checked + .toggle-track { background: #4f8ef7 !important; }
+
     /* Report-a-question: subtle flag icon, low visibility until hovered, and its popup */
     .report-flag-btn { background: none; border: none; cursor: pointer; display: inline-flex; align-items: center; opacity: 0.35; padding: 2px 4px; margin-left: auto; transition: opacity 0.15s, transform 0.15s; }
     .report-flag-btn:hover, .report-flag-btn:focus-visible { opacity: 1; transform: scale(1.15); }
@@ -544,7 +564,70 @@
     // together at the row's right edge (report-flag-btn owns the margin-left:auto that pushes
     // this whole group there -- wrapping it here rather than duplicating that push).
     function metaActionsHtml(difficulty, pyqId) {
-      return `<span style="margin-left:auto;display:inline-flex;align-items:center;gap:10px;">${difficultyBadgeHtml(difficulty)}${reportFlagBtnHtml(pyqId)}</span>`;
+      // Always in the DOM (display toggled by the setting) rather than conditionally included,
+      // so switching the setting on/off mid-question just needs to show/hide + start/stop the
+      // existing element instead of forcing a full re-render of the question card.
+      const timerHtml = `<span class="q-timer" id="questionTimer" style="display:${getShowQuestionTimer() ? 'inline' : 'none'};">0s</span>`;
+      return `<span style="margin-left:auto;display:inline-flex;align-items:center;gap:10px;">${timerHtml}${difficultyBadgeHtml(difficulty)}${reportFlagBtnHtml(pyqId)}</span>`;
+    }
+
+    // ---------------- Per-question timer ----------------
+    // Purely a live on-screen stopwatch for the student's own awareness -- nothing persisted
+    // anywhere (no DB write, no analytics). Default ON: same "on unless explicitly disabled"
+    // convention chat.html's personalize toggle already uses, so a first-time visitor with no
+    // localStorage entry yet sees it on.
+    let questionTimerInterval = null;
+    let questionTimerStartMs = 0;
+
+    function getShowQuestionTimer() {
+      return localStorage.getItem('showQuestionTimer') !== 'false';
+    }
+
+    function formatQuestionTimer(totalSeconds) {
+      if (totalSeconds < 60) return `${totalSeconds}s`;
+      const m = Math.floor(totalSeconds / 60);
+      const s = totalSeconds % 60;
+      return `${m}:${String(s).padStart(2, '0')}`;
+    }
+
+    function updateQuestionTimerDisplay() {
+      const el = document.getElementById('questionTimer');
+      if (!el) return;
+      const elapsed = Math.floor((Date.now() - questionTimerStartMs) / 1000);
+      el.textContent = formatQuestionTimer(elapsed);
+    }
+
+    // Called after every fresh render of a question card (initial load, Prev, Next) -- always
+    // starts from 0, never carries over from the previous question.
+    function startQuestionTimer() {
+      clearInterval(questionTimerInterval);
+      questionTimerInterval = null;
+      if (!getShowQuestionTimer()) return;
+      questionTimerStartMs = Date.now();
+      updateQuestionTimerDisplay();
+      questionTimerInterval = setInterval(updateQuestionTimerDisplay, 1000);
+    }
+
+    // Called the moment the student clicks any option -- freezes the last displayed value
+    // rather than clearing it, so they can glance at their final time.
+    function stopQuestionTimer() {
+      if (!questionTimerInterval) return;
+      clearInterval(questionTimerInterval);
+      questionTimerInterval = null;
+      updateQuestionTimerDisplay();
+    }
+
+    function setShowQuestionTimer(checked) {
+      localStorage.setItem('showQuestionTimer', checked ? 'true' : 'false');
+      const el = document.getElementById('questionTimer');
+      if (!el) return;
+      if (checked) {
+        el.style.display = 'inline';
+        startQuestionTimer();
+      } else {
+        stopQuestionTimer();
+        el.style.display = 'none';
+      }
     }
 
     // The on-display trigger: called right after a batch of questions is fetched, before first
@@ -926,11 +1009,20 @@ const yearOptions = `<option value="" ${currentYearFilter === '' ? 'selected' : 
 
 document.getElementById('mainContent').innerHTML = `
         <div class="page-title">${chapterName(chapter)}</div>
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;gap:12px;flex-wrap:wrap;">
           <div class="page-subtitle">${t('pyqbank','questionOf').replace('{i}', localizeNum(i + 1)).replace('{n}', localizeNum(data.length))}</div>
-          <select class="year-filter-select" onchange="filterByYear(this.value, '${subject}', ${classNum}, '${chapterEscaped}')">
-            ${yearOptions}
-          </select>
+          <div style="display:flex;align-items:center;gap:16px;">
+            <label class="timer-toggle-row">
+              <span>${t('pyqbank','showTimer')}</span>
+              <span class="toggle-switch-sm">
+                <input type="checkbox" ${getShowQuestionTimer() ? 'checked' : ''} onchange="setShowQuestionTimer(this.checked)"/>
+                <span class="toggle-track"><span class="toggle-thumb"></span></span>
+              </span>
+            </label>
+            <select class="year-filter-select" onchange="filterByYear(this.value, '${subject}', ${classNum}, '${chapterEscaped}')">
+              ${yearOptions}
+            </select>
+          </div>
         </div>
         <div class="question-card">
           <div class="q-meta">
@@ -953,6 +1045,7 @@ ${q.diagram_url ? `<img class="q-diagram-img" src="${q.diagram_url}">` : ''}
           </div>
         </div>
       `;
+      startQuestionTimer();
     }
 
     function nextQuestion(subject, classNum, chapter) {
@@ -996,6 +1089,7 @@ ${q.diagram_url ? `<img class="q-diagram-img" src="${q.diagram_url}">` : ''}
     }
 
     async function selectPyqOption(selectedOpt, correctOpt, pyqId) {
+      stopQuestionTimer();
       const clickedEl = document.getElementById('opt-' + selectedOpt);
       if (!correctOpt) {
         // First-ever click on this question: nothing cached yet, resolve it now. Every other
