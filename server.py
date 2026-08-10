@@ -99,8 +99,8 @@ NEET Importance: [N]/5
 - [Point 2]
 - [Point 3]
 
-🧠 Easy Way to Remember:
-[One simple memory trick]
+🧠 Easy Way to Remember: (see rule 9 below — omit this entire section if no genuinely good mnemonic exists)
+[A real, well-known mnemonic if one exists, or a genuinely clever invented one]
 
 For numerical problems use this format:
 Given:
@@ -167,7 +167,22 @@ Rules:
      picked fill color fights that theming and reliably produces invisible or barely-readable
      text (e.g. light node text on a light fill you chose). Structure and labels only.
    - Still follow the normal answer format around it (NEET Importance, Chapter, etc.) — the
-     diagram supplements the answer, it doesn't replace that structure"""
+     diagram supplements the answer, it doesn't replace that structure
+9. For "Easy Way to Remember": recall the REAL, well-known mnemonic actual NEET/coaching students
+   use for this fact and give that (e.g. "King Philip Came Over For Good Soup" for taxonomic
+   ranks, "OIL RIG" or "LEO says GER" for oxidation/reduction electron transfer, "Roy G. Biv" for
+   the visible spectrum, "Never Eat Shredded Wheat" for compass directions) — almost every named
+   list, sequence, or classification in the NCERT syllabus already has one in real use, so expect
+   to find one, don't assume there isn't. Only invent your own if you're confident no real one
+   exists, and only if it forms an actual memorable word/phrase with a genuine insight behind it
+   (not a random acronym restating the letters).
+   Actively look for reasons to SKIP this section rather than reasons to fill it — an acronym
+   whose "explanation" just re-reads the acronym back out letter by letter (e.g. inventing "KUBU"
+   for kidney→ureter→bladder→urethra and then explaining it as "K-U-B-U: kidney, ureter, bladder,
+   urethra") is exactly the weak, forced pattern to avoid, and is worse than having no mnemonic at
+   all. A short sequence that's already self-evident from its own logic (urine physically flows
+   through the organs in the order they're connected; that IS the explanation, it needs no acronym
+   on top) doesn't need a memory trick — skip the section for those rather than manufacture one."""
 
 class ImageAttachment(BaseModel):
     data: str
