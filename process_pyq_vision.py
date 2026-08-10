@@ -117,6 +117,10 @@ TEXT_MODEL = "gemini-3.5-flash-lite"
 MIN_TEXT_LENGTH = 40
 MIN_ALNUM_RATIO = 0.3
 DIAGRAM_MARKER = "<<<DIAGRAM_HERE>>>"
+# Shared by extract_pages_text_and_diagrams (per-block, via .match()) and scan_pdf_bytes's
+# under-extraction safety net (per-line across a whole page, via .findall() -- re.M makes "^"
+# match after every "\n" too, which .match() ignores since it only ever tries position 0).
+_QUESTION_START_RE = re.compile(r"^\d+\s*[.)]", re.M)
 
 def build_text_extraction_prompt(subject):
     return f"""You are extracting NEET {subject} questions from raw text extracted programmatically
@@ -268,28 +272,40 @@ def extract_pages_text_and_diagrams(pdf_bytes):
     pages = []
     for i, page in enumerate(doc):
         real_diagram_xrefs = page_xrefs[i] - template_xrefs
-        text_entries = []  # (y0, text)
+        mid_x = page.rect.width / 2
+        text_entries = []  # (x0, y0, text)
         for block in page.get_text("dict")["blocks"]:
             if block.get("type") != 0:
                 continue
             block_text = _block_text_from_dict(block)
             if block_text.strip():
-                text_entries.append((block["bbox"][1], block_text.strip()))
+                x0, y0 = block["bbox"][0], block["bbox"][1]
+                text_entries.append((x0, y0, block_text.strip()))
 
         # A one-time (non-repeating) image sitting ABOVE the first real question on the page -
         # e.g. a chapter-title banner - is a decorative header, not a per-question diagram.
         # Repeating images are already excluded above; this catches the one-time-only case.
-        question_start_re = re.compile(r"^\d+\s*[.)]")
-        question_start_ys = [y0 for y0, text in text_entries if question_start_re.match(text)]
+        question_start_ys = [y0 for _, y0, text in text_entries if _QUESTION_START_RE.match(text)]
         content_start_y = min(question_start_ys) if question_start_ys else 0
 
-        entries = list(text_entries)  # (y0, text) - text blocks and diagram markers, sorted into reading order
+        entries = list(text_entries)  # (x0, y0, text) - text blocks and diagram markers
         for xref in real_diagram_xrefs:
             for rect in page.get_image_rects(xref):
                 if rect.y0 >= content_start_y:
-                    entries.append((rect.y0, DIAGRAM_MARKER))
-        entries.sort(key=lambda e: e[0])
-        pages.append({"text": "\n".join(content for _, content in entries)})
+                    entries.append((rect.x0, rect.y0, DIAGRAM_MARKER))
+        # Sort by COLUMN first (left-of-midpoint vs right-of-midpoint), then by y0 within that
+        # column -- not by y0 alone. A real 2-column exam-paper layout (official NEET papers,
+        # confirmed live on QP_2024/QP_2025: right column's first block sits at the same y0 as
+        # the left column's, a sort tie broken by PyMuPDF's arbitrary block-discovery order) was
+        # producing badly scrambled reading order -- e.g. Q57 (right column) landing before
+        # Q52-56 (left column) in the extracted text, which is no longer a coherent question
+        # sequence, so Gemini correctly (per its own "skip incomplete/incoherent" instruction)
+        # returned zero questions for the whole page -- a real, silent root cause of pages
+        # producing far fewer questions than expected, confirmed via a live 22-PDF audit (found
+        # 2026-08-10). For a genuinely single-column page every block falls on the same side of
+        # the midpoint, so this reduces to the previous plain y0 sort -- verified harmless there.
+        entries.sort(key=lambda e: (0 if e[0] < mid_x else 1, e[1]))
+        pages.append({"text": "\n".join(content for _, _, content in entries)})
     doc.close()
     return pages
 
@@ -438,7 +454,15 @@ def _parse_extraction_json(text, page_num):
     backslash fix BEFORE parsing rather than only as an exception fallback -- see
     _fix_unescaped_json_backslashes's docstring for why "did the first parse succeed" can't be
     trusted as a signal here. The fix is a verified no-op on already-correct JSON, so this is
-    strictly safer than the old try-original-then-fallback order, never worse."""
+    strictly safer than the old try-original-then-fallback order, never worse.
+
+    IMPORTANT: raises on a genuine parse failure instead of swallowing it and returning [] --
+    the old behavior made a page that failed to parse indistinguishable from a page that
+    legitimately had zero questions, so scan_pdf_bytes's flagged_pages (which DOES catch an
+    exception from this call, via future.result() in its executor loop) never saw it: the page
+    just silently contributed zero questions with no trace anywhere (a real, if not the only,
+    cause of "questions getting skipped" -- see extract_pages_text_and_diagrams's 2-column-layout
+    fix above for the other, bigger one found in the same investigation, 2026-08-10)."""
     try:
         questions = json.loads(_fix_unescaped_json_backslashes(text))
     except Exception:
@@ -447,8 +471,7 @@ def _parse_extraction_json(text, page_num):
         try:
             questions = json.loads(text)  # last resort, in case the fix broke something unexpected
         except Exception as e:
-            print(f"    JSON parse error on page {page_num}: {e}")
-            return []
+            raise ValueError(f"Could not parse model response as JSON: {e}") from e
     for q in questions:
         for field in _EXTRACTED_TEXT_FIELDS:
             if isinstance(q.get(field), str):
@@ -503,6 +526,24 @@ def scan_pdf_bytes(pdf_bytes, subject, max_workers=5):
                 print(f"    Error extracting page {idx + 1}: {e}")
                 flagged_pages.append({"page": idx + 1, "reason": f"Extraction call failed: {e}"})
                 results[idx] = []
+
+    # General safety net, not tied to any one specific root cause: a page with several "N."
+    # question-start markers in its own raw text that STILL came back with zero extracted
+    # questions is a strong, cheap, false-positive-resistant signal something went wrong on that
+    # page specifically (the 2-column-layout bug fixed above in extract_pages_text_and_diagrams
+    # was the first real cause found this way, live, 2026-08-10 -- but this check exists to catch
+    # whatever similar issue turns up next too, not just that one). Deliberately NOT flagged when
+    # 0 < actual < expected -- a page legitimately ending mid-question extracts fewer than its
+    # full "N." count (the prompt explicitly tells the model to skip a cut-off question), so a
+    # partial shortfall is normal, expected behavior, not a sign of a problem.
+    for idx, page_text in to_extract.items():
+        expected = len(_QUESTION_START_RE.findall(page_text))
+        actual = len(results.get(idx, []))
+        if expected >= 2 and actual == 0:
+            flagged_pages.append({
+                "page": idx + 1,
+                "reason": f"Found {expected} question-number markers on this page but extracted 0 questions -- likely an extraction issue, not a genuinely empty page. Worth checking manually."
+            })
 
     questions = []
     for i, page in enumerate(pages):
@@ -623,7 +664,11 @@ if __name__ == "__main__":
             print(f"  {len(page_images)} pages found")
             total_inserted = 0
             for page_num, img in enumerate(page_images, 1):
-                questions = extract_questions_from_page(img, page_num)
+                try:
+                    questions = extract_questions_from_page(img, page_num)
+                except Exception as e:
+                    print(f"  Page {page_num}: SKIPPED -- {e}")
+                    continue
                 print(f"  Page {page_num}: {len(questions)} questions")
                 for q in questions:
                     status = insert_question(q)
