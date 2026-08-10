@@ -111,11 +111,7 @@ def extract_questions_from_page(image_b64, page_num, subject="Biology", model=VI
         if text.startswith("json"):
             text = text[4:]
 
-    try:
-        return json.loads(text)
-    except Exception as e:
-        print(f"    JSON parse error on page {page_num}: {e}")
-        return []
+    return _parse_extraction_json(text, page_num)
 
 TEXT_MODEL = "gemini-3.5-flash-lite"
 MIN_TEXT_LENGTH = 40
@@ -298,14 +294,69 @@ def extract_pages_text_and_diagrams(pdf_bytes):
     return pages
 
 def _fix_unescaped_json_backslashes(text):
-    """Gemini is inconsistent about JSON-escaping the literal backslashes in LaTeX commands it
-    writes (e.g. \\mu, \\varepsilon, \\times) inside the extracted question/option strings --
-    confirmed live: the exact same prompt, same content, sometimes correctly emits \\\\mu and
-    sometimes invalid raw \\mu, non-deterministically. Prompting harder didn't fix it (tried,
-    including response_mime_type="application/json"), so this defensively doubles any backslash
-    NOT already followed by a valid JSON escape character, fixing the invalid ones without
-    touching already-correct ones."""
-    return re.sub(r'\\(?![\\"/bfnrtu])', r'\\\\', text)
+    """Gemini/Claude are inconsistent about JSON-escaping the literal backslashes in LaTeX
+    commands they write (e.g. \\mu, \\varepsilon, \\times, \\text, \\frac) inside the extracted
+    question/option strings -- confirmed live: the exact same prompt, same content, sometimes
+    correctly emits \\\\mu and sometimes invalid raw \\mu, non-deterministically. Prompting
+    harder didn't fix it (tried, including response_mime_type="application/json").
+
+    IMPORTANT: this used to only double a backslash NOT already followed by a "valid JSON escape
+    character" (one of \\"/bfnrtu), on the theory that those were probably intentional. That was
+    wrong in a dangerous way -- \\t, \\b, \\f, \\n, \\r are ALSO the first two characters of common
+    LaTeX commands (\\text, \\theta, \\times, \\tan, \\to, \\frac, \\beta, \\bar, \\nabla, \\rho,
+    \\rightarrow...), and json.loads() treats \\t etc as VALID escapes -- it doesn't raise, so the
+    old fallback-on-exception logic never even ran for these. The result was silent corruption:
+    "\\text{AlF}_3" parsed as an actual TAB CHARACTER followed by the literal text "ext{AlF}_3",
+    with no error anywhere, visible only much later as garbled "ext{...}" in the admin UI (real
+    bug, reported live 2026-08-10).
+
+    Simply doubling every lone backslash unconditionally isn't right either -- confirmed live on
+    the same real extraction batch that reproduced the bug above: a genuinely-intended "\\n\\n"
+    paragraph break between "Statement I:" and "Statement II:" in a real question also showed up
+    as a lone backslash, and blanket-doubling it would turn a real line break into literal visible
+    "\\n" text. The two cases are only distinguishable by context: the extraction prompt requires
+    ALL math to be wrapped in $...$, so a lone backslash INSIDE an active $...$ span is essentially
+    always an under-escaped LaTeX command, while one OUTSIDE any $ span is essentially always
+    genuine prose (a real newline, etc). This walks the string tracking $-parity and only doubles
+    backslashes while "inside" an odd number of $ signs; an already-correct \\\\ or \\" pair is
+    consumed atomically (2 chars at once) wherever it appears, in or out of math mode, so its
+    second character is never independently re-examined and re-doubled."""
+    out = []
+    in_math = False
+    i, n = 0, len(text)
+    while i < n:
+        ch = text[i]
+        if ch == '$':
+            in_math = not in_math
+            out.append(ch)
+            i += 1
+            continue
+        if ch == '\\' and i + 1 < n:
+            nxt = text[i + 1]
+            if nxt in ('\\', '"'):
+                out.append(ch); out.append(nxt); i += 2; continue
+            if in_math:
+                out.append('\\\\'); i += 1; continue
+            out.append(ch); i += 1; continue
+        out.append(ch)
+        i += 1
+    return ''.join(out)
+
+def _parse_extraction_json(text, page_num):
+    """Shared by both extraction paths (Gemini text-only and Claude Vision). Always runs the
+    backslash fix BEFORE parsing rather than only as an exception fallback -- see
+    _fix_unescaped_json_backslashes's docstring for why "did the first parse succeed" can't be
+    trusted as a signal here. The fix is a verified no-op on already-correct JSON, so this is
+    strictly safer than the old try-original-then-fallback order, never worse."""
+    try:
+        return json.loads(_fix_unescaped_json_backslashes(text))
+    except Exception:
+        pass
+    try:
+        return json.loads(text)  # last resort, in case the fix itself broke something unexpected
+    except Exception as e:
+        print(f"    JSON parse error on page {page_num}: {e}")
+        return []
 
 def extract_questions_from_text(page_text, page_num, subject="Biology", model=TEXT_MODEL):
     prompt = build_text_extraction_prompt(subject).replace("{page_text}", page_text)
@@ -321,15 +372,7 @@ def extract_questions_from_text(page_text, page_num, subject="Biology", model=TE
         if text.startswith("json"):
             text = text[4:]
 
-    try:
-        return json.loads(text)
-    except Exception:
-        pass
-    try:
-        return json.loads(_fix_unescaped_json_backslashes(text))
-    except Exception as e:
-        print(f"    JSON parse error on page {page_num}: {e}")
-        return []
+    return _parse_extraction_json(text, page_num)
 
 def scan_pdf_bytes(pdf_bytes, subject, max_workers=5):
     """Callable entry point for the admin review pipeline (server.py's /admin/scan-pdf).
