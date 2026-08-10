@@ -69,6 +69,7 @@
     body.light-mode .profile-name { color: #0d0d0d !important; }
     body.light-mode .profile-plan { color: #7a7a85 !important; }
     body.light-mode .profile-menu { background: #ffffff !important; border-color: #e0e0e5 !important; box-shadow: 0 -4px 20px rgba(0,0,0,0.1) !important; }
+    body.light-mode .profile-menu-email { color: #85859a !important; }
     body.light-mode .profile-menu-item { color: #333338 !important; }
     body.light-mode .profile-menu-item:hover { background: #f0f0f3 !important; }
     body.light-mode .profile-menu-item.logout { color: #ef4444 !important; }
@@ -299,6 +300,7 @@
     .profile-more { width: 14px; height: 14px; flex-shrink: 0; }
 
     .profile-menu { position: absolute; bottom: 60px; left: 8px; right: 8px; background: #1e1e1e; border: 1px solid #2a2a2a; border-radius: 10px; padding: 6px; z-index: 100; box-shadow: 0 -4px 20px rgba(0,0,0,0.4); }
+    .profile-menu-email { padding: 7px 12px 9px; font-size: 12px; color: #666; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .profile-menu-item { padding: 10px 12px; border-radius: 7px; font-size: 13px; color: #ccc; cursor: pointer; transition: background 0.15s; }
     .profile-menu-item:hover { background: #2a2a2a; }
     .profile-menu-item.logout { color: #ef4444; }
@@ -574,6 +576,7 @@
 
     <div class="sidebar-bottom">
       <div class="profile-menu" id="profileMenu" style="display:none">
+        <div class="profile-menu-email" id="profileMenuEmail" style="display:none"></div>
         <div class="profile-menu-item" onclick="alert('Coming soon!')" data-i18n="chat.myPlan">📋 My Plan</div>
         <div class="profile-menu-item" onclick="document.getElementById('profileMenu').style.display='none';openSettings();" data-i18n="chat.settings">⚙️ Settings</div>
         <div class="profile-menu-divider"></div>
@@ -3705,6 +3708,13 @@ function plainTextFromMarkdown(text) {
         const name = user.user_metadata.full_name || user.email || user.phone || 'Student';
         const initial = name[0].toUpperCase();
         document.querySelector('.profile-name').textContent = name;
+        // Phone-only accounts (OTP login, no email on file) have no user.email at all -- leave
+        // the line hidden rather than showing "undefined" or an empty row.
+        const emailEl = document.getElementById('profileMenuEmail');
+        if (emailEl && user.email) {
+          emailEl.textContent = user.email;
+          emailEl.style.display = 'block';
+        }
         mergeGuestUsage(user.id).then(refreshUsageBanner);
         updateStreak().then(() => {
   client.from('user_streaks').select('current_streak').eq('user_id', user.id).single().then(({ data }) => {
