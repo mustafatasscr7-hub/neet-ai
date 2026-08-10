@@ -55,6 +55,8 @@
     .save-badge { display: none; align-items: center; gap: 4px; background: rgba(74,222,128,0.1); color: var(--green); border: 1px solid rgba(74,222,128,0.25); padding: 2px 9px; border-radius: 20px; font-size: 11px; font-weight: 600; margin-top: 9px; width: fit-content; }
     .plan-btn { width: 100%; padding: 13px; border-radius: 999px; cursor: pointer; font-size: 13.5px; font-weight: 600; font-family: 'Inter', sans-serif; transition: all 0.15s; margin: 26px 0 26px; border: none; background: var(--cream); color: var(--cream-text); }
     .plan-btn:hover { background: var(--cream-hover); }
+    .plan-btn.is-current-plan { background: transparent; border: 1px solid var(--border-2); color: var(--muted); cursor: default; }
+    .plan-btn.is-current-plan:hover { background: transparent; }
     .divider { height: 1px; background: var(--border); margin-bottom: 20px; }
     .features-label { font-size: 11.5px; color: var(--muted-2); margin-bottom: 14px; text-transform: uppercase; letter-spacing: 0.06em; }
     .features { display: flex; flex-direction: column; gap: 12px; flex: 1; }
@@ -121,7 +123,7 @@
           <span class="plan-price" data-i18n-num>₹0</span>
         </div>
         <div class="plan-price-sub" data-i18n="pricing.foreverFree">forever free</div>
-        <button class="plan-btn" onclick="window.location.href='./index.html'" data-i18n="pricing.freeCta">Start Free</button>
+        <button class="plan-btn" id="freeCtaBtn" onclick="window.location.href='./index.html'" data-i18n="pricing.freeCta">Start Free</button>
         <div class="divider"></div>
         <div class="features-label" data-i18n="pricing.whatsIncluded">What's included</div>
         <div class="features">
@@ -155,7 +157,7 @@
         </div>
         <div class="plan-price-sub plan-price-sub-dynamic" data-plan="pro" id="proPriceSub" data-i18n="pricing.billedMonthly">billed monthly · cancel anytime</div>
         <div class="save-badge" data-plan="pro" id="proSaveBadge" data-i18n="pricing.proSaveYearly">Save ₹789/year</div>
-        <button class="plan-btn" onclick="alert(t('pricing','paymentsComingSoon'))" data-i18n="pricing.proCta">Upgrade to Pro</button>
+        <button class="plan-btn" id="proCtaBtn" onclick="alert(t('pricing','paymentsComingSoon'))" data-i18n="pricing.proCta">Upgrade to Pro</button>
         <div class="divider"></div>
         <div class="features-label" data-i18n="pricing.everythingInFreePlus">Everything in Free, plus</div>
         <div class="features">
@@ -193,7 +195,7 @@
         </div>
         <div class="plan-price-sub plan-price-sub-dynamic" data-plan="max" id="maxPriceSub" data-i18n="pricing.billedMonthly">billed monthly · cancel anytime</div>
         <div class="save-badge" data-plan="max" id="maxSaveBadge" data-i18n="pricing.maxSaveYearly">Save ₹1,289/year</div>
-        <button class="plan-btn" onclick="alert(t('pricing','paymentsComingSoon'))" data-i18n="pricing.maxCta">Go Max</button>
+        <button class="plan-btn" id="maxCtaBtn" onclick="alert(t('pricing','paymentsComingSoon'))" data-i18n="pricing.maxCta">Go Max</button>
         <div class="divider"></div>
         <div class="features-label" data-i18n="pricing.everythingInProPlus">Everything in Pro, plus</div>
         <div class="features">
@@ -214,9 +216,15 @@
     </div>
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="./theme.js"></script>
   <script src="./i18n.js"></script>
   <script>
+    const SUPABASE_URL = 'https://hvhnfttrfouajlyhvunq.supabase.co'
+    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh2aG5mdHRyZm91YWpseWh2dW5xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg5NDI1NTIsImV4cCI6MjA5NDUxODU1Mn0.8RaSu5yiTpQCEUGKrFO2y6oiRXSqdBehIz933j9Z7WA'
+    const { createClient } = supabase
+    const client = createClient(SUPABASE_URL, SUPABASE_KEY)
+
     let isYearly = false;
 
     const PLAN_PRICE = {
@@ -252,6 +260,50 @@
       }
       updatePrices();
     }
+
+    // ---------------- Plan awareness (logged-in users) ----------------
+    // null for a guest/unauthenticated visitor -- default CTAs on every card stay untouched.
+    let currentUserTier = null;
+    const TIER_RANK = { free: 0, pro: 1, max: 2 };
+
+    // Re-run on every language switch (not just once on load) so a badge/label already applied
+    // doesn't get silently reverted -- removing data-i18n below is what stops applyTranslations()
+    // itself from stomping it, same pattern as chat.html's #welcomeGreeting.
+    function applyPlanBadges() {
+      if (!currentUserTier) return;
+      const myRank = TIER_RANK[currentUserTier];
+      [['free', 'freeCtaBtn'], ['pro', 'proCtaBtn'], ['max', 'maxCtaBtn']].forEach(([tier, btnId]) => {
+        const btn = document.getElementById(btnId);
+        if (!btn) return;
+        if (tier === currentUserTier) {
+          btn.removeAttribute('data-i18n');
+          btn.textContent = t('pricing', 'currentPlanBadge');
+          btn.disabled = true;
+          btn.onclick = null;
+          btn.classList.add('is-current-plan');
+        } else if (TIER_RANK[tier] > myRank) {
+          btn.removeAttribute('data-i18n');
+          btn.textContent = tier === 'max' ? t('pricing', 'upgradeToMax') : t('pricing', 'proCta');
+        }
+        // A tier BELOW the user's current one is left with its original default label/behavior --
+        // there's no self-serve downgrade flow, so nothing meaningful to change there.
+      });
+    }
+
+    async function initPlanAwareness() {
+      try {
+        const { data: { session } } = await client.auth.getSession();
+        if (!session) return; // guest -- every card keeps its default CTA
+        const { data: planRow } = await client.from('user_plan').select('plan').eq('user_id', session.user.id).single();
+        const plan = (planRow && planRow.plan) || 'free';
+        currentUserTier = plan === 'max' ? 'max' : (plan === 'free' ? 'free' : 'pro');
+        applyPlanBadges();
+      } catch (e) {
+        // Best-effort -- a failed lookup just leaves the page in its normal guest-view state.
+      }
+    }
+    document.addEventListener('langchange', applyPlanBadges);
+    initPlanAwareness();
   </script>
 </body>
 </html>

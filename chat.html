@@ -3923,20 +3923,24 @@ function openSettings() {
         initDisplayNameSaveState();
       } else if (section === 'plan') {
         const pro = isPro();
+        const isMax = userPlan === 'max';
         content.innerHTML = `
           <h2 style="font-size:18px;font-weight:700;color:#fff;margin-bottom:24px;" data-i18n="chat.settingsPlan">Plan</h2>
           <div style="background:#111;border:1px solid #1e1e1e;border-radius:12px;padding:24px;margin-bottom:16px;">
             <div style="font-size:13px;color:#555;margin-bottom:4px;" data-i18n="chat.currentPlan">Current Plan</div>
-            ${pro ? `
+            ${isMax ? `
+            <div style="font-size:22px;font-weight:700;color:#fff;margin-bottom:8px;" data-i18n="chat.maxPlan">Max Plan</div>
+            <div style="font-size:13px;color:#666;margin-bottom:20px;" data-i18n="chat.maxPlanDesc">Truly unlimited · Every feature</div>
+            ` : pro ? `
             <div style="font-size:22px;font-weight:700;color:#fff;margin-bottom:8px;" data-i18n="chat.proPlan">Pro Plan</div>
-            <div style="font-size:13px;color:#666;" data-i18n="chat.proPlanDesc">Unlimited questions · Full access</div>
+            <div style="font-size:13px;color:#666;margin-bottom:20px;" data-i18n="chat.proPlanDesc">Unlimited questions · Full access</div>
             ` : `
             <div style="font-size:22px;font-weight:700;color:#fff;margin-bottom:8px;" data-i18n="chat.free">Free</div>
-            <div style="font-size:13px;color:#666;margin-bottom:20px;" data-i18n="chat.freePlanDesc">5 questions per day · Basic access</div>
-            <button onclick="window.open('./pricing.html','_blank')" style="background:#4f8ef7;border:none;color:white;padding:10px 24px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;font-family:Inter,sans-serif;" data-i18n="chat.upgradeToProFull">⭐ Upgrade to Pro — ₹299/month</button>
+            <div style="font-size:13px;color:#666;margin-bottom:20px;" data-i18n="chat.freePlanDesc">Limited daily doubts · Basic access</div>
             `}
+            <button onclick="window.open('./pricing.html','_blank')" style="background:${pro ? 'transparent' : '#4f8ef7'};border:${pro ? '1px solid #2a2a2a' : 'none'};color:${pro ? '#ececec' : 'white'};padding:10px 24px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;font-family:Inter,sans-serif;" data-i18n="${isMax ? 'chat.viewPlans' : pro ? 'chat.upgradeToMaxShort' : 'chat.upgradeToProShort'}">${isMax ? 'View Plans' : pro ? '⭐ Upgrade to Max' : '⭐ Upgrade to Pro'}</button>
           </div>
-          ${pro ? '' : '<div style="font-size:12px;color:#333;text-align:center;" data-i18n="chat.razorpayNote">Payments powered by Razorpay · Launching soon</div>'}
+          ${isMax ? '' : '<div style="font-size:12px;color:#333;text-align:center;" data-i18n="chat.razorpayNote">Payments powered by Razorpay · Launching soon</div>'}
         `;
         applyTranslations();
       } else if (section === 'privacy') {
