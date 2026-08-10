@@ -124,24 +124,6 @@
   .feature-row h3 { font-size: 16px; font-weight: 600; color: var(--text); }
   .feature-row p { font-size: 14px; line-height: 1.7; color: var(--muted); max-width: 62ch; }
 
-  /* ---------- PRICING ---------- */
-  .pricing-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
-  .price-card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 30px; }
-  .price-card.pro { border-color: var(--blue); }
-  .plan-name { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin-bottom: 10px; }
-  .plan-price { font-size: 36px; font-weight: 800; margin-bottom: 4px; font-variant-numeric: tabular-nums; }
-  .plan-price span { font-size: 14px; font-weight: 500; color: var(--muted); }
-  .plan-sub { font-size: 12.5px; color: var(--muted-2); margin-bottom: 22px; }
-  .plan-features { list-style: none; display: flex; flex-direction: column; gap: 9px; margin-bottom: 26px; }
-  .plan-features li { font-size: 13px; color: var(--muted); display: flex; gap: 8px; align-items: flex-start; }
-  .plan-features li.yes { color: var(--text-dim); }
-  .plan-features .check { color: var(--green); font-weight: 700; flex-shrink: 0; }
-  .plan-features .cross { color: var(--border-2); flex-shrink: 0; }
-  .plan-btn { width: 100%; padding: 12px; border-radius: 8px; font-size: 13.5px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; text-align: center; text-decoration: none; display: block; border: 1px solid var(--border-2); color: var(--text); background: transparent; }
-  .plan-btn:hover { border-color: var(--blue); color: var(--blue); }
-  .plan-btn.pro-btn { background: var(--blue); border-color: var(--blue); color: #fff; }
-  .plan-btn.pro-btn:hover { background: #3b7de8; }
-
   /* ---------- CLOSING CTA ---------- */
   .cta-block { padding: 100px var(--container-pad) 120px; text-align: center; }
   .cta-block h2 { font-size: clamp(26px, 3.6vw, 38px); font-weight: 700; letter-spacing: -0.015em; margin-bottom: 16px; max-width: 620px; margin-left: auto; margin-right: auto; text-wrap: balance; }
@@ -167,7 +149,7 @@
   }
 
   @media (max-width: 860px) {
-    .pyq-grid, .pricing-grid { grid-template-columns: 1fr; }
+    .pyq-grid { grid-template-columns: 1fr; }
     .feature-row { grid-template-columns: 1fr; gap: 8px; }
     .footer-columns { grid-template-columns: 1fr 1fr; gap: 32px; }
   }
@@ -197,7 +179,7 @@
   <div class="nav-links">
     <a href="#pyq">PYQ Bank</a>
     <a href="#features">Features</a>
-    <a href="#pricing">Pricing</a>
+    <a href="./pricing.html">Pricing</a>
   </div>
   <div class="nav-right">
     <a href="./chat.html" class="nav-cta">Start Free →</a>
@@ -210,7 +192,6 @@
   <h1 class="head">Ask your doubt at 11pm. Get the NCERT line it comes from, and every year NEET has actually asked it.</h1>
   <div class="head-actions">
     <a href="./chat.html" class="btn-primary">Start free</a>
-    <a href="#pricing" class="link-quiet">₹0 for 5 questions a day</a>
   </div>
 </div>
 
@@ -290,43 +271,6 @@
     <div class="feature-row">
       <h3>Daily streak</h3>
       <p>Counts up when you actually answer questions or finish a test — not just for opening the app.</p>
-    </div>
-  </div>
-</section>
-
-<!-- PRICING -->
-<section class="block" id="pricing">
-  <div class="eyebrow-label">Pricing</div>
-  <h2 class="block-title">₹399 a month. Cancel anytime.</h2>
-  <p class="block-sub">Free covers real studying, not a trial. Pro removes the limits once you're doing this daily.</p>
-  <div class="pricing-grid">
-    <div class="price-card">
-      <div class="plan-name">Free</div>
-      <div class="plan-price">₹0</div>
-      <div class="plan-sub">forever</div>
-      <ul class="plan-features">
-        <li class="yes"><span class="check">✓</span> 5 AI questions per day</li>
-        <li class="yes"><span class="check">✓</span> NCERT-grounded answers</li>
-        <li class="yes"><span class="check">✓</span> Biology PYQ Bank</li>
-        <li class="yes"><span class="check">✓</span> 3 mock tests per month</li>
-        <li><span class="cross">✕</span> Physics &amp; Chemistry PYQ</li>
-        <li><span class="cross">✕</span> Mistake journal</li>
-      </ul>
-      <a href="./chat.html" class="plan-btn">Get started free</a>
-    </div>
-    <div class="price-card pro">
-      <div class="plan-name">Pro</div>
-      <div class="plan-price">₹399<span>/mo</span></div>
-      <div class="plan-sub">cancel anytime</div>
-      <ul class="plan-features">
-        <li class="yes"><span class="check">✓</span> Unlimited AI questions</li>
-        <li class="yes"><span class="check">✓</span> All 3 subjects, full PYQ Bank</li>
-        <li class="yes"><span class="check">✓</span> Unlimited mock tests</li>
-        <li class="yes"><span class="check">✓</span> Mistake journal</li>
-        <li class="yes"><span class="check">✓</span> Performance analytics</li>
-        <li class="yes"><span class="check">✓</span> Priority support</li>
-      </ul>
-      <a href="./pricing.html" class="plan-btn pro-btn">Get Pro →</a>
     </div>
   </div>
 </section>
