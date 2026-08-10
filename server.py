@@ -317,6 +317,9 @@ class DiagramMatchRequest(BaseModel):
     answer: str = ""  # the AI's full answer, for chapter-line extraction
 
 class PyqQuestionCreate(BaseModel):
+    # Only ever set by the admin tool's undo-delete restore path -- normal question creation
+    # (PDF scan review, scanned-paste parser) omits it so Postgres assigns a fresh id as before.
+    id: Optional[str] = None
     subject: str
     chapter: Optional[str] = None
     question: str
@@ -336,6 +339,10 @@ class PyqQuestionCreate(BaseModel):
     option_b_diagram_url: Optional[str] = None
     option_c_diagram_url: Optional[str] = None
     option_d_diagram_url: Optional[str] = None
+    # Also undo-restore-only -- lets a restored row keep its prior review/difficulty state
+    # instead of coming back reset to "needs review" every time.
+    reviewed: Optional[bool] = None
+    difficulty: Optional[str] = None
 
 class PyqBulkCreate(BaseModel):
     questions: List[PyqQuestionCreate]
@@ -1924,7 +1931,10 @@ async def admin_pyq_delete(pyq_id: str, _: None = Depends(verify_admin)):
         deleted = response.json()
         if not deleted:
             return {"error": "Row not found"}
-        return {"success": True}
+        # Returning the deleted row (not just success:true) is what lets the admin tool's
+        # Ctrl+Z undo restore it -- this is a hard DELETE, so this response is the only place
+        # that data still exists once the request completes.
+        return {"success": True, "deleted": deleted[0]}
     except Exception as e:
         return {"error": str(e)}
 
@@ -2714,6 +2724,15 @@ async def admin_pyq_bulk_create(body: PyqBulkCreate, _: None = Depends(verify_ad
         # entirely keeps every save working before that migration is run, not just this feature.
         if q.source_pdf_filename:
             item["source_pdf_filename"] = q.source_pdf_filename
+        # Undo-delete restore passes these through to make the restored row match what was
+        # actually deleted; normal creation never sets them, so this stays a no-op for every
+        # other caller (PDF review, scanned-paste parser).
+        if q.id:
+            item["id"] = q.id
+        if q.reviewed is not None:
+            item["reviewed"] = q.reviewed
+        if q.difficulty is not None:
+            item["difficulty"] = q.difficulty
         payload.append(item)
     try:
         response = http_requests.post(

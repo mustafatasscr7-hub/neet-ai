@@ -295,6 +295,11 @@
     let totalRows = 0;
     let currentRows = [];
     let selectedIds = new Set();
+    // Ctrl+Z undo stack -- each entry is { rows: [fullRowAsDeleted, ...] } for one delete action
+    // (single delete, "Delete both", or a bulk Delete Selected all count as one undo step).
+    let undoStack = [];
+    let undoInProgress = false;
+    let undoToastTimer = null;
     let duplicatesMode = false;
     let reviewMode = false;
     let reportsMode = false;
@@ -800,10 +805,27 @@
     }
 
     // ---------------- Bulk select ----------------
-    // Checkboxes only ever exist on cards rendered by questionCardHtml (normal list + review
-    // queue share that one function) -- duplicates/reports/diagram mode have their own per-item
-    // or per-pair actions already, so this bar is cleared/hidden on every mode switch and every
-    // fresh loadResults() fetch (see resetModeToggleUi() and loadResults() above).
+    // Checkboxes are rendered by questionCardHtml, which is shared by the normal list/review
+    // queue AND the Duplicates and Reports views (questionCardHtml(duplicateRowsMap[id]) /
+    // questionCardHtml(reportedRowsMap[...]) above) -- so the checkboxes are always live,
+    // regardless of mode. These helpers used to only ever look at currentRows, which stays
+    // empty/stale in duplicatesMode and reportsMode (their data lives in duplicateRowsMap /
+    // reportedRowsMap instead) -- checking a box there added the id to selectedIds fine, but
+    // "Delete Selected" then filtered against the wrong array and silently deleted nothing.
+    // That's the bug behind "can't select and delete easily" on 3+ duplicate groups, where the
+    // per-group bulk button is deliberately omitted (see renderDuplicatePairs) and checkboxes +
+    // Delete Selected is the intended way to pick which ones to keep.
+    function currentModeRowIds() {
+      if (duplicatesMode) return Object.keys(duplicateRowsMap);
+      if (reportsMode) return Object.keys(reportedRowsMap);
+      return currentRows.map(r => r.id);
+    }
+
+    function rerenderCurrentMode() {
+      if (duplicatesMode) renderDuplicatePairs(document.getElementById('filterSubject').value);
+      else if (reportsMode) renderReportedQuestions();
+      else renderResults();
+    }
 
     function toggleQuestionSelect(id, checked) {
       if (checked) selectedIds.add(id); else selectedIds.delete(id);
@@ -811,14 +833,14 @@
     }
 
     function toggleSelectAll(checked) {
-      currentRows.forEach(r => { if (checked) selectedIds.add(r.id); else selectedIds.delete(r.id); });
-      renderResults();
+      currentModeRowIds().forEach(id => { if (checked) selectedIds.add(id); else selectedIds.delete(id); });
+      rerenderCurrentMode();
       updateBulkBar();
     }
 
     function clearSelection() {
       selectedIds.clear();
-      renderResults();
+      rerenderCurrentMode();
       updateBulkBar();
     }
 
@@ -829,7 +851,8 @@
       document.getElementById('bulkSelectedCount').textContent = `${count} selected`;
       document.getElementById('bulkApproveBtn').style.display = reviewMode ? 'inline-block' : 'none';
       const selectAllCb = document.getElementById('selectAllCheckbox');
-      selectAllCb.checked = currentRows.length > 0 && currentRows.every(r => selectedIds.has(r.id));
+      const idsOnScreen = currentModeRowIds();
+      selectAllCb.checked = idsOnScreen.length > 0 && idsOnScreen.every(id => selectedIds.has(id));
     }
 
     async function approveOneQuietly(id) {
@@ -880,9 +903,12 @@
     }
 
     async function bulkDeleteSelected() {
-      const ids = currentRows.map(r => r.id).filter(id => selectedIds.has(id));
+      // Was hardcoded to currentRows, which stays empty/stale in duplicatesMode and
+      // reportsMode (their rows live in duplicateRowsMap / reportedRowsMap) -- checking boxes
+      // there and clicking this silently deleted nothing. currentModeRowIds() fixes that.
+      const ids = currentModeRowIds().filter(id => selectedIds.has(id));
       if (ids.length === 0) return;
-      if (!confirm(`Permanently delete ${ids.length} question${ids.length === 1 ? '' : 's'} from Supabase? This cannot be undone from here.`)) return;
+      if (!confirm(`Permanently delete ${ids.length} question${ids.length === 1 ? '' : 's'} from Supabase? (Ctrl+Z to undo right after)`)) return;
       const btn = document.getElementById('bulkDeleteBtn');
       const originalLabel = btn.textContent;
       btn.disabled = true;
@@ -891,13 +917,29 @@
       if (results.some(r => r.error === 'unauthorized')) return logout();
       const succeeded = new Set();
       const failures = [];
-      ids.forEach((id, i) => { if (results[i].error) failures.push(results[i].error); else succeeded.add(id); });
+      const deletedRows = [];
+      ids.forEach((id, i) => {
+        if (results[i].error) { failures.push(results[i].error); return; }
+        succeeded.add(id);
+        deletedRows.push(results[i].row || duplicateRowsMap[id] || reportedRowsMap[id] || currentRows.find(r => r.id === id));
+      });
       succeeded.forEach(id => selectedIds.delete(id));
-      currentRows = currentRows.filter(r => !succeeded.has(r.id));
-      totalRows = Math.max(0, totalRows - succeeded.size);
-      renderResults();
-      renderPagination();
-      updateResultCountText();
+      if (duplicatesMode) {
+        succeeded.forEach(id => delete duplicateRowsMap[id]);
+        duplicatePairs = duplicatePairs.filter(p => !succeeded.has(p.a) && !succeeded.has(p.b));
+        renderDuplicatePairs(document.getElementById('filterSubject').value);
+      } else if (reportsMode) {
+        succeeded.forEach(id => delete reportedRowsMap[id]);
+        reportGroups = reportGroups.filter(g => !succeeded.has(g.pyq_id));
+        renderReportedQuestions();
+      } else {
+        currentRows = currentRows.filter(r => !succeeded.has(r.id));
+        totalRows = Math.max(0, totalRows - succeeded.size);
+        renderResults();
+        renderPagination();
+        updateResultCountText();
+      }
+      pushUndoEntry(deletedRows);
       updateBulkBar();
       btn.disabled = false;
       btn.textContent = originalLabel;
@@ -1894,7 +1936,10 @@
         if (res.status === 401) return { error: 'unauthorized' };
         if (!res.ok) return { error: await describeHttpError(res) };
         const data = await res.json();
-        return data.error ? { error: data.error } : { success: true };
+        // `row` is the deleted row exactly as it was in the DB, straight from the server's
+        // return=representation -- this is a hard delete, so this response is the last place
+        // that data exists. Feeds the Ctrl+Z undo stack (pushUndoEntry below).
+        return data.error ? { error: data.error } : { success: true, row: data.deleted };
       } catch (e) {
         if (e.name === 'AbortError') return { error: 'Timed out waiting for the server -- check your connection and try again.' };
         return { error: 'Could not reach server.' };
@@ -1903,17 +1948,100 @@
       }
     }
 
+    // ---------------- Ctrl+Z undo for deletes ----------------
+    function pushUndoEntry(rows) {
+      const cleanRows = (rows || []).filter(Boolean);
+      if (cleanRows.length === 0) return;
+      undoStack.push({ rows: cleanRows });
+      if (undoStack.length > 20) undoStack.shift(); // cap growth over a long admin session
+      showUndoToast(cleanRows.length);
+    }
+
+    function showUndoToast(count) {
+      let toast = document.getElementById('undoToast');
+      if (!toast) {
+        toast = document.createElement('div');
+        toast.id = 'undoToast';
+        toast.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#111;border:1px solid #2a2a2a;color:#ececec;padding:10px 12px 10px 16px;border-radius:10px;font-size:13px;z-index:2000;box-shadow:0 4px 20px rgba(0,0,0,0.5);display:flex;gap:12px;align-items:center;font-family:Inter,sans-serif;';
+        document.body.appendChild(toast);
+      }
+      toast.innerHTML = `<span>${count} question${count === 1 ? '' : 's'} deleted</span><button type="button" id="undoToastBtn" style="background:#4f8ef7;border:none;color:#fff;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;">Undo (Ctrl+Z)</button>`;
+      document.getElementById('undoToastBtn').onclick = undoLastDelete;
+      toast.style.display = 'flex';
+      clearTimeout(undoToastTimer);
+      undoToastTimer = setTimeout(() => { toast.style.display = 'none'; }, 8000);
+    }
+
+    // Restores via /admin/pyq-bulk-create rather than any "undelete" endpoint -- this was a
+    // real DELETE, the row is gone, so undo means re-creating it. Passing the original id
+    // (and reviewed/difficulty) through keeps the restore faithful to what was actually there
+    // instead of coming back as a fresh, unreviewed row every time.
+    async function undoLastDelete() {
+      if (undoInProgress || undoStack.length === 0) return;
+      undoInProgress = true;
+      const toast = document.getElementById('undoToast');
+      if (toast) { toast.innerHTML = '<span>Restoring...</span>'; toast.style.display = 'flex'; }
+      const entry = undoStack.pop();
+      try {
+        const payload = {
+          questions: entry.rows.map(r => ({
+            id: r.id, subject: r.subject, chapter: r.chapter, question: r.question,
+            option_a: r.option_a, option_b: r.option_b, option_c: r.option_c, option_d: r.option_d,
+            correct_answer: r.correct_answer, question_type: r.question_type, year: r.year,
+            source_tag: r.source_tag, source_pdf_filename: r.source_pdf_filename, class: r.class,
+            has_diagram: r.has_diagram, diagram_url: r.diagram_url,
+            option_a_diagram_url: r.option_a_diagram_url, option_b_diagram_url: r.option_b_diagram_url,
+            option_c_diagram_url: r.option_c_diagram_url, option_d_diagram_url: r.option_d_diagram_url,
+            reviewed: r.reviewed, difficulty: r.difficulty
+          }))
+        };
+        const res = await fetch(`${API_BASE}/admin/pyq-bulk-create`, {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify(payload)
+        });
+        if (res.status === 401) return logout();
+        const data = await res.json();
+        if (!res.ok || data.error) {
+          undoStack.push(entry); // restore failed -- keep it available to retry, don't lose it
+          alert('Undo failed: ' + (data.error || res.status));
+          return;
+        }
+        // Refresh whichever view is active instead of hand-patching local state -- a restored
+        // row's duplicate-group relationships (duplicatePairs) can't be reconstructed
+        // client-side once removed, so a real re-scan/re-fetch is the only way it rejoins
+        // correctly.
+        if (duplicatesMode) await loadDuplicates();
+        else if (reportsMode) await loadReportedQuestions();
+        else if (!diagramMode) await loadResults();
+        if (toast) toast.style.display = 'none';
+      } finally {
+        undoInProgress = false;
+      }
+    }
+
+    document.addEventListener('keydown', function(e) {
+      if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.key.toLowerCase() !== 'z') return;
+      const tag = document.activeElement && document.activeElement.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return; // let native text-field undo happen instead
+      e.preventDefault();
+      undoLastDelete();
+    });
+
     async function deleteBothInPair(idA, idB, btnEl) {
-      if (!confirm('Permanently delete BOTH of these questions from Supabase? This cannot be undone from here.')) return;
+      if (!confirm('Permanently delete BOTH of these questions from Supabase? (Ctrl+Z to undo right after)')) return;
       const originalLabel = btnEl ? btnEl.textContent : null;
       if (btnEl) { btnEl.disabled = true; btnEl.textContent = 'Deleting...'; }
       const [resultA, resultB] = await Promise.all([deleteOneQuietly(idA), deleteOneQuietly(idB)]);
       if (resultA.error === 'unauthorized' || resultB.error === 'unauthorized') return logout();
+      const deletedRows = [];
       if (!resultA.error) {
+        deletedRows.push(resultA.row || duplicateRowsMap[idA]);
         delete duplicateRowsMap[idA];
         duplicatePairs = duplicatePairs.filter(p => p.a !== idA && p.b !== idA);
       }
       if (!resultB.error) {
+        deletedRows.push(resultB.row || duplicateRowsMap[idB]);
         delete duplicateRowsMap[idB];
         duplicatePairs = duplicatePairs.filter(p => p.a !== idB && p.b !== idB);
       }
@@ -1921,11 +2049,12 @@
         alert('One or both deletes failed: ' + [resultA.error, resultB.error].filter(Boolean).join(' / '));
         if (btnEl) { btnEl.disabled = false; btnEl.textContent = originalLabel; }
       }
+      pushUndoEntry(deletedRows);
       renderDuplicatePairs(document.getElementById('filterSubject').value);
     }
 
     async function deleteQuestion(id, btnEl) {
-      if (!confirm('Permanently delete this question from Supabase? This cannot be undone from here.')) return;
+      if (!confirm('Permanently delete this question from Supabase? (Ctrl+Z to undo right after)')) return;
       const originalLabel = btnEl ? btnEl.textContent : null;
       if (btnEl) { btnEl.disabled = true; btnEl.textContent = 'Deleting...'; }
       const result = await deleteOneQuietly(id);
@@ -1936,14 +2065,17 @@
         return;
       }
       if (duplicatesMode) {
+        pushUndoEntry([result.row || duplicateRowsMap[id]]);
         delete duplicateRowsMap[id];
         duplicatePairs = duplicatePairs.filter(p => p.a !== id && p.b !== id);
         renderDuplicatePairs(document.getElementById('filterSubject').value);
       } else if (reportsMode) {
+        pushUndoEntry([result.row || reportedRowsMap[id]]);
         delete reportedRowsMap[id];
         reportGroups = reportGroups.filter(g => g.pyq_id !== id);
         renderReportedQuestions();
       } else {
+        pushUndoEntry([result.row || currentRows.find(r => r.id === id)]);
         selectedIds.delete(id);
         currentRows = currentRows.filter(r => r.id !== id);
         totalRows = Math.max(0, totalRows - 1);
