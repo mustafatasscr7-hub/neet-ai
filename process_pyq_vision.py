@@ -293,6 +293,22 @@ def extract_pages_text_and_diagrams(pdf_bytes):
     doc.close()
     return pages
 
+_KNOWN_LATEX_COMMANDS = {
+    "text", "mathrm", "mathbf", "mathit", "overline", "underline", "hat", "vec", "dot", "ddot",
+    "binom", "frac", "sqrt", "times", "div", "pm", "mp", "cdot", "circ", "quad", "qquad", "left",
+    "right", "rightarrow", "leftarrow", "Rightarrow", "Leftarrow", "to",
+    "sum", "int", "prod", "infty", "partial", "nabla",
+    "alpha", "beta", "gamma", "Gamma", "delta", "Delta", "epsilon", "varepsilon", "zeta", "eta",
+    "theta", "Theta", "iota", "kappa", "lambda", "Lambda", "mu", "nu", "xi", "Xi", "pi", "Pi",
+    "rho", "sigma", "Sigma", "tau", "upsilon", "phi", "varphi", "Phi", "chi", "psi", "Psi",
+    "omega", "Omega",
+    "sin", "cos", "tan", "cot", "sec", "csc", "log", "ln", "exp", "lim", "min", "max",
+    "ast", "star", "prime", "dagger", "ne", "neq", "leq", "geq", "approx", "equiv", "propto",
+    "in", "notin", "subset", "supset", "cup", "cap", "forall", "exists", "emptyset",
+    "angle", "perp", "parallel", "triangle", "square", "therefore", "because",
+}
+_CMD_NAME_RE = re.compile(r'[a-zA-Z]+')
+
 def _fix_unescaped_json_backslashes(text):
     """Gemini/Claude are inconsistent about JSON-escaping the literal backslashes in LaTeX
     commands they write (e.g. \\mu, \\varepsilon, \\times, \\text, \\frac) inside the extracted
@@ -314,19 +330,38 @@ def _fix_unescaped_json_backslashes(text):
     the same real extraction batch that reproduced the bug above: a genuinely-intended "\\n\\n"
     paragraph break between "Statement I:" and "Statement II:" in a real question also showed up
     as a lone backslash, and blanket-doubling it would turn a real line break into literal visible
-    "\\n" text. The two cases are only distinguishable by context: the extraction prompt requires
-    ALL math to be wrapped in $...$, so a lone backslash INSIDE an active $...$ span is essentially
-    always an under-escaped LaTeX command, while one OUTSIDE any $ span is essentially always
-    genuine prose (a real newline, etc). This walks the string tracking $-parity and only doubles
-    backslashes while "inside" an odd number of $ signs; an already-correct \\\\ or \\" pair is
-    consumed atomically (2 chars at once) wherever it appears, in or out of math mode, so its
-    second character is never independently re-examined and re-doubled."""
+    "\\n" text.
+
+    Originally this was disambiguated purely by $...$ position (a lone backslash INSIDE an active
+    $...$ span is LaTeX, one OUTSIDE is prose) -- but that broke down for the companion bug fixed
+    in wrap_bare_latex_notation() below: the model sometimes writes a real LaTeX command with NO
+    $ wrapper at all (e.g. bare "PCl_{3}, \\text{ } NH_{3}"), and that backslash needs protecting
+    too even though it's technically "outside" any $ span (reported live 2026-08-10, same session,
+    a different admin-pdf-review.html question). So a lone backslash is now protected if EITHER
+    it's inside $...$, OR the word immediately following it exactly matches a known LaTeX command
+    name (_KNOWN_LATEX_COMMANDS) -- checking against a specific whitelist rather than "2+ letters
+    follow" avoids the false positive where a genuine "\\n" is immediately followed by the next
+    sentence's first word with no space (e.g. "...heating.\\nAssertion continues" -- "nAssertion"
+    has plenty of letters after the backslash, but isn't a known command, so the \\n is correctly
+    left as a real newline). An already-correct \\\\ or \\" pair is consumed atomically (2 chars
+    at once) wherever it appears, in or out of math mode, so its second character is never
+    independently re-examined and re-doubled.
+
+    "$$...$$" (display math) is treated as ONE atomic 2-char delimiter, not two independent "$"
+    toggles -- toggling on each "$" individually flips in_math ON then immediately back OFF for
+    "$$", silently breaking display-math detection (found via a live full-table audit before this
+    was ever used to write data, not from a user report)."""
     out = []
     in_math = False
     i, n = 0, len(text)
     while i < n:
         ch = text[i]
         if ch == '$':
+            if i + 1 < n and text[i + 1] == '$':
+                out.append('$$')
+                in_math = not in_math
+                i += 2
+                continue
             in_math = not in_math
             out.append(ch)
             i += 1
@@ -335,12 +370,68 @@ def _fix_unescaped_json_backslashes(text):
             nxt = text[i + 1]
             if nxt in ('\\', '"'):
                 out.append(ch); out.append(nxt); i += 2; continue
-            if in_math:
+            cmd_match = _CMD_NAME_RE.match(text, i + 1)
+            is_known_cmd = bool(cmd_match) and cmd_match.group(0) in _KNOWN_LATEX_COMMANDS
+            if in_math or is_known_cmd:
                 out.append('\\\\'); i += 1; continue
             out.append(ch); i += 1; continue
         out.append(ch)
         i += 1
     return ''.join(out)
+
+_LATEX_TOKEN_RE = re.compile(r'(?:[A-Za-z0-9]|_\{[^{}]*\}|\^\{[^{}]*\}|\\[a-zA-Z]+(?:\{[^{}]*\})*)+')
+_MATH_MARKER_RE = re.compile(r'_\{[^{}]*\}|\^\{[^{}]*\}|\\([a-zA-Z]+)')
+
+def _token_has_math_marker(token):
+    """A _{...} or ^{...} group is always a real math marker. A \\command is only a real marker
+    if it's a KNOWN LaTeX command -- accepting ANY \\[a-zA-Z]+ wrapped stray non-command
+    backslash-letter debris (e.g. a literal "\\n" left over from other corrupted content) as if
+    it were legitimate LaTeX (found via the same live audit as the $$ fix above)."""
+    for m in _MATH_MARKER_RE.finditer(token):
+        if m.group(1) is None or m.group(1) in _KNOWN_LATEX_COMMANDS:
+            return True
+    return False
+
+def wrap_bare_latex_notation(text):
+    """Separate bug from the backslash-escaping one above: the model sometimes writes correctly-
+    formed LaTeX notation (_{...} subscripts, ^{...} superscripts, \\text{...}) but forgets to
+    wrap it in $...$ AT ALL -- e.g. option text literally "SF_{6}" or "PCl_{3}, \\text{ } NH_{3}"
+    with no dollar signs anywhere, so KaTeX never renders it and the raw notation shows as-is
+    (reported live 2026-08-10, a different admin-pdf-review.html report from the same session as
+    the backslash bug). This is a prompt-adherence gap, not an encoding bug -- no amount of
+    re-parsing JSON fixes it, the text is already valid Python/JSON, just not valid *rendering*
+    input. Runs on each already-extracted field's plain text (NOT on raw JSON before parsing --
+    unlike the backslash fix, this would misfire on JSON's own quote/brace structure), walking
+    $-parity the same way (with the same "$$" atomic-pair handling), and wraps any maximal run of
+    letters/digits glued directly (no spaces) to at least one _{...}/^{...}/known \\command in a
+    fresh $...$ pair. Never touches text already inside an existing $...$ span, and plain prose
+    with no math markers is left untouched."""
+    out = []
+    in_math = False
+    i, n = 0, len(text)
+    while i < n:
+        ch = text[i]
+        if ch == '$':
+            if i + 1 < n and text[i + 1] == '$':
+                out.append('$$')
+                in_math = not in_math
+                i += 2
+                continue
+            in_math = not in_math
+            out.append(ch)
+            i += 1
+            continue
+        if not in_math:
+            m = _LATEX_TOKEN_RE.match(text, i)
+            if m and _token_has_math_marker(m.group(0)):
+                out.append('$' + m.group(0) + '$')
+                i = m.end()
+                continue
+        out.append(ch)
+        i += 1
+    return ''.join(out)
+
+_EXTRACTED_TEXT_FIELDS = ("question", "option_a", "option_b", "option_c", "option_d")
 
 def _parse_extraction_json(text, page_num):
     """Shared by both extraction paths (Gemini text-only and Claude Vision). Always runs the
@@ -349,14 +440,20 @@ def _parse_extraction_json(text, page_num):
     trusted as a signal here. The fix is a verified no-op on already-correct JSON, so this is
     strictly safer than the old try-original-then-fallback order, never worse."""
     try:
-        return json.loads(_fix_unescaped_json_backslashes(text))
+        questions = json.loads(_fix_unescaped_json_backslashes(text))
     except Exception:
-        pass
-    try:
-        return json.loads(text)  # last resort, in case the fix itself broke something unexpected
-    except Exception as e:
-        print(f"    JSON parse error on page {page_num}: {e}")
-        return []
+        questions = None
+    if questions is None:
+        try:
+            questions = json.loads(text)  # last resort, in case the fix broke something unexpected
+        except Exception as e:
+            print(f"    JSON parse error on page {page_num}: {e}")
+            return []
+    for q in questions:
+        for field in _EXTRACTED_TEXT_FIELDS:
+            if isinstance(q.get(field), str):
+                q[field] = wrap_bare_latex_notation(q[field])
+    return questions
 
 def extract_questions_from_text(page_text, page_num, subject="Biology", model=TEXT_MODEL):
     prompt = build_text_extraction_prompt(subject).replace("{page_text}", page_text)
