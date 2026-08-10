@@ -1685,6 +1685,7 @@
         <div class="q-block-actions">
           <button type="button" onclick="mergeWithNext('${b.id}')" title="Merge this block with the next one">Merge next</button>
           <button type="button" onclick="splitBlock('${b.id}')" title="Split into two separate questions">Split</button>
+          <button type="button" onclick="insertBlockBelow('${b.id}')" title="Insert a new blank question directly after this one">+ Insert Below</button>
           <button type="button" class="danger-link" onclick="removeBlock('${b.id}')">Remove</button>
         </div>
       </div>
@@ -2160,6 +2161,46 @@
     renderAllBlocks();
     updateSummaryBar();
     scheduleAutoSave();
+  }
+
+  function insertBlockBelow(id) {
+    const idx = findBlockIndex(id);
+    if (idx === -1) return;
+    // Sync this block's live DOM edits back into blocks[] first -- renderAllBlocks() below does
+    // a full innerHTML rebuild from blocks[], and without this its still-unsaved text would
+    // revert to whatever was last synced (same reasoning as mergeWithNext/splitBlock above).
+    Object.assign(blocks[idx], readBlockFromDom(id));
+    const newBlock = {
+      id: 'b' + (blockIdSeq++), question: '', option_a: '', option_b: '', option_c: '', option_d: '',
+      correct_answer: '', question_type: 'mcq', has_diagram: false, diagram_url: null,
+      option_a_diagram_url: null, option_b_diagram_url: null, option_c_diagram_url: null, option_d_diagram_url: null,
+      year: null, class_: null, chapter: null, source_page: null, display_number: null, saved: false, savePending: false
+    };
+    blocks.splice(idx + 1, 0, newBlock);
+    // A block with no explicit display_number auto-renumbers for free -- blockTemplate falls
+    // back to its 1-based array position on every render. A block whose number was manually
+    // corrected (e.g. to fix drift from the PDF's own numbering) won't move on its own, so shift
+    // those forward explicitly to keep the whole sequence consistent after the insertion.
+    for (let i = idx + 2; i < blocks.length; i++) {
+      const raw = blocks[i].display_number;
+      const n = raw == null ? NaN : parseInt(raw, 10);
+      if (!isNaN(n) && String(n) === String(raw).trim()) {
+        blocks[i].display_number = String(n + 1);
+      }
+    }
+    document.getElementById('summaryBar').style.display = 'flex';
+    renderAllBlocks();
+    updateSummaryBar();
+    scheduleAutoSave();
+    // Unlike addMissedQuestion (always appended at the very end, scrolls to page bottom), this
+    // new block lands in the middle of the list -- bring it into view and focus it directly so
+    // it's immediately editable without the admin having to go hunting for it.
+    const newEl = document.getElementById('block-' + newBlock.id);
+    if (newEl) {
+      newEl.scrollIntoView({ block: 'center' });
+      const qText = document.getElementById('q-text-' + newBlock.id);
+      if (qText) qText.focus();
+    }
   }
 
   function removeBlock(id) {
