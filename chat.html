@@ -2281,28 +2281,73 @@ let selectedImages = [];
       document.body.appendChild(modal);
     }
 
-    // Shared by both the live-streamed answer's button and the conversation-history-reload
-    // button -- same lazy-fetch-on-click pattern as the PYQ button (no change needed to /chat's
-    // plain-text streaming response to carry this data).
-    async function handleShowDiagramClick(btnEl, doubtText, answerText) {
-      btnEl.disabled = true;
-      btnEl.innerHTML = '⏳ Finding diagram...';
+    // Two-tier diagram confidence split -- see server.py's DIAGRAM_MATCH_THRESHOLD comment for
+    // the live measurement this number comes from (real on-topic matches against the actual
+    // catalog scored 0.56-0.79; 0.80 would almost never fire, same reason that constant isn't
+    // 0.75). Only matters when VISUAL_INTENT was "yes" -- everything else keeps the existing
+    // lazy, click-triggered button untouched.
+    const DIAGRAM_HIGH_CONFIDENCE_THRESHOLD = 0.65;
+
+    async function fetchDiagramMatch(doubtText, answerText) {
       try {
         const res = await fetch(`${API_BASE}/diagram-match`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text: doubtText, answer: answerText })
         });
-        const data = await res.json();
-        if (data.matched && data.image_url) {
-          showDiagramModal(data);
-          btnEl.innerHTML = '🖼️ Show Diagram';
-          btnEl.disabled = false;
+        return await res.json();
+      } catch (e) {
+        return null;
+      }
+    }
+
+    // Inline auto-embed for high-confidence, visually-oriented matches -- no click needed.
+    // Structurally mirrors showDiagramModal's image treatment (same frame/caption look) so an
+    // auto-embedded diagram doesn't look like a different feature from the click-triggered one.
+    function renderInlineDiagram(diagram) {
+      const wrap = document.createElement('div');
+      wrap.className = 'inline-diagram';
+      wrap.style.cssText = 'margin-top:14px;background:#141420;border-radius:10px;padding:12px;display:flex;flex-direction:column;align-items:center;';
+      const img = document.createElement('img');
+      img.src = diagram.image_url;
+      img.alt = diagram.name || 'Diagram';
+      img.style.cssText = 'max-width:100%;max-height:400px;display:block;border-radius:6px;cursor:pointer;';
+      img.onclick = () => showDiagramModal(diagram);
+      wrap.appendChild(img);
+      if (diagram.description) {
+        const caption = document.createElement('p');
+        caption.style.cssText = 'margin:10px 0 0;color:#c4c4c4;font-size:12px;line-height:1.6;text-align:center;width:100%;';
+        caption.textContent = diagram.description;
+        wrap.appendChild(caption);
+      }
+      return wrap;
+    }
+
+    // Shared by both the live-streamed answer's button and the conversation-history-reload
+    // button -- same lazy-fetch-on-click pattern as the PYQ button (no change needed to /chat's
+    // plain-text streaming response to carry this data). `prefetched` lets the high-confidence
+    // auto-embed path's own /diagram-match call (already made right after streaming finished) be
+    // reused here instead of firing a second, redundant request when a button is shown anyway
+    // (medium-confidence case: VISUAL_INTENT was yes, but similarity fell short of the auto-embed
+    // bar).
+    async function handleShowDiagramClick(btnEl, doubtText, answerText, prefetched) {
+      if (prefetched) {
+        if (prefetched.matched && prefetched.image_url) {
+          showDiagramModal(prefetched);
         } else {
           btnEl.innerHTML = 'No diagram available for this topic';
         }
-      } catch (e) {
-        btnEl.innerHTML = '❌ Error loading';
+        return;
+      }
+      btnEl.disabled = true;
+      btnEl.innerHTML = '⏳ Finding diagram...';
+      const data = await fetchDiagramMatch(doubtText, answerText);
+      if (data && data.matched && data.image_url) {
+        showDiagramModal(data);
+        btnEl.innerHTML = '🖼️ Show Diagram';
+        btnEl.disabled = false;
+      } else {
+        btnEl.innerHTML = data ? 'No diagram available for this topic' : '❌ Error loading';
       }
     }
 
@@ -3606,6 +3651,17 @@ function plainTextFromMarkdown(text) {
         let lastRenderTime = 0;
         const RENDER_THROTTLE_MS = 100;
 
+        // VISUAL_INTENT: [yes/no] is a hidden backend-only signal the model puts as the literal
+        // first line (server.py SYSTEM_PROMPT rule 10) -- must never reach the screen, not even
+        // for a flash mid-stream, so it's stripped here at the source (before it ever joins
+        // fullText) rather than in extractAnswerMeta, which only runs once streaming is done.
+        // Fail-safe per spec: if the tag is missing/malformed, default to 'no' and flush whatever
+        // was buffered unchanged -- never block real content waiting for a tag that isn't coming.
+        let visualIntentBuffer = '';
+        let visualIntentResolved = false;
+        let visualIntent = 'no';
+        const VISUAL_INTENT_BUFFER_CAP = 64;
+
         while (true) {
           if (streamController && streamController.signal.aborted) break;
           const { done, value } = await reader.read();
@@ -3620,7 +3676,27 @@ function plainTextFromMarkdown(text) {
           const chunk = decoder.decode(value);
           for (let i = 0; i < chunk.length; i++) {
             if (streamController && streamController.signal.aborted) break;
-            fullText += chunk[i];
+            if (!visualIntentResolved) {
+              visualIntentBuffer += chunk[i];
+              const nlIdx = visualIntentBuffer.indexOf('\n');
+              if (nlIdx !== -1) {
+                const firstLine = visualIntentBuffer.slice(0, nlIdx);
+                const rest = visualIntentBuffer.slice(nlIdx + 1);
+                const m = firstLine.match(/^\s*VISUAL_INTENT:\s*(yes|no)\s*$/i);
+                visualIntentResolved = true;
+                if (m) {
+                  visualIntent = m[1].toLowerCase();
+                  fullText += rest;
+                } else {
+                  fullText += visualIntentBuffer; // not our line -- flush unchanged, keep default 'no'
+                }
+              } else if (visualIntentBuffer.length >= VISUAL_INTENT_BUFFER_CAP) {
+                visualIntentResolved = true;
+                fullText += visualIntentBuffer; // gave up looking for the tag -- flush as-is
+              }
+            } else {
+              fullText += chunk[i];
+            }
             const now = Date.now();
             if (now - lastRenderTime >= RENDER_THROTTLE_MS) {
               renderStreamingText(bubble, fullText);
@@ -3646,14 +3722,24 @@ function plainTextFromMarkdown(text) {
         bubble.innerHTML = metaHtml + parseWithMath(cleanFullText);
         await renderMermaidBlocksIn(bubble);
 
+        // Only visually-oriented doubts (VISUAL_INTENT: yes) trigger a proactive diagram lookup
+        // -- everything else keeps the original lazy, click-only cost profile unchanged.
+        const diagramPrefetch = visualIntent === 'yes' ? await fetchDiagramMatch(pyqSearchText, fullText) : null;
+        const isAutoEmbed = !!(diagramPrefetch && diagramPrefetch.matched && diagramPrefetch.similarity >= DIAGRAM_HIGH_CONFIDENCE_THRESHOLD);
+        if (isAutoEmbed) {
+          bubble.appendChild(renderInlineDiagram(diagramPrefetch));
+        }
+
         const actionsRow = document.createElement('div');
         actionsRow.className = 'answer-actions-row';
 
-        const diagramBtn = document.createElement('button');
-        diagramBtn.className = 'diagram-btn';
-        diagramBtn.innerHTML = '🖼️ Show Diagram';
-        diagramBtn.onclick = () => handleShowDiagramClick(diagramBtn, pyqSearchText, fullText);
-        actionsRow.appendChild(diagramBtn);
+        if (!isAutoEmbed) {
+          const diagramBtn = document.createElement('button');
+          diagramBtn.className = 'diagram-btn';
+          diagramBtn.innerHTML = '🖼️ Show Diagram';
+          diagramBtn.onclick = () => handleShowDiagramClick(diagramBtn, pyqSearchText, fullText, diagramPrefetch);
+          actionsRow.appendChild(diagramBtn);
+        }
 
         const pyqBtn = document.createElement('button');
         pyqBtn.className = 'pyq-btn';

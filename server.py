@@ -87,6 +87,8 @@ You will be given relevant NCERT content to answer the student's question.
 
 For EVERY answer follow this exact format:
 
+VISUAL_INTENT: [yes or no]
+
 NEET Importance: [N]/5
 
 📚 Chapter: [NCERT Class X, Chapter X — Chapter Name]
@@ -182,7 +184,15 @@ Rules:
    urethra") is exactly the weak, forced pattern to avoid, and is worse than having no mnemonic at
    all. A short sequence that's already self-evident from its own logic (urine physically flows
    through the organs in the order they're connected; that IS the explanation, it needs no acronym
-   on top) doesn't need a memory trick — skip the section for those rather than manufacture one."""
+   on top) doesn't need a memory trick — skip the section for those rather than manufacture one.
+10. VISUAL_INTENT must be the VERY FIRST LINE of your response, before anything else — not
+    mentioned later, not skipped. Classify: "yes" if the student is explicitly asking to SEE,
+    view, or be shown something visual (e.g. "show me the structure of X", "what does X look
+    like", "draw/diagram of X") — "no" if it's a conceptual, factual, or process question that
+    merely relates to a topic that happens to have a diagram (e.g. "explain how X works", "why is
+    X true", "describe the function of X"). This is a hidden backend signal only — it controls
+    whether a diagram is automatically shown to the student, it is never explained or referred to
+    in the answer itself."""
 
 class ImageAttachment(BaseModel):
     data: str
@@ -1340,6 +1350,16 @@ async def get_pyq(message: Message, _: None = Depends(rate_limiter(15, 60))):
 # near-exact topical match only scored ~0.72 for this embedding model (text-embedding-3-small's
 # absolute similarity scale runs lower than 0.75 for real paraphrased matches) -- 0.75 would have
 # meant this feature almost never fired. 0.5 matches match_ncert's own threshold for the same model.
+#
+# Two-tier auto-embed confidence split (chat.html, DIAGRAM_HIGH_CONFIDENCE_THRESHOLD): re-measured
+# live against the actual reviewed-diagram catalog before picking a number -- genuine on-topic
+# matches against real rows scored 0.56-0.79, with topical closeness (not "visual" vs "conceptual"
+# phrasing) driving the score; a non-visual query ("explain how bacteria are classified by shape",
+# 0.787) scored higher than a visually-phrased one on the same topic ("show me the different shapes
+# of bacteria", 0.675). So similarity alone can't stand in for visual intent -- that's what the
+# VISUAL_INTENT tag is for. The high-confidence auto-embed floor is 0.65 (frontend-side), not this
+# feature's original 0.75/0.80 design target, since 0.80 would reproduce the same "almost never
+# fires" problem this threshold was already lowered once to avoid.
 DIAGRAM_MATCH_THRESHOLD = 0.5
 
 # Mirrors the "always-available action button, lazily fetched on click" pattern the PYQ button
@@ -1388,7 +1408,10 @@ async def diagram_match(req: DiagramMatchRequest, _: None = Depends(rate_limiter
         if not rows:
             return {"matched": False}
         top = rows[0]
-        return {"matched": True, "diagram_id": top["id"], "image_url": top["image_url"], "name": top.get("name"), "description": top.get("description")}
+        # similarity is already computed by match_diagrams for its own threshold filter above --
+        # exposing it here doesn't touch the matching logic itself, it just lets the caller (the
+        # frontend's confidence-tier split) see the same number the RPC already had.
+        return {"matched": True, "diagram_id": top["id"], "image_url": top["image_url"], "name": top.get("name"), "description": top.get("description"), "similarity": top.get("similarity")}
     except Exception:
         return {"matched": False}
 
