@@ -3254,7 +3254,10 @@ function plainTextFromMarkdown(text) {
         return;
       }
 
-      const doubtsLeft = Math.floor((budget - used) / AVG_TOKENS_PER_DOUBT);
+      // Clamped at 0 -- AVG_TOKENS_PER_DOUBT is a rough display-only estimate, so a single real
+      // doubt using more than that average can push `used` past `budget` before the cooldown
+      // banner above actually kicks in, which without this would show as e.g. "-4 doubts left".
+      const doubtsLeft = Math.max(0, Math.floor((budget - used) / AVG_TOKENS_PER_DOUBT));
       limitEl.style.display = 'none';
       setSendEnabled(true);
       if (doubtsLeft <= WARNING_THRESHOLD_DOUBTS) {
