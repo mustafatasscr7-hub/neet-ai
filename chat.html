@@ -2434,22 +2434,48 @@ let selectedImages = [];
       return grow;
     }
 
-    // Auto-embedded diagrams belong right after the section of text they illustrate (the
-    // "📝 Answer:" section, server.py SYSTEM_PROMPT format), not floating disconnected at the
-    // very bottom after Key Points/Easy Way to Remember. Finds the rendered "🔑 Key Points:"
-    // paragraph by its text content -- not by parsing raw markdown position -- so it doesn't
-    // matter whether the model happened to bold the heading or not. Numerical-format answers
-    // (Given/Formula/Solution/Answer, no Key Points section at all) and any answer where the
-    // heading text isn't found for some other reason fall back to appending at the end, same
-    // as the previous unconditional behavior -- never silently drop the diagram.
-    function findKeyPointsAnchor(bubble) {
-      for (const el of bubble.children) {
-        if (el.tagName === 'P' || /^H[1-6]$/.test(el.tagName)) {
-          const t = el.textContent.trim();
-          if (t.length < 80 && /key points/i.test(t)) return el;
-        }
-      }
-      return null;
+    // Shown the instant VISUAL_INTENT: yes is known (streamAIResponse's diagram-first block) --
+    // before we even know whether a diagram will actually match, let alone have its URL. Kept
+    // deliberately minimal per Claude.ai's own understated loading style: no card background,
+    // no shimmer, no label -- just the same small spinner the "thinking" indicator already uses
+    // (.thinking-orb), reused rather than a second bespoke spinner invented for this one spot.
+    // Once the match decision resolves this is removed outright (see the caller), so it's never
+    // seen alongside the heavier .diagram-skeleton (buildDiagramImage) that follows if a real
+    // diagram was found -- that one has its own spinner+label because it's covering a materially
+    // different wait (fetching actual image bytes, not a fast RPC lookup).
+    function showDiagramPendingIndicator(bubble, beforeEl) {
+      const el = document.createElement('div');
+      el.style.cssText = 'display:flex;justify-content:center;padding:16px 0;opacity:0;transition:opacity 0.2s ease;';
+      const orb = document.createElement('div');
+      orb.className = 'thinking-orb';
+      el.appendChild(orb);
+      bubble.insertBefore(el, beforeEl);
+      void el.offsetWidth;
+      el.style.opacity = '1';
+      return el;
+    }
+
+    // Auto-embeds a matched diagram as bubble's first child (before textArea), animating its
+    // entrance the same way renderInlineDiagram's caller always has (grow + fade, see that
+    // function's own comments for why both are needed). Pulled into a shared helper now that
+    // there's a single insertion point (always before textArea) instead of the old
+    // findKeyPointsAnchor-based mid-text splice -- diagram-first ordering falls out of DOM
+    // insertion order by construction once the diagram decision always resolves before any text
+    // renders, so there's no longer a "was there already text on screen" case to handle.
+    function insertAutoEmbedDiagram(bubble, textArea, diagram) {
+      const diagramEl = renderInlineDiagram(diagram);
+      const innerCard = diagramEl.querySelector('.inline-diagram');
+      bubble.insertBefore(diagramEl, textArea);
+      void diagramEl.offsetWidth;
+      diagramEl.style.maxHeight = '700px';
+      innerCard.style.opacity = '1';
+      innerCard.style.transform = 'translateY(0) scale(1)';
+      diagramEl.addEventListener('transitionend', function onGrowEnd(e) {
+        if (e.propertyName !== 'max-height') return;
+        diagramEl.style.maxHeight = 'none';
+        diagramEl.style.overflow = 'visible';
+        diagramEl.removeEventListener('transitionend', onGrowEnd);
+      });
     }
 
     // Shared by both the live-streamed answer's button and the conversation-history-reload
@@ -3764,14 +3790,22 @@ function plainTextFromMarkdown(text) {
         // regardless of whether its bubble has any text yet.
         let aiRow = null;
         let bubble = null;
+        // Text always renders into this inner container, never into `bubble` itself -- an
+        // auto-embedded diagram (see the diagram-first block in the loop below) is inserted as
+        // bubble's FIRST child, before this one, so it's never wiped by a later text re-render
+        // (renderStreamingText/the final render both do a blind innerHTML overwrite of whatever
+        // element they're given, by design -- see renderStreamingText's own comment -- so they
+        // must never be pointed at an element that also holds the diagram).
+        let textArea = null;
         function ensureAiRow() {
           if (aiRow) return;
           aiRow = document.createElement('div');
           aiRow.className = 'message-row ai';
           aiRow.dataset.msgIndex = aiIndex;
-          aiRow.innerHTML = '<div class="avatar ai">⚡</div><div class="message-content ai"><div class="message-bubble ai"></div></div>';
+          aiRow.innerHTML = '<div class="avatar ai">⚡</div><div class="message-content ai"><div class="message-bubble ai"><div class="bubble-text"></div></div></div>';
           chatWindow.appendChild(aiRow);
           bubble = aiRow.querySelector('.message-bubble.ai');
+          textArea = aiRow.querySelector('.bubble-text');
         }
 
         const reader = response.body.getReader();
@@ -3790,6 +3824,14 @@ function plainTextFromMarkdown(text) {
         let visualIntentResolved = false;
         let visualIntent = 'no';
         const VISUAL_INTENT_BUFFER_CAP = 64;
+
+        // Set inline, the moment VISUAL_INTENT: yes resolves below -- read after the loop to
+        // decide the "Show Diagram" button (skipped if already auto-embedded). Declared here,
+        // not after the loop like the old single fetch-after-streaming call this replaced, since
+        // the diagram-first flow now resolves and (if matched) embeds these during streaming,
+        // before any answer text has rendered at all.
+        let diagramPrefetch = null;
+        let isAutoEmbed = false;
 
         while (true) {
           if (streamController && streamController.signal.aborted) break;
@@ -3819,6 +3861,29 @@ function plainTextFromMarkdown(text) {
                 } else {
                   fullText += visualIntentBuffer; // not our line -- flush unchanged, keep default 'no'
                 }
+                // Diagram-first: the instant VISUAL_INTENT is known to be yes, pause handing any
+                // more of the answer to the renderer and resolve the diagram lookup right here --
+                // before a single character of the actual answer text has been shown. The
+                // underlying fetch response just buffers incoming bytes while this await is in
+                // flight (a few hundred ms typically -- match_diagrams is a fast RPC, and text
+                // generation keeps running server-side the whole time regardless), so nothing is
+                // lost or re-requested; only the client's own rendering of it pauses. Matches
+                // using pyqSearchText (the student's own question) with an empty `answer` --
+                // skips the chapter-filter narrowing the post-stream call used to do, trading a
+                // small amount of match precision (immaterial against today's small, topically
+                // distinct diagram catalog -- see chat_diagram_matching memory) for not needing
+                // to wait for the model to have written a 📚 Chapter: line yet, which is the
+                // whole point here. VISUAL_INTENT: no is entirely unaffected -- diagramPrefetch
+                // simply never gets set, and the loop below behaves exactly as it always has.
+                if (visualIntent === 'yes') {
+                  const pendingEl = showDiagramPendingIndicator(bubble, textArea);
+                  diagramPrefetch = await fetchDiagramMatch(pyqSearchText, '');
+                  pendingEl.remove();
+                  isAutoEmbed = !!(diagramPrefetch && diagramPrefetch.matched && diagramPrefetch.similarity >= DIAGRAM_HIGH_CONFIDENCE_THRESHOLD);
+                  if (isAutoEmbed) {
+                    insertAutoEmbedDiagram(bubble, textArea, diagramPrefetch);
+                  }
+                }
               } else if (visualIntentBuffer.length >= VISUAL_INTENT_BUFFER_CAP) {
                 visualIntentResolved = true;
                 fullText += visualIntentBuffer; // gave up looking for the tag -- flush as-is
@@ -3828,7 +3893,7 @@ function plainTextFromMarkdown(text) {
             }
             const now = Date.now();
             if (now - lastRenderTime >= RENDER_THROTTLE_MS) {
-              renderStreamingText(bubble, fullText);
+              renderStreamingText(textArea, fullText);
               lastRenderTime = now;
               // scrollBottom() animates via scroll-behavior:smooth - throttled with the
               // render, not called on every character, or repeated calls interrupt each
@@ -3848,42 +3913,13 @@ function plainTextFromMarkdown(text) {
         ensureAiRow();
 
         const { cleanText: cleanFullText, metaHtml } = extractAnswerMeta(fullText);
-        bubble.innerHTML = metaHtml + parseWithMath(cleanFullText);
-        await renderMermaidBlocksIn(bubble);
+        textArea.innerHTML = metaHtml + parseWithMath(cleanFullText);
+        await renderMermaidBlocksIn(textArea);
 
-        // Only visually-oriented doubts (VISUAL_INTENT: yes) trigger a proactive diagram lookup
-        // -- everything else keeps the original lazy, click-only cost profile unchanged.
-        const diagramPrefetch = visualIntent === 'yes' ? await fetchDiagramMatch(pyqSearchText, fullText) : null;
-        const isAutoEmbed = !!(diagramPrefetch && diagramPrefetch.matched && diagramPrefetch.similarity >= DIAGRAM_HIGH_CONFIDENCE_THRESHOLD);
-        if (isAutoEmbed) {
-          const diagramEl = renderInlineDiagram(diagramPrefetch); // .inline-diagram-grow, wrapping the real .inline-diagram card
-          const innerCard = diagramEl.querySelector('.inline-diagram');
-          const keyPointsAnchor = findKeyPointsAnchor(bubble);
-          if (keyPointsAnchor) {
-            bubble.insertBefore(diagramEl, keyPointsAnchor);
-          } else {
-            bubble.appendChild(diagramEl);
-          }
-          // Force layout before flipping to the resting state, or the insertion and these style
-          // changes would land in the same tick and both transitions would be skipped entirely
-          // (same reflow-forcing trick buildDiagramImage's own image-reveal step uses) -- the
-          // card would just appear at its final state, full height and full opacity, with no
-          // animation at all.
-          void diagramEl.offsetWidth;
-          // 700px comfortably exceeds the card's real height in every state it passes through
-          // (skeleton ~370px, revealed ~455px, plus a long caption) -- once the transition ends,
-          // the cap is lifted entirely (below) so nothing about the card's later skeleton ->
-          // image resize is constrained by a leftover fixed max-height.
-          diagramEl.style.maxHeight = '700px';
-          innerCard.style.opacity = '1';
-          innerCard.style.transform = 'translateY(0) scale(1)';
-          diagramEl.addEventListener('transitionend', function onGrowEnd(e) {
-            if (e.propertyName !== 'max-height') return;
-            diagramEl.style.maxHeight = 'none';
-            diagramEl.style.overflow = 'visible';
-            diagramEl.removeEventListener('transitionend', onGrowEnd);
-          });
-        }
+        // diagramPrefetch/isAutoEmbed were already resolved (and, if matched, already embedded
+        // via insertAutoEmbedDiagram) inline in the loop above, the moment VISUAL_INTENT: yes
+        // was known -- nothing left to do here for that case. VISUAL_INTENT: no never touches
+        // either variable, so the button logic below simply never applies to it, same as before.
 
         const actionsRow = document.createElement('div');
         actionsRow.className = 'answer-actions-row';
