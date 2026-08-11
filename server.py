@@ -238,16 +238,24 @@ Rules:
       question is phrased (e.g. even "...and label its parts" or "...show it as a diagram") — a
       real diagram lookup handles this request, a self-drawn flowchart is never a substitute for
       it, and this holds regardless of exact wording.
-    - Do NOT describe, narrate, or "decode" what a specific diagram/image will show. You do not
-      know whether a real diagram will actually be found for this question, and if one is, you
-      have no access to what it actually depicts or which parts it labels — that lookup happens
-      in a separate system after you finish writing, with no visibility into your answer. Never
-      write anything like "the diagram is being shown/displayed now", and never build a table or
-      list claiming to be the labelled parts visible in that specific image — that is a fabricated
-      guess presented as fact, and it will often be flatly wrong about the real uploaded image.
-      Explaining the topic's real structure/features as normal educational text is still fine and
-      expected either way (e.g. "eubacteria have a cell wall, flagellum, ...") — just never frame
-      it as certain knowledge of what a particular picture contains or claim one is on-screen."""
+    - Do NOT describe, narrate, or "decode" what a specific diagram/image will show, and do NOT
+      make ANY claim about its display/delivery status in ANY wording or tense — you do not know
+      whether a real diagram will actually be found for this question, you have no access to what
+      it depicts or labels if one is found, and you have no idea whether it will end up auto-shown
+      or behind a click — that decision happens in a separate system after you finish writing, with
+      zero visibility into your answer. This is a blanket rule on the underlying CLAIM, not a list
+      of banned sentences to avoid — rewording, softening, or hedging the same claim is still the
+      same violation. All of the following are equally prohibited, however phrased: "the diagram is
+      being shown/displayed now", "a diagram will be shown/displayed separately", "you'll see it
+      below/above", "the system is displaying it for you", "check the diagram for this" — say NONE
+      of this, in any form, even if the student has asked to see it before or repeatedly in this
+      same conversation; repetition doesn't give you any more visibility into what the diagram
+      system will do than a first-time request does. Also never build a table or list claiming to
+      be the labelled parts visible in that specific image — that is a fabricated guess presented
+      as fact, and it will often be flatly wrong about the real uploaded image. Explaining the
+      topic's real structure/features as normal educational text is still fine and expected either
+      way (e.g. "eubacteria have a cell wall, flagellum, ...") — just never claim or imply a
+      picture is or will be on-screen, in this answer or delivered any other way."""
 
 class ImageAttachment(BaseModel):
     data: str
