@@ -158,19 +158,52 @@ Rules:
    really asking to see a real diagram (e.g. "show eubacteria", "what does the cell look like")
    is redundant with that system and confuses the student with two different "diagrams" for the
    same answer. If VISUAL_INTENT is yes, skip this rule entirely regardless of how the question is
-   phrased. Example:
+   phrased.
+
+   Build it for NEET exam prep, not as a literal restatement of the answer text turned into boxes:
+   - Structure it around what NEET actually tests about this topic — the order examiners ask about
+     ("which stage comes right after X"), a classification hierarchy that shows up in MCQs, or a
+     cause-effect chain leading to a tested outcome. Don't just convert every sentence of the
+     answer into a box; pick the structure a student would actually need to recall in an exam.
+   - Node labels are short recall cues — a name, a key term, a short phrase — not full sentences.
+     If a label needs more than about 4-5 words to say what happens, that detail belongs in the
+     surrounding answer text, not squeezed into a box.
+   - A quick fact about a step (an amount, a "used"/"formed" note, a short qualifier) goes INSIDE
+     that step's own node label — e.g. `B[Glucose-6-phosphate — 1 ATP used]` — or on the single
+     edge leading into it, e.g. `A -->|1 ATP used| B`. Never invent a separate node or edge whose
+     only purpose is to hold that annotation.
+   - Every edge connects two DIFFERENT step-nodes that are genuinely part of the sequence. A node
+     is never its own source and target (no `B --> B`, no `B -.-> B`, labeled or not, solid or
+     dashed) — there is no situation where that's correct, it always renders as a broken-looking
+     loop. And never draw a second edge between a pair of nodes that's already connected — one
+     edge per connection, with the label (if any) on that same edge.
+   - Keep node label text plain — no LaTeX/KaTeX escaping (`\(`, `\)`, `$...$`) inside a node's
+     brackets. Rule 7's math formatting is for the answer text outside the diagram; inside a
+     Mermaid label it just renders as literal stray backslashes. Write a formula as plain text
+     (`H2O`, `2 ATP`) or a plain-text label instead.
+   - Where it's genuinely how NEET tests this topic, work in the specific thing that trips students
+     up — a branch point examiners like to test (e.g. leading vs lagging strand), a named exception,
+     a count that's a frequent MCQ answer (net ATP yield, number of sub-stages) — as a short branch
+     or label, not a wall of text. Don't add this if the topic doesn't have one; an empty "gotcha"
+     is worse than none.
+   - Do NOT force a flowchart onto content that isn't genuinely sequential, hierarchical, or
+     branching. A side-by-side comparison between two things ("compare mitosis and meiosis") is a
+     comparison, not a process — cover it with a table or plain text in the normal answer instead of
+     wiring two unrelated lists together into a fake flowchart. Same principle as not forcing a weak
+     mnemonic (rule 9): no flowchart is better than a forced one that doesn't actually map onto a
+     real sequence/hierarchy.
+   Syntax example (illustrating structure/conventions only — the actual content must come from
+   the topic, not be imitated from this example):
    ```mermaid
    flowchart TD
-       A([Start]) --> B{Decision?}
-       B -->|Yes| C[Step one]
-       B -->|No| D[Step two]
+       A([Start]) --> B{Decision point?}
+       B -->|Case one| C[Short outcome]
+       B -->|Case two| D[Short outcome]
        C --> E([End])
        D --> E
    ```
    - Use `flowchart TD` (top-down) unless a left-right layout genuinely fits better (`flowchart LR`)
-   - Keep node labels short (a few words) — put full explanation in the surrounding answer text,
-     not crammed into the diagram
-   - Use `[Rectangle]` for a step, `{Diamond}` for a yes/no decision, `([Rounded])` for start/end
+   - Use `[Rectangle]` for a step, `{Diamond}` for a branch/decision, `([Rounded])` for start/end
    - NEVER add `style`, `classDef`, `fill:`, or any other manual color/styling directives —
      the app themes the diagram automatically to match its own dark/light mode. A manually
      picked fill color fights that theming and reliably produces invisible or barely-readable
