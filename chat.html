@@ -2401,6 +2401,20 @@ let selectedImages = [];
     // Structurally mirrors showDiagramModal's image treatment (same frame/caption look) so an
     // auto-embedded diagram doesn't look like a different feature from the click-triggered one.
     function renderInlineDiagram(diagram) {
+      // Outer wrapper grows from 0 height alongside the inner card's own opacity/transform fade.
+      // Previous version only animated the inner card's opacity+transform, on the assumption
+      // that was the whole entrance -- but inserting that card at its full ~370-450px size in
+      // one DOM operation reserves that much space instantly, in the same frame, regardless of
+      // the card's own opacity starting at 0. That reservation was the actual "pop": confirmed
+      // live via frame-by-frame capture (3ms polling) showing the Key Points paragraph's Y
+      // position jump ~400px in a single ~20ms tick at the exact moment of insertion, well
+      // before the opacity transition had produced any visible change at all. Growing max-height
+      // here, alongside the inner card's own fade, makes that space open up gradually instead of
+      // shoving everything below it down in one frame.
+      const grow = document.createElement('div');
+      grow.className = 'inline-diagram-grow';
+      grow.style.cssText = 'max-height:0;overflow:hidden;transition:max-height 0.3s ease;';
+
       const wrap = document.createElement('div');
       wrap.className = 'inline-diagram';
       // width:fit-content + margin:auto (not a flat 100%-wide block) so the card hugs the
@@ -2408,13 +2422,6 @@ let selectedImages = [];
       // diagram previously stretched its dark card background across the full ~680px column
       // width regardless of the image's real size. max-width:100% is the fallback cap for a
       // wide/landscape image, which already caps out at the message column's own max-width.
-      //
-      // Starts at opacity:0/offset -- the card itself (not just the loaded image inside it)
-      // used to just appear the instant it was inserted, with no transition of its own. The
-      // caller (isAutoEmbed block below) flips these to their resting values right after
-      // insertion to animate the entrance. transform/opacity only, never width/height/margin --
-      // those don't affect layout (no reflow), so the skeleton inside still reserves its full
-      // aspect-ratio space from the very first frame regardless of where this animation is.
       wrap.style.cssText = 'width:fit-content;max-width:100%;margin:20px auto;background:#141420;border:1px solid #2a2a3a;border-radius:10px;padding:12px;display:flex;flex-direction:column;align-items:center;box-shadow:0 4px 16px rgba(0,0,0,0.35);opacity:0;transform:translateY(8px) scale(0.98);transition:opacity 0.28s ease,transform 0.28s ease;';
       wrap.appendChild(buildDiagramImage(diagram, { maxHeight: '400px', onClick: () => showDiagramModal(diagram) }));
       if (diagram.description) {
@@ -2423,7 +2430,8 @@ let selectedImages = [];
         caption.textContent = diagram.description;
         wrap.appendChild(caption);
       }
-      return wrap;
+      grow.appendChild(wrap);
+      return grow;
     }
 
     // Auto-embedded diagrams belong right after the section of text they illustrate (the
@@ -3848,20 +3856,33 @@ function plainTextFromMarkdown(text) {
         const diagramPrefetch = visualIntent === 'yes' ? await fetchDiagramMatch(pyqSearchText, fullText) : null;
         const isAutoEmbed = !!(diagramPrefetch && diagramPrefetch.matched && diagramPrefetch.similarity >= DIAGRAM_HIGH_CONFIDENCE_THRESHOLD);
         if (isAutoEmbed) {
-          const diagramEl = renderInlineDiagram(diagramPrefetch);
+          const diagramEl = renderInlineDiagram(diagramPrefetch); // .inline-diagram-grow, wrapping the real .inline-diagram card
+          const innerCard = diagramEl.querySelector('.inline-diagram');
           const keyPointsAnchor = findKeyPointsAnchor(bubble);
           if (keyPointsAnchor) {
             bubble.insertBefore(diagramEl, keyPointsAnchor);
           } else {
             bubble.appendChild(diagramEl);
           }
-          // Force layout before flipping to the resting opacity/transform, or the insertion
-          // and this style change would land in the same tick and the transition would be
-          // skipped entirely (same reflow-forcing trick buildDiagramImage's own image-reveal
-          // step uses) -- the card would just appear at its final state with no animation.
+          // Force layout before flipping to the resting state, or the insertion and these style
+          // changes would land in the same tick and both transitions would be skipped entirely
+          // (same reflow-forcing trick buildDiagramImage's own image-reveal step uses) -- the
+          // card would just appear at its final state, full height and full opacity, with no
+          // animation at all.
           void diagramEl.offsetWidth;
-          diagramEl.style.opacity = '1';
-          diagramEl.style.transform = 'translateY(0) scale(1)';
+          // 700px comfortably exceeds the card's real height in every state it passes through
+          // (skeleton ~370px, revealed ~455px, plus a long caption) -- once the transition ends,
+          // the cap is lifted entirely (below) so nothing about the card's later skeleton ->
+          // image resize is constrained by a leftover fixed max-height.
+          diagramEl.style.maxHeight = '700px';
+          innerCard.style.opacity = '1';
+          innerCard.style.transform = 'translateY(0) scale(1)';
+          diagramEl.addEventListener('transitionend', function onGrowEnd(e) {
+            if (e.propertyName !== 'max-height') return;
+            diagramEl.style.maxHeight = 'none';
+            diagramEl.style.overflow = 'visible';
+            diagramEl.removeEventListener('transitionend', onGrowEnd);
+          });
         }
 
         const actionsRow = document.createElement('div');
