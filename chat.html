@@ -414,8 +414,13 @@
        size, which would depend on the ancestor's size...) and silently computes to a 0x0 box --
        confirmed live, not theoretical: reserved zero space and the whole point of this skeleton
        was lost. 100vw has no such ambiguity since it's always resolved against the viewport. */
-    .diagram-skeleton { width: min(300px, calc(100vw - 140px)); aspect-ratio: 0.95; border-radius: 6px; background: linear-gradient(100deg, #1a1a26 30%, #26263a 50%, #1a1a26 70%); background-size: 200% 100%; animation: diagramShimmer 1.4s ease-in-out infinite; }
+    .diagram-skeleton { width: min(300px, calc(100vw - 140px)); aspect-ratio: 0.95; border-radius: 6px; background: linear-gradient(100deg, #1a1a26 30%, #26263a 50%, #1a1a26 70%); background-size: 200% 100%; animation: diagramShimmer 1.4s ease-in-out infinite; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; }
     @keyframes diagramShimmer { 0% { background-position: 150% 0; } 100% { background-position: -150% 0; } }
+    /* Same spinner used by the "thinking" indicator (.thinking-orb, above) -- reused as-is
+       rather than a second bespoke spinner, so a diagram load reads as the same kind of wait
+       as everything else in the app. */
+    .diagram-skeleton-label { font-size: 12px; color: #888; animation: thinkingFade 2.2s ease-in-out infinite; }
+    body.light-mode .diagram-skeleton-label { color: #7a7a85 !important; }
 
     .input-area { padding: 16px 24px 24px; background: #0d0d0d; }
     .input-wrapper { max-width: 820px; margin: 0 auto; background: #111111; border: 1px solid #2a2a2a; border-radius: 14px; display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; transition: border-color 0.2s; }
@@ -2246,16 +2251,24 @@ let selectedImages = [];
       document.body.appendChild(modal);
     }
 
-    // No lightbox/expanded-image pattern existed anywhere in this file before -- built fresh,
-    // structurally following showPYQModal's own construction pattern (createElement + inline
-    // cssText) so it fits the existing visual style rather than introducing a new one.
     // Shared by the auto-embedded inline diagram and the click-triggered modal (showDiagramModal)
     // so both diagram surfaces load/fail the same way, matching the "same frame/caption look"
     // they already share. Returns a container holding a shimmer skeleton (reserves roughly the
-    // right space via aspect-ratio, see .diagram-skeleton) that's swapped for the real <img>,
-    // faded and scaled in, once it finishes loading -- or a small graceful message in place of
-    // a broken-image icon if the load fails. `src` is only set once onload/onerror are already
-    // wired, so a cache-instant load can't fire before its own handler exists.
+    // right space via aspect-ratio, see .diagram-skeleton, with the same spinner+fade-text pair
+    // the "thinking" indicator uses so a diagram load reads as the same kind of wait as
+    // everything else) that's swapped for the real <img>, faded and scaled in, once it finishes
+    // loading -- or a small graceful message in place of a broken-image icon if the load fails.
+    // `src` is only set once onload/onerror are already wired, so a cache-instant load can't
+    // fire before its own handler exists.
+    //
+    // MIN_SKELETON_MS: a real Supabase CDN image load is often well under 100-200ms, which reads
+    // as "just popped in" to a human even though the skeleton genuinely did render first --
+    // confirmed by testing this over an artificially slow connection (skeleton clearly visible)
+    // vs. a normal one (not perceptible) side by side. This isn't padding for its own sake --
+    // without it, the loading state exists in code but not in the experience anyone actually has
+    // on a fast connection, which is most of the time.
+    const MIN_SKELETON_MS = 450;
+
     function buildDiagramImage(diagram, { maxHeight, onClick }) {
       const container = document.createElement('div');
       // No explicit width: left to shrink-to-fit its one visible child (skeleton, then the
@@ -2266,6 +2279,13 @@ let selectedImages = [];
 
       const skeleton = document.createElement('div');
       skeleton.className = 'diagram-skeleton';
+      const orb = document.createElement('div');
+      orb.className = 'thinking-orb';
+      skeleton.appendChild(orb);
+      const label = document.createElement('span');
+      label.className = 'diagram-skeleton-label';
+      label.textContent = 'Loading diagram…';
+      skeleton.appendChild(label);
       container.appendChild(skeleton);
 
       const img = document.createElement('img');
@@ -2273,7 +2293,13 @@ let selectedImages = [];
       img.style.cssText = `max-width:100%;max-height:${maxHeight};display:none;border-radius:6px;opacity:0;transform:scale(0.98);transition:opacity 0.35s ease,transform 0.35s ease;${onClick ? 'cursor:pointer;' : ''}`;
       if (onClick) img.onclick = onClick;
 
-      img.onload = () => {
+      const skeletonShownAt = Date.now();
+      function afterMinSkeletonTime(fn) {
+        const remaining = MIN_SKELETON_MS - (Date.now() - skeletonShownAt);
+        if (remaining > 0) setTimeout(fn, remaining); else fn();
+      }
+
+      img.onload = () => afterMinSkeletonTime(() => {
         skeleton.remove();
         img.style.display = 'block';
         // Force layout before flipping to the target styles, or the display:none -> block change
@@ -2282,8 +2308,8 @@ let selectedImages = [];
         void img.offsetWidth;
         img.style.opacity = '1';
         img.style.transform = 'scale(1)';
-      };
-      img.onerror = () => {
+      });
+      img.onerror = () => afterMinSkeletonTime(() => {
         skeleton.remove();
         const fallback = document.createElement('div');
         // Same fit-content-ancestor caveat as .diagram-skeleton above -- width relative to the
@@ -2291,12 +2317,15 @@ let selectedImages = [];
         fallback.style.cssText = 'width:min(240px, calc(100vw - 140px));padding:28px 12px;text-align:center;color:#888;font-size:13px;';
         fallback.textContent = '🖼️ Diagram could not be loaded';
         container.appendChild(fallback);
-      };
+      });
       img.src = diagram.image_url;
       container.appendChild(img);
       return container;
     }
 
+    // No lightbox/expanded-image pattern existed anywhere in this file before -- built fresh,
+    // structurally following showPYQModal's own construction pattern (createElement + inline
+    // cssText) so it fits the existing visual style rather than introducing a new one.
     function showDiagramModal(diagram) {
       const existing = document.getElementById('diagram-modal');
       if (existing) existing.remove();
