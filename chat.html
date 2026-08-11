@@ -781,6 +781,17 @@
     let conversations = [];
     let currentConversation = [];
     let currentId = null;
+    // saveToSidebar (title generation + the initial Supabase insert that gives a new chat its
+    // supabaseId) is deliberately fire-and-forget where it's called -- awaiting it there would
+    // block the AI response from even starting until title generation finishes, which measured
+    // 5+ real seconds in one live run (a slow /title response, not rare). But streamAIResponse's
+    // own final save (the update that actually persists the AI's message) needs that id to
+    // exist first. Tracked here so streamAIResponse can await the SAME in-flight promise right
+    // before it needs the result, instead of just checking conv.supabaseId synchronously and
+    // silently skipping the save if the insert hasn't landed yet -- confirmed live as a real bug,
+    // not theoretical: a short/fast AI answer finishing before saveToSidebar's title+insert
+    // sequence resolved caused the entire AI message (not just a diagram) to never reach Supabase.
+    let pendingSidebarSave = null;
     let isLoggedIn = false;
     let userPlan = 'free'; // kept in sync by refreshUsageBanner() whenever it re-fetches user_plan
 
@@ -2455,17 +2466,20 @@ let selectedImages = [];
       return el;
     }
 
-    // Auto-embeds a matched diagram as bubble's first child (before textArea), animating its
+    // Auto-embeds a matched diagram as bubble's first child (before beforeEl), animating its
     // entrance the same way renderInlineDiagram's caller always has (grow + fade, see that
     // function's own comments for why both are needed). Pulled into a shared helper now that
-    // there's a single insertion point (always before textArea) instead of the old
-    // findKeyPointsAnchor-based mid-text splice -- diagram-first ordering falls out of DOM
-    // insertion order by construction once the diagram decision always resolves before any text
-    // renders, so there's no longer a "was there already text on screen" case to handle.
-    function insertAutoEmbedDiagram(bubble, textArea, diagram) {
+    // there's a single insertion point (always before the rest of the bubble's content) instead
+    // of the old findKeyPointsAnchor-based mid-text splice -- diagram-first ordering falls out of
+    // DOM insertion order by construction. Shared by two callers: the live streaming loop
+    // (beforeEl = the `.bubble-text` container, still empty at insertion time) and
+    // addMessageRow's conversation-history restore (beforeEl = bubble.firstChild, since that
+    // bubble's text is set in one shot via innerHTML rather than streamed) -- pass `null` for an
+    // empty bubble, same as a plain appendChild.
+    function insertAutoEmbedDiagram(bubble, beforeEl, diagram) {
       const diagramEl = renderInlineDiagram(diagram);
       const innerCard = diagramEl.querySelector('.inline-diagram');
-      bubble.insertBefore(diagramEl, textArea);
+      bubble.insertBefore(diagramEl, beforeEl);
       void diagramEl.offsetWidth;
       diagramEl.style.maxHeight = '700px';
       innerCard.style.opacity = '1';
@@ -2641,7 +2655,7 @@ let selectedImages = [];
       return actions;
     }
 
-    function addMessageRow(role, text, userQuestion, msgIndex) {
+    function addMessageRow(role, text, userQuestion, msgIndex, diagram) {
       const row = document.createElement('div');
       row.className = 'message-row ' + role;
       if (msgIndex !== undefined) row.dataset.msgIndex = msgIndex;
@@ -2662,15 +2676,28 @@ let selectedImages = [];
         bubble.innerHTML = metaHtml + parseWithMath(cleanText);
         renderMermaidBlocksIn(bubble);
 
+        // Restores a diagram that was auto-embedded live, saved onto the message (see
+        // streamAIResponse's currentConversation.push) -- reused verbatim rather than a
+        // reload-specific variant, so a restored diagram looks and behaves identically to a live
+        // one (click-to-enlarge, same card styling). bubble.innerHTML above already set this
+        // bubble's text in one shot (not streamed), so bubble.firstChild is simply whatever
+        // element that produced -- no separate text container needed the way the live loop's
+        // .bubble-text is, since nothing re-renders this bubble afterward.
+        if (diagram) {
+          insertAutoEmbedDiagram(bubble, bubble.firstChild, diagram);
+        }
+
         if (userQuestion) {
           const actionsRow = document.createElement('div');
           actionsRow.className = 'answer-actions-row';
 
-          const diagramBtn = document.createElement('button');
-          diagramBtn.className = 'diagram-btn';
-          diagramBtn.innerHTML = '🖼️ Show Diagram';
-          diagramBtn.onclick = () => handleShowDiagramClick(diagramBtn, userQuestion, text);
-          actionsRow.appendChild(diagramBtn);
+          if (!diagram) {
+            const diagramBtn = document.createElement('button');
+            diagramBtn.className = 'diagram-btn';
+            diagramBtn.innerHTML = '🖼️ Show Diagram';
+            diagramBtn.onclick = () => handleShowDiagramClick(diagramBtn, userQuestion, text);
+            actionsRow.appendChild(diagramBtn);
+          }
 
           const pyqBtn = document.createElement('button');
           pyqBtn.className = 'pyq-btn';
@@ -2823,7 +2850,7 @@ function plainTextFromMarkdown(text) {
         const newIndex = currentConversation.length;
         addMessageRow('user', newText, undefined, newIndex);
         currentConversation.push({ role: 'user', text: newText });
-        if (currentConversation.length === 1) saveToSidebar(newText);
+        if (currentConversation.length === 1) pendingSidebarSave = saveToSidebar(newText);
 
         await streamAIResponse(newText, { skipCache: false });
       };
@@ -3322,7 +3349,7 @@ function plainTextFromMarkdown(text) {
           lastUserText = msg.text;
           addMessageRow(msg.role, msg.text, undefined, i);
         } else if (msg.role === 'ai') {
-          const bubble = addMessageRow('ai', msg.text, lastUserText, i);
+          const bubble = addMessageRow('ai', msg.text, lastUserText, i, msg.diagram);
         }
       });
       currentConversation = chat.messages;
@@ -3341,7 +3368,7 @@ function plainTextFromMarkdown(text) {
           lastUserText = msg.text;
           addMessageRow(msg.role, msg.text, undefined, i);
         } else if (msg.role === 'ai') {
-          addMessageRow('ai', msg.text, lastUserText, i);
+          addMessageRow('ai', msg.text, lastUserText, i, msg.diagram);
         }
       });
       currentConversation = conv.messages;
@@ -3615,7 +3642,7 @@ function plainTextFromMarkdown(text) {
       input.style.height = 'auto';
 
       currentConversation.push({ role: 'user', text: text });
-      if (currentConversation.length === 1) saveToSidebar(text);
+      if (currentConversation.length === 1) pendingSidebarSave = saveToSidebar(text);
 
       const imagesPayload = selectedImages.map(img => ({
         data: img.data.split(',')[1],
@@ -3972,7 +3999,24 @@ function plainTextFromMarkdown(text) {
         const aiTimeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         aiRow.querySelector('.message-content').appendChild(buildActionsDiv('ai', aiTimeStr));
 
-        currentConversation.push({ role: 'ai', text: fullText });
+        // Save the matched diagram alongside the text when auto-embedded, or a reload/switch
+        // (loadConversation/loadConversationFromSupabase -> addMessageRow) has nothing to restore
+        // it from and silently falls back to the button -- previously the diagram lived only in
+        // the DOM the live stream built, never in the data that actually gets persisted
+        // (localStorage and the `chats.messages` JSONB column both just serialize whatever shape
+        // this object is, so adding a field here needs no migration on either side).
+        currentConversation.push({ role: 'ai', text: fullText, diagram: isAutoEmbed ? diagramPrefetch : undefined });
+
+        // Wait for the sidebar save (title generation + the initial insert that assigns
+        // conv.supabaseId and the real currentId) to actually finish before relying on either --
+        // see pendingSidebarSave's own comment for why this doesn't just await it eagerly instead
+        // and why skipping this wait is a real, confirmed bug (an answer finishing faster than
+        // title generation silently dropped the entire AI message, not just its diagram).
+        if (pendingSidebarSave) {
+          await pendingSidebarSave;
+          pendingSidebarSave = null;
+        }
+
         const conv = conversations.find(c => c.id === currentId || c.supabaseId === currentId);
         if (conv) conv.messages = currentConversation;
 
