@@ -400,6 +400,23 @@
     @keyframes thinkingFade { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
     body.light-mode .thinking-text { color: #7a7a85 !important; }
 
+    /* Diagram image loading skeleton (inline auto-embed + click-triggered modal, see
+       buildDiagramImage in JS). aspect-ratio (not a fixed height) so the reserved space scales
+       proportionally with whatever width the skeleton actually renders at -- a fixed pixel
+       height would be a reasonable approximation on desktop but noticeably too tall once the
+       same box shrinks to a narrow mobile column. Ratio itself is an approximation from this
+       app's own reviewed NCERT diagrams (mostly single organisms/figures, roughly square to
+       slightly portrait), not a guarantee -- real images still resize the box slightly on load,
+       softened by the opacity/scale transition on the image itself rather than eliminated outright.
+       Width caps against 100vw, NOT 100% -- the skeleton's own ancestor (.inline-diagram) is
+       deliberately width:fit-content (see renderInlineDiagram), so a percentage here has nothing
+       non-circular to resolve against (the ancestor's fit-content size depends on the skeleton's
+       size, which would depend on the ancestor's size...) and silently computes to a 0x0 box --
+       confirmed live, not theoretical: reserved zero space and the whole point of this skeleton
+       was lost. 100vw has no such ambiguity since it's always resolved against the viewport. */
+    .diagram-skeleton { width: min(300px, calc(100vw - 140px)); aspect-ratio: 0.95; border-radius: 6px; background: linear-gradient(100deg, #1a1a26 30%, #26263a 50%, #1a1a26 70%); background-size: 200% 100%; animation: diagramShimmer 1.4s ease-in-out infinite; }
+    @keyframes diagramShimmer { 0% { background-position: 150% 0; } 100% { background-position: -150% 0; } }
+
     .input-area { padding: 16px 24px 24px; background: #0d0d0d; }
     .input-wrapper { max-width: 820px; margin: 0 auto; background: #111111; border: 1px solid #2a2a2a; border-radius: 14px; display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; transition: border-color 0.2s; }
     .input-row { display: flex; align-items: flex-end; gap: 8px; width: 100%; }
@@ -2232,6 +2249,54 @@ let selectedImages = [];
     // No lightbox/expanded-image pattern existed anywhere in this file before -- built fresh,
     // structurally following showPYQModal's own construction pattern (createElement + inline
     // cssText) so it fits the existing visual style rather than introducing a new one.
+    // Shared by the auto-embedded inline diagram and the click-triggered modal (showDiagramModal)
+    // so both diagram surfaces load/fail the same way, matching the "same frame/caption look"
+    // they already share. Returns a container holding a shimmer skeleton (reserves roughly the
+    // right space via aspect-ratio, see .diagram-skeleton) that's swapped for the real <img>,
+    // faded and scaled in, once it finishes loading -- or a small graceful message in place of
+    // a broken-image icon if the load fails. `src` is only set once onload/onerror are already
+    // wired, so a cache-instant load can't fire before its own handler exists.
+    function buildDiagramImage(diagram, { maxHeight, onClick }) {
+      const container = document.createElement('div');
+      // No explicit width: left to shrink-to-fit its one visible child (skeleton, then the
+      // loaded img, or the fallback message) so it doesn't fight the inline card's own
+      // width:fit-content sizing -- centering comes from the flex parents around it
+      // (wrap/imgFrame) rather than from this container's own width.
+      container.style.cssText = 'display:flex;align-items:center;justify-content:center;';
+
+      const skeleton = document.createElement('div');
+      skeleton.className = 'diagram-skeleton';
+      container.appendChild(skeleton);
+
+      const img = document.createElement('img');
+      img.alt = diagram.name || 'Diagram';
+      img.style.cssText = `max-width:100%;max-height:${maxHeight};display:none;border-radius:6px;opacity:0;transform:scale(0.98);transition:opacity 0.35s ease,transform 0.35s ease;${onClick ? 'cursor:pointer;' : ''}`;
+      if (onClick) img.onclick = onClick;
+
+      img.onload = () => {
+        skeleton.remove();
+        img.style.display = 'block';
+        // Force layout before flipping to the target styles, or the display:none -> block change
+        // and the opacity/transform change would land in the same tick and skip the transition
+        // entirely instead of animating it.
+        void img.offsetWidth;
+        img.style.opacity = '1';
+        img.style.transform = 'scale(1)';
+      };
+      img.onerror = () => {
+        skeleton.remove();
+        const fallback = document.createElement('div');
+        // Same fit-content-ancestor caveat as .diagram-skeleton above -- width relative to the
+        // viewport, not the percentage of an ambiguous fit-content parent.
+        fallback.style.cssText = 'width:min(240px, calc(100vw - 140px));padding:28px 12px;text-align:center;color:#888;font-size:13px;';
+        fallback.textContent = '🖼️ Diagram could not be loaded';
+        container.appendChild(fallback);
+      };
+      img.src = diagram.image_url;
+      container.appendChild(img);
+      return container;
+    }
+
     function showDiagramModal(diagram) {
       const existing = document.getElementById('diagram-modal');
       if (existing) existing.remove();
@@ -2263,11 +2328,7 @@ let selectedImages = [];
 
       const imgFrame = document.createElement('div');
       imgFrame.style.cssText = 'background:#141420;border-radius:10px;padding:12px;display:flex;align-items:center;justify-content:center;width:100%;';
-      const img = document.createElement('img');
-      img.src = diagram.image_url;
-      img.alt = diagram.name || 'Diagram';
-      img.style.cssText = 'max-width:100%;max-height:65vh;display:block;border-radius:6px;';
-      imgFrame.appendChild(img);
+      imgFrame.appendChild(buildDiagramImage(diagram, { maxHeight: '65vh' }));
       box.appendChild(imgFrame);
 
       if (diagram.description) {
@@ -2319,12 +2380,7 @@ let selectedImages = [];
       // width regardless of the image's real size. max-width:100% is the fallback cap for a
       // wide/landscape image, which already caps out at the message column's own max-width.
       wrap.style.cssText = 'width:fit-content;max-width:100%;margin:20px auto;background:#141420;border:1px solid #2a2a3a;border-radius:10px;padding:12px;display:flex;flex-direction:column;align-items:center;box-shadow:0 4px 16px rgba(0,0,0,0.35);';
-      const img = document.createElement('img');
-      img.src = diagram.image_url;
-      img.alt = diagram.name || 'Diagram';
-      img.style.cssText = 'max-width:100%;max-height:400px;display:block;border-radius:6px;cursor:pointer;';
-      img.onclick = () => showDiagramModal(diagram);
-      wrap.appendChild(img);
+      wrap.appendChild(buildDiagramImage(diagram, { maxHeight: '400px', onClick: () => showDiagramModal(diagram) }));
       if (diagram.description) {
         const caption = document.createElement('p');
         caption.style.cssText = 'margin:10px 0 0;color:#c4c4c4;font-size:12px;line-height:1.6;text-align:center;width:100%;';
