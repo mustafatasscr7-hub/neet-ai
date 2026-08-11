@@ -2408,7 +2408,14 @@ let selectedImages = [];
       // diagram previously stretched its dark card background across the full ~680px column
       // width regardless of the image's real size. max-width:100% is the fallback cap for a
       // wide/landscape image, which already caps out at the message column's own max-width.
-      wrap.style.cssText = 'width:fit-content;max-width:100%;margin:20px auto;background:#141420;border:1px solid #2a2a3a;border-radius:10px;padding:12px;display:flex;flex-direction:column;align-items:center;box-shadow:0 4px 16px rgba(0,0,0,0.35);';
+      //
+      // Starts at opacity:0/offset -- the card itself (not just the loaded image inside it)
+      // used to just appear the instant it was inserted, with no transition of its own. The
+      // caller (isAutoEmbed block below) flips these to their resting values right after
+      // insertion to animate the entrance. transform/opacity only, never width/height/margin --
+      // those don't affect layout (no reflow), so the skeleton inside still reserves its full
+      // aspect-ratio space from the very first frame regardless of where this animation is.
+      wrap.style.cssText = 'width:fit-content;max-width:100%;margin:20px auto;background:#141420;border:1px solid #2a2a3a;border-radius:10px;padding:12px;display:flex;flex-direction:column;align-items:center;box-shadow:0 4px 16px rgba(0,0,0,0.35);opacity:0;transform:translateY(8px) scale(0.98);transition:opacity 0.28s ease,transform 0.28s ease;';
       wrap.appendChild(buildDiagramImage(diagram, { maxHeight: '400px', onClick: () => showDiagramModal(diagram) }));
       if (diagram.description) {
         const caption = document.createElement('p');
@@ -3848,6 +3855,13 @@ function plainTextFromMarkdown(text) {
           } else {
             bubble.appendChild(diagramEl);
           }
+          // Force layout before flipping to the resting opacity/transform, or the insertion
+          // and this style change would land in the same tick and the transition would be
+          // skipped entirely (same reflow-forcing trick buildDiagramImage's own image-reveal
+          // step uses) -- the card would just appear at its final state with no animation.
+          void diagramEl.offsetWidth;
+          diagramEl.style.opacity = '1';
+          diagramEl.style.transform = 'translateY(0) scale(1)';
         }
 
         const actionsRow = document.createElement('div');
