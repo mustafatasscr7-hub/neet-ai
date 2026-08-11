@@ -2281,12 +2281,18 @@ let selectedImages = [];
       document.body.appendChild(modal);
     }
 
-    // Two-tier diagram confidence split -- see server.py's DIAGRAM_MATCH_THRESHOLD comment for
-    // the live measurement this number comes from (real on-topic matches against the actual
-    // catalog scored 0.56-0.79; 0.80 would almost never fire, same reason that constant isn't
-    // 0.75). Only matters when VISUAL_INTENT was "yes" -- everything else keeps the existing
-    // lazy, click-triggered button untouched.
-    const DIAGRAM_HIGH_CONFIDENCE_THRESHOLD = 0.65;
+    // Collapsed to match the base RPC floor (server.py's DIAGRAM_MATCH_THRESHOLD) -- any match
+    // at all, combined with VISUAL_INTENT: yes, now auto-embeds. There's no longer a distinct
+    // "matched but not confident enough" tier: since match_diagrams itself never returns a row
+    // below 0.5, "matched" and "similarity >= 0.5" are the same condition now, so this constant
+    // existing separately from DIAGRAM_MATCH_THRESHOLD is just for the two call sites to stay
+    // named for what they mean, not because the values are expected to diverge again.
+    // The "Show Diagram" button is NOT dead code -- it's still the only path for VISUAL_INTENT:
+    // "no"/missing (the fail-safe -- rule 10 in server.py), which is the majority of doubts, and
+    // it still renders (showing "No diagram available") when VISUAL_INTENT is "yes" but nothing
+    // matched at all. Only the narrow "yes + matched + not confident enough" case it used to also
+    // cover is now unreachable, because that similarity range no longer exists.
+    const DIAGRAM_HIGH_CONFIDENCE_THRESHOLD = 0.50;
 
     async function fetchDiagramMatch(doubtText, answerText) {
       try {

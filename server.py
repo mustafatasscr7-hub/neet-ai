@@ -1421,15 +1421,20 @@ async def get_pyq(message: Message, _: None = Depends(rate_limiter(15, 60))):
 # absolute similarity scale runs lower than 0.75 for real paraphrased matches) -- 0.75 would have
 # meant this feature almost never fired. 0.5 matches match_ncert's own threshold for the same model.
 #
-# Two-tier auto-embed confidence split (chat.html, DIAGRAM_HIGH_CONFIDENCE_THRESHOLD): re-measured
-# live against the actual reviewed-diagram catalog before picking a number -- genuine on-topic
-# matches against real rows scored 0.56-0.79, with topical closeness (not "visual" vs "conceptual"
-# phrasing) driving the score; a non-visual query ("explain how bacteria are classified by shape",
-# 0.787) scored higher than a visually-phrased one on the same topic ("show me the different shapes
-# of bacteria", 0.675). So similarity alone can't stand in for visual intent -- that's what the
-# VISUAL_INTENT tag is for. The high-confidence auto-embed floor is 0.65 (frontend-side), not this
-# feature's original 0.75/0.80 design target, since 0.80 would reproduce the same "almost never
-# fires" problem this threshold was already lowered once to avoid.
+# Auto-embed confidence split (chat.html, DIAGRAM_HIGH_CONFIDENCE_THRESHOLD): originally a
+# separate, higher tier (0.65) above this floor, re-measured live against the actual
+# reviewed-diagram catalog before picking that number -- genuine on-topic matches against real
+# rows scored 0.56-0.79, with topical closeness (not "visual" vs "conceptual" phrasing) driving
+# the score; a non-visual query ("explain how bacteria are classified by shape", 0.787) scored
+# higher than a visually-phrased one on the same topic ("show me the different shapes of
+# bacteria", 0.675). So similarity alone can't stand in for visual intent -- VISUAL_INTENT (rule
+# 10) is what gates that. Collapsed down to this same 0.5 floor: with VISUAL_INTENT: yes, any
+# match at all now auto-embeds -- "matched" and "similarity >= 0.5" are already the same
+# condition, since match_diagrams itself never returns a row below this threshold, so a separate
+# higher auto-embed bar was just adding a distinct "matched but not confident enough" tier on
+# top, not a real accuracy safeguard. The "Show Diagram" button is still very much alive for
+# VISUAL_INTENT: "no"/missing (the fail-safe path) and for "yes but nothing matched at all" --
+# only that middle tier is now unreachable.
 DIAGRAM_MATCH_THRESHOLD = 0.5
 
 # Mirrors the "always-available action button, lazily fetched on click" pattern the PYQ button
