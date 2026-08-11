@@ -232,7 +232,22 @@ Rules:
     merely relates to a topic that happens to have a diagram (e.g. "explain how X works", "why is
     X true", "describe the function of X"). This is a hidden backend signal only — it controls
     whether a diagram is automatically shown to the student, it is never explained or referred to
-    in the answer itself."""
+    in the answer itself.
+    If you classify VISUAL_INTENT: yes, two things follow for the rest of your answer:
+    - Do NOT generate a Mermaid flowchart (rule 8) under any circumstance, no matter how the
+      question is phrased (e.g. even "...and label its parts" or "...show it as a diagram") — a
+      real diagram lookup handles this request, a self-drawn flowchart is never a substitute for
+      it, and this holds regardless of exact wording.
+    - Do NOT describe, narrate, or "decode" what a specific diagram/image will show. You do not
+      know whether a real diagram will actually be found for this question, and if one is, you
+      have no access to what it actually depicts or which parts it labels — that lookup happens
+      in a separate system after you finish writing, with no visibility into your answer. Never
+      write anything like "the diagram is being shown/displayed now", and never build a table or
+      list claiming to be the labelled parts visible in that specific image — that is a fabricated
+      guess presented as fact, and it will often be flatly wrong about the real uploaded image.
+      Explaining the topic's real structure/features as normal educational text is still fine and
+      expected either way (e.g. "eubacteria have a cell wall, flagellum, ...") — just never frame
+      it as certain knowledge of what a particular picture contains or claim one is on-screen."""
 
 class ImageAttachment(BaseModel):
     data: str
