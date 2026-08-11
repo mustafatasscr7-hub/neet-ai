@@ -2313,7 +2313,12 @@ let selectedImages = [];
     function renderInlineDiagram(diagram) {
       const wrap = document.createElement('div');
       wrap.className = 'inline-diagram';
-      wrap.style.cssText = 'margin-top:14px;background:#141420;border-radius:10px;padding:12px;display:flex;flex-direction:column;align-items:center;';
+      // width:fit-content + margin:auto (not a flat 100%-wide block) so the card hugs the
+      // image's own rendered size and centers within the message column -- a narrow portrait
+      // diagram previously stretched its dark card background across the full ~680px column
+      // width regardless of the image's real size. max-width:100% is the fallback cap for a
+      // wide/landscape image, which already caps out at the message column's own max-width.
+      wrap.style.cssText = 'width:fit-content;max-width:100%;margin:20px auto;background:#141420;border:1px solid #2a2a3a;border-radius:10px;padding:12px;display:flex;flex-direction:column;align-items:center;box-shadow:0 4px 16px rgba(0,0,0,0.35);';
       const img = document.createElement('img');
       img.src = diagram.image_url;
       img.alt = diagram.name || 'Diagram';
@@ -2327,6 +2332,24 @@ let selectedImages = [];
         wrap.appendChild(caption);
       }
       return wrap;
+    }
+
+    // Auto-embedded diagrams belong right after the section of text they illustrate (the
+    // "📝 Answer:" section, server.py SYSTEM_PROMPT format), not floating disconnected at the
+    // very bottom after Key Points/Easy Way to Remember. Finds the rendered "🔑 Key Points:"
+    // paragraph by its text content -- not by parsing raw markdown position -- so it doesn't
+    // matter whether the model happened to bold the heading or not. Numerical-format answers
+    // (Given/Formula/Solution/Answer, no Key Points section at all) and any answer where the
+    // heading text isn't found for some other reason fall back to appending at the end, same
+    // as the previous unconditional behavior -- never silently drop the diagram.
+    function findKeyPointsAnchor(bubble) {
+      for (const el of bubble.children) {
+        if (el.tagName === 'P' || /^H[1-6]$/.test(el.tagName)) {
+          const t = el.textContent.trim();
+          if (t.length < 80 && /key points/i.test(t)) return el;
+        }
+      }
+      return null;
     }
 
     // Shared by both the live-streamed answer's button and the conversation-history-reload
@@ -3733,7 +3756,13 @@ function plainTextFromMarkdown(text) {
         const diagramPrefetch = visualIntent === 'yes' ? await fetchDiagramMatch(pyqSearchText, fullText) : null;
         const isAutoEmbed = !!(diagramPrefetch && diagramPrefetch.matched && diagramPrefetch.similarity >= DIAGRAM_HIGH_CONFIDENCE_THRESHOLD);
         if (isAutoEmbed) {
-          bubble.appendChild(renderInlineDiagram(diagramPrefetch));
+          const diagramEl = renderInlineDiagram(diagramPrefetch);
+          const keyPointsAnchor = findKeyPointsAnchor(bubble);
+          if (keyPointsAnchor) {
+            bubble.insertBefore(diagramEl, keyPointsAnchor);
+          } else {
+            bubble.appendChild(diagramEl);
+          }
         }
 
         const actionsRow = document.createElement('div');
