@@ -88,9 +88,9 @@
     .option.selected .option-label { background: #4f8ef7; border-color: #4f8ef7; color: white; }
 
     .question-actions { display: flex; gap: 10px; }
-    .mark-btn { background: transparent; border: 1px solid #f97316; color: #f97316; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 13px; font-family: 'Inter', sans-serif; transition: all 0.2s; }
-    .mark-btn:hover { background: #f9731620; }
-    .mark-btn.marked { background: #f9731620; }
+    .mark-btn { background: #f973161c; border: none; color: #f97316; padding: 8px 16px; border-radius: 9px; cursor: pointer; font-size: 13px; font-weight: 600; font-family: 'Inter', sans-serif; transition: filter 0.15s ease; }
+    .mark-btn:hover { filter: brightness(1.15); }
+    .mark-btn.marked { background: #f97316; color: #1a0f00; }
     .clear-btn { background: transparent; border: 1px solid #3a3a3a; color: #888; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 13px; font-family: 'Inter', sans-serif; transition: all 0.2s; }
     .clear-btn:hover { background: #1a1a1a; color: #ccc; }
     .nav-btns { display: flex; gap: 10px; margin-left: auto; }
@@ -133,6 +133,19 @@
     .stat-label { color: #555; }
 
     /* ===== LIGHT MODE ===== */
+    /* Choose-your-test cards -- flat solid colour (not a gradient) and a restrained shadow,
+       in place of the old two-stop gradient + big hover-lift shadow blowout. Text stays white
+       on both cards regardless of theme since they're self-contained colour blocks either way. */
+    .choose-test-card { flex: 1; min-width: 240px; border: none; color: white; padding: 32px 24px; border-radius: 18px; cursor: pointer; font-family: Inter, sans-serif; transition: transform 0.15s ease, box-shadow 0.15s ease; text-align: center; }
+    .choose-test-card:hover { transform: translateY(-2px); }
+    .choose-test-card:active { transform: translateY(0) scale(0.98); }
+    .ctc-blue { background: #4f8ef7; box-shadow: 0 6px 20px rgba(79,142,247,0.25); }
+    .ctc-blue:hover { box-shadow: 0 8px 24px rgba(79,142,247,0.35); }
+    .ctc-purple { background: #8b5cf6; box-shadow: 0 6px 20px rgba(139,92,246,0.25); }
+    .ctc-purple:hover { box-shadow: 0 8px 24px rgba(139,92,246,0.35); }
+    body.light-mode .ctc-blue { box-shadow: 0 4px 14px rgba(79,142,247,0.2) !important; }
+    body.light-mode .ctc-purple { box-shadow: 0 4px 14px rgba(139,92,246,0.2) !important; }
+
     body.light-mode { background: #f5f5f5 !important; color: #0d0d0d !important; }
 
     body.light-mode .header { background: #ffffff !important; border-color: #e3e3ea !important; }
@@ -163,8 +176,8 @@
     body.light-mode .option-label { border-color: #c8c8d2 !important; }
     body.light-mode .option.selected .option-label { background: #4f8ef7 !important; border-color: #4f8ef7 !important; color: #ffffff !important; }
 
-    body.light-mode .mark-btn:hover { background: #f9731618 !important; }
-    body.light-mode .mark-btn.marked { background: #f9731618 !important; }
+    body.light-mode .mark-btn { background: #f973161a !important; color: #c2540a !important; }
+    body.light-mode .mark-btn.marked { background: #f97316 !important; color: #ffffff !important; }
     body.light-mode .clear-btn { border-color: #d5d5dd !important; color: #55555f !important; }
     body.light-mode .clear-btn:hover { background: #f0f0f3 !important; color: #0d0d0d !important; }
     body.light-mode .prev-btn, body.light-mode .next-btn { background: #ffffff !important; border-color: #d5d5dd !important; color: #333338 !important; }
@@ -213,15 +226,15 @@
         <button onclick="window.location.href='./chat.html'" style="background:transparent;border:1px solid #2a2a2a;color:#888;padding:8px 16px;border-radius:8px;cursor:pointer;font-size:13px;font-family:Inter,sans-serif;transition:all 0.2s;" onmouseover="this.style.color='#ccc'" onmouseout="this.style.color='#888'" data-i18n="common.backToNeetAi">← Back to NEET-AI</button>
         <button class="lang-toggle" onclick="toggleLang()" style="background:transparent;border:1px solid #2a2a2a;color:#888;padding:8px 14px;border-radius:8px;cursor:pointer;font-size:13px;font-family:Inter,sans-serif;">हिं</button>
       </div>
-      <h1 style="font-size:26px;font-weight:800;color:#fff;margin-bottom:36px;" data-i18n="mocktest.chooseTest">Choose Your Test</h1>
+      <h1 class="choose-test-heading" style="font-size:26px;font-weight:800;color:#fff;margin-bottom:36px;" data-i18n="mocktest.chooseTest">Choose Your Test</h1>
       <div style="display:flex;gap:20px;flex-wrap:wrap;justify-content:center;">
-        <button onclick="startTest()" style="flex:1;min-width:240px;background:linear-gradient(135deg,#4f8ef7,#3b6fe0);border:none;color:white;padding:36px 24px;border-radius:18px;cursor:pointer;font-family:Inter,sans-serif;transition:all 0.2s;box-shadow:0 10px 30px rgba(79,142,247,0.3);" onmouseover="this.style.transform='translateY(-5px)';this.style.boxShadow='0 16px 40px rgba(79,142,247,0.45)';" onmouseout="this.style.transform='translateY(0)';this.style.boxShadow='0 10px 30px rgba(79,142,247,0.3)';">
-          <div style="font-size:38px;margin-bottom:14px;">📝</div>
+        <button class="choose-test-card ctc-blue" onclick="startTest()">
+          <div style="font-size:34px;margin-bottom:14px;">📝</div>
           <div style="font-size:20px;font-weight:800;margin-bottom:6px;" data-i18n="mocktest.fullMockTest">Full Mock Test</div>
           <div style="font-size:12.5px;opacity:0.85;font-weight:400;" data-i18n="mocktest.fullMockMeta">180 Qs · 3h 20m · Max 720 marks</div>
         </button>
-        <button onclick="window.location.href='./personalised-test.html'" style="flex:1;min-width:240px;background:linear-gradient(135deg,#a855f7,#7c3aed);border:none;color:white;padding:36px 24px;border-radius:18px;cursor:pointer;font-family:Inter,sans-serif;transition:all 0.2s;box-shadow:0 10px 30px rgba(168,85,247,0.3);" onmouseover="this.style.transform='translateY(-5px)';this.style.boxShadow='0 16px 40px rgba(168,85,247,0.45)';" onmouseout="this.style.transform='translateY(0)';this.style.boxShadow='0 10px 30px rgba(168,85,247,0.3)';">
-          <div style="font-size:38px;margin-bottom:14px;">🎯</div>
+        <button class="choose-test-card ctc-purple" onclick="window.location.href='./personalised-test.html'">
+          <div style="font-size:34px;margin-bottom:14px;">🎯</div>
           <div style="font-size:20px;font-weight:800;margin-bottom:6px;" data-i18n="mocktest.personalisedTest">Personalised Test</div>
           <div style="font-size:12.5px;opacity:0.85;font-weight:400;" data-i18n="mocktest.personalisedMeta">Pick subject, chapter & count</div>
         </button>

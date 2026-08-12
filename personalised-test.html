@@ -182,9 +182,9 @@
     .option.selected .option-label { background: #4f8ef7; border-color: #4f8ef7; color: white; }
 
     .question-actions { display: flex; gap: 10px; flex-wrap: wrap; }
-    .mark-btn { background: transparent; border: 1px solid #f97316; color: #f97316; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 13px; font-family: 'Inter', sans-serif; transition: all 0.2s; }
-    .mark-btn:hover { background: #f9731620; }
-    .mark-btn.marked { background: #f9731620; }
+    .mark-btn { background: #f973161c; border: none; color: #f97316; padding: 8px 16px; border-radius: 9px; cursor: pointer; font-size: 13px; font-weight: 600; font-family: 'Inter', sans-serif; transition: filter 0.15s ease; }
+    .mark-btn:hover { filter: brightness(1.15); }
+    .mark-btn.marked { background: #f97316; color: #1a0f00; }
     .clear-btn { background: transparent; border: 1px solid #3a3a3a; color: #888; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 13px; font-family: 'Inter', sans-serif; transition: all 0.2s; }
     .clear-btn:hover { background: #1a1a1a; color: #ccc; }
     .nav-btns { display: flex; gap: 10px; margin-left: auto; }
@@ -361,8 +361,12 @@
     body.light-mode .option-label { border-color: #c8c8d2 !important; }
     body.light-mode .option.selected .option-label { background: #4f8ef7 !important; border-color: #4f8ef7 !important; color: #ffffff !important; }
 
-    body.light-mode .mark-btn:hover { background: #f9731618 !important; }
-    body.light-mode .mark-btn.marked { background: #f9731618 !important; }
+    body.light-mode .mark-btn { background: #f973161a !important; color: #c2540a !important; }
+    body.light-mode .mark-btn.marked { background: #f97316 !important; color: #ffffff !important; }
+    .save-question-btn { background: #f973161c; border: none; color: #f97316; padding: 6px 14px; border-radius: 8px; cursor: pointer; font-size: 11px; font-weight: 600; font-family: 'Inter', sans-serif; margin-top: 4px; transition: filter 0.15s ease; }
+    .save-question-btn:hover { filter: brightness(1.15); }
+    .save-question-btn:disabled { opacity: 0.6; cursor: default; }
+    body.light-mode .save-question-btn { background: #f973161a !important; color: #c2540a !important; }
     body.light-mode .clear-btn { border-color: #d5d5dd !important; color: #55555f !important; }
     body.light-mode .clear-btn:hover { background: #f0f0f3 !important; color: #0d0d0d !important; }
     body.light-mode .prev-btn, body.light-mode .next-btn { background: #ffffff !important; border-color: #d5d5dd !important; color: #333338 !important; }
@@ -1972,7 +1976,7 @@
           ${q.diagram_url ? `<img class="q-diagram-img" src="${escapeHtml(q.diagram_url)}">` : ''}
           <div class="q-options">${opts}</div>
           ${q.userAnswer ? `<div style="font-size:11px;color:#555;margin-bottom:8px;">${t('mockresults','yourAnswer')} ${q.userAnswer?.toUpperCase()}</div>` : ''}
-          <button id="review-save-${i}" onclick="saveFromReview(${i}, '${filter}')" style="background:transparent;border:1px solid #f97316;color:#f97316;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:11px;font-family:Inter,sans-serif;margin-top:4px;">${t('mockresults','saveQuestion')}</button>
+          <button id="review-save-${i}" class="save-question-btn" onclick="saveFromReview(${i}, '${filter}')">${t('mockresults','saveQuestion')}</button>
         `;
         container.appendChild(card);
       });

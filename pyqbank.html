@@ -105,16 +105,17 @@
     .report-note { width: 100%; background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 6px; padding: 6px 8px; color: #ececec; font-size: 12px; font-family: 'Inter', sans-serif; margin: 6px 0; resize: vertical; }
     .report-popup-error { color: #ef4444; font-size: 11px; min-height: 14px; margin: 4px 0; }
     .report-popup-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
-    .report-cancel-btn { background: transparent; border: 1px solid #2a2a2a; color: #888; padding: 5px 10px; border-radius: 6px; font-size: 11px; cursor: pointer; font-family: 'Inter', sans-serif; }
-    .report-submit-btn { background: #ef4444; border: none; color: white; padding: 5px 12px; border-radius: 6px; font-size: 11px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
-    .report-submit-btn:hover { background: #dc2626; }
+    .report-cancel-btn { background: #ffffff10; border: none; color: #9a9aa5; padding: 6px 12px; border-radius: 8px; font-size: 11px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; transition: filter 0.15s ease; }
+    .report-cancel-btn:hover { filter: brightness(1.2); }
+    .report-submit-btn { background: #ef4444; border: none; color: white; padding: 6px 14px; border-radius: 8px; font-size: 11px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; transition: filter 0.15s ease; }
+    .report-submit-btn:hover { filter: brightness(1.1); }
     .report-submit-btn:disabled { opacity: 0.6; cursor: default; }
     .report-popup-thanks { text-align: center; padding: 8px 4px; color: #4ade80; font-weight: 600; }
     body.light-mode .report-popup { background: #ffffff !important; border-color: #e3e3ea !important; box-shadow: 0 8px 24px rgba(0,0,0,0.12) !important; }
     body.light-mode .report-popup-title { color: #0d0d0d !important; }
     body.light-mode .report-reason-row { color: #33333d !important; }
     body.light-mode .report-note { background: #f7f7fa !important; border-color: #e3e3ea !important; color: #0d0d0d !important; }
-    body.light-mode .report-cancel-btn { border-color: #e3e3ea !important; color: #7a7a85 !important; }
+    body.light-mode .report-cancel-btn { background: #00000008 !important; color: #7a7a85 !important; }
     .q-year { color: #4f8ef7; font-weight: 600; }
     .q-text { font-size: 14px; color: #ececec; line-height: 1.7; margin-bottom: 16px; }
     /* The global `* { margin: 0 }` reset zeroes out marked.parse()'s default <p> spacing, so a
@@ -146,8 +147,21 @@
     .q-option.wrong { border-color: #ef4444; background: #ef444415; color: #ef4444; }
     .checking-note { font-size: 11px; color: #888; margin-left: 8px; font-style: italic; }
     .q-actions { display: flex; gap: 8px; }
-    .sol-btn { background: transparent; border: 1px solid #a78bfa; color: #a78bfa; padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 12px; font-family: 'Inter', sans-serif; transition: all 0.2s; }
-    .sol-btn:hover { background: #a78bfa20; }
+    /* Minimal/tinted button language: soft tinted fill + matching text, no outline border --
+       replaces the old white-box-with-saturated-border look. .sol-btn's base is the purple
+       tint (Show Solution); Save and Prev/Next override background/color inline per-button
+       (same mechanism, see the JS that builds these) since they share this one class but need
+       different colors -- Prev/Next specifically get a neutral tint, not purple, since they're
+       navigation, not a content action, and shouldn't visually compete with Show Solution. */
+    .sol-btn { background: #a78bfa1c; border: none; color: #a78bfa; padding: 7px 16px; border-radius: 9px; cursor: pointer; font-size: 12px; font-weight: 600; font-family: 'Inter', sans-serif; transition: filter 0.15s ease, transform 0.1s ease; }
+    .sol-btn:hover { filter: brightness(1.15); }
+    .sol-btn:active { transform: scale(0.97); }
+    .sol-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    body.light-mode .sol-btn { background: #a78bfa1a !important; color: #7c3aed !important; }
+    .sol-btn-orange { background: #f973161c; color: #f97316; }
+    body.light-mode .sol-btn-orange { background: #f973161a !important; color: #c2540a !important; }
+    .sol-btn-neutral { background: #ffffff10; color: #9a9aa5; }
+    body.light-mode .sol-btn-neutral { background: #00000008 !important; color: #7a7a85 !important; }
     .sol-div { display: none; margin-top: 12px; padding: 12px; background: #1a1a2e; border-radius: 6px; border: 1px solid #3a3a5e; color: #c4c4c4; line-height: 1.7; font-size: 13px; overflow-x: auto; word-wrap: break-word; }
     .sol-div ul, .sol-div ol { margin: 0; padding-left: 20px; }
     .sol-div p { margin: 0 0 8px 0; }
@@ -232,7 +246,6 @@
     body.light-mode .q-option.correct { background: #4ade8018 !important; border-color: #4ade80 !important; color: #2f9d5e !important; }
     body.light-mode .q-option.wrong { background: #ef444418 !important; border-color: #ef4444 !important; color: #d13a3a !important; }
 
-    body.light-mode .sol-btn:hover { background: #a78bfa20 !important; }
     body.light-mode .sol-div { background: #f5f5f7 !important; border-color: #d5d5dd !important; color: #333338 !important; }
     body.light-mode .alt-method-toggle { color: #7c3aed !important; }
     body.light-mode .alt-method-toggle:hover { color: #6d28d9 !important; }
@@ -1039,12 +1052,12 @@ ${q.diagram_url ? `<img class="q-diagram-img" src="${q.diagram_url}">` : ''}
           <div class="q-options">${opts}</div>
           <div class="q-actions">
             <button class="sol-btn" onclick="toggleSolution(this, '${q.id}', ${JSON.stringify(q).replace(/"/g, '&quot;')})">${t('pyqbank','showSolution')}</button>
-            <button class="sol-btn" style="border-color:#f97316;color:#f97316;" onclick="saveQuestion(${JSON.stringify(q).replace(/"/g, '&quot;')}, 'PYQ Bank', this)">${t('pyqbank','save')}</button>
+            <button class="sol-btn sol-btn-orange" onclick="saveQuestion(${JSON.stringify(q).replace(/"/g, '&quot;')}, 'PYQ Bank', this)">${t('pyqbank','save')}</button>
           </div>
           <div class="sol-div" id="sol-${q.id}"></div>
           <div style="display:flex;justify-content:space-between;margin-top:20px;">
-            <button class="sol-btn" ${i === 0 ? 'disabled style="opacity:0.4;"' : ''} onclick="prevQuestion('${subject}', ${classNum}, '${chapterEscaped}')">${t('pyqbank','prev')}</button>
-            <button class="sol-btn" ${i === data.length - 1 ? 'disabled style="opacity:0.4;"' : ''} onclick="nextQuestion('${subject}', ${classNum}, '${chapterEscaped}')">${t('pyqbank','next')}</button>
+            <button class="sol-btn sol-btn-neutral" ${i === 0 ? 'disabled' : ''} onclick="prevQuestion('${subject}', ${classNum}, '${chapterEscaped}')">${t('pyqbank','prev')}</button>
+            <button class="sol-btn sol-btn-neutral" ${i === data.length - 1 ? 'disabled' : ''} onclick="nextQuestion('${subject}', ${classNum}, '${chapterEscaped}')">${t('pyqbank','next')}</button>
           </div>
         </div>
       `;

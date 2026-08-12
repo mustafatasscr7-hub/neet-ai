@@ -134,14 +134,19 @@
        style.cssText, which meant no :hover was possible at all (an element's own inline style
        always wins over any stylesheet rule for the same property, hover state or not) -- moved
        to real classes so hover feedback actually shows. */
-    .sol-btn { background: transparent; border: 1px solid #a78bfa; color: #a78bfa; padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 12px; font-family: 'Inter', sans-serif; transition: background 0.15s; }
-    .sol-btn:hover { background: #a78bfa20; }
-    .pyq-save-btn { background: transparent; border: 1px solid #f97316; color: #f97316; padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 12px; font-family: 'Inter', sans-serif; margin-left: 8px; transition: background 0.15s; }
-    .pyq-save-btn:hover { background: #f9731620; }
-    .pyq-save-btn:disabled { cursor: default; }
-    body.light-mode .sol-btn { border-color: #a78bfa !important; color: #7c3aed !important; }
-    body.light-mode .sol-btn:hover { background: #a78bfa20 !important; }
-    body.light-mode .pyq-save-btn:hover { background: #f9731620 !important; }
+    .sol-btn { background: #a78bfa1c; border: none; color: #a78bfa; padding: 7px 16px; border-radius: 9px; cursor: pointer; font-size: 12px; font-weight: 600; font-family: 'Inter', sans-serif; transition: filter 0.15s ease, transform 0.1s ease; }
+    .sol-btn:hover { filter: brightness(1.15); }
+    .sol-btn:active { transform: scale(0.97); }
+    .pyq-save-btn { background: #f973161c; border: none; color: #f97316; padding: 7px 16px; border-radius: 9px; cursor: pointer; font-size: 12px; font-weight: 600; font-family: 'Inter', sans-serif; margin-left: 8px; transition: filter 0.15s ease, transform 0.1s ease; }
+    .pyq-save-btn:hover { filter: brightness(1.15); }
+    .pyq-save-btn:active { transform: scale(0.97); }
+    .pyq-save-btn:disabled { cursor: default; opacity: 0.6; }
+    body.light-mode .sol-btn { background: #a78bfa1a !important; color: #7c3aed !important; }
+    body.light-mode .pyq-save-btn { background: #f973161a !important; color: #c2540a !important; }
+    .upgrade-btn { background: #f9b02c1c; border: none; color: #f9b02c; padding: 7px 16px; border-radius: 9px; cursor: pointer; font-size: 12px; font-weight: 600; font-family: 'Inter', sans-serif; transition: filter 0.15s ease, transform 0.1s ease; }
+    .upgrade-btn:hover { filter: brightness(1.15); }
+    .upgrade-btn:active { transform: scale(0.97); }
+    body.light-mode .upgrade-btn { background: #f9b02c22 !important; color: #b5790a !important; }
 
     /* Report-a-question: subtle flag icon, low visibility until hovered, and its popup --
        same block as mocktest.html/pyqbank.html/personalised-test.html, kept identical so the
@@ -329,12 +334,12 @@
        SCROLLABLE CONTENT height, not its visible viewport, so with many messages it would render
        far below what's actually on screen. .main itself never scrolls, so anchoring here keeps
        this genuinely fixed in the viewport regardless of .chat-window's internal scroll offset. */
-    .scroll-to-bottom-btn { display: none; position: absolute; bottom: 110px; left: 50%; transform: translateX(-50%); width: 40px; height: 40px; border-radius: 50%; background: #1a1a1a; border: 1px solid #4f8ef7; color: #4f8ef7; align-items: center; justify-content: center; cursor: pointer; box-shadow: 0 4px 14px rgba(0,0,0,0.4); z-index: 50; transition: background 0.15s, transform 0.15s; }
-    .scroll-to-bottom-btn:hover { background: #4f8ef720; transform: translateX(-50%) translateY(-2px); }
-    .scroll-to-bottom-btn.has-new { background: #4f8ef7; border-color: #4f8ef7; color: #fff; animation: scrollBtnPulse 1.6s ease-in-out infinite; }
+    .scroll-to-bottom-btn { display: none; position: absolute; bottom: 110px; left: 50%; transform: translateX(-50%); width: 40px; height: 40px; border-radius: 50%; background: #4f8ef71c; border: none; color: #4f8ef7; align-items: center; justify-content: center; cursor: pointer; box-shadow: 0 4px 14px rgba(0,0,0,0.25); z-index: 50; transition: filter 0.15s ease, transform 0.15s ease; }
+    .scroll-to-bottom-btn:hover { filter: brightness(1.15); transform: translateX(-50%) translateY(-2px); }
+    .scroll-to-bottom-btn.has-new { background: #4f8ef7; color: #fff; animation: scrollBtnPulse 1.6s ease-in-out infinite; }
     @keyframes scrollBtnPulse { 0%, 100% { box-shadow: 0 4px 14px rgba(79,142,247,0.4); } 50% { box-shadow: 0 4px 22px rgba(79,142,247,0.7); } }
-    body.light-mode .scroll-to-bottom-btn { background: #ffffff !important; border-color: #4f8ef750 !important; color: #4f8ef7 !important; box-shadow: 0 4px 14px rgba(0,0,0,0.12) !important; }
-    body.light-mode .scroll-to-bottom-btn:hover { background: #4f8ef710 !important; }
+    body.light-mode .scroll-to-bottom-btn { background: #4f8ef71a !important; color: #2f6bd1 !important; box-shadow: 0 4px 14px rgba(0,0,0,0.1) !important; }
+    body.light-mode .scroll-to-bottom-btn.has-new { background: #4f8ef7 !important; color: #fff !important; }
 
     .welcome { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 24px; padding: 40px; text-align: center; }
     .welcome h2 { font-size: 26px; font-weight: 700; color: #ffffff; letter-spacing: -0.5px; }
@@ -390,6 +395,18 @@
     body.light-mode .mermaid-diagram { background: #f9f9fb !important; border-color: #e0e0e5 !important; }
     .mermaid-placeholder { margin: 12px 0; padding: 16px; background: #111111; border: 1px dashed #2a2a2a; border-radius: 10px; text-align: center; color: #666; font-size: calc(var(--chat-font-size, 14px) - 1px); animation: thinkingFade 1.6s ease-in-out infinite; }
     body.light-mode .mermaid-placeholder { background: #f9f9fb !important; border-color: #d5d5dd !important; color: #999 !important; }
+
+    /* Diagram card/modal frames -- built with inline styles in JS (renderInlineDiagram,
+       showDiagramModal), so these need !important to win over that, same as every other
+       light-mode override in this file. */
+    body.light-mode .inline-diagram { background: #ffffff !important; border-color: #e0e0e5 !important; box-shadow: 0 4px 16px rgba(0,0,0,0.08) !important; }
+    body.light-mode .inline-diagram-caption { color: #55555f !important; }
+    body.light-mode .diagram-skeleton { background: linear-gradient(100deg, #ececf0 30%, #f7f7fa 50%, #ececf0 70%) !important; background-size: 200% 100% !important; }
+    body.light-mode .diagram-modal-box { background: #ffffff !important; }
+    body.light-mode .diagram-modal-title { color: #7c3aed !important; }
+    body.light-mode .diagram-modal-close { color: #7a7a85 !important; }
+    body.light-mode .diagram-modal-imgframe { background: #f5f5f7 !important; }
+    body.light-mode .diagram-modal-caption { color: #55555f !important; }
 
     .typing-row { padding: 16px 24px; display: flex; gap: 16px; max-width: 820px; width: 100%; margin: 0 auto; }
     .typing { display: flex; gap: 5px; padding: 12px 4px; align-items: center; }
@@ -464,11 +481,17 @@
     body.light-mode .answer-stars { color: #9c7a26 !important; }
     body.light-mode .answer-stars .star-empty { color: #d8d2c4 !important; }
     body.light-mode .answer-rating-num { color: #7a7a85 !important; }
-    .pyq-btn { margin: 0; background: transparent; border: 1px solid #4f8ef7; color: #4f8ef7; padding: 7px 14px; border-radius: 8px; cursor: pointer; font-size: 12px; font-family: 'Inter', sans-serif; transition: all 0.2s; }
-    .pyq-btn:hover { background: #4f8ef720; }
-    .diagram-btn { margin: 0; background: transparent; border: 1px solid #a78bfa; color: #a78bfa; padding: 7px 14px; border-radius: 8px; cursor: pointer; font-size: 12px; font-family: 'Inter', sans-serif; transition: all 0.2s; }
-    .diagram-btn:hover:not(:disabled) { background: #a78bfa20; }
-    .diagram-btn:disabled { cursor: default; opacity: 0.75; }
+    /* Soft tinted fill + matching text, no outline border -- same minimal button language used
+       across pyqbank.html's sol-btn family and mocktest.html's choose-test cards. */
+    .pyq-btn { margin: 0; background: #4f8ef71c; border: none; color: #4f8ef7; padding: 8px 16px; border-radius: 9px; cursor: pointer; font-size: 12px; font-weight: 600; font-family: 'Inter', sans-serif; transition: filter 0.15s ease, transform 0.1s ease; }
+    .pyq-btn:hover { filter: brightness(1.15); }
+    .pyq-btn:active { transform: scale(0.97); }
+    body.light-mode .pyq-btn { background: #4f8ef71a !important; color: #2f6bd1 !important; }
+    .diagram-btn { margin: 0; background: #a78bfa1c; border: none; color: #a78bfa; padding: 8px 16px; border-radius: 9px; cursor: pointer; font-size: 12px; font-weight: 600; font-family: 'Inter', sans-serif; transition: filter 0.15s ease, transform 0.1s ease; }
+    .diagram-btn:hover:not(:disabled) { filter: brightness(1.15); }
+    .diagram-btn:active:not(:disabled) { transform: scale(0.97); }
+    .diagram-btn:disabled { cursor: default; opacity: 0.6; }
+    body.light-mode .diagram-btn { background: #a78bfa1a !important; color: #7c3aed !important; }
     .alt-method-wrap { margin-top: 10px; }
     .alt-method-toggle { margin: 0; background: transparent; border: none; color: #888; padding: 4px 0; cursor: pointer; font-size: 12px; font-family: 'Inter', sans-serif; text-decoration: underline; text-underline-offset: 2px; }
     .alt-method-toggle:hover { color: #ccc; }
@@ -671,7 +694,7 @@
             <div style="font-size:10px;color:#333;margin-top:10px;text-align:center;" data-i18n="chat.neetDateFormatted">May 4, 2027</div>
           </div>
        </div>
-        <button id="headerUpgradeBtn" onclick="window.location.href='./pricing.html'" style="background:transparent;border:1px solid #3a3a3a;color:#ececec;padding:6px 14px;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600;font-family:Inter,sans-serif;transition:all 0.2s;" data-i18n="chat.upgradeBtn">⭐ Upgrade</button>
+        <button id="headerUpgradeBtn" class="upgrade-btn" onclick="window.location.href='./pricing.html'" data-i18n="chat.upgradeBtn">⭐ Upgrade</button>
       </div>
     </div>
 
@@ -2399,6 +2422,7 @@ let selectedImages = [];
       modal.onclick = function(e) { if (e.target === modal) modal.remove(); };
 
       const box = document.createElement('div');
+      box.className = 'diagram-modal-box';
       // Sized to the content, not the viewport -- a tall/narrow diagram used to sit inside a
       // box stretched toward max-width:90vw (set by the header row), leaving a big dead-space
       // gap beside it. Capping width and centering everything keeps the box hugging whatever
@@ -2408,10 +2432,12 @@ let selectedImages = [];
       const header = document.createElement('div');
       header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px;width:100%;';
       const title = document.createElement('h3');
+      title.className = 'diagram-modal-title';
       title.style.cssText = 'margin:0;color:#a78bfa;font-size:15px;';
       title.textContent = diagram.name || 'Diagram';
       header.appendChild(title);
       const closeBtn = document.createElement('button');
+      closeBtn.className = 'diagram-modal-close';
       closeBtn.textContent = '✕';
       closeBtn.style.cssText = 'background:none;border:none;color:#888;font-size:20px;cursor:pointer;flex-shrink:0;';
       closeBtn.onclick = () => modal.remove();
@@ -2419,12 +2445,14 @@ let selectedImages = [];
       box.appendChild(header);
 
       const imgFrame = document.createElement('div');
+      imgFrame.className = 'diagram-modal-imgframe';
       imgFrame.style.cssText = 'background:#141420;border-radius:10px;padding:12px;display:flex;align-items:center;justify-content:center;width:100%;';
       imgFrame.appendChild(buildDiagramImage(diagram, { maxHeight: '65vh' }));
       box.appendChild(imgFrame);
 
       if (diagram.description) {
         const caption = document.createElement('p');
+        caption.className = 'diagram-modal-caption';
         caption.style.cssText = 'margin:14px 0 0;color:#c4c4c4;font-size:13px;line-height:1.6;text-align:center;width:100%;';
         caption.textContent = diagram.description;
         box.appendChild(caption);
@@ -2489,6 +2517,7 @@ let selectedImages = [];
       wrap.appendChild(buildDiagramImage(diagram, { maxHeight: '400px', onClick: () => showDiagramModal(diagram) }));
       if (diagram.description) {
         const caption = document.createElement('p');
+        caption.className = 'inline-diagram-caption';
         caption.style.cssText = 'margin:10px 0 0;color:#c4c4c4;font-size:12px;line-height:1.6;text-align:center;width:100%;';
         caption.textContent = diagram.description;
         wrap.appendChild(caption);
