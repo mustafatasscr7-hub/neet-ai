@@ -775,6 +775,41 @@
     const sendBtn = document.getElementById('sendBtn');
     const inputArea = document.getElementById('inputArea');
 
+    // ---------------- Auto-focus (matches Claude.ai's chat input always being ready to type
+    // into, rather than needing a click first) ----------------
+    // 768px is this file's only real "mobile" breakpoint (there are no @media queries anywhere
+    // else in it) -- used here specifically to gate stealing focus on arrival at a view, since
+    // popping the on-screen keyboard open on a phone-sized screen before the student has done
+    // anything is a well-known disruptive pattern. Not used for the post-send refocus below --
+    // by that point the student already had the keyboard up to type and send in the first
+    // place, so returning focus there isn't "unexpected" the same way a cold auto-focus is.
+    function isMobileViewport() {
+      return window.innerWidth <= 768;
+    }
+
+    // Auto-focus is meant to be the default/starting state, not a forced lock -- skip stealing
+    // focus if the student is already actively in some OTHER real text field (editing a past
+    // message, a search box, a modal's input, etc.), so a response finishing mid-edit doesn't
+    // yank their cursor out from under them.
+    function isFocusElsewhereIntentional(exceptEl) {
+      const active = document.activeElement;
+      if (!active || active === document.body || active === exceptEl) return false;
+      return active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable;
+    }
+
+    // Focuses whichever input is actually on screen right now -- the welcome screen's own
+    // #welcomeInput (present before the first message, and rebuilt fresh by showWelcome() on
+    // "New Chat") before inputArea is shown, or the real #userInput textarea once a
+    // conversation is underway. inputArea's display style is what the rest of the file already
+    // uses as the source of truth for which state it's in (see showWelcome() and every
+    // send/load path that flips it to 'block').
+    function focusMessageInput({ skipOnMobile = false } = {}) {
+      if (skipOnMobile && isMobileViewport()) return;
+      const target = inputArea.style.display !== 'none' ? input : document.getElementById('welcomeInput');
+      if (!target || isFocusElsewhereIntentional(target)) return;
+      target.focus();
+    }
+
     let isStreaming = false;
     let streamController = null;
     let userScrolled = false;
@@ -3356,6 +3391,7 @@ function plainTextFromMarkdown(text) {
       currentId = chat.supabaseId || chat.id;
       updateHeaderTitle(chat.title);
       scrollBottom();
+      focusMessageInput({ skipOnMobile: true });
     }
 
     function loadConversation(id) {
@@ -3376,6 +3412,7 @@ function plainTextFromMarkdown(text) {
       updateHeaderTitle(conv.title);
       inputArea.style.display = 'block';
       scrollBottom();
+      focusMessageInput({ skipOnMobile: true });
     }
 
     function showWelcome() {
@@ -3399,9 +3436,15 @@ function plainTextFromMarkdown(text) {
         input.value = document.getElementById('welcomeInput').value;
         sendMessage();
       });
+      focusMessageInput({ skipOnMobile: true });
     }
 
     renderSuggestionCards();
+    // Initial page load always lands on the welcome screen (never auto-loads a past
+    // conversation, logged in or not -- see the session-check block below), so the static
+    // #welcomeInput already in the markup is what's on screen at this point; no need to wait
+    // for anything async first.
+    focusMessageInput({ skipOnMobile: true });
 
     document.getElementById('newChatBtn').addEventListener('click', function() {
       currentConversation = [];
@@ -3807,6 +3850,7 @@ function plainTextFromMarkdown(text) {
           document.getElementById('sendIcon').style.display = 'block';
           document.getElementById('stopIcon').style.display = 'none';
           scrollBottom();
+          focusMessageInput();
           return;
         }
 
@@ -4039,6 +4083,7 @@ function plainTextFromMarkdown(text) {
       document.getElementById('sendIcon').style.display = 'block';
       document.getElementById('stopIcon').style.display = 'none';
       scrollBottom();
+      focusMessageInput();
     }
 
     client.auth.getSession().then(async ({ data: { session } }) => {
