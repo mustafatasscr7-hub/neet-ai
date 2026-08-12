@@ -148,6 +148,10 @@ Rules:
    - Always write: $F = ma$ for all formulas
    - Subscripts: $H_2O$ NOT H₂O
    - Superscripts: $x^2$ NOT x²
+   - This applies even to a short formula mentioned parenthetically inside a sentence -- write
+     "the growth rate $R = \\frac{dN}{dt}$" NOT "the growth rate (R = \\frac{dN}{dt})". Raw LaTeX
+     commands wrapped in plain parentheses instead of dollar signs render as broken literal text,
+     not math -- every piece of math needs its own $...$ or $$...$$, no exceptions for brevity.
 8. If the student explicitly asks for a flowchart, process map, or step-by-step visualization of
    a PROCESS or SEQUENCE (e.g. "make me a flowchart of the steps in photosynthesis"), output it
    as a Mermaid flowchart in a ```mermaid code block — never say you can't create visual diagrams,
@@ -2357,7 +2361,7 @@ For questions that DO involve a calculation or derivation, find a genuinely diff
 A valid alternate must use a genuinely different principle, not just a different algebraic route to the identical relationship. If your alternate ends up re-deriving the same underlying formula the primary method already used (even via a different intermediate path, like re-deriving a known formula from its definition instead of quoting it), that is NOT a genuine alternate -- it is the same method in disguise. A valid alternate must also be a GENERAL, repeatable technique that would still work if the numbers changed, not a shortcut based on a memorized reference value. Simple single-formula plug-in questions (a basic unit conversion, direct substitution into one named formula with no derivation choice) genuinely have only one method -- do not invent an alternate for these.
 
 First, on one line, write your judgment: either "ALTERNATE EXISTS" or "NO ALTERNATE".
-Then on the next line, if ALTERNATE EXISTS, write the full alternate method as bullet-point steps using KaTeX ($formula$ inline, $$formula$$ display). If NO ALTERNATE, write nothing else.
+Then on the next line, if ALTERNATE EXISTS, write the full alternate method as bullet-point steps. Every piece of math, however short, must be wrapped in KaTeX delimiters -- $formula$ inline, $$formula$$ display -- with NO exceptions, including a short formula mentioned parenthetically inside a sentence. Writing raw LaTeX commands inside plain parentheses instead of dollar signs (e.g. "the growth rate (R = \\frac{{dN}}{{dt}})" or "(N = -\\frac{{b}}{{2a}})") is wrong and renders as broken literal text, not math -- it must be "the growth rate $R = \\frac{{dN}}{{dt}}$" and "$N = -\\frac{{b}}{{2a}}$" instead. If NO ALTERNATE, write nothing else.
 
 Do not default to "NO ALTERNATE" just because the final numeric answer is the same -- a different starting PRINCIPLE that reaches the same answer IS a genuine alternate and has real teaching value, for questions that involve a real calculation. Only say NO ALTERNATE if you truly cannot identify any different underlying principle, if the only "alternate" you can think of just re-derives the same formula a different way, or if the question is factual recall with no calculation at all.{lang_instruction}""",
             messages=[{"role": "user", "content": f"Question: {question}\n{options_context}\n\nPrimary method already given to the student:\n{primary_answer}\n\nFind a genuinely different valid alternate method."}]
