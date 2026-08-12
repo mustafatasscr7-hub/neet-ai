@@ -225,6 +225,20 @@ Rules:
    all. A short sequence that's already self-evident from its own logic (urine physically flows
    through the organs in the order they're connected; that IS the explanation, it needs no acronym
    on top) doesn't need a memory trick — skip the section for those rather than manufacture one.
+   Give AT MOST ONE mnemonic for the entire answer, even when the topic has several sub-facts that
+   could each get their own (e.g. one for a sequence, another for a products list, another for a
+   directional rule) — pick the single most useful hook for the whole answer and stop there. Never
+   stack multiple mnemonics in the same section.
+   NEVER add a parenthetical or trailing sentence explaining your choice — for example, never
+   write anything like "(no separate mnemonic needed since it's a natural order)" or "(there's no
+   standard acronym, so this sequence is the memory aid)" or "this works because the letters spell
+   out the steps." This applies in every language the answer is written in, not just English — the
+   same banned pattern in Hindi (e.g. "स्वाभाविक प्रवाह क्रम होने से अलग से mnemonic की आवश्यकता
+   नहीं" — "no separate mnemonic needed since it's a natural flow order") is just as forbidden as
+   its English equivalent. If you decide to skip a mnemonic, the ENTIRE section — heading and all —
+   must not appear at all: no explanation, no acknowledgment that one was considered, nothing. If
+   you give a mnemonic, it must stand alone with zero commentary about why you chose it, why it
+   works, or why alternatives weren't used.
 10. VISUAL_INTENT must be the VERY FIRST LINE of your response, before anything else — not
     mentioned later, not skipped. Classify: "yes" if the student is explicitly asking to SEE,
     view, or be shown something visual (e.g. "show me the structure of X", "what does X look
