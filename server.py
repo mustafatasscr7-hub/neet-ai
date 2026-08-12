@@ -399,6 +399,11 @@ class DiagramMatchRequest(BaseModel):
     text: str   # the student's doubt text (same text /chat embeds for NCERT RAG)
     answer: str = ""  # the AI's full answer, for chapter-line extraction
 
+class SummarizeAnswerRequest(BaseModel):
+    text: str   # the AI's last full answer, to condense
+    language: str = "en"
+    user_id: str = ""
+
 class PyqQuestionCreate(BaseModel):
     # Only ever set by the admin tool's undo-delete restore path -- normal question creation
     # (PDF scan review, scanned-paste parser) omits it so Postgres assigns a fresh id as before.
@@ -1343,6 +1348,35 @@ async def generate_title(message: Message, request: Request, _: None = Depends(r
     )
     await log_token_usage(message.user_id, response.usage.input_tokens + response.usage.output_tokens, ip)
     return {"title": response.content[0].text}
+
+# Backs chat.html's "/summarize" command -- same lightweight, no-NCERT-search, low-max_tokens
+# shape as /title above (a small transform of already-known text, not a fresh doubt-answering
+# call), not the full /chat pipeline. Deliberately uncached: /title has run this same pattern
+# uncached since it shipped, and a per-answer summary cache would be new infra for a cheap,
+# infrequent call -- not worth adding for this.
+@app.post("/summarize-answer")
+async def summarize_answer(req: SummarizeAnswerRequest, request: Request, _: None = Depends(rate_limiter(15, 60))):
+    ip = _client_ip(request)
+    await enforce_daily_budget(req.user_id, ip)
+    client = deepseek_client
+    lang_instruction = "Respond entirely in Hindi (Devanagari script) -- every word in Hindi, no English words mixed in, except LaTeX/KaTeX math notation and units which stay as-is." if req.language == "hi" else "Respond in English."
+    response = client.messages.create(
+        model="deepseek-v4-flash",
+        max_tokens=220,
+        thinking={"type": "disabled"},
+        system=(
+            "Condense the given NEET doubt answer into 3-5 short bullet points suitable for "
+            "last-minute revision. Genuinely condense and re-synthesize -- do not just copy the "
+            "answer's existing 'Key Points' section verbatim. Each bullet is one short line: no "
+            "sub-bullets, no headings, no restating the question, no filler. Preserve any "
+            "LaTeX/KaTeX math notation ($...$ or $$...$$) exactly as it appears in the source if "
+            f"it's essential to a point. {lang_instruction} Return ONLY the bullet points as a "
+            "markdown list ('- ' prefix), nothing before or after."
+        ),
+        messages=[{"role": "user", "content": req.text}]
+    )
+    await log_token_usage(req.user_id, response.usage.input_tokens + response.usage.output_tokens, ip)
+    return {"summary": response.content[0].text}
 
 # Guests have no Supabase session, so they can't use RLS to read their own usage row the way a
 # logged-in user does (auth.uid() is null for anonymous requests) -- this endpoint is the only

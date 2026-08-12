@@ -3094,7 +3094,10 @@ function plainTextFromMarkdown(text) {
     const SLASH_COMMANDS = [
       { cmd: '/mocktest', desc: 'Jump straight into a mock test' },
       { cmd: '/pyq', desc: 'Search Previous Year Questions by topic' },
-      { cmd: '/explain simply', desc: 'Re-explain the last answer, simply' }
+      { cmd: '/explain simply', desc: 'Re-explain the last answer, simply' },
+      { cmd: '/diagram', desc: 'Show the diagram for the current topic' },
+      { cmd: '/formula', desc: 'Pull out just the formula from the last answer' },
+      { cmd: '/summarize', desc: 'Condense the last answer into quick bullet points' }
     ];
 
     const slashMenu = document.createElement('div');
@@ -3220,6 +3223,138 @@ function plainTextFromMarkdown(text) {
       addMessageRow('user', instructionText, undefined, userIndex);
       currentConversation.push({ role: 'user', text: instructionText });
       streamAIResponse(instructionText, { pyqSearchText: originalTopicText || instructionText });
+    }
+
+    // Shared by /diagram, /formula, /summarize -- all three operate on the most recent AI turn,
+    // so they need the same "is there one yet" check and the same preceding-user-question lookup
+    // (same pattern runExplainSimplyCommand already uses for pyqSearchText).
+    function getLastAiTurn() {
+      const aiIndex = currentConversation.map(m => m.role).lastIndexOf('ai');
+      if (aiIndex === -1) return null;
+      const precedingUser = currentConversation[aiIndex - 1];
+      return {
+        aiText: currentConversation[aiIndex].text,
+        userText: (precedingUser && precedingUser.role === 'user') ? precedingUser.text : ''
+      };
+    }
+
+    // /diagram -- explicit, on-demand trigger for the same diagram-matching pipeline VISUAL_INTENT
+    // normally gates automatically. Skips the /chat call entirely (typing the command IS the
+    // visual-intent signal) and goes straight to /diagram-match on the last discussed topic, then
+    // mirrors the live stream's own auto-embed-if-matched / button-otherwise split exactly (see
+    // DIAGRAM_HIGH_CONFIDENCE_THRESHOLD's comment -- "matched" and "similarity >= threshold" are
+    // the same condition today, but this still checks both in case that ever changes again).
+    async function runDiagramCommand() {
+      const welcome = document.getElementById('welcome');
+      if (welcome) welcome.remove();
+      inputArea.style.display = 'block';
+      const last = getLastAiTurn();
+      if (!last) {
+        addMessageRow('ai', 'Ask a doubt first — then I can look up its diagram.');
+        return;
+      }
+      const loadingRow = document.createElement('div');
+      loadingRow.className = 'typing-row';
+      loadingRow.innerHTML = '<div class="avatar ai"><img src="assets/logo.svg" alt="NEET-AI" width="32" height="32" /></div><div class="thinking-indicator"><span class="thinking-orb"></span><span class="thinking-text">Finding diagram…</span></div>';
+      chatWindow.appendChild(loadingRow);
+      scrollBottom();
+
+      const data = await fetchDiagramMatch(last.userText, last.aiText);
+      loadingRow.remove();
+
+      if (data && data.matched && data.image_url && data.similarity >= DIAGRAM_HIGH_CONFIDENCE_THRESHOLD) {
+        addMessageRow('ai', 'Here’s the diagram for this topic:', undefined, undefined, data);
+      } else if (data && data.matched && data.image_url) {
+        addMessageRow('ai', 'Found a possible match for this topic:');
+        const actionsRow = document.createElement('div');
+        actionsRow.className = 'answer-actions-row';
+        actionsRow.style.cssText = 'padding:0 24px 16px 64px;';
+        const diagramBtn = document.createElement('button');
+        diagramBtn.className = 'diagram-btn';
+        diagramBtn.innerHTML = '🖼️ Show Diagram';
+        diagramBtn.onclick = () => handleShowDiagramClick(diagramBtn, last.userText, last.aiText, data);
+        actionsRow.appendChild(diagramBtn);
+        chatWindow.appendChild(actionsRow);
+        scrollBottom();
+      } else {
+        addMessageRow('ai', 'No diagram found for this topic.');
+      }
+    }
+
+    // /formula -- pulls every $$...$$ (display) and $...$ (inline) block out of the last raw
+    // answer text, in the order they appear, deduped by normalized content. Purely client-side
+    // regex over text already in currentConversation -- no AI call, no network round-trip, the
+    // cheapest possible way to answer this command (per the "reuse existing cost patterns"
+    // instruction this command was built under). Same delimiter convention parseWithMath already
+    // renders, so feeding the extracted strings back through it renders identically.
+    function extractFormulas(text) {
+      const found = [];
+      const seen = new Set();
+      const re = /\$\$([^$]+)\$\$|\$([^$\n]+)\$/g;
+      let m;
+      while ((m = re.exec(text)) !== null) {
+        const raw = m[1] !== undefined ? m[1] : m[2];
+        const key = raw.trim().replace(/\s+/g, '');
+        if (seen.has(key)) continue;
+        seen.add(key);
+        found.push(m[1] !== undefined ? ('$$' + raw.trim() + '$$') : ('$' + raw.trim() + '$'));
+      }
+      return found;
+    }
+
+    function runFormulaCommand() {
+      const welcome = document.getElementById('welcome');
+      if (welcome) welcome.remove();
+      inputArea.style.display = 'block';
+      const last = getLastAiTurn();
+      if (!last) {
+        addMessageRow('ai', 'Ask a doubt first — then I can pull the formula out of the answer.');
+        return;
+      }
+      const formulas = extractFormulas(last.aiText);
+      if (formulas.length === 0) {
+        addMessageRow('ai', 'No formula or equation was found in the last answer.');
+        return;
+      }
+      addMessageRow('ai', formulas.map(f => '- ' + f).join('\n'));
+    }
+
+    // /summarize -- genuine condensation, not a copy of the answer's own Key Points section, so
+    // this needs a real (but cheap) AI call: POSTs to /summarize-answer, a small dedicated
+    // endpoint mirroring /title's pattern (low max_tokens, no NCERT search, not the full /chat
+    // pipeline).
+    async function runSummarizeCommand() {
+      const welcome = document.getElementById('welcome');
+      if (welcome) welcome.remove();
+      inputArea.style.display = 'block';
+      const last = getLastAiTurn();
+      if (!last) {
+        addMessageRow('ai', 'Ask a doubt first — then I can summarize the answer for you.');
+        return;
+      }
+      const loadingRow = document.createElement('div');
+      loadingRow.className = 'typing-row';
+      loadingRow.innerHTML = '<div class="avatar ai"><img src="assets/logo.svg" alt="NEET-AI" width="32" height="32" /></div><div class="thinking-indicator"><span class="thinking-orb"></span><span class="thinking-text">Summarizing…</span></div>';
+      chatWindow.appendChild(loadingRow);
+      scrollBottom();
+      try {
+        const { data: { session } } = await client.auth.getSession();
+        const res = await fetch(`${API_BASE}/summarize-answer`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: last.aiText, language: getLang(), user_id: session?.user?.id || '' })
+        });
+        const data = await res.json();
+        loadingRow.remove();
+        if (data && data.summary) {
+          addMessageRow('ai', data.summary);
+        } else {
+          addMessageRow('ai', 'Could not generate a summary right now — please try again.');
+        }
+      } catch (e) {
+        loadingRow.remove();
+        addMessageRow('ai', 'Could not generate a summary right now — please try again.');
+      }
     }
 
     // /pyq [topic] reuses the same search + modal already wired to the "Previous Year
@@ -3712,6 +3847,24 @@ function plainTextFromMarkdown(text) {
         input.value = '';
         input.style.height = 'auto';
         await runPyqSearchCommand(pyqTopicMatch[1].trim());
+        return;
+      }
+      if (/^\/diagram\s*$/i.test(text)) {
+        input.value = '';
+        input.style.height = 'auto';
+        await runDiagramCommand();
+        return;
+      }
+      if (/^\/formula\s*$/i.test(text)) {
+        input.value = '';
+        input.style.height = 'auto';
+        runFormulaCommand();
+        return;
+      }
+      if (/^\/summarize\s*$/i.test(text)) {
+        input.value = '';
+        input.style.height = 'auto';
+        await runSummarizeCommand();
         return;
       }
 
