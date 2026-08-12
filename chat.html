@@ -252,11 +252,34 @@
     .item-menu-btn:hover { background: #2a2a2a; color: #ccc; }
     .item-menu-btn svg { width: 13px; height: 13px; }
 
-    .item-menu { position: fixed; width: 160px; background: #1e1e1e; border: 1px solid #333; border-radius: 8px; padding: 4px; z-index: 9999; box-shadow: 0 8px 24px rgba(0,0,0,0.6); }
-    .item-menu-option { padding: 8px 12px; font-size: 13px; color: #ccc; cursor: pointer; border-radius: 6px; transition: background 0.15s; }
+    .item-menu { position: fixed; width: 190px; background: #1e1e1e; border: 1px solid #2a2a2a; border-radius: 14px; padding: 6px; z-index: 9999; box-shadow: 0 12px 32px rgba(0,0,0,0.5); }
+    .item-menu-option { display: flex; align-items: center; gap: 10px; padding: 9px 10px; font-size: 13.5px; color: #ececec; cursor: pointer; border-radius: 8px; transition: background 0.15s; }
     .item-menu-option:hover { background: #2a2a2a; }
     .item-menu-option.delete { color: #ef4444; }
-    .item-menu-divider { height: 1px; background: #2a2a2a; margin: 4px 0; }
+    /* Fixed-width icon column so every row's label starts at the same x position regardless of
+       icon shape -- icons inherit currentColor, so they pick up hover/delete-red automatically
+       with no separate icon-color rule needed. */
+    .item-menu-icon { flex-shrink: 0; width: 16px; height: 16px; display: flex; align-items: center; justify-content: center; }
+    .item-menu-icon svg { width: 15px; height: 15px; }
+    .item-menu-divider { height: 1px; background: #2a2a2a; margin: 4px 6px; }
+
+    .archived-link { padding: 6px 12px; font-size: 12px; color: #666; cursor: pointer; transition: color 0.15s; }
+    .archived-link:hover { color: #ccc; }
+    body.light-mode .archived-link { color: #9a9aa5 !important; }
+    body.light-mode .archived-link:hover { color: #55555f !important; }
+
+    .archived-modal-box { background: #1e1e2e; border-radius: 14px; padding: 20px; width: min(92vw, 420px); max-height: 70vh; overflow: auto; display: flex; flex-direction: column; }
+    .archived-modal-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 4px; border-bottom: 1px solid #2a2a3a; }
+    .archived-modal-row:last-child { border-bottom: none; }
+    .archived-modal-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: #ececec; }
+    .archived-modal-restore { flex-shrink: 0; background: #4f8ef71c; border: none; color: #4f8ef7; padding: 6px 12px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; transition: filter 0.15s ease; }
+    .archived-modal-restore:hover { filter: brightness(1.15); }
+    .archived-modal-empty { text-align: center; padding: 24px 12px; color: #666; font-size: 13px; }
+    body.light-mode .archived-modal-box { background: #ffffff !important; }
+    body.light-mode .archived-modal-row { border-color: #e5e5ea !important; }
+    body.light-mode .archived-modal-title { color: #16161d !important; }
+    body.light-mode .archived-modal-restore { background: #4f8ef71a !important; color: #2f6bd1 !important; }
+    body.light-mode .archived-modal-empty { color: #9a9aa5 !important; }
 
     .chat-title-btn:hover { background: #1a1a1a; }
     body.light-mode .chat-title-btn { color: #0d0d0d !important; }
@@ -619,6 +642,7 @@
     <div class="sidebar-divider"></div>
     <div class="sidebar-label" data-i18n="chat.recent">Recent</div>
     <div class="history-list" id="historyList"></div>
+    <div class="archived-link" id="archivedLink" onclick="showArchivedChatsModal()" style="display:none;">Archived</div>
 
     <div class="sidebar-bottom">
       <div class="profile-menu" id="profileMenu" style="display:none">
@@ -3419,6 +3443,119 @@ function plainTextFromMarkdown(text) {
       if (item) document.getElementById('historyList').prepend(item);
     }
 
+    // Positions a .item-menu next to its trigger, flipping to the left side (or clamping
+    // vertically) if the default right-of/below-trigger placement would run off the viewport
+    // edge. The menu must already be display:block (not none) when this runs -- it needs the
+    // menu's real rendered width/height to check for overflow, which a display:none element
+    // can't report.
+    function positionItemMenu(menu, anchorRect, { belowInsteadOfRight = false } = {}) {
+      const menuRect = menu.getBoundingClientRect();
+      let left = belowInsteadOfRight ? anchorRect.left : anchorRect.right + 4;
+      if (left + menuRect.width > window.innerWidth - 8) {
+        left = belowInsteadOfRight ? window.innerWidth - menuRect.width - 8 : anchorRect.left - menuRect.width - 4;
+      }
+      left = Math.max(8, left);
+      let top = belowInsteadOfRight ? anchorRect.bottom + 4 : anchorRect.top;
+      if (top + menuRect.height > window.innerHeight - 8) {
+        top = window.innerHeight - menuRect.height - 8;
+      }
+      top = Math.max(8, top);
+      menu.style.left = left + 'px';
+      menu.style.top = top + 'px';
+    }
+
+    // Archived chats keep their Supabase row (and their spot in the client-side `conversations`
+    // array, so restoring doesn't need a re-fetch) -- only `archived` flips and the sidebar's
+    // .history-item is removed from view. Mirrors deleteConversationById's own
+    // "drop the DOM node, patch Supabase, fall back to welcome if it was the open chat" shape.
+    async function archiveConversationById(id) {
+      document.getElementById('conv-' + id)?.remove();
+      const { data: { session } } = await client.auth.getSession();
+      if (session) {
+        const conv = conversations.find(c => c.id === id || c.supabaseId === id);
+        const supabaseId = conv ? conv.supabaseId : id;
+        if (supabaseId) {
+          await client.from('chats').update({ archived: true }).eq('id', supabaseId).eq('user_id', session.user.id);
+        }
+      }
+      if (currentId === id) showWelcome();
+    }
+
+    async function unarchiveConversationById(id) {
+      const { data: { session } } = await client.auth.getSession();
+      if (!session) return;
+      const conv = conversations.find(c => c.id === id || c.supabaseId === id);
+      const supabaseId = conv ? conv.supabaseId : id;
+      if (supabaseId) {
+        await client.from('chats').update({ archived: false }).eq('id', supabaseId).eq('user_id', session.user.id);
+      }
+      if (conv && !document.getElementById('conv-' + id)) {
+        const item = createHistoryItem(id, conv.title, () => loadConversationFromSupabase({ ...conv, supabaseId: conv.supabaseId }));
+        document.getElementById('historyList').prepend(item);
+      }
+    }
+
+    // Simple list-in-a-modal rather than a full second sidebar view -- matches the "soft-hide
+    // flag, not a full archive view" scope this was built under. Fetched fresh on open (not kept
+    // in the client-side `conversations` array's normal flow) since archived chats are rare to
+    // view and this keeps the common case (the main list load) from needing to carry them at all.
+    async function showArchivedChatsModal() {
+      const { data: { session } } = await client.auth.getSession();
+      if (!session) return;
+      const existing = document.getElementById('archived-modal');
+      if (existing) existing.remove();
+      const modal = document.createElement('div');
+      modal.id = 'archived-modal';
+      modal.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:2000;display:flex;align-items:center;justify-content:center;';
+      modal.onclick = function(e) { if (e.target === modal) modal.remove(); };
+      const box = document.createElement('div');
+      box.className = 'archived-modal-box';
+      box.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;"><h3 style="margin:0;color:#a78bfa;font-size:15px;">Archived Chats</h3><button style="background:none;border:none;color:#888;font-size:20px;cursor:pointer;" onclick="document.getElementById(\'archived-modal\').remove()">✕</button></div><div id="archivedModalList"><div class="archived-modal-empty">Loading…</div></div>';
+      modal.appendChild(box);
+      document.body.appendChild(modal);
+
+      const { data: chats } = await client.from('chats').select('*').eq('user_id', session.user.id).eq('archived', true).order('created_at', { ascending: false });
+      const listEl = document.getElementById('archivedModalList');
+      if (!chats || chats.length === 0) {
+        listEl.innerHTML = '<div class="archived-modal-empty">No archived chats.</div>';
+        return;
+      }
+      listEl.innerHTML = '';
+      chats.forEach(chat => {
+        const row = document.createElement('div');
+        row.className = 'archived-modal-row';
+        const titleEl = document.createElement('span');
+        titleEl.className = 'archived-modal-title';
+        titleEl.textContent = chat.title;
+        const restoreBtn = document.createElement('button');
+        restoreBtn.className = 'archived-modal-restore';
+        restoreBtn.textContent = 'Restore';
+        restoreBtn.onclick = async () => {
+          restoreBtn.disabled = true;
+          restoreBtn.textContent = 'Restoring…';
+          await unarchiveConversationById(chat.id);
+          row.remove();
+          if (!listEl.querySelector('.archived-modal-row')) {
+            listEl.innerHTML = '<div class="archived-modal-empty">No archived chats.</div>';
+          }
+        };
+        row.appendChild(titleEl);
+        row.appendChild(restoreBtn);
+        listEl.appendChild(row);
+      });
+    }
+
+    // Shared by both the per-item sidebar menu and the chat-title header dropdown so their
+    // markup (icons, order, styling) can never drift apart. Order matches the ChatGPT reference
+    // this was redesigned against: Share, Rename, Pin chat, Archive, then Delete below a divider.
+    const ITEM_MENU_HTML =
+      '<div class="item-menu-option" data-action="share"><span class="item-menu-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg></span>Share</div>' +
+      '<div class="item-menu-option" data-action="rename"><span class="item-menu-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></span>Rename</div>' +
+      '<div class="item-menu-option" data-action="pin"><span class="item-menu-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/></svg></span>Pin chat</div>' +
+      '<div class="item-menu-option" data-action="archive"><span class="item-menu-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8"/><line x1="10" y1="12" x2="14" y2="12"/></svg></span>Archive</div>' +
+      '<div class="item-menu-divider"></div>' +
+      '<div class="item-menu-option delete" data-action="delete"><span class="item-menu-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></span>Delete</div>';
+
     function updateHeaderTitle(title) {
       document.getElementById('headerBrand').style.display = 'none';
       const btn = document.getElementById('chatTitleBtn');
@@ -3440,7 +3577,7 @@ function plainTextFromMarkdown(text) {
         menu.id = 'chatTitleMenu';
         menu.className = 'item-menu';
         menu.style.display = 'none';
-        menu.innerHTML = '<div class="item-menu-option" data-action="rename">Rename</div><div class="item-menu-option" data-action="pin">Pin</div><div class="item-menu-option" data-action="share">Share</div><div class="item-menu-divider"></div><div class="item-menu-option delete" data-action="delete">Delete</div>';
+        menu.innerHTML = ITEM_MENU_HTML;
         document.body.appendChild(menu);
         menu.querySelectorAll('.item-menu-option').forEach(function(opt) {
           opt.addEventListener('click', async function(e) {
@@ -3454,16 +3591,16 @@ function plainTextFromMarkdown(text) {
               await renameConversationById(currentId, document.getElementById('chatTitleText').textContent);
             } else if (action === 'pin') {
               pinConversationById(currentId);
+            } else if (action === 'archive') {
+              await archiveConversationById(currentId);
             } else if (action === 'share') {
               alert('Share feature coming soon!');
             }
           });
         });
       }
-      const rect = this.getBoundingClientRect();
-      menu.style.top = (rect.bottom + 4) + 'px';
-      menu.style.left = rect.left + 'px';
       menu.style.display = 'block';
+      positionItemMenu(menu, this.getBoundingClientRect(), { belowInsteadOfRight: true });
     });
 
     function createHistoryItem(id, title, onClickFn) {
@@ -3485,7 +3622,7 @@ function plainTextFromMarkdown(text) {
       menu.className = 'item-menu';
       menu.id = 'menu-' + id;
       menu.style.display = 'none';
-      menu.innerHTML = '<div class="item-menu-option" data-action="rename">Rename</div><div class="item-menu-option" data-action="pin">Pin</div><div class="item-menu-option" data-action="share">Share</div><div class="item-menu-divider"></div><div class="item-menu-option delete" data-action="delete">Delete</div>';
+      menu.innerHTML = ITEM_MENU_HTML;
       document.body.appendChild(menu);
 
       item.addEventListener('click', function(e) {
@@ -3498,10 +3635,8 @@ function plainTextFromMarkdown(text) {
       menuBtn.addEventListener('click', function(e) {
         e.stopPropagation();
         document.querySelectorAll('.item-menu').forEach(m => m.style.display = 'none');
-        const rect = menuBtn.getBoundingClientRect();
-        menu.style.top = rect.top + 'px';
-        menu.style.left = (rect.right + 4) + 'px';
         menu.style.display = 'block';
+        positionItemMenu(menu, menuBtn.getBoundingClientRect());
       });
 
       menu.querySelectorAll('.item-menu-option').forEach(function(opt) {
@@ -3515,6 +3650,8 @@ function plainTextFromMarkdown(text) {
             await renameConversationById(id, titleSpan.textContent);
           } else if (action === 'pin') {
             pinConversationById(id);
+          } else if (action === 'archive') {
+            await archiveConversationById(id);
           } else if (action === 'share') {
             alert('Share feature coming soon!');
           }
@@ -4319,7 +4456,9 @@ function plainTextFromMarkdown(text) {
         document.getElementById('guestAvatarBtn').style.display = 'none';
         document.getElementById('profileSection').style.display = 'flex';
 
-        const { data: chats } = await client.from('chats').select('*').eq('user_id', user.id).order('created_at', { ascending: false });
+        // .eq('archived', false) requires the chats.archived column (add_chats_archived_column.sql)
+        // to exist first -- this query 500s on any account until that migration has run.
+        const { data: chats } = await client.from('chats').select('*').eq('user_id', user.id).eq('archived', false).order('created_at', { ascending: false });
         if (chats && chats.length > 0) {
           chats.forEach(chat => {
             const item = createHistoryItem(chat.id, chat.title, () => loadConversationFromSupabase(chat));
@@ -4327,6 +4466,7 @@ function plainTextFromMarkdown(text) {
             conversations.push({ id: chat.id, title: chat.title, messages: chat.messages, supabaseId: chat.id });
           });
         }
+        document.getElementById('archivedLink').style.display = 'block';
       } else {
         document.getElementById('loginNudge').style.display = 'flex';
         document.getElementById('guestMenu').style.display = 'flex';
