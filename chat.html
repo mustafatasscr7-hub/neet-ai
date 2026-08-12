@@ -4,6 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>NEET-AI</title>
+  <link rel="icon" href="assets/favicon.ico" sizes="any" />
+  <link rel="icon" type="image/svg+xml" href="assets/logo.svg" />
+  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
@@ -221,7 +224,8 @@
     .sidebar.collapsed .logo { display: flex; justify-content: center; }
     .sidebar.collapsed .logo .logo-icon { display: none; }
     .logo { display: flex; align-items: center; gap: 10px; padding: 6px 12px; margin-bottom: 4px; }
-    .logo-icon { width: 24px; height: 24px; background: linear-gradient(135deg, #4f8ef7, #7c3aed); border-radius: 7px; display: flex; align-items: center; justify-content: center; }
+    .logo-icon { width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; }
+    .logo-icon img { width: 100%; height: 100%; object-fit: contain; display: block; }
 
     .new-chat-btn { display: flex; align-items: center; gap: 10px; background: transparent; border: 1px solid transparent; color: #ececec; padding: 8px 12px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 500; font-family: 'Inter', sans-serif; transition: all 0.2s; width: 100%; text-align: left; margin-bottom: 4px; }
     .new-chat-btn:hover { background: #1a1a1a; }
@@ -359,7 +363,7 @@
     .message-row { padding: 16px 24px; display: flex; gap: 16px; max-width: 820px; width: 100%; margin: 0 auto; }
     .message-row.user { flex-direction: row-reverse; }
     .avatar { width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 14px; flex-shrink: 0; margin-top: 2px; }
-    .avatar.ai { background: linear-gradient(135deg, #4f8ef7, #7c3aed); }
+    .avatar.ai img { width: 100%; height: 100%; object-fit: contain; display: block; }
     .avatar.user { background: #1e1e1e; border: 1px solid #2a2a2a; }
     .message-content { flex: 1; max-width: 680px; }
     .message-content.user { display: flex; flex-direction: column; align-items: flex-end; width: fit-content; align-self: flex-end; }
@@ -548,18 +552,7 @@
   <div class="sidebar">
 <div class="logo" style="justify-content:space-between;">
       <div class="logo-icon">
-        <svg viewBox="0 0 32 32" fill="none">
-          <circle cx="16" cy="16" r="6" stroke="white" stroke-width="2"/>
-          <circle cx="16" cy="16" r="2" fill="white"/>
-          <line x1="16" y1="4" x2="16" y2="10" stroke="white" stroke-width="2" stroke-linecap="round"/>
-          <line x1="16" y1="22" x2="16" y2="28" stroke="white" stroke-width="2" stroke-linecap="round"/>
-          <line x1="4" y1="16" x2="10" y2="16" stroke="white" stroke-width="2" stroke-linecap="round"/>
-          <line x1="22" y1="16" x2="28" y2="16" stroke="white" stroke-width="2" stroke-linecap="round"/>
-          <line x1="7.8" y1="7.8" x2="12" y2="12" stroke="white" stroke-width="2" stroke-linecap="round"/>
-          <line x1="20" y1="20" x2="24.2" y2="24.2" stroke="white" stroke-width="2" stroke-linecap="round"/>
-          <line x1="24.2" y1="7.8" x2="20" y2="12" stroke="white" stroke-width="2" stroke-linecap="round"/>
-          <line x1="12" y1="20" x2="7.8" y2="24.2" stroke="white" stroke-width="2" stroke-linecap="round"/>
-        </svg>
+        <img src="assets/logo.svg" alt="NEET-AI" width="24" height="24" />
       </div>
       <button onclick="toggleSidebar()" style="background:transparent;border:none;color:#666;cursor:pointer;padding:4px;border-radius:6px;display:flex;align-items:center;">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg>
@@ -2720,7 +2713,11 @@ let selectedImages = [];
       if (msgIndex !== undefined) row.dataset.msgIndex = msgIndex;
       const avatar = document.createElement('div');
       avatar.className = 'avatar ' + role;
-      avatar.textContent = role === 'ai' ? '⚡' : '👤';
+      if (role === 'ai') {
+        avatar.innerHTML = '<img src="assets/logo.svg" alt="NEET-AI" width="32" height="32" />';
+      } else {
+        avatar.textContent = '👤';
+      }
       const contentWrapper = document.createElement('div');
       contentWrapper.className = 'message-content ' + role;
       contentWrapper.style.flexDirection = 'column';
@@ -3801,7 +3798,7 @@ function plainTextFromMarkdown(text) {
 
       const typingRow = document.createElement('div');
       typingRow.className = 'typing-row';
-      typingRow.innerHTML = '<div class="avatar ai">⚡</div><div class="thinking-indicator"><span class="thinking-orb"></span><span class="thinking-text"></span></div>';
+      typingRow.innerHTML = '<div class="avatar ai"><img src="assets/logo.svg" alt="NEET-AI" width="32" height="32" /></div><div class="thinking-indicator"><span class="thinking-orb"></span><span class="thinking-text"></span></div>';
       chatWindow.appendChild(typingRow);
       // Cycles through a few NEET/study-themed phrases while the real answer is still being
       // generated server-side (NCERT search, model routing, first token) -- reads the phrase
@@ -3897,7 +3894,7 @@ function plainTextFromMarkdown(text) {
           aiRow = document.createElement('div');
           aiRow.className = 'message-row ai';
           aiRow.dataset.msgIndex = aiIndex;
-          aiRow.innerHTML = '<div class="avatar ai">⚡</div><div class="message-content ai"><div class="message-bubble ai"><div class="bubble-text"></div></div></div>';
+          aiRow.innerHTML = '<div class="avatar ai"><img src="assets/logo.svg" alt="NEET-AI" width="32" height="32" /></div><div class="message-content ai"><div class="message-bubble ai"><div class="bubble-text"></div></div></div>';
           chatWindow.appendChild(aiRow);
           bubble = aiRow.querySelector('.message-bubble.ai');
           textArea = aiRow.querySelector('.bubble-text');
