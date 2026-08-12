@@ -364,6 +364,10 @@ class DiagramCreate(BaseModel):
     subtopic: Optional[str] = None
     name: str
     description: Optional[str] = None
+    # Optional Hindi counterparts, filled in side-by-side with the English fields above at
+    # upload time -- never required, same as description isn't.
+    name_hi: Optional[str] = None
+    description_hi: Optional[str] = None
     image_url: str
 
 class DiagramUpdate(BaseModel):
@@ -373,6 +377,8 @@ class DiagramUpdate(BaseModel):
     subtopic: Optional[str] = None
     name: Optional[str] = None
     description: Optional[str] = None
+    name_hi: Optional[str] = None
+    description_hi: Optional[str] = None
     reviewed: Optional[bool] = None
 
 class DiagramMatchRequest(BaseModel):
@@ -2579,10 +2585,13 @@ async def admin_diagrams_create(body: DiagramCreate, _: None = Depends(verify_ad
     chapter = body.chapter.strip()
     description = body.description.strip() if body.description else None
     subtopic = body.subtopic.strip() if body.subtopic else None
+    name_hi = body.name_hi.strip() if body.name_hi else None
+    description_hi = body.description_hi.strip() if body.description_hi else None
     try:
         # Embedding is a match-quality enhancement for chat.html's diagram-matching, not a hard
         # requirement for the row to exist -- a failure here shouldn't block the upload itself.
-        # Not fed subtopic yet -- see build_diagram_embedding_text's comment.
+        # Not fed subtopic yet -- see build_diagram_embedding_text's comment. Hindi fields
+        # deliberately not fed in either -- English-only match-text, same reasoning.
         embedding = await get_embedding(build_diagram_embedding_text(name, description, chapter))
     except Exception:
         embedding = None
@@ -2593,6 +2602,8 @@ async def admin_diagrams_create(body: DiagramCreate, _: None = Depends(verify_ad
         "subtopic": subtopic,
         "name": name,
         "description": description,
+        "name_hi": name_hi,
+        "description_hi": description_hi,
         "image_url": body.image_url,
         "embedding": embedding
     }
@@ -2616,7 +2627,7 @@ async def admin_diagrams_list(_: None = Depends(verify_admin)):
             f"{SUPABASE_URL}/rest/v1/diagrams",
             headers=ADMIN_HEADERS,
             params={
-                "select": "id,subject,class,chapter,subtopic,name,description,image_url,reviewed,created_at",
+                "select": "id,subject,class,chapter,subtopic,name,description,name_hi,description_hi,image_url,reviewed,created_at",
                 "order": "created_at.desc",
                 "limit": 1000
             }
@@ -2640,13 +2651,17 @@ async def admin_diagram_update(diagram_id: int, body: DiagramUpdate, _: None = D
         update_fields["chapter"] = body.chapter
     if body.name is not None:
         update_fields["name"] = body.name
-    # description/subtopic can legitimately be cleared to null (removing a caption/tag), so
-    # distinguish "not sent" from "sent as null" the same way /admin/pyq-update does for
-    # diagram fields.
+    # description/subtopic/Hindi fields can legitimately be cleared to null (removing a
+    # caption/tag/translation), so distinguish "not sent" from "sent as null" the same way
+    # /admin/pyq-update does for diagram fields.
     if "description" in body.model_fields_set:
         update_fields["description"] = body.description
     if "subtopic" in body.model_fields_set:
         update_fields["subtopic"] = body.subtopic
+    if "name_hi" in body.model_fields_set:
+        update_fields["name_hi"] = body.name_hi
+    if "description_hi" in body.model_fields_set:
+        update_fields["description_hi"] = body.description_hi
     if body.reviewed is not None:
         update_fields["reviewed"] = body.reviewed
     if not update_fields:
@@ -2678,7 +2693,7 @@ async def admin_diagram_update(diagram_id: int, body: DiagramUpdate, _: None = D
         response = await async_client.patch(
             f"{SUPABASE_URL}/rest/v1/diagrams",
             headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
-            params={"id": f"eq.{diagram_id}", "select": "id,subject,class,chapter,subtopic,name,description,image_url,reviewed,created_at"},
+            params={"id": f"eq.{diagram_id}", "select": "id,subject,class,chapter,subtopic,name,description,name_hi,description_hi,image_url,reviewed,created_at"},
             json=update_fields
         )
         if response.status_code >= 400:

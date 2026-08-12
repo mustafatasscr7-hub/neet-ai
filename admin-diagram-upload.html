@@ -49,17 +49,29 @@
   .paste-hint { font-size: 11px; color: #555; margin-top: 6px; }
   .paste-hint kbd { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 4px; padding: 1px 5px; font-family: 'Inter', sans-serif; font-size: 10px; color: #999; }
 
-  .batch-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; margin-top: 12px; }
-  .batch-item { background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 8px; padding: 8px; position: relative; }
+  /* Wider than the old single-column-of-thumbnails layout -- each card now holds a full
+     English+Hindi field set, not just one name input, so it needs real room. minmax(300px,1fr)
+     rather than a fixed width so the outer grid still fits 1-3 cards per row depending on
+     panel width, same auto-fill responsiveness as before. */
+  .batch-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; margin-top: 12px; }
+  .batch-item { background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 8px; padding: 10px; position: relative; }
   .batch-item.upload-failed { border-color: #ef444480; }
   .batch-item.upload-success { border-color: #4ade8080; }
-  .batch-item img { width: 100%; height: 100px; object-fit: cover; border-radius: 6px; display: block; margin-bottom: 6px; }
-  .batch-item input[type="text"] { font-size: 11px; padding: 5px 7px; }
-  .batch-item .remove-btn { position: absolute; top: 4px; right: 4px; width: 20px; height: 20px; border-radius: 50%; background: rgba(0,0,0,0.75); border: 1px solid #3a3a3a; color: #ccc; font-size: 12px; line-height: 1; cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0; }
+  .batch-item img.batch-thumb { width: 100%; height: 90px; object-fit: cover; border-radius: 6px; display: block; margin-bottom: 8px; }
+  /* auto-fit (not auto-fill) so the two language columns collapse to one stacked column when
+     the card itself is narrow, rather than leaving a near-empty second column -- this is the
+     "two columns, or stacked if screen width is tight" responsiveness called for. */
+  .batch-lang-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(115px, 1fr)); gap: 8px; }
+  .batch-lang-col label.lang-tag { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: #4f8ef7; display: block; margin-bottom: 4px; }
+  .batch-lang-col.hindi label.lang-tag { color: #f97316; }
+  .batch-item input[type="text"] { font-size: 11px; padding: 5px 7px; width: 100%; margin-bottom: 5px; }
+  .batch-lang-col input[type="text"]:last-child { margin-bottom: 0; }
+  .batch-item .remove-btn { position: absolute; top: 4px; right: 4px; width: 20px; height: 20px; border-radius: 50%; background: rgba(0,0,0,0.75); border: 1px solid #3a3a3a; color: #ccc; font-size: 12px; line-height: 1; cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0; z-index: 1; }
   .batch-item .remove-btn:hover { border-color: #ef4444; color: #ef4444; }
-  .batch-item .item-status { font-size: 10px; margin-top: 4px; min-height: 12px; }
+  .batch-item .item-status { font-size: 10px; margin-top: 6px; min-height: 12px; }
   .batch-item .item-status.error { color: #ef4444; }
   .batch-item .item-status.success { color: #4ade80; }
+  .hindi-badge { font-size: 10px; padding: 2px 7px; border-radius: 20px; font-weight: 600; display: inline-block; background: #f9731620; color: #f97316; margin-left: 6px; }
 
   #uploadStatus { font-size: 12px; margin-top: 12px; display: none; }
   #uploadStatus.info { color: #4f8ef7; }
@@ -137,17 +149,13 @@
     </div>
 
     <div class="q-field">
-      <label>Description / caption (optional, applied to every image below)</label>
-      <input type="text" id="descriptionInput" placeholder="Short caption or extra context"/>
-    </div>
-
-    <div class="q-field">
       <label>Images (PNG, JPG, WEBP) — select multiple to upload as a batch</label>
       <div class="upload-row">
         <input type="file" id="imageFile" accept="image/png,image/jpeg,image/webp" multiple onchange="onImageFileChange()"/>
         <button type="button" class="scan-btn" id="uploadBtn" onclick="uploadDiagrams()" disabled>Upload</button>
       </div>
       <div class="paste-hint">or copy an image and press <kbd>Ctrl</kbd>+<kbd>V</kbd> to paste it -- each paste adds one more to the batch</div>
+      <div class="paste-hint">Subject/Class/Chapter/Subtopic above apply to every image below -- Name and Description (English + Hindi) are set per image, since each is its own diagram entry.</div>
       <div class="batch-grid" id="batchGrid"></div>
     </div>
 
@@ -180,10 +188,11 @@
 <script>
   const API_BASE = 'https://neet-ai-production.up.railway.app';
   let adminKey = sessionStorage.getItem('admin_key') || '';
-  // Each pending upload: { id, base64, mediaType, filename, name }. Subject/Class/Chapter/
-  // Subtopic/Description are shared fields applied to the whole batch -- only name is per-item
-  // since it has to be distinct for each diagram; everything else is realistically the same
-  // across a batch uploaded from the same chapter in one sitting.
+  // Each pending upload: { id, base64, mediaType, filename, name, description, nameHi,
+  // descriptionHi }. Subject/Class/Chapter/Subtopic are shared fields applied to the whole
+  // batch -- name/description/nameHi/descriptionHi are per-item (each image is its own diagram
+  // entry with its own English + optional Hindi display text), since those are realistically
+  // different even for images uploaded from the same chapter in one sitting.
   let pendingImages = [];
   let nextPendingId = 1;
 
@@ -302,7 +311,10 @@
       base64,
       mediaType: file.type || 'image/png',
       filename: filename || file.name || `pasted-image-${Date.now()}.png`,
-      name: deriveNameFromFilename(filename || file.name)
+      name: deriveNameFromFilename(filename || file.name),
+      description: '',
+      nameHi: '',
+      descriptionHi: ''
     });
   }
 
@@ -342,8 +354,19 @@
     grid.innerHTML = pendingImages.map(item => `
       <div class="batch-item" id="batch-item-${item.id}">
         <button type="button" class="remove-btn" onclick="removeBatchItem(${item.id})" title="Remove">✕</button>
-        <img src="data:${item.mediaType};base64,${item.base64}" alt=""/>
-        <input type="text" value="${escapeHtml(item.name)}" placeholder="Name (required)" oninput="updateItemName(${item.id}, this.value)"/>
+        <img class="batch-thumb" src="data:${item.mediaType};base64,${item.base64}" alt=""/>
+        <div class="batch-lang-grid">
+          <div class="batch-lang-col">
+            <label class="lang-tag">English</label>
+            <input type="text" value="${escapeHtml(item.name)}" placeholder="Name (required)" oninput="updateItemField(${item.id}, 'name', this.value)"/>
+            <input type="text" value="${escapeHtml(item.description)}" placeholder="Description (optional)" oninput="updateItemField(${item.id}, 'description', this.value)"/>
+          </div>
+          <div class="batch-lang-col hindi">
+            <label class="lang-tag">हिन्दी</label>
+            <input type="text" value="${escapeHtml(item.nameHi)}" placeholder="नाम (optional)" oninput="updateItemField(${item.id}, 'nameHi', this.value)"/>
+            <input type="text" value="${escapeHtml(item.descriptionHi)}" placeholder="विवरण (optional)" oninput="updateItemField(${item.id}, 'descriptionHi', this.value)"/>
+          </div>
+        </div>
         <div class="item-status" id="item-status-${item.id}"></div>
       </div>
     `).join('');
@@ -351,9 +374,9 @@
     document.getElementById('uploadBtn').textContent = pendingImages.length > 1 ? `Upload All (${pendingImages.length})` : 'Upload';
   }
 
-  function updateItemName(id, value) {
+  function updateItemField(id, field, value) {
     const item = pendingImages.find(p => p.id === id);
-    if (item) item.name = value;
+    if (item) item[field] = value;
   }
 
   function removeBatchItem(id) {
@@ -398,7 +421,10 @@
         body: JSON.stringify({
           subject: shared.subject, class: shared.cls, chapter: shared.chapter,
           subtopic: shared.subtopic, name: item.name.trim(),
-          description: shared.description, image_url: uploadData.url
+          description: item.description.trim() || null,
+          name_hi: item.nameHi.trim() || null,
+          description_hi: item.descriptionHi.trim() || null,
+          image_url: uploadData.url
         })
       });
       if (createRes.status === 401) return { id: item.id, error: 'unauthorized' };
@@ -417,7 +443,6 @@
     const subject = document.getElementById('subjectInput').value;
     const cls = document.getElementById('classInput').value;
     const chapter = document.getElementById('chapterInput').value;
-    const description = document.getElementById('descriptionInput').value.trim();
     const subtopic = document.getElementById('subtopicInput').value.trim();
 
     if (!subject || !chapter || pendingImages.length === 0) {
@@ -426,14 +451,14 @@
     }
     const unnamed = pendingImages.filter(p => !p.name.trim());
     if (unnamed.length > 0) {
-      setUploadStatus('Every image needs a name -- fill in the blank one(s) below.', 'error');
+      setUploadStatus('Every image needs an English name -- fill in the blank one(s) below.', 'error');
       unnamed.forEach(p => setItemStatus(p.id, 'Name required', 'error'));
       return;
     }
 
     const shared = {
       subject, cls: cls ? parseInt(cls, 10) : null, chapter,
-      subtopic: subtopic || null, description: description || null
+      subtopic: subtopic || null
     };
 
     const uploadBtn = document.getElementById('uploadBtn');
@@ -449,7 +474,6 @@
 
     if (failed.length === 0) {
       setUploadStatus(`All ${results.length} image${results.length === 1 ? '' : 's'} uploaded successfully.`, 'success');
-      document.getElementById('descriptionInput').value = '';
       document.getElementById('subtopicInput').value = '';
     } else {
       setUploadStatus(`${succeededIds.size} uploaded, ${failed.length} failed (see below) -- fix and retry the ones marked in red.`, 'error');
@@ -488,7 +512,7 @@
       <tr data-id="${d.id}">
         <td><img class="thumb" src="${escapeHtml(d.image_url)}" alt=""/></td>
         <td>
-          <div class="row-name">${escapeHtml(d.name)}</div>
+          <div class="row-name">${escapeHtml(d.name)}${(d.name_hi || d.description_hi) ? '<span class="hindi-badge" title="Has Hindi metadata">हिं</span>' : ''}</div>
           ${d.description ? `<div class="row-desc">${escapeHtml(d.description)}</div>` : ''}
         </td>
         <td><span class="subject-chip ${escapeHtml(d.subject)}">${escapeHtml(d.subject)}</span></td>

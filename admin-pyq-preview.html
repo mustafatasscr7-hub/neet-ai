@@ -193,6 +193,9 @@
     .diagram-thumb { max-height: 160px; object-fit: cover; cursor: zoom-in; width: 100%; }
     .diagram-lightbox-overlay { position: fixed; inset: 0; background: #000000c0; z-index: 970; display: flex; align-items: center; justify-content: center; cursor: zoom-out; }
     .diagram-lightbox-overlay img { max-width: 90vw; max-height: 90vh; border-radius: 8px; }
+    .lang-section-label { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: #4f8ef7; margin-bottom: 6px; }
+    .lang-section-label.hindi { color: #f97316; }
+    .hindi-badge { font-size: 10px; padding: 2px 7px; border-radius: 20px; font-weight: 600; display: inline-block; background: #f9731620; color: #f97316; margin-left: 6px; }
   </style>
 </head>
 <body>
@@ -1516,6 +1519,7 @@
       const statusBadge = d.reviewed
         ? '<span class="q-confirmed-flag">Confirmed</span>'
         : '<span class="q-flag">Pending Review</span>';
+      const hindiBadge = (d.name_hi || d.description_hi) ? '<span class="hindi-badge" title="Has Hindi metadata">हिं</span>' : '';
       return `
         <div class="question-card diagram-card" data-diagram-id="${d.id}">
           <div class="q-meta">
@@ -1527,8 +1531,10 @@
             ${statusBadge}
           </div>
           <img class="q-diagram-img diagram-thumb" src="${escapeHtml(d.image_url)}" alt="${escapeHtml(d.name)}" onclick="openDiagramLightbox('${escapeHtml(d.image_url)}')"/>
-          <div class="q-text" style="margin-bottom:4px;"><strong>${escapeHtml(d.name)}</strong></div>
+          <div class="q-text" style="margin-bottom:4px;"><strong>${escapeHtml(d.name)}</strong>${hindiBadge}</div>
           ${d.description ? `<div class="q-text" style="font-size:12px;color:#888;">${escapeHtml(d.description)}</div>` : ''}
+          ${d.name_hi ? `<div class="q-text" style="margin-top:6px;margin-bottom:4px;"><strong>${escapeHtml(d.name_hi)}</strong></div>` : ''}
+          ${d.description_hi ? `<div class="q-text" style="font-size:12px;color:#888;">${escapeHtml(d.description_hi)}</div>` : ''}
           <div class="q-admin-bar">
             <span class="q-admin-id">${d.id}</span>
             <button type="button" class="q-edit-btn" onclick="startDiagramEdit(${d.id})">Edit</button>
@@ -1542,13 +1548,29 @@
       const chapters = CANONICAL_CHAPTERS[d.subject] || [];
       return `
         <div class="question-card diagram-card" data-diagram-id="${d.id}">
-          <div class="q-edit-field">
-            <label>Name</label>
-            <input type="text" data-field="name" value="${escapeHtml(d.name)}"/>
-          </div>
-          <div class="q-edit-field">
-            <label>Description</label>
-            <textarea data-field="description" rows="2" oninput="autoResizeTextarea(this)">${escapeHtml(d.description || '')}</textarea>
+          <div class="q-edit-row" style="align-items:flex-start;">
+            <div style="flex:1;min-width:180px;">
+              <div class="lang-section-label">English</div>
+              <div class="q-edit-field">
+                <label>Name</label>
+                <input type="text" data-field="name" value="${escapeHtml(d.name)}"/>
+              </div>
+              <div class="q-edit-field">
+                <label>Description</label>
+                <textarea data-field="description" rows="2" oninput="autoResizeTextarea(this)">${escapeHtml(d.description || '')}</textarea>
+              </div>
+            </div>
+            <div style="flex:1;min-width:180px;">
+              <div class="lang-section-label hindi">हिन्दी</div>
+              <div class="q-edit-field">
+                <label>Name</label>
+                <input type="text" data-field="name_hi" value="${escapeHtml(d.name_hi || '')}"/>
+              </div>
+              <div class="q-edit-field">
+                <label>Description</label>
+                <textarea data-field="description_hi" rows="2" oninput="autoResizeTextarea(this)">${escapeHtml(d.description_hi || '')}</textarea>
+              </div>
+            </div>
           </div>
           <div class="q-edit-row">
             <div class="q-edit-field">
@@ -1605,6 +1627,8 @@
       const payload = {
         name, chapter,
         description: getVal('description').trim() || null,
+        name_hi: getVal('name_hi').trim() || null,
+        description_hi: getVal('description_hi').trim() || null,
         subtopic: getVal('subtopic').trim() || null,
         subject: getVal('subject')
       };
