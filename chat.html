@@ -339,6 +339,14 @@
     .welcome-search:focus-within { border-color: #4f8ef740; }
     .welcome-search input { flex: 1; background: transparent; border: none; color: #ececec; font-size: var(--chat-font-size, 14px); font-family: 'Inter', sans-serif; outline: none; }
     .welcome-search input::placeholder { color: #444; }
+    /* Applied only by focusMessageInput()'s programmatic auto-focus (see JS), never by a real
+       click -- a click focusing an input is already a deliberate "I'm about to type" signal, so
+       it shows the normal caret immediately same as any other input on the web. Auto-focus on
+       arrival is different: a blinking cursor sitting in a box the student hasn't touched yet
+       reads as unintentional/distracting, not as an inviting affordance. caret-color, not
+       display/visibility on the whole element -- the input stays genuinely focused and ready
+       for a keystroke the entire time, this only hides the blinking caret glyph itself. */
+    .caret-hidden { caret-color: transparent; }
     .welcome-send { width: 32px; height: 32px; background: #4f8ef7; border: none; border-radius: 7px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s; }
     .welcome-send:hover { background: #3b7de8; }
     .welcome-send svg { width: 14px; height: 14px; fill: white; }
@@ -807,8 +815,24 @@
       if (skipOnMobile && isMobileViewport()) return;
       const target = inputArea.style.display !== 'none' ? input : document.getElementById('welcomeInput');
       if (!target || isFocusElsewhereIntentional(target)) return;
+      // caret-hidden goes on right alongside the programmatic focus() call, never independently
+      // -- see the class's own CSS comment for why a click never gets this treatment. Removed
+      // again the instant a real keystroke lands, via the single delegated listener below
+      // (delegated on document, not bound per-element, so it keeps working across #welcomeInput
+      // getting torn down and rebuilt by showWelcome() with no rebinding needed).
+      target.classList.add('caret-hidden');
       target.focus();
     }
+
+    // The one place caret-hidden ever comes off. Delegated on document (not addEventListener'd
+    // directly on #welcomeInput/#userInput) specifically because #welcomeInput is rebuilt from
+    // scratch by showWelcome() every "New Chat" -- a listener bound to today's element would be
+    // gone with it; this one keeps working regardless of how many times that happens.
+    document.addEventListener('keydown', function(e) {
+      if (e.target && e.target.classList && e.target.classList.contains('caret-hidden')) {
+        e.target.classList.remove('caret-hidden');
+      }
+    });
 
     let isStreaming = false;
     let streamController = null;
