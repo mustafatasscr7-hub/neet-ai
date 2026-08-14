@@ -447,6 +447,60 @@ def wrap_bare_latex_notation(text):
         i += 1
     return ''.join(out)
 
+_NUMBERED_MARKER_RE = re.compile(r'(\d{1,2})\.\s')
+
+def format_numbered_substatements(text):
+    """"Which of the following is/is not correct" style questions often extract as one dense
+    run-on block with no separation between numbered sub-statements ("...correct? 1. X is zero.
+    2. X is positive. 3. X is negative."). Inserts a line break before each such marker so it
+    displays one point per line -- purely whitespace, never touches the actual wording/LaTeX.
+
+    Only fires when the digits found form a genuine ascending sequence starting at 1 (1, 2, 3,
+    ...) with at least two markers. A single isolated "N. " match is left alone -- shape alone
+    can't tell a list marker apart from an ordinary sentence that happens to end in a bare number
+    ("the pH will be 7. This means neutral."), so the sequence itself is what has to prove it's a
+    real list, not the regex. "2 moles of gas" never matches at all: there's no period directly
+    after the digit, which is exactly what distinguishes a marker from a plain quantity.
+
+    Only meant to run on the question stem (see _parse_extraction_json's call site) -- the 4
+    option fields are separate UI fields already, not numbered sub-points within a block of text."""
+    if not isinstance(text, str) or not text:
+        return text
+    candidates = []
+    for m in _NUMBERED_MARKER_RE.finditer(text):
+        start = m.start()
+        if start > 0 and not text[start - 1].isspace():
+            continue  # glued to a preceding word/digit, e.g. mid-token -- not a real marker
+        candidates.append(m)
+    if len(candidates) < 2:
+        return text
+
+    expected = 1
+    confirmed = []
+    for m in candidates:
+        if int(m.group(1)) == expected:
+            confirmed.append(m)
+            expected += 1
+        elif confirmed:
+            break  # sequence broken after at least one hit -- don't extend past the real list
+    if len(confirmed) < 2:
+        return text
+
+    out = []
+    last_end = 0
+    for m in confirmed:
+        start = m.start()
+        ws_start = start
+        while ws_start > last_end and text[ws_start - 1].isspace():
+            ws_start -= 1
+        out.append(text[last_end:ws_start])
+        if ws_start > 0:
+            out.append('\n')
+        out.append(text[start:m.end()])
+        last_end = m.end()
+    out.append(text[last_end:])
+    return ''.join(out)
+
 _EXTRACTED_TEXT_FIELDS = ("question", "option_a", "option_b", "option_c", "option_d")
 
 def _parse_extraction_json(text, page_num):
@@ -476,6 +530,10 @@ def _parse_extraction_json(text, page_num):
         for field in _EXTRACTED_TEXT_FIELDS:
             if isinstance(q.get(field), str):
                 q[field] = wrap_bare_latex_notation(q[field])
+        # Question stem only -- see format_numbered_substatements's docstring for why this
+        # doesn't run on option_a-d too.
+        if isinstance(q.get("question"), str):
+            q["question"] = format_numbered_substatements(q["question"])
     return questions
 
 def extract_questions_from_text(page_text, page_num, subject="Biology", model=TEXT_MODEL):
