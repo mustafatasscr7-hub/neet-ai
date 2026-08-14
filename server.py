@@ -98,7 +98,7 @@ VISUAL_INTENT: [yes or no]
 
 NEET Importance: [N]/5
 
-📚 Chapter: [NCERT Class X, Chapter X — Chapter Name]
+📚 Chapter: [copied verbatim from a "Retrieved from:" entry given to you — see Rule 1. Omit this whole line if no "Retrieved from:" entries were given.]
 
 📝 Answer:
 [Give the answer in clear points]
@@ -124,7 +124,23 @@ Solution:
 Answer: [final answer with units]
 
 Rules:
-1. Answer ONLY from the NCERT content provided to you
+1. Answer ONLY from the NCERT content provided to you. This applies most strictly to the 📚
+   Chapter: line — follow this exact mechanical procedure for it, in order, before writing
+   anything else in that line:
+   STEP A: Look at the user message. Does it literally contain the text "Retrieved from:"?
+   STEP B: If NO — stop immediately, do not proceed to step C, do not try to recall the chapter
+   from your own knowledge no matter how confident you are. Write "📚 Chapter: Not available —
+   answering from general knowledge, not a specific retrieved NCERT chapter." (or omit the
+   Chapter line entirely) and move on to the rest of the answer.
+   STEP C: If YES — copy ONE of the listed entries into the Chapter line EXACTLY as given (same
+   class number, same chapter number, same chapter name, character-for-character); if several
+   entries are listed, pick whichever single one is most relevant to the question, but the text
+   you write must still be copied verbatim from one of them, not reconstructed or blended.
+   This two-step check (does "Retrieved from:" literally appear or not) is the ONLY thing that
+   decides what you write — never your own confidence in what the answer "should" be. This
+   matters even more for non-English questions, since NCERT content search currently only covers
+   English and often returns nothing for a question asked in Hindi — a confident-sounding but
+   fabricated citation is worse than honestly saying none was found.
 2. Always show the NEET Importance rating AT THE TOP
 3. Use bullet points — never big paragraphs
 4. Answer length should match question complexity
@@ -822,25 +838,54 @@ async def get_embedding(text: str):
 # only change we can fully verify ourselves.
 NCERT_NON_CHAPTER_LABELS = {"Preliminary Pages", "Appendix", "Answer Key"}
 
+# Same canonical chapter-per-class ordering as the frontend's neetSyllabus (pyqbank.html and
+# friends) -- position in each list = official NCERT chapter number for that subject+class.
+# ncert_content itself has no stored chapter number (only subject/class/chapter_name), so a
+# live 45-question test found the model guessing/misremembering the number from its own training
+# knowledge ~30% of the time even when it correctly copied the chapter NAME from retrieved
+# content. This is the fix: compute the real number here, server-side, from data we already
+# trust, so the model's job in the "Chapter:" line becomes "copy this string" instead of
+# "recall this number" -- see _ncert_chapter_citation and its call site in stream_response().
+NEET_SYLLABUS = {
+    "Biology": {
+        11: ['The Living World', 'Biological Classification', 'Plant Kingdom', 'Animal Kingdom', 'Morphology of Flowering Plants', 'Anatomy of Flowering Plants', 'Structural Organisation in Animals', 'Cell: The Unit of Life', 'Biomolecules', 'Cell Cycle and Cell Division', 'Transport in Plants', 'Mineral Nutrition', 'Photosynthesis in Higher Plants', 'Respiration in Plants', 'Plant Growth and Development', 'Digestion and Absorption', 'Breathing and Exchange of Gases', 'Body Fluids and Circulation', 'Excretory Products and their Elimination', 'Locomotion and Movement', 'Neural Control and Coordination', 'Chemical Coordination and Integration'],
+        12: ['Reproduction in Organisms', 'Sexual Reproduction in Flowering Plants', 'Human Reproduction', 'Reproductive Health', 'Principles of Inheritance and Variation', 'Molecular Basis of Inheritance', 'Evolution', 'Human Health and Disease', 'Strategies for Enhancement in Food Production', 'Microbes in Human Welfare', 'Biotechnology: Principles and Processes', 'Biotechnology and its Applications', 'Organisms and Populations', 'Ecosystem', 'Biodiversity and Conservation', 'Environmental Issues']
+    },
+    "Physics": {
+        11: ['Units and Measurements', 'Motion in a Straight Line', 'Motion in a Plane', 'Laws of Motion', 'Work, Energy and Power', 'System of Particles and Rotational Motion', 'Gravitation', 'Mechanical Properties of Solids', 'Mechanical Properties of Fluids', 'Thermal Properties of Matter', 'Thermodynamics', 'Kinetic Theory', 'Oscillations', 'Waves', 'Mathematical Tools'],
+        12: ['Electric Charges and Fields', 'Electrostatic Potential and Capacitance', 'Current Electricity', 'Moving Charges and Magnetism', 'Magnetism and Matter', 'Electromagnetic Induction', 'Alternating Current', 'Electromagnetic Waves', 'Ray Optics and Optical Instruments', 'Wave Optics', 'Dual Nature of Radiation and Matter', 'Atoms', 'Nuclei', 'Semiconductor Electronics: Materials, Devices and Simple Circuits']
+    },
+    "Chemistry": {
+        11: ['Some Basic Concepts of Chemistry', 'Structure of Atom', 'Classification of Elements and Periodicity in Properties of Elements', 'Chemical Bonding and Molecular Structure', 'States of Matter: Gases and Liquids', 'Thermodynamics', 'Equilibrium', 'Redox Reactions', 'Hydrogen', 'The s-Block Elements (Alkali and Alkaline Earth Metals)', 'The p-Block Elements', 'Organic Chemistry: Some Basic Principles and Techniques', 'Hydrocarbons', 'Environmental Chemistry'],
+        12: ['The Solid State', 'Solutions', 'Electrochemistry', 'Chemical Kinetics', 'Surface Chemistry', 'General Principles and Processes of Isolation of Elements', 'The p-Block Elements', 'The d and f Block Elements', 'Coordination Compounds', 'Haloalkanes and Haloarenes', 'Alcohols, Phenols and Ethers', 'Aldehydes, Ketones and Carboxylic Acids', 'Amines', 'Biomolecules', 'Polymers', 'Chemistry in Everyday Life']
+    }
+}
+
 # ---------------- Diagram matching (chat.html doubt-solving) ----------------
-# The SYSTEM_PROMPT instructs the model to always include a line like
-# "📚 Chapter: [NCERT Class X, Chapter X — Chapter Name]" in its answer, but nothing previously
-# parsed it back out -- this is the first consumer. The bracket's chapter NAME is whatever
-# follows the last dash-like separator ("—"/"–"/" - ", the model isn't perfectly consistent
-# about which one), since "Chapter X" itself isn't a lookup key.
-DIAGRAM_CHAPTER_LINE_RE = re.compile(r'chapter:\s*\[([^\]]*)\]', re.IGNORECASE)
+# The SYSTEM_PROMPT instructs the model to include a line like "📚 Chapter: NCERT Class X,
+# Chapter X — Chapter Name" in its answer -- this is the first (and, discovered while fixing
+# citation accuracy elsewhere in this file, formerly non-functional) consumer of it. The
+# original regex here required literal [bracket] characters around the citation, copying the
+# SYSTEM_PROMPT template's placeholder-bracket convention -- but real model output never
+# actually includes brackets (confirmed against 91 real "Chapter:" lines from a live test: 0
+# matched), so extract_chapter_candidate() always returned None and diagram-matching's
+# chapter-filtering step never fired, silently falling through to an unfiltered similarity
+# search every time. Fixed to match the rest of the line instead of a bracketed group -- the
+# chapter NAME is still whatever follows the last dash-like separator ("—"/"–"/" - ", the model
+# isn't perfectly consistent about which one), since "Chapter X" itself isn't a lookup key.
+DIAGRAM_CHAPTER_LINE_RE = re.compile(r'chapter:\s*(.+)', re.IGNORECASE)
 
 def extract_chapter_candidate(answer_text: str):
     m = DIAGRAM_CHAPTER_LINE_RE.search(answer_text or '')
     if not m:
         return None
-    bracket = m.group(1)
+    line = m.group(1).strip().strip('*').strip()
     for sep in ('—', '–', ' - '):
-        if sep in bracket:
-            candidate = bracket.rsplit(sep, 1)[-1].strip()
+        if sep in line:
+            candidate = line.rsplit(sep, 1)[-1].strip()
             if candidate:
                 return candidate
-    return bracket.strip() or None
+    return line.strip() or None
 
 DIAGRAM_CHAPTER_FUZZY_THRESHOLD = 0.3  # same spirit/magnitude as admin-pdf-review.html's FILENAME_MATCH_THRESHOLD
 
@@ -899,6 +944,31 @@ async def search_ncert(query: str, limit: int = 3):
     if response.status_code == 200:
         return [r for r in response.json() if r.get("chapter_name") not in NCERT_NON_CHAPTER_LABELS]
     return []
+
+def _ncert_chapter_citation(subject: str, class_num, chapter_name: str) -> str:
+    """Builds an authoritative citation string like 'NCERT Class 12, Chapter 3 -- Current
+    Electricity' for one retrieved ncert_content row, by looking its (subject, class,
+    chapter_name) up against NEET_SYLLABUS -- the same canonical, chapter-number-by-position
+    list the frontend uses. This is handed to the model as a ready-made "Retrieved from:" line
+    (see stream_response()) so it never has to recall/guess the chapter number itself, which is
+    where the real citation errors came from (chapter_name is already stored correctly -- only
+    the number was ever a guess). Falls back to a numberless citation (never a guessed number)
+    if the name doesn't confidently match anything in the list -- e.g. a genuinely new/renamed
+    chapter that hasn't been added to NEET_SYLLABUS yet."""
+    if not chapter_name:
+        return ""
+    try:
+        class_key = int(class_num)
+    except (TypeError, ValueError):
+        return f"NCERT {subject} — {chapter_name}" if subject else chapter_name
+    chapters = NEET_SYLLABUS.get(subject, {}).get(class_key, [])
+    if not chapters:
+        return f"NCERT Class {class_key}, {subject} — {chapter_name}"
+    norm = chapter_name.strip().lower()
+    match = next((c for c in chapters if c.strip().lower() == norm), None) or fuzzy_match_chapter(chapter_name, chapters)
+    if match:
+        return f"NCERT Class {class_key}, Chapter {chapters.index(match) + 1} — {match}"
+    return f"NCERT Class {class_key}, {subject} — {chapter_name}"
 
 async def search_pyq(query: str, limit: int = 5):
     embedding = await get_embedding(query)
@@ -1195,7 +1265,17 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
             f"[{r.get('subject', '')} - Class {r.get('class', '')} - {r.get('chapter_name', '')}]\n{r.get('content', '')}"
             for r in results
         ])
-        user_message = f"NCERT Content:\n{context}\n\nStudent Question: {text}"
+        # Deduplicated, mechanically-correct citation for every distinct chapter actually
+        # retrieved (see _ncert_chapter_citation) -- SYSTEM_PROMPT rule 1 instructs the model to
+        # copy one of these verbatim into the "Chapter:" line instead of recalling/guessing it,
+        # which a live 45-question test found produced a ~30% wrong-chapter-number rate.
+        real_citations = []
+        for r in results:
+            citation = _ncert_chapter_citation(r.get('subject', ''), r.get('class'), r.get('chapter_name', ''))
+            if citation and citation not in real_citations:
+                real_citations.append(citation)
+        retrieved_from = "\n".join(f"- {c}" for c in real_citations)
+        user_message = f"NCERT Content:\n{context}\n\nRetrieved from (copy EXACTLY ONE of these verbatim into your Chapter: line -- never a different name or number):\n{retrieved_from}\n\nStudent Question: {text}"
     else:
         user_message = f"Student Question: {text}"
 
