@@ -925,6 +925,15 @@ def build_diagram_embedding_text(name: str, description: str, chapter: str):
     parts.append(chapter)
     return " ".join(p for p in parts if p)
 
+DEVANAGARI_RE = re.compile(r'[ऀ-ॿ]')
+
+def _detect_query_language(query: str) -> str:
+    """Deliberately simple: any Devanagari character in the query counts as Hindi. No mixed-
+    script handling -- a Hinglish (Latin-script Hindi) query still gets filtered as 'en', which
+    is correct here since the Hindi ncert_content rows are themselves in Devanagari script, not
+    transliterated Latin."""
+    return "hi" if DEVANAGARI_RE.search(query or "") else "en"
+
 async def search_ncert(query: str, limit: int = 3):
     embedding = await get_embedding(query)
     headers = {
@@ -938,25 +947,35 @@ async def search_ncert(query: str, limit: int = 3):
         json={
             "query_embedding": embedding,
             "match_threshold": 0.5,
-            "match_count": limit
+            "match_count": limit,
+            "filter_language": _detect_query_language(query)
         }
     )
     if response.status_code == 200:
         return [r for r in response.json() if r.get("chapter_name") not in NCERT_NON_CHAPTER_LABELS]
     return []
 
-def _ncert_chapter_citation(subject: str, class_num, chapter_name: str) -> str:
+def _ncert_chapter_citation(subject: str, class_num, chapter_name: str, lookup_name: str = None) -> str:
     """Builds an authoritative citation string like 'NCERT Class 12, Chapter 3 -- Current
-    Electricity' for one retrieved ncert_content row, by looking its (subject, class,
-    chapter_name) up against NEET_SYLLABUS -- the same canonical, chapter-number-by-position
-    list the frontend uses. This is handed to the model as a ready-made "Retrieved from:" line
-    (see stream_response()) so it never has to recall/guess the chapter number itself, which is
-    where the real citation errors came from (chapter_name is already stored correctly -- only
-    the number was ever a guess). Falls back to a numberless citation (never a guessed number)
-    if the name doesn't confidently match anything in the list -- e.g. a genuinely new/renamed
+    Electricity' for one retrieved ncert_content row, by looking it up against NEET_SYLLABUS --
+    the same canonical, chapter-number-by-position list the frontend uses. This is handed to the
+    model as a ready-made "Retrieved from:" line (see stream_response()) so it never has to
+    recall/guess the chapter number itself, which is where the real citation errors came from
+    (chapter_name is already stored correctly -- only the number was ever a guess).
+
+    chapter_name is what gets DISPLAYED in the citation (English for 'en' rows, real Hindi title
+    for 'hi' rows -- a Hindi-answered student should see a Hindi citation line). lookup_name is
+    what actually gets matched against NEET_SYLLABUS to find the chapter number -- defaults to
+    chapter_name itself (English rows), but Hindi rows must pass chapter_name_en here instead,
+    since NEET_SYLLABUS is English-only and fuzzy_match_chapter's tokenizer strips non-ASCII
+    letters, so a raw Hindi title would never match anything and always fall back to numberless.
+
+    Falls back to a numberless citation (never a guessed number) if lookup_name doesn't
+    confidently match anything in the list -- e.g. Appendix content, or a genuinely new/renamed
     chapter that hasn't been added to NEET_SYLLABUS yet."""
     if not chapter_name:
         return ""
+    lookup_name = lookup_name or chapter_name
     try:
         class_key = int(class_num)
     except (TypeError, ValueError):
@@ -964,10 +983,10 @@ def _ncert_chapter_citation(subject: str, class_num, chapter_name: str) -> str:
     chapters = NEET_SYLLABUS.get(subject, {}).get(class_key, [])
     if not chapters:
         return f"NCERT Class {class_key}, {subject} — {chapter_name}"
-    norm = chapter_name.strip().lower()
-    match = next((c for c in chapters if c.strip().lower() == norm), None) or fuzzy_match_chapter(chapter_name, chapters)
+    norm = lookup_name.strip().lower()
+    match = next((c for c in chapters if c.strip().lower() == norm), None) or fuzzy_match_chapter(lookup_name, chapters)
     if match:
-        return f"NCERT Class {class_key}, Chapter {chapters.index(match) + 1} — {match}"
+        return f"NCERT Class {class_key}, Chapter {chapters.index(match) + 1} — {chapter_name}"
     return f"NCERT Class {class_key}, {subject} — {chapter_name}"
 
 async def search_pyq(query: str, limit: int = 5):
@@ -1271,7 +1290,7 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
         # which a live 45-question test found produced a ~30% wrong-chapter-number rate.
         real_citations = []
         for r in results:
-            citation = _ncert_chapter_citation(r.get('subject', ''), r.get('class'), r.get('chapter_name', ''))
+            citation = _ncert_chapter_citation(r.get('subject', ''), r.get('class'), r.get('chapter_name', ''), lookup_name=r.get('chapter_name_en'))
             if citation and citation not in real_citations:
                 real_citations.append(citation)
         retrieved_from = "\n".join(f"- {c}" for c in real_citations)
