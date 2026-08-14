@@ -380,6 +380,9 @@ class DiagramCreate(BaseModel):
     class_: Optional[int] = Field(None, alias="class")
     chapter: str
     subtopic: Optional[str] = None
+    # Optional Hindi counterpart to subtopic -- same shared-across-the-batch field as subtopic
+    # itself, just the Hindi half of it, filled in side-by-side at upload time.
+    subtopic_hi: Optional[str] = None
     name: str
     description: Optional[str] = None
     # Optional Hindi counterparts, filled in side-by-side with the English fields above at
@@ -393,6 +396,7 @@ class DiagramUpdate(BaseModel):
     class_: Optional[int] = Field(None, alias="class")
     chapter: Optional[str] = None
     subtopic: Optional[str] = None
+    subtopic_hi: Optional[str] = None
     name: Optional[str] = None
     description: Optional[str] = None
     name_hi: Optional[str] = None
@@ -2637,6 +2641,7 @@ async def admin_diagrams_create(body: DiagramCreate, _: None = Depends(verify_ad
     chapter = body.chapter.strip()
     description = body.description.strip() if body.description else None
     subtopic = body.subtopic.strip() if body.subtopic else None
+    subtopic_hi = body.subtopic_hi.strip() if body.subtopic_hi else None
     name_hi = body.name_hi.strip() if body.name_hi else None
     description_hi = body.description_hi.strip() if body.description_hi else None
     try:
@@ -2652,6 +2657,7 @@ async def admin_diagrams_create(body: DiagramCreate, _: None = Depends(verify_ad
         "class": body.class_,
         "chapter": chapter,
         "subtopic": subtopic,
+        "subtopic_hi": subtopic_hi,
         "name": name,
         "description": description,
         "name_hi": name_hi,
@@ -2679,7 +2685,7 @@ async def admin_diagrams_list(_: None = Depends(verify_admin)):
             f"{SUPABASE_URL}/rest/v1/diagrams",
             headers=ADMIN_HEADERS,
             params={
-                "select": "id,subject,class,chapter,subtopic,name,description,name_hi,description_hi,image_url,reviewed,created_at",
+                "select": "id,subject,class,chapter,subtopic,subtopic_hi,name,description,name_hi,description_hi,image_url,reviewed,created_at",
                 "order": "created_at.desc",
                 "limit": 1000
             }
@@ -2710,6 +2716,8 @@ async def admin_diagram_update(diagram_id: int, body: DiagramUpdate, _: None = D
         update_fields["description"] = body.description
     if "subtopic" in body.model_fields_set:
         update_fields["subtopic"] = body.subtopic
+    if "subtopic_hi" in body.model_fields_set:
+        update_fields["subtopic_hi"] = body.subtopic_hi
     if "name_hi" in body.model_fields_set:
         update_fields["name_hi"] = body.name_hi
     if "description_hi" in body.model_fields_set:
@@ -2745,7 +2753,7 @@ async def admin_diagram_update(diagram_id: int, body: DiagramUpdate, _: None = D
         response = await async_client.patch(
             f"{SUPABASE_URL}/rest/v1/diagrams",
             headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
-            params={"id": f"eq.{diagram_id}", "select": "id,subject,class,chapter,subtopic,name,description,name_hi,description_hi,image_url,reviewed,created_at"},
+            params={"id": f"eq.{diagram_id}", "select": "id,subject,class,chapter,subtopic,subtopic_hi,name,description,name_hi,description_hi,image_url,reviewed,created_at"},
             json=update_fields
         )
         if response.status_code >= 400:

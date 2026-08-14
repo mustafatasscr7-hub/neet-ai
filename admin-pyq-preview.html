@@ -1522,7 +1522,7 @@
       const statusBadge = d.reviewed
         ? '<span class="q-confirmed-flag">Confirmed</span>'
         : '<span class="q-flag">Pending Review</span>';
-      const hindiBadge = (d.name_hi || d.description_hi) ? '<span class="hindi-badge" title="Has Hindi metadata">हिं</span>' : '';
+      const hindiBadge = (d.name_hi || d.description_hi || d.subtopic_hi) ? '<span class="hindi-badge" title="Has Hindi metadata">हिं</span>' : '';
       return `
         <div class="question-card diagram-card" data-diagram-id="${d.id}">
           <div class="q-meta">
@@ -1530,6 +1530,7 @@
             ${d.class != null ? `<span>Class ${escapeHtml(String(d.class))}</span>` : ''}
             ${d.chapter ? `<span>${escapeHtml(d.chapter)}</span>` : ''}
             ${d.subtopic ? `<span>${escapeHtml(d.subtopic)}</span>` : ''}
+            ${d.subtopic_hi ? `<span>${escapeHtml(d.subtopic_hi)}</span>` : ''}
             <span>${new Date(d.created_at).toLocaleDateString()}</span>
             ${statusBadge}
           </div>
@@ -1589,9 +1590,21 @@
               <select data-field="chapter">${chapterOptionsHtml(chapters, d.chapter)}</select>
             </div>
           </div>
-          <div class="q-edit-field">
-            <label>Subtopic</label>
-            <input type="text" data-field="subtopic" value="${escapeHtml(d.subtopic || '')}" placeholder="e.g. 2.3.1 Phycomycetes"/>
+          <div class="q-edit-row" style="align-items:flex-start;">
+            <div style="flex:1;min-width:180px;">
+              <div class="lang-section-label">English</div>
+              <div class="q-edit-field">
+                <label>Subtopic</label>
+                <input type="text" data-field="subtopic" value="${escapeHtml(d.subtopic || '')}" placeholder="e.g. 2.3.1 Phycomycetes"/>
+              </div>
+            </div>
+            <div style="flex:1;min-width:180px;">
+              <div class="lang-section-label hindi">हिन्दी</div>
+              <div class="q-edit-field">
+                <label>Subtopic</label>
+                <input type="text" data-field="subtopic_hi" value="${escapeHtml(d.subtopic_hi || '')}" placeholder="उपविषय (optional)"/>
+              </div>
+            </div>
           </div>
           <img class="q-diagram-img diagram-thumb" src="${escapeHtml(d.image_url)}" alt="" onclick="openDiagramLightbox('${escapeHtml(d.image_url)}')"/>
           <div class="q-admin-bar">
@@ -1633,6 +1646,7 @@
         name_hi: getVal('name_hi').trim() || null,
         description_hi: getVal('description_hi').trim() || null,
         subtopic: getVal('subtopic').trim() || null,
+        subtopic_hi: getVal('subtopic_hi').trim() || null,
         subject: getVal('subject')
       };
       const originalLabel = btnEl.textContent;

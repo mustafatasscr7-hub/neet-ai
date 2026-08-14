@@ -147,8 +147,17 @@
     </div>
 
     <div class="q-field">
-      <label>Subtopic (optional)</label>
-      <input type="text" id="subtopicInput" placeholder="e.g. 2.3.1 Phycomycetes"/>
+      <label>Subtopic (optional) — applies to the whole batch, same as Subject/Class/Chapter</label>
+      <div class="batch-lang-grid">
+        <div class="batch-lang-col">
+          <label class="lang-tag">English</label>
+          <input type="text" id="subtopicInput" placeholder="e.g. 2.3.1 Phycomycetes"/>
+        </div>
+        <div class="batch-lang-col hindi">
+          <label class="lang-tag">हिन्दी</label>
+          <input type="text" id="subtopicHiInput" placeholder="उपविषय (optional)"/>
+        </div>
+      </div>
     </div>
 
     <div class="q-field">
@@ -423,7 +432,7 @@
         headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           subject: shared.subject, class: shared.cls, chapter: shared.chapter,
-          subtopic: shared.subtopic, name: item.name.trim(),
+          subtopic: shared.subtopic, subtopic_hi: shared.subtopicHi, name: item.name.trim(),
           description: item.description.trim() || null,
           name_hi: item.nameHi.trim() || null,
           description_hi: item.descriptionHi.trim() || null,
@@ -447,6 +456,7 @@
     const cls = document.getElementById('classInput').value;
     const chapter = document.getElementById('chapterInput').value;
     const subtopic = document.getElementById('subtopicInput').value.trim();
+    const subtopicHi = document.getElementById('subtopicHiInput').value.trim();
 
     if (!subject || !chapter || pendingImages.length === 0) {
       setUploadStatus('Subject, chapter, and at least one image are all required.', 'error');
@@ -461,7 +471,7 @@
 
     const shared = {
       subject, cls: cls ? parseInt(cls, 10) : null, chapter,
-      subtopic: subtopic || null
+      subtopic: subtopic || null, subtopicHi: subtopicHi || null
     };
 
     const uploadBtn = document.getElementById('uploadBtn');
@@ -478,6 +488,7 @@
     if (failed.length === 0) {
       setUploadStatus(`All ${results.length} image${results.length === 1 ? '' : 's'} uploaded successfully.`, 'success');
       document.getElementById('subtopicInput').value = '';
+      document.getElementById('subtopicHiInput').value = '';
     } else {
       setUploadStatus(`${succeededIds.size} uploaded, ${failed.length} failed (see below) -- fix and retry the ones marked in red.`, 'error');
     }
@@ -515,13 +526,13 @@
       <tr data-id="${d.id}">
         <td><img class="thumb" src="${escapeHtml(d.image_url)}" alt=""/></td>
         <td>
-          <div class="row-name">${escapeHtml(d.name)}${(d.name_hi || d.description_hi) ? '<span class="hindi-badge" title="Has Hindi metadata">हिं</span>' : ''}</div>
+          <div class="row-name">${escapeHtml(d.name)}${(d.name_hi || d.description_hi || d.subtopic_hi) ? '<span class="hindi-badge" title="Has Hindi metadata">हिं</span>' : ''}</div>
           ${d.description ? `<div class="row-desc">${escapeHtml(d.description)}</div>` : ''}
         </td>
         <td><span class="subject-chip ${escapeHtml(d.subject)}">${escapeHtml(d.subject)}</span></td>
         <td>${d.class != null ? escapeHtml(String(d.class)) : '—'}</td>
         <td>${escapeHtml(d.chapter)}</td>
-        <td>${d.subtopic ? escapeHtml(d.subtopic) : '—'}</td>
+        <td>${d.subtopic ? escapeHtml(d.subtopic) : '—'}${d.subtopic_hi ? `<div class="row-desc">${escapeHtml(d.subtopic_hi)}</div>` : ''}</td>
         <td><button type="button" class="action-btn danger" onclick="deleteDiagram(${d.id})">Delete</button></td>
       </tr>
     `).join('');
