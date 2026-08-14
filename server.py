@@ -53,6 +53,7 @@ app.add_middleware(
 )
 
 DEEPSEEK_KEY = os.getenv("DEEPSEEK_KEY")
+QWEN_API_KEY = os.getenv("QWEN_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 OPENAI_KEY = os.getenv("OPENAI_KEY")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -69,6 +70,12 @@ openai_client = openai.OpenAI(api_key=OPENAI_KEY)
 # vision support isn't reliable (confirmed via live testing -- it silently hallucinates on images
 # instead of erroring), so it's never used for image-attached questions.
 deepseek_client = anthropic.Anthropic(api_key=DEEPSEEK_KEY, base_url="https://api.deepseek.com/anthropic")
+# Peak-hour fallback for text doubt-answering only (never images/PDFs) -- confirmed via a live
+# 45-question test to be equivalent to DeepSeek on accuracy/reliability, used during DeepSeek's
+# own peak-pricing windows (see _is_deepseek_peak_hour) to avoid the peak surcharge. Same
+# OpenAI-compatible endpoint pattern already verified live in that test. See
+# _stream_with_peak_fallback below for the actual routing/failover logic.
+qwen_client = openai.OpenAI(api_key=QWEN_API_KEY, base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1")
 # Image-attached doubts (/chat) run on Gemini 3.5 Flash-Lite, swapped from Claude Sonnet after
 # 4 rounds of live comparison testing: 95-100% accuracy on handwritten doubts, NCERT diagrams,
 # organic mechanisms and IUPAC-adjacent naming, both on clean crops and camera-photo-style
@@ -601,6 +608,14 @@ COOLDOWN_HOURS = 24  # how long a block lasts once the budget is actually crosse
 def _ist_today() -> str:
     return datetime.now(timezone.utc).astimezone(IST).date().isoformat()
 
+def _is_deepseek_peak_hour() -> bool:
+    """DeepSeek's own published peak-pricing windows are 01:00-04:00 and 06:00-10:00, stated in
+    UTC on their pricing page -- checked directly against UTC rather than converting from IST or
+    server-local time, since UTC is the timezone the windows are actually defined in and adding
+    an extra conversion step would just risk an offset bug for zero benefit."""
+    hour = datetime.now(timezone.utc).hour
+    return (1 <= hour < 4) or (6 <= hour < 10)
+
 async def get_user_plan(user_id: str) -> str:
     if not user_id:
         return "free"
@@ -986,6 +1001,91 @@ async def _empty_str():
 # whole text -- any real typed question alongside an image still gets a real NCERT search.
 IMAGE_ONLY_PLACEHOLDER_TEXT = "Describe this image and answer any NEET related content in it."
 
+async def _stream_qwen(system: str, messages: list, user_id: str, ip: str):
+    """Yields text chunks from Qwen-Flash and logs real usage. Any failure -- at connection time
+    or partway through the stream -- propagates to the caller as-is; _stream_with_peak_fallback
+    is the one that decides whether that's safe to retry on DeepSeek (only if nothing was
+    yielded yet)."""
+    qwen_stream = qwen_client.chat.completions.create(
+        model="qwen-flash",
+        max_tokens=1024,
+        stream=True,
+        stream_options={"include_usage": True},
+        messages=[{"role": "system", "content": system}] + messages
+    )
+    input_tokens = output_tokens = 0
+    try:
+        for chunk in qwen_stream:
+            if chunk.choices and chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
+            if chunk.usage:
+                input_tokens = chunk.usage.prompt_tokens
+                output_tokens = chunk.usage.completion_tokens
+    finally:
+        # Best-effort even on a mid-stream failure -- whatever tokens were actually used still
+        # get logged/counted against the student's daily budget; log_token_usage() itself is a
+        # no-op for tokens<=0, so a failure before any usage chunk arrived costs nothing extra.
+        if input_tokens or output_tokens:
+            print(f"PROVIDER USAGE: provider=qwen-flash peak_window=true input={input_tokens} output={output_tokens}", flush=True)
+            try:
+                await log_token_usage(user_id, input_tokens + output_tokens, ip)
+            except Exception:
+                pass
+
+async def _stream_deepseek(system: str, messages: list, user_id: str, ip: str, is_peak: bool):
+    """The default off-peak provider, and also the peak-window fallback when Qwen is
+    unavailable -- is_peak is only for the usage-log tag, so peak-window fallback traffic still
+    shows up as such in the logs even though DeepSeek ended up serving it."""
+    with deepseek_client.messages.stream(
+        model="deepseek-v4-flash",
+        max_tokens=1024,
+        thinking={"type": "disabled"},
+        system=system,
+        messages=messages
+    ) as stream:
+        try:
+            for text_chunk in stream.text_stream:
+                yield text_chunk
+        finally:
+            try:
+                usage = stream.get_final_message().usage
+                print(f"PROVIDER USAGE: provider=deepseek-v4-flash peak_window={str(is_peak).lower()} input={usage.input_tokens} output={usage.output_tokens}", flush=True)
+                await log_token_usage(user_id, usage.input_tokens + usage.output_tokens, ip)
+            except Exception:
+                pass
+
+async def _stream_with_peak_fallback(system: str, messages: list, user_id: str, ip: str):
+    """Routes text-doubt generation (/chat, /solve -- never image/PDF doubts, those stay on
+    Gemini regardless of time of day) to Qwen-Flash during DeepSeek's published peak-pricing
+    windows (_is_deepseek_peak_hour), DeepSeek everywhere else. Confirmed via a live 45-question
+    test that the two are equivalent on accuracy/reliability, so this is purely a cost-avoidance
+    swap, not a quality tradeoff.
+
+    Failover: if Qwen fails before yielding anything, the same request is retried on DeepSeek
+    transparently -- the student never sees the difference, and this accepts DeepSeek's peak
+    cost rather than failing the request outright (availability over cost optimization). If Qwen
+    fails after already streaming part of an answer, there's no clean way to hand off to a
+    different model mid-response without duplicating or garbling what the student already saw,
+    so the failure just propagates like any other mid-stream error in this file -- the caller's
+    own try/except turns it into a yielded "Error: ..." message and correctly skips caching a
+    partial answer, exactly as it already does for a mid-stream DeepSeek failure."""
+    if _is_deepseek_peak_hour():
+        sent_any = False
+        try:
+            async for chunk in _stream_qwen(system, messages, user_id, ip):
+                sent_any = True
+                yield chunk
+            return
+        except Exception as e:
+            if sent_any:
+                raise
+            print(f"QWEN UNAVAILABLE BEFORE FIRST TOKEN, FALLING BACK TO DEEPSEEK: {e}", flush=True)
+        async for chunk in _stream_deepseek(system, messages, user_id, ip, True):
+            yield chunk
+        return
+    async for chunk in _stream_deepseek(system, messages, user_id, ip, False):
+        yield chunk
+
 async def stream_response(text: str, history: list = [], images: list = [], pdf: str = None, answer_style: str = "detailed", student_name: str = "", language: str = "en", user_id: str = "", personalize: bool = True, skip_cache: bool = False, ip: str = ""):
     images = (images or [])[:3]
     import hashlib
@@ -1162,35 +1262,18 @@ IMPORTANT -- BE CONCISE:
                         pass
             return
         else:
-            selected_model = "deepseek-v4-flash"
-            print(f"MODEL SELECTED: {selected_model}", flush=True)
+            is_peak = _is_deepseek_peak_hour()
+            print(f"MODEL SELECTED: {'qwen-flash (DeepSeek peak-hour fallback)' if is_peak else 'deepseek-v4-flash'}", flush=True)
             sys.stdout.flush()
-            stream_cm = deepseek_client.messages.stream(
-                model=selected_model,
-                max_tokens=1024,
-                thinking={"type": "disabled"},
-                system=full_system,
-                messages=messages
-            )
-        with stream_cm as stream:
             full_answer = ""
-            try:
-                for text_chunk in stream.text_stream:
-                    full_answer += text_chunk
-                    yield text_chunk
-            finally:
-                # Reliably logs on normal completion. This is now a native async generator (not
-                # a sync generator run in Starlette's threadpool wrapper), so an early client
-                # disconnect propagates via GeneratorExit at the next yield point -- more
-                # responsive than the old setup, though not re-verified with a live abort test
-                # after this refactor. Anthropic still bills for tokens generated before any
-                # abort either way, so a partial under-count on disconnect remains an accepted
-                # edge case, same reasoning as the check-then-log race in log_token_usage() above.
-                try:
-                    usage = stream.get_final_message().usage
-                    await log_token_usage(user_id, usage.input_tokens + usage.output_tokens, ip)
-                except Exception:
-                    pass
+            # Reliably logs on normal completion. This is a native async generator, so an early
+            # client disconnect propagates via GeneratorExit at the next yield point -- usage
+            # logging for whichever provider actually served the request happens inside
+            # _stream_qwen/_stream_deepseek's own finally blocks either way, same accepted
+            # partial-under-count-on-disconnect tradeoff as before this routing was added.
+            async for text_chunk in _stream_with_peak_fallback(full_system, messages, user_id, ip):
+                full_answer += text_chunk
+                yield text_chunk
             if not images and not pdf and use_shared_cache:
                 await async_client.post(
                     f"{SUPABASE_URL}/rest/v1/answer_cache",
@@ -1228,12 +1311,7 @@ async def stream_solve_response(pyq_id: str, cached_solution, question: str, opt
         yield cached_solution
         return
     lang_instruction = "\n5. Respond ONLY in Hindi (Devanagari script) — every word in Hindi, no English words or Hinglish mixing. The ONLY exceptions are LaTeX/KaTeX math notation, chemical formulas/symbols, and units, which stay exactly as-is." if language == "hi" else ""
-    try:
-        with deepseek_client.messages.stream(
-            model="deepseek-v4-flash",
-            max_tokens=1024,
-            thinking={"type": "disabled"},
-            system=f"""You are a NEET exam expert. Solve the given NEET question step by step.
+    solve_system = f"""You are a NEET exam expert. Solve the given NEET question step by step.
 
 Format your response exactly like this:
 
@@ -1255,29 +1333,24 @@ Rules:
    - Inline: $formula$ example: $\\frac{{1}}{{2}}mv^2$
    - Display: $$formula$$ example: $$E = mc^2$$
    - Always write $H_2O$ not H₂O
-   - Always write $v^2$ not v²{lang_instruction}""",
-            messages=[
-                {"role": "user", "content": f"Solve this NEET question:\n\nQuestion: {question}\n\nA) {option_a}\nB) {option_b}\nC) {option_c}\nD) {option_d}\n\nCorrect Answer: {correct_answer}"}
-            ]
-        ) as stream:
-            full_solution = ""
-            try:
-                for text_chunk in stream.text_stream:
-                    full_solution += text_chunk
-                    yield text_chunk
-            finally:
-                # Same accepted early-disconnect caveat as stream_response() above.
-                try:
-                    usage = stream.get_final_message().usage
-                    await log_token_usage(user_id, usage.input_tokens + usage.output_tokens, ip)
-                except Exception:
-                    pass
-            if pyq_id and full_solution:
-                await async_client.post(
-                    f"{SUPABASE_URL}/rest/v1/pyq_solution_cache",
-                    headers={**SOLVE_CACHE_HEADERS, "Content-Type": "application/json"},
-                    json={"pyq_id": pyq_id, "language": language, "solution": full_solution}
-                )
+   - Always write $v^2$ not v²{lang_instruction}"""
+    solve_messages = [
+        {"role": "user", "content": f"Solve this NEET question:\n\nQuestion: {question}\n\nA) {option_a}\nB) {option_b}\nC) {option_c}\nD) {option_d}\n\nCorrect Answer: {correct_answer}"}
+    ]
+    try:
+        full_solution = ""
+        # Same routing (Qwen during DeepSeek's peak windows, DeepSeek otherwise, with failover)
+        # as stream_response()'s text branch above -- see _stream_with_peak_fallback for the
+        # shared logic and its accepted early-disconnect / mid-stream-failure tradeoffs.
+        async for text_chunk in _stream_with_peak_fallback(solve_system, solve_messages, user_id, ip):
+            full_solution += text_chunk
+            yield text_chunk
+        if pyq_id and full_solution:
+            await async_client.post(
+                f"{SUPABASE_URL}/rest/v1/pyq_solution_cache",
+                headers={**SOLVE_CACHE_HEADERS, "Content-Type": "application/json"},
+                json={"pyq_id": pyq_id, "language": language, "solution": full_solution}
+            )
     except Exception as e:
         yield f"Error: {str(e)}"
 
