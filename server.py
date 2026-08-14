@@ -1001,7 +1001,63 @@ async def _empty_str():
 # whole text -- any real typed question alongside an image still gets a real NCERT search.
 IMAGE_ONLY_PLACEHOLDER_TEXT = "Describe this image and answer any NEET related content in it."
 
-async def _stream_qwen(system: str, messages: list, user_id: str, ip: str):
+# Real per-provider pricing used only to compute provider_usage_log's `cost` column -- update
+# these constants directly if a provider changes pricing; nothing else needs to change.
+# DeepSeek's rates are its published peak/off-peak structure effective 2026-08-16 (fetched from
+# api-docs.deepseek.com/quick_start/pricing on 2026-08-14) -- the peak-hour Qwen fallback exists
+# specifically because of that change, so these are the rates that actually matter for cost
+# analysis here even for the handful of days before the change formally takes effect (using the
+# old flat rate instead would make the peak_window column meaningless in the cost figures).
+# $ per 1M tokens throughout.
+DEEPSEEK_RATES = {
+    "peak": {"cache_hit": 0.014, "cache_miss": 0.44, "output": 1.32},
+    "off_peak": {"cache_hit": 0.007, "cache_miss": 0.22, "output": 0.66},
+}
+# Qwen-Flash's published rate for the 0-256K input tier (fetched from
+# alibabacloud.com/help/en/model-studio/model-pricing on 2026-08-14). Alibaba's docs mention a
+# separate, lower cache-hit rate exists but don't publish a number for it, so this deliberately
+# applies the flat input rate to all input tokens -- a conservative (slight over-, never under-)
+# estimate rather than guessing an unconfirmed discount.
+QWEN_FLASH_RATE = {"input": 0.05, "output": 0.40}
+# Gemini 3.5 Flash-Lite's standard (non-batch) tier -- the tier that actually applies to live
+# streaming /chat requests (fetched from ai.google.dev/gemini-api/docs/pricing on 2026-08-14).
+GEMINI_FLASH_LITE_RATE = {"input": 0.30, "output": 2.50}
+
+def _deepseek_cost(cache_miss_tokens: int, cache_hit_tokens: int, output_tokens: int, is_peak: bool) -> float:
+    r = DEEPSEEK_RATES["peak" if is_peak else "off_peak"]
+    return (cache_miss_tokens * r["cache_miss"] + cache_hit_tokens * r["cache_hit"] + output_tokens * r["output"]) / 1_000_000
+
+def _qwen_cost(input_tokens: int, output_tokens: int) -> float:
+    return (input_tokens * QWEN_FLASH_RATE["input"] + output_tokens * QWEN_FLASH_RATE["output"]) / 1_000_000
+
+def _gemini_cost(input_tokens: int, output_tokens: int) -> float:
+    return (input_tokens * GEMINI_FLASH_LITE_RATE["input"] + output_tokens * GEMINI_FLASH_LITE_RATE["output"]) / 1_000_000
+
+async def log_provider_usage(provider: str, peak_window: bool, input_tokens: int, output_tokens: int, cost: float, endpoint: str, user_id: str = ""):
+    """Additive to log_token_usage() (which drives per-user daily budget enforcement, keyed by
+    total tokens only) -- this is purely for cost/provider analytics: one row per completed
+    request in provider_usage_log (see create_provider_usage_log_table.sql; RLS locked to the
+    service-role key only, no anon/authenticated policy at all, same as pyq_solution_cache --
+    this is internal cost telemetry, not user-facing content). Keeps the existing print line
+    too, since it's cheap and useful for a quick Railway log check without a DB round trip."""
+    print(f"PROVIDER USAGE: provider={provider} peak_window={str(peak_window).lower()} input={input_tokens} output={output_tokens} cost=${cost:.6f} endpoint={endpoint}", flush=True)
+    try:
+        await async_client.post(
+            f"{SUPABASE_URL}/rest/v1/provider_usage_log", headers={**ADMIN_HEADERS, "Content-Type": "application/json"},
+            json={
+                "user_id": user_id or None,
+                "provider": provider,
+                "peak_window": peak_window,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "cost": cost,
+                "endpoint": endpoint
+            }
+        )
+    except Exception:
+        pass
+
+async def _stream_qwen(system: str, messages: list, user_id: str, ip: str, endpoint: str):
     """Yields text chunks from Qwen-Flash and logs real usage. Any failure -- at connection time
     or partway through the stream -- propagates to the caller as-is; _stream_with_peak_fallback
     is the one that decides whether that's safe to retry on DeepSeek (only if nothing was
@@ -1026,13 +1082,17 @@ async def _stream_qwen(system: str, messages: list, user_id: str, ip: str):
         # get logged/counted against the student's daily budget; log_token_usage() itself is a
         # no-op for tokens<=0, so a failure before any usage chunk arrived costs nothing extra.
         if input_tokens or output_tokens:
-            print(f"PROVIDER USAGE: provider=qwen-flash peak_window=true input={input_tokens} output={output_tokens}", flush=True)
+            cost = _qwen_cost(input_tokens, output_tokens)
+            try:
+                await log_provider_usage("qwen-flash", True, input_tokens, output_tokens, cost, endpoint, user_id)
+            except Exception:
+                pass
             try:
                 await log_token_usage(user_id, input_tokens + output_tokens, ip)
             except Exception:
                 pass
 
-async def _stream_deepseek(system: str, messages: list, user_id: str, ip: str, is_peak: bool):
+async def _stream_deepseek(system: str, messages: list, user_id: str, ip: str, is_peak: bool, endpoint: str):
     """The default off-peak provider, and also the peak-window fallback when Qwen is
     unavailable -- is_peak is only for the usage-log tag, so peak-window fallback traffic still
     shows up as such in the logs even though DeepSeek ended up serving it."""
@@ -1049,12 +1109,21 @@ async def _stream_deepseek(system: str, messages: list, user_id: str, ip: str, i
         finally:
             try:
                 usage = stream.get_final_message().usage
-                print(f"PROVIDER USAGE: provider=deepseek-v4-flash peak_window={str(is_peak).lower()} input={usage.input_tokens} output={usage.output_tokens}", flush=True)
+                # cache_creation_input_tokens (writing a fresh cache entry) is billed at the same
+                # rate as a cache miss, not a discount -- only cache_read_input_tokens (an actual
+                # hit against an already-cached system prompt) gets the cheaper rate.
+                cache_miss_tokens = usage.input_tokens + (usage.cache_creation_input_tokens or 0)
+                cache_hit_tokens = usage.cache_read_input_tokens or 0
+                cost = _deepseek_cost(cache_miss_tokens, cache_hit_tokens, usage.output_tokens, is_peak)
+                try:
+                    await log_provider_usage("deepseek-v4-flash", is_peak, cache_miss_tokens + cache_hit_tokens, usage.output_tokens, cost, endpoint, user_id)
+                except Exception:
+                    pass
                 await log_token_usage(user_id, usage.input_tokens + usage.output_tokens, ip)
             except Exception:
                 pass
 
-async def _stream_with_peak_fallback(system: str, messages: list, user_id: str, ip: str):
+async def _stream_with_peak_fallback(system: str, messages: list, user_id: str, ip: str, endpoint: str):
     """Routes text-doubt generation (/chat, /solve -- never image/PDF doubts, those stay on
     Gemini regardless of time of day) to Qwen-Flash during DeepSeek's published peak-pricing
     windows (_is_deepseek_peak_hour), DeepSeek everywhere else. Confirmed via a live 45-question
@@ -1072,7 +1141,7 @@ async def _stream_with_peak_fallback(system: str, messages: list, user_id: str, 
     if _is_deepseek_peak_hour():
         sent_any = False
         try:
-            async for chunk in _stream_qwen(system, messages, user_id, ip):
+            async for chunk in _stream_qwen(system, messages, user_id, ip, endpoint):
                 sent_any = True
                 yield chunk
             return
@@ -1080,10 +1149,10 @@ async def _stream_with_peak_fallback(system: str, messages: list, user_id: str, 
             if sent_any:
                 raise
             print(f"QWEN UNAVAILABLE BEFORE FIRST TOKEN, FALLING BACK TO DEEPSEEK: {e}", flush=True)
-        async for chunk in _stream_deepseek(system, messages, user_id, ip, True):
+        async for chunk in _stream_deepseek(system, messages, user_id, ip, True, endpoint):
             yield chunk
         return
-    async for chunk in _stream_deepseek(system, messages, user_id, ip, False):
+    async for chunk in _stream_deepseek(system, messages, user_id, ip, False, endpoint):
         yield chunk
 
 async def stream_response(text: str, history: list = [], images: list = [], pdf: str = None, answer_style: str = "detailed", student_name: str = "", language: str = "en", user_id: str = "", personalize: bool = True, skip_cache: bool = False, ip: str = ""):
@@ -1221,7 +1290,11 @@ IMPORTANT -- BE CONCISE:
                 # (even a partial stream) already holds the running totals -- no separate
                 # "final message" fetch needed the way Anthropic's SDK requires.
                 if last_usage:
-                    print(f"GEMINI TOKENS: input={last_usage.prompt_token_count} output={last_usage.candidates_token_count}", flush=True)
+                    cost = _gemini_cost(last_usage.prompt_token_count, last_usage.candidates_token_count)
+                    try:
+                        await log_provider_usage("gemini-3.5-flash-lite", False, last_usage.prompt_token_count, last_usage.candidates_token_count, cost, "/chat", user_id)
+                    except Exception:
+                        pass
                     try:
                         await log_token_usage(user_id, last_usage.prompt_token_count + last_usage.candidates_token_count, ip)
                     except Exception:
@@ -1255,7 +1328,11 @@ IMPORTANT -- BE CONCISE:
             finally:
                 # Same reasoning as the images branch above.
                 if last_usage:
-                    print(f"GEMINI TOKENS: input={last_usage.prompt_token_count} output={last_usage.candidates_token_count}", flush=True)
+                    cost = _gemini_cost(last_usage.prompt_token_count, last_usage.candidates_token_count)
+                    try:
+                        await log_provider_usage("gemini-3.5-flash-lite", False, last_usage.prompt_token_count, last_usage.candidates_token_count, cost, "/chat", user_id)
+                    except Exception:
+                        pass
                     try:
                         await log_token_usage(user_id, last_usage.prompt_token_count + last_usage.candidates_token_count, ip)
                     except Exception:
@@ -1271,7 +1348,7 @@ IMPORTANT -- BE CONCISE:
             # logging for whichever provider actually served the request happens inside
             # _stream_qwen/_stream_deepseek's own finally blocks either way, same accepted
             # partial-under-count-on-disconnect tradeoff as before this routing was added.
-            async for text_chunk in _stream_with_peak_fallback(full_system, messages, user_id, ip):
+            async for text_chunk in _stream_with_peak_fallback(full_system, messages, user_id, ip, "/chat"):
                 full_answer += text_chunk
                 yield text_chunk
             if not images and not pdf and use_shared_cache:
@@ -1342,7 +1419,7 @@ Rules:
         # Same routing (Qwen during DeepSeek's peak windows, DeepSeek otherwise, with failover)
         # as stream_response()'s text branch above -- see _stream_with_peak_fallback for the
         # shared logic and its accepted early-disconnect / mid-stream-failure tradeoffs.
-        async for text_chunk in _stream_with_peak_fallback(solve_system, solve_messages, user_id, ip):
+        async for text_chunk in _stream_with_peak_fallback(solve_system, solve_messages, user_id, ip, "/solve"):
             full_solution += text_chunk
             yield text_chunk
         if pyq_id and full_solution:
