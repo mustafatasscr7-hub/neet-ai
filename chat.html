@@ -464,6 +464,18 @@
     .quoted-context-box .quote-dismiss { position: absolute; top: 4px; right: 5px; background: transparent; border: none; color: #666; cursor: pointer; font-size: 12px; line-height: 1; padding: 2px; opacity: 0.7; }
     .quoted-context-box .quote-dismiss:hover { opacity: 1; color: #ccc; }
     body.light-mode .quoted-context-box { background: rgba(0,0,0,0.04) !important; color: #777 !important; }
+    /* Clarifying-question UI (server.py SYSTEM_PROMPT rule 11) -- deliberately understated, not
+       a primary-action pill: subtle border + near-transparent fill, matching the quote-box's
+       neutral treatment above rather than the brand-blue tinted buttons used elsewhere, since
+       these are optional disambiguation choices, not a CTA. */
+    .clarify-question-text { font-size: var(--chat-font-size, 14px); line-height: 1.55; margin-bottom: 10px; }
+    .clarify-options { display: flex; flex-direction: column; gap: 8px; }
+    .clarify-option-btn { display: block; width: 100%; text-align: left; padding: 10px 14px; border: 1px solid rgba(255,255,255,0.14); border-radius: 10px; background: rgba(255,255,255,0.03); color: inherit; font-size: var(--chat-font-size, 14px); font-weight: 400; font-family: 'Inter', sans-serif; cursor: pointer; transition: background 0.15s ease, border-color 0.15s ease; }
+    .clarify-option-btn:hover { background: rgba(255,255,255,0.07); border-color: rgba(255,255,255,0.24); }
+    .clarify-option-btn:active { transform: scale(0.98); }
+    .clarify-option-btn:disabled { opacity: 0.5; cursor: default; }
+    body.light-mode .clarify-option-btn { border: 1px solid rgba(0,0,0,0.12) !important; background: rgba(0,0,0,0.02) !important; color: inherit !important; }
+    body.light-mode .clarify-option-btn:hover { background: rgba(0,0,0,0.05) !important; border-color: rgba(0,0,0,0.2) !important; }
     .input-wrapper:focus-within { border-color: #4f8ef750; }
     .input-wrapper textarea { flex: 1; background: transparent; border: none; color: #ececec; font-size: var(--chat-font-size, 14px); font-family: 'Inter', sans-serif; outline: none; resize: none; max-height: 160px; min-height: 24px; line-height: 1.6; }
     .input-wrapper textarea::placeholder { color: #444; }
@@ -1463,6 +1475,146 @@ let selectedImages = [];
 
       const metaHtml = (starsHtml || chapterHtml) ? `<div class="answer-meta-row">${chapterHtml}${starsHtml}</div>` : '';
       return { cleanText, metaHtml };
+    }
+
+    // Parses the CLARIFY_TYPE/QUESTION/OPTION lines that follow an AMBIGUOUS: yes first line
+    // (server.py SYSTEM_PROMPT rule 11, stripped of that first line already by the time this
+    // runs -- see the AMBIGUOUS branch in streamAIResponse's buffer loop). Fails safe: a
+    // missing question or fewer than 2 options means the model didn't follow the wire format,
+    // so the caller falls back to showing the raw text rather than a broken button UI.
+    function parseClarification(text) {
+      const typeMatch = text.match(/^\s*CLARIFY_TYPE:\s*(topic|format)\s*$/im);
+      const questionMatch = text.match(/^\s*QUESTION:\s*(.+)$/im);
+      const options = [...text.matchAll(/^\s*OPTION:\s*(.+)$/gim)].map(m => m[1].trim()).filter(Boolean);
+      const question = questionMatch ? questionMatch[1].trim() : '';
+      if (!question || options.length < 2) {
+        return { valid: false, raw: text };
+      }
+      return { valid: true, type: typeMatch ? typeMatch[1].toLowerCase() : 'topic', question, options: options.slice(0, 4) };
+    }
+
+    // Minimal, understated clarifying-question UI -- a plain question line + tappable option
+    // buttons, styled to match the app's existing muted elements (quote-box) rather than the
+    // brand-blue primary-action buttons used elsewhere. `originalTopicText` is the student's own
+    // doubt wording, needed by the format-type "Show me the diagram" branch to search on the
+    // real topic rather than the option button's own label text.
+    function renderClarifyUI(bubble, textArea, info, originalTopicText) {
+      if (!info.valid) {
+        textArea.innerHTML = parseWithMath(escapeHtml(info.raw || ''));
+        return;
+      }
+      const block = document.createElement('div');
+      block.className = 'clarify-block';
+
+      const q = document.createElement('div');
+      q.className = 'clarify-question-text';
+      q.textContent = info.question;
+      block.appendChild(q);
+
+      const optsWrap = document.createElement('div');
+      optsWrap.className = 'clarify-options';
+
+      const buttons = [];
+      info.options.forEach(optText => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'clarify-option-btn';
+        btn.textContent = optText;
+        btn.onclick = () => {
+          buttons.forEach(b => b.disabled = true);
+          if (info.type === 'format') {
+            // Fixed wording per SYSTEM_PROMPT rule 11 ("Explain it" / "Show me the diagram") --
+            // matched by content, not position, so the UI still degrades sanely if the model
+            // ever reorders them.
+            if (/diagram/i.test(optText)) {
+              sendClarifyDiagramChoice(originalTopicText);
+            } else {
+              sendSyntheticMessage('Explain it in text, not as a diagram.', { pyqSearchText: originalTopicText });
+            }
+          } else {
+            sendSyntheticMessage(optText);
+          }
+        };
+        buttons.push(btn);
+        optsWrap.appendChild(btn);
+      });
+      block.appendChild(optsWrap);
+
+      textArea.innerHTML = '';
+      textArea.appendChild(block);
+    }
+
+    // Reusable synthetic user-turn sender -- mirrors runExplainSimplyCommand's own
+    // addMessageRow + currentConversation.push + streamAIResponse sequence, generalized to any
+    // text (a tapped clarify-option label here; other callers may reuse it later).
+    function sendSyntheticMessage(text, options = {}) {
+      const welcome = document.getElementById('welcome');
+      if (welcome) welcome.remove();
+      inputArea.style.display = 'block';
+      const userIndex = currentConversation.length;
+      addMessageRow('user', text, undefined, userIndex);
+      currentConversation.push({ role: 'user', text });
+      streamAIResponse(text, options);
+    }
+
+    // "Show me the diagram" skips /chat entirely -- there's no text answer to generate, just the
+    // diagram lookup the regular Show Diagram button already does. Never touches the doubt
+    // quota, same as that button never has: /diagram-match doesn't run through stream_response's
+    // billing_context/log_token_usage path at all, so this needs no client-side quota handling
+    // of its own.
+    async function sendClarifyDiagramChoice(originalTopicText) {
+      const welcome = document.getElementById('welcome');
+      if (welcome) welcome.remove();
+      inputArea.style.display = 'block';
+
+      const userText = 'Show me the diagram';
+      const userIndex = currentConversation.length;
+      addMessageRow('user', userText, undefined, userIndex);
+      currentConversation.push({ role: 'user', text: userText });
+
+      const aiIndex = currentConversation.length;
+      const aiRow = document.createElement('div');
+      aiRow.className = 'message-row ai';
+      aiRow.dataset.msgIndex = aiIndex;
+      aiRow.innerHTML = '<div class="avatar ai"><img src="assets/logo.svg" alt="NEET-AI" width="32" height="32" /></div><div class="message-content ai"><div class="message-bubble ai"><div class="bubble-text"></div></div></div>';
+      chatWindow.appendChild(aiRow);
+      const bubble = aiRow.querySelector('.message-bubble.ai');
+      const textArea = aiRow.querySelector('.bubble-text');
+      scrollBottom();
+
+      const pendingEl = showDiagramPendingIndicator(bubble, textArea);
+      const diagram = await fetchDiagramMatch(originalTopicText, '');
+      pendingEl.remove();
+
+      let savedDiagram;
+      let fallbackText = '';
+      if (diagram && diagram.matched && diagram.image_url) {
+        insertAutoEmbedDiagram(bubble, textArea, diagram);
+        savedDiagram = diagram;
+      } else {
+        fallbackText = 'No diagram available for this topic.';
+        textArea.innerHTML = parseWithMath(escapeHtml(fallbackText));
+      }
+
+      const aiTimeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      aiRow.querySelector('.message-content').appendChild(buildActionsDiv('ai', aiTimeStr));
+
+      currentConversation.push({ role: 'ai', text: fallbackText, diagram: savedDiagram });
+
+      if (pendingSidebarSave) {
+        await pendingSidebarSave;
+        pendingSidebarSave = null;
+      }
+      const conv = conversations.find(c => c.id === currentId || c.supabaseId === currentId);
+      if (conv) conv.messages = currentConversation;
+
+      const { data: { session: sessionAfter } } = await client.auth.getSession();
+      if (sessionAfter && conv && conv.supabaseId) {
+        await client.from('chats').update({ messages: currentConversation }).eq('id', conv.supabaseId).eq('user_id', sessionAfter.user.id);
+      }
+      refreshUsageBanner();
+      scrollBottom();
+      focusMessageInput();
     }
 
     function parseWithMath(text) {
@@ -4130,6 +4282,10 @@ function plainTextFromMarkdown(text) {
         let visualIntentResolved = false;
         let visualIntent = 'no';
         const VISUAL_INTENT_BUFFER_CAP = 64;
+        // AMBIGUOUS: yes is a second, mutually-exclusive first-line marker (server.py SYSTEM_PROMPT
+        // rule 11) -- when present, the rest of the stream is CLARIFY_TYPE/QUESTION/OPTION lines,
+        // not answer text, so it must never be handed to renderStreamingText at all.
+        let isClarification = false;
 
         // Set inline, the moment VISUAL_INTENT: yes resolves below -- read after the loop to
         // decide the "Show Diagram" button (skipped if already auto-embedded). Declared here,
@@ -4160,8 +4316,12 @@ function plainTextFromMarkdown(text) {
                 const firstLine = visualIntentBuffer.slice(0, nlIdx);
                 const rest = visualIntentBuffer.slice(nlIdx + 1);
                 const m = firstLine.match(/^\s*VISUAL_INTENT:\s*(yes|no)\s*$/i);
+                const amb = firstLine.match(/^\s*AMBIGUOUS:\s*(yes|no)\s*$/i);
                 visualIntentResolved = true;
-                if (m) {
+                if (amb && amb[1].toLowerCase() === 'yes') {
+                  isClarification = true;
+                  fullText += rest; // CLARIFY_TYPE/QUESTION/OPTION lines -- parsed after the loop, never rendered live
+                } else if (m) {
                   visualIntent = m[1].toLowerCase();
                   fullText += rest;
                 } else {
@@ -4198,7 +4358,7 @@ function plainTextFromMarkdown(text) {
               fullText += chunk[i];
             }
             const now = Date.now();
-            if (now - lastRenderTime >= RENDER_THROTTLE_MS) {
+            if (!isClarification && now - lastRenderTime >= RENDER_THROTTLE_MS) {
               renderStreamingText(textArea, fullText);
               lastRenderTime = now;
               // scrollBottom() animates via scroll-behavior:smooth - throttled with the
@@ -4217,6 +4377,30 @@ function plainTextFromMarkdown(text) {
         }
         removeTypingRow(); // safety net -- covers a done-with-no-value edge case (empty response)
         ensureAiRow();
+
+        if (isClarification) {
+          // Clarifying questions are a dead-end turn on their own -- no diagram/PYQ buttons, no
+          // alternate-method toggle, no extractAnswerMeta citation parsing (there's no answer to
+          // cite yet). Still needs the same persistence steps as a real answer so the clarify
+          // turn survives a reload/sidebar-switch, just the abbreviated version.
+          renderClarifyUI(bubble, textArea, parseClarification(fullText), pyqSearchText);
+
+          currentConversation.push({ role: 'ai', text: fullText });
+
+          if (pendingSidebarSave) {
+            await pendingSidebarSave;
+            pendingSidebarSave = null;
+          }
+
+          const conv = conversations.find(c => c.id === currentId || c.supabaseId === currentId);
+          if (conv) conv.messages = currentConversation;
+
+          const { data: { session: sessionAfter } } = await client.auth.getSession();
+          if (sessionAfter && conv && conv.supabaseId) {
+            await client.from('chats').update({ messages: currentConversation }).eq('id', conv.supabaseId).eq('user_id', sessionAfter.user.id);
+          }
+          refreshUsageBanner();
+        } else {
 
         const { cleanText: cleanFullText, metaHtml } = extractAnswerMeta(fullText);
         textArea.innerHTML = metaHtml + parseWithMath(cleanFullText);
@@ -4304,6 +4488,7 @@ function plainTextFromMarkdown(text) {
           await client.from('chats').update({ messages: currentConversation }).eq('id', conv.supabaseId).eq('user_id', sessionAfter.user.id);
         }
         refreshUsageBanner();
+        }
 
       } catch (error) {
         removeTypingRow();

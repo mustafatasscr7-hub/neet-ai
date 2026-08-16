@@ -296,7 +296,54 @@ Rules:
       as fact, and it will often be flatly wrong about the real uploaded image. Explaining the
       topic's real structure/features as normal educational text is still fine and expected either
       way (e.g. "eubacteria have a cell wall, flagellum, ...") — just never claim or imply a
-      picture is or will be on-screen, in this answer or delivered any other way."""
+      picture is or will be on-screen, in this answer or delivered any other way.
+11. BEFORE writing VISUAL_INTENT or anything else, check whether this doubt is genuinely
+    ambiguous in one of two specific ways. This should trigger RARELY — almost every doubt has
+    enough context to answer directly, and defaulting to "not ambiguous" is correct far more
+    often than not. Only trigger this for genuine ambiguity, never for a question that merely
+    sounds vague or underspecified but still has one clear best reading.
+
+    TOPIC AMBIGUITY: the doubt is a single word or short phrase that could clearly mean 2-4
+    DISTINCT things across different NEET subjects/topics, with no other context (conversation
+    history, phrasing, retrieved NCERT content) pointing to one specific meaning. Example: a
+    bare doubt like "resistance" could mean electrical resistance (Physics) or peripheral
+    resistance in blood flow (Biology) — genuinely ambiguous. "explain resistance in a
+    conductor" is NOT ambiguous (context makes it clearly Physics) — answer normally.
+
+    FORMAT AMBIGUITY: it's genuinely unclear whether the student wants a text explanation or to
+    SEE a diagram, AND a diagram has been confirmed to exist for this topic (only true if the
+    user message contains the "[A relevant NCERT diagram exists for this topic...]" note — never
+    offer this without that note present, even if you're sure a diagram should exist). This is
+    different from VISUAL_INTENT (rule 10), which already handles the clear cases — "show me X"
+    is an unambiguous yes, "explain X" is an unambiguous no. Format ambiguity is ONLY for
+    genuinely neutral phrasing that doesn't lean either way, e.g. a bare topic name like
+    "eubacteria structure" with no verb indicating explain-vs-show.
+
+    If EITHER kind of ambiguity applies, do not answer normally at all — do not write
+    VISUAL_INTENT or any of the normal answer format. Instead output EXACTLY this format and
+    nothing else:
+
+    AMBIGUOUS: yes
+    CLARIFY_TYPE: [topic or format]
+    QUESTION: [one short, plain-text question, no emoji]
+    OPTION: [first interpretation, plain text, no emoji]
+    OPTION: [second interpretation, plain text, no emoji]
+    [OPTION: third interpretation, if a genuinely distinct third meaning exists]
+    [OPTION: fourth interpretation, if a genuinely distinct fourth meaning exists]
+
+    For CLARIFY_TYPE: topic — each OPTION is a short, specific label for one real interpretation
+    (e.g. "Electrical resistance (Physics)" / "Peripheral resistance (Biology)") — 2 to 4
+    options, only as many as there are genuinely distinct real meanings, never padded to a fixed
+    count.
+    For CLARIFY_TYPE: format — there are ALWAYS exactly two options, worded EXACTLY like this,
+    in this order: "OPTION: Explain it" then "OPTION: Show me the diagram" — do not reword
+    these two, the app matches on this exact text to decide what happens next.
+
+    If NEITHER kind of ambiguity applies (the overwhelming majority of doubts), ignore this rule
+    entirely and answer in the normal format starting with VISUAL_INTENT, exactly as before. If
+    a doubt happens to qualify as ambiguous in BOTH ways at once, resolve TOPIC ambiguity only —
+    never output two clarification questions in the same turn; once the student picks a topic
+    interpretation, judge format ambiguity fresh on that follow-up if it still applies."""
 
 class ImageAttachment(BaseModel):
     data: str
@@ -836,6 +883,21 @@ async def get_embedding(text: str):
 # in the match_ncert Postgres function itself: this repo has no DDL/DATABASE_URL access to
 # safely inspect or edit that function, so excluding post-hoc from a table we can't see is the
 # only change we can fully verify ourselves.
+#
+# Also confirmed a real, separate reason to exclude Appendix from general retrieval (not just
+# the citation-honesty reason above): a live diagnostic test found Appendix content -- a
+# compiled answer-key/reference block spanning terse references to many different chapters --
+# winning top-rank against genuinely unrelated conceptual questions (e.g. Mendel's law of
+# segregation top-matching Appendix instead of the real genetics chapter), because it's topically
+# diffuse enough to partially resemble almost any query. Excluding it measurably fixed that
+# specific failure with no observed downside on irrelevant-query safety.
+#
+# Tradeoff this doesn't handle: a student directly asking a reference-lookup question the
+# Appendix *should* answer (e.g. "what is sodium's atomic mass", a value that literally lives in
+# an Appendix table) will no longer find it via this general search. Not fixed here -- if that
+# turns out to matter in practice, the right shape is a separate, explicit reference-lookup path
+# (detect that class of query and search Appendix-only, rather than lowering this general
+# exclusion) rather than letting Appendix back into ordinary conceptual search.
 NCERT_NON_CHAPTER_LABELS = {"Preliminary Pages", "Appendix", "Answer Key"}
 
 # Same canonical chapter-per-class ordering as the frontend's neetSyllabus (pyqbank.html and
@@ -952,7 +1014,10 @@ async def search_ncert(query: str, limit: int = 3):
         }
     )
     if response.status_code == 200:
-        return [r for r in response.json() if r.get("chapter_name") not in NCERT_NON_CHAPTER_LABELS]
+        # chapter_name_en is what actually carries "Appendix"/etc for Hindi rows (chapter_name
+        # itself is the real Hindi title, e.g. "परिशिष्ट", which would never match these English
+        # labels) -- falls back to chapter_name for English rows, where chapter_name_en is null.
+        return [r for r in response.json() if (r.get("chapter_name_en") or r.get("chapter_name")) not in NCERT_NON_CHAPTER_LABELS]
     return []
 
 def _ncert_chapter_citation(subject: str, class_num, chapter_name: str, lookup_name: str = None) -> str:
@@ -1082,6 +1147,32 @@ async def get_student_context(user_id: str) -> str:
 async def _empty_str():
     return ""
 
+async def _empty_bool():
+    return False
+
+async def _diagram_exists_for(text: str) -> bool:
+    """Cheap existence check reusing the same embedding + match_diagrams RPC /diagram-match
+    already uses (get_embedding is sha256-cached, so this is effectively free when the same
+    doubt text's embedding was already computed elsewhere in this same request). Only tells the
+    model WHETHER a diagram is available -- never which one -- so it can decide whether
+    offering a format-clarification ("explain it, or show the diagram?") is even honest to
+    offer; the real lookup still happens through the existing /diagram-match flow when the
+    student actually asks to see it. Best-effort: any failure here just means the format-
+    clarification option won't be offered, same fail-safe direction as /diagram-match itself."""
+    try:
+        embedding = await get_embedding(text)
+        headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"}
+        response = await async_client.post(
+            f"{SUPABASE_URL}/rest/v1/rpc/match_diagrams",
+            headers=headers,
+            json={"query_embedding": embedding, "match_threshold": DIAGRAM_MATCH_THRESHOLD, "match_count": 1, "filter_chapter": None}
+        )
+        if response.status_code == 200:
+            return bool(response.json())
+    except Exception:
+        pass
+    return False
+
 # chat.html's streamAIResponse sends this exact string as `text` when an image doubt has no
 # real typed question (`text || 'Describe this image...'`) -- must stay in sync with that
 # literal. A placeholder like this has no real topic for NCERT search to match against, so
@@ -1146,11 +1237,19 @@ async def log_provider_usage(provider: str, peak_window: bool, input_tokens: int
     except Exception:
         pass
 
-async def _stream_qwen(system: str, messages: list, user_id: str, ip: str, endpoint: str):
+async def _stream_qwen(system: str, messages: list, user_id: str, ip: str, endpoint: str, billing_context: dict = None):
     """Yields text chunks from Qwen-Flash and logs real usage. Any failure -- at connection time
     or partway through the stream -- propagates to the caller as-is; _stream_with_peak_fallback
     is the one that decides whether that's safe to retry on DeepSeek (only if nothing was
-    yielded yet)."""
+    yielded yet).
+
+    billing_context (optional, shared mutable dict): lets the caller waive the student's daily
+    budget charge for this specific response -- e.g. stream_response() sets
+    billing_context["bill"] = False as soon as it sees this turn is a clarifying-question
+    response, not a real answer. Provider cost logging (log_provider_usage) is deliberately
+    unaffected -- real tokens were genuinely spent either way, this only controls the
+    user-facing quota deduction. None (the default, used by every caller that doesn't pass one,
+    e.g. /solve) means "always bill", matching the pre-existing behavior."""
     qwen_stream = qwen_client.chat.completions.create(
         model="qwen-flash",
         max_tokens=1024,
@@ -1176,15 +1275,17 @@ async def _stream_qwen(system: str, messages: list, user_id: str, ip: str, endpo
                 await log_provider_usage("qwen-flash", True, input_tokens, output_tokens, cost, endpoint, user_id)
             except Exception:
                 pass
-            try:
-                await log_token_usage(user_id, input_tokens + output_tokens, ip)
-            except Exception:
-                pass
+            if billing_context is None or billing_context.get("bill", True):
+                try:
+                    await log_token_usage(user_id, input_tokens + output_tokens, ip)
+                except Exception:
+                    pass
 
-async def _stream_deepseek(system: str, messages: list, user_id: str, ip: str, is_peak: bool, endpoint: str):
+async def _stream_deepseek(system: str, messages: list, user_id: str, ip: str, is_peak: bool, endpoint: str, billing_context: dict = None):
     """The default off-peak provider, and also the peak-window fallback when Qwen is
     unavailable -- is_peak is only for the usage-log tag, so peak-window fallback traffic still
-    shows up as such in the logs even though DeepSeek ended up serving it."""
+    shows up as such in the logs even though DeepSeek ended up serving it. See _stream_qwen's
+    docstring for what billing_context does."""
     with deepseek_client.messages.stream(
         model="deepseek-v4-flash",
         max_tokens=1024,
@@ -1208,11 +1309,12 @@ async def _stream_deepseek(system: str, messages: list, user_id: str, ip: str, i
                     await log_provider_usage("deepseek-v4-flash", is_peak, cache_miss_tokens + cache_hit_tokens, usage.output_tokens, cost, endpoint, user_id)
                 except Exception:
                     pass
-                await log_token_usage(user_id, usage.input_tokens + usage.output_tokens, ip)
+                if billing_context is None or billing_context.get("bill", True):
+                    await log_token_usage(user_id, usage.input_tokens + usage.output_tokens, ip)
             except Exception:
                 pass
 
-async def _stream_with_peak_fallback(system: str, messages: list, user_id: str, ip: str, endpoint: str):
+async def _stream_with_peak_fallback(system: str, messages: list, user_id: str, ip: str, endpoint: str, billing_context: dict = None):
     """Routes text-doubt generation (/chat, /solve -- never image/PDF doubts, those stay on
     Gemini regardless of time of day) to Qwen-Flash during DeepSeek's published peak-pricing
     windows (_is_deepseek_peak_hour), DeepSeek everywhere else. Confirmed via a live 45-question
@@ -1230,7 +1332,7 @@ async def _stream_with_peak_fallback(system: str, messages: list, user_id: str, 
     if _is_deepseek_peak_hour():
         sent_any = False
         try:
-            async for chunk in _stream_qwen(system, messages, user_id, ip, endpoint):
+            async for chunk in _stream_qwen(system, messages, user_id, ip, endpoint, billing_context):
                 sent_any = True
                 yield chunk
             return
@@ -1238,10 +1340,10 @@ async def _stream_with_peak_fallback(system: str, messages: list, user_id: str, 
             if sent_any:
                 raise
             print(f"QWEN UNAVAILABLE BEFORE FIRST TOKEN, FALLING BACK TO DEEPSEEK: {e}", flush=True)
-        async for chunk in _stream_deepseek(system, messages, user_id, ip, True, endpoint):
+        async for chunk in _stream_deepseek(system, messages, user_id, ip, True, endpoint, billing_context):
             yield chunk
         return
-    async for chunk in _stream_deepseek(system, messages, user_id, ip, False, endpoint):
+    async for chunk in _stream_deepseek(system, messages, user_id, ip, False, endpoint, billing_context):
         yield chunk
 
 async def stream_response(text: str, history: list = [], images: list = [], pdf: str = None, answer_style: str = "detailed", student_name: str = "", language: str = "en", user_id: str = "", personalize: bool = True, skip_cache: bool = False, ip: str = ""):
@@ -1268,16 +1370,21 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
         if cached:
             yield cached[0]["answer"]
             return
-    # Student context and NCERT search are independent of each other -- run them concurrently
-    # instead of stacking their latency sequentially. Skip the search entirely for an image-only
-    # doubt (see IMAGE_ONLY_PLACEHOLDER_TEXT above) -- there's no real question text to search on.
+    # Student context, NCERT search, and the diagram-existence check are independent of each
+    # other -- run them concurrently instead of stacking their latency sequentially. Skip the
+    # search entirely for an image-only doubt (see IMAGE_ONLY_PLACEHOLDER_TEXT above) -- there's
+    # no real question text to search on. The diagram-existence check is only meaningful for
+    # text doubts (format-ambiguity -- "explain it or show the diagram?" -- doesn't apply once
+    # an image is already attached), so it's skipped for images/pdf the same way.
     student_context_coro = get_student_context(user_id) if (personalize and user_id) else _empty_str()
     skip_ncert_search = bool(images) and text.strip() == IMAGE_ONLY_PLACEHOLDER_TEXT
+    diagram_exists_coro = _diagram_exists_for(text) if not images and not pdf else _empty_bool()
     if skip_ncert_search:
         results = []
         student_context = await student_context_coro
+        diagram_exists = False
     else:
-        results, student_context = await asyncio.gather(search_ncert(text), student_context_coro)
+        results, student_context, diagram_exists = await asyncio.gather(search_ncert(text), student_context_coro, diagram_exists_coro)
 
     if results:
         context = "\n\n".join([
@@ -1297,6 +1404,8 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
         user_message = f"NCERT Content:\n{context}\n\nRetrieved from (copy EXACTLY ONE of these verbatim into your Chapter: line -- never a different name or number):\n{retrieved_from}\n\nStudent Question: {text}"
     else:
         user_message = f"Student Question: {text}"
+    if diagram_exists:
+        user_message += "\n\n[A relevant NCERT diagram exists for this topic -- this is the ONLY signal that tells you whether offering a format-clarification (rule 11) is honest to offer. If this note is absent, a diagram is not available, so never offer to show one.]"
 
     messages = []
     for msg in history:
@@ -1442,13 +1551,23 @@ IMPORTANT -- BE CONCISE:
             print(f"MODEL SELECTED: {'qwen-flash (DeepSeek peak-hour fallback)' if is_peak else 'deepseek-v4-flash'}", flush=True)
             sys.stdout.flush()
             full_answer = ""
+            # billing_context lets this loop waive the student's daily-budget charge the moment
+            # it recognizes the response is a clarifying question (rule 11), not a real answer --
+            # set BEFORE the underlying stream finishes, which is what matters: the nested
+            # generator's own usage-logging finally block only runs once ITS stream is exhausted,
+            # by which point this loop has already processed every chunk including the one that
+            # revealed "AMBIGUOUS: yes" (that marker is always within the first line, yielded
+            # many chunks before the short clarification response ends).
+            billing_context = {"bill": True}
             # Reliably logs on normal completion. This is a native async generator, so an early
             # client disconnect propagates via GeneratorExit at the next yield point -- usage
             # logging for whichever provider actually served the request happens inside
             # _stream_qwen/_stream_deepseek's own finally blocks either way, same accepted
             # partial-under-count-on-disconnect tradeoff as before this routing was added.
-            async for text_chunk in _stream_with_peak_fallback(full_system, messages, user_id, ip, "/chat"):
+            async for text_chunk in _stream_with_peak_fallback(full_system, messages, user_id, ip, "/chat", billing_context):
                 full_answer += text_chunk
+                if billing_context["bill"] and full_answer.strip().startswith("AMBIGUOUS: yes"):
+                    billing_context["bill"] = False
                 yield text_chunk
             if not images and not pdf and use_shared_cache:
                 await async_client.post(
