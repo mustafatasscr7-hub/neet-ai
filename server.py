@@ -651,21 +651,31 @@ ADMIN_HEADERS = {
 from datetime import datetime, timezone, timedelta, date
 
 IST = timezone(timedelta(hours=5, minutes=30))  # fixed offset: India has no DST
-DAILY_TOKEN_BUDGET_FREE = 3600  # ~9 doubts/day -- recalibrated after the Claude->DeepSeek text
-                                  # migration. DeepSeek's Anthropic-compat endpoint auto-caches
-                                  # the repeated system prompt/NCERT context (no cache_control
-                                  # needed), so usage.input_tokens -- what log_token_usage() sums
-                                  # here -- reflects only the small "fresh" remainder, not the
-                                  # full context Claude always billed in full. Real per-doubt cost
-                                  # dropped from ~2500 tokens/doubt (Claude) to a measured ~400
-                                  # tokens/doubt (pooled n=22 real samples: 20 from this session's
-                                  # three-way model comparison test + 2 live /chat and /solve
-                                  # calls), which silently let the OLD 20000-token ceiling cover
-                                  # ~47-50 doubts/day instead of the intended ~8 -- this number is
-                                  # 9 * ~400. If DeepSeek's caching behavior or output verbosity
-                                  # changes materially, re-measure avg tokens/doubt before trusting
-                                  # this ceiling again; it's tied to that assumption, not a fixed
-                                  # cost model.
+DAILY_TOKEN_BUDGET_FREE = 50000  # ~9 doubts/day -- re-recalibrated 2026-08-16. The ~400
+                                  # tokens/doubt this used to be built on (see git history) relied
+                                  # specifically on DeepSeek's Anthropic-compat endpoint auto-
+                                  # caching the repeated system prompt/NCERT context, so
+                                  # usage.input_tokens only ever reflected the small "fresh"
+                                  # remainder. The Qwen-Flash peak-hour fallback (shipped
+                                  # 2026-08-14, AFTER that calibration) routes requests to Qwen
+                                  # during DeepSeek's own peak-pricing windows -- Qwen's API gets
+                                  # no equivalent caching, so input_tokens bills the FULL context
+                                  # every time during those windows, exactly the failure mode the
+                                  # old comment here warned about ("if DeepSeek's caching behavior
+                                  # ... changes materially, re-measure") -- nobody did when the
+                                  # fallback shipped, so a logged-in free user could hit "daily
+                                  # limit reached" on literally their first message, every message
+                                  # costing more than the entire old 3600 budget. Real per-doubt
+                                  # cost measured at ~5470 tokens/doubt (pooled n=8 live /chat
+                                  # generations against current code, all falling inside a peak
+                                  # window -- see provider_usage_log ids 97-105, excluding one
+                                  # AMBIGUOUS-clarify response that doesn't bill quota at all;
+                                  # range 4509-8782). Calibrated for the peak-hour (worst-case,
+                                  # uncached) cost rather than DeepSeek's off-peak cached cost, so
+                                  # a student doesn't get fewer doubts just for studying during
+                                  # peak hours -- this number is 9 * ~5470, rounded up. If model
+                                  # routing or either provider's caching behavior changes again,
+                                  # re-measure before trusting this ceiling.
 COOLDOWN_HOURS = 24  # how long a block lasts once the budget is actually crossed
 
 def _ist_today() -> str:
@@ -738,11 +748,15 @@ async def validate_pdf_limits(pdf_b64: "str | None", user_id: str):
             "tier": tier, "next_tier": next_tier
         })
 
-DAILY_TOKEN_BUDGET_GUEST = 1000  # ~2.5 doubts/day -- deliberately tight vs. the logged-in free
+DAILY_TOKEN_BUDGET_GUEST = 14000  # ~2.5 doubts/day -- deliberately tight vs. the logged-in free
                                   # tier: the goal is to force a login, not to be a usable tier on
-                                  # its own. Recalibrated at the same time and for the same reason
-                                  # as DAILY_TOKEN_BUDGET_FREE above (DeepSeek's automatic prompt
-                                  # caching) -- this is 2.5 * the same measured ~400 tokens/doubt.
+                                  # its own. Same 2026-08-16 re-recalibration and same root cause
+                                  # as DAILY_TOKEN_BUDGET_FREE above (see its comment) -- guests
+                                  # had it worse: at the old 1000-token budget, even the CHEAPEST
+                                  # real answer measured (4509 tokens) exceeded the entire daily
+                                  # allowance, so a guest could never get a single answer, ever.
+                                  # This is 2.5 * the same measured ~5470 tokens/doubt, keeping the
+                                  # same ratio to the free tier's budget as before.
 
 # usage_log/guest_usage_log stay keyed by (id, usage_date) exactly as before -- tokens_used still
 # resets to 0 on a fresh calendar day. What changed is WHEN a block clears: previously that was
