@@ -1010,6 +1010,18 @@ def _detect_query_language(query: str) -> str:
     transliterated Latin."""
     return "hi" if DEVANAGARI_RE.search(query or "") else "en"
 
+NCERT_MATCH_THRESHOLD_EN = 0.5
+# Hindi embeddings score systematically lower than English for genuinely correct matches --
+# same underlying text-embedding-3-small model, but Hindi's much higher tokens/word density
+# (see hindi_retrieval_rechunking memory) dilutes the signal even in well-formed, sentence-
+# aware chunks. Confirmed via a real 15-correct/7-irrelevant diagnostic against the current
+# (sentence-aware) Hindi chunks: correct queries scored 0.4046-0.5684, irrelevant queries
+# scored 0.2461-0.3917 -- a clean, non-overlapping gap. 0.40 sits in that gap. Re-measure
+# before trusting this if the Hindi chunking strategy changes again (word-count chunking
+# measured earlier had NO clean gap at any threshold -- this number is tied to the current
+# sentence-aware chunks, not a fixed property of Hindi embeddings in general).
+NCERT_MATCH_THRESHOLD_HI = 0.40
+
 async def search_ncert(query: str, limit: int = 3):
     embedding = await get_embedding(query)
     headers = {
@@ -1017,14 +1029,16 @@ async def search_ncert(query: str, limit: int = 3):
         "Authorization": f"Bearer {SUPABASE_KEY}",
         "Content-Type": "application/json"
     }
+    language = _detect_query_language(query)
+    threshold = NCERT_MATCH_THRESHOLD_HI if language == "hi" else NCERT_MATCH_THRESHOLD_EN
     response = await async_client.post(
         f"{SUPABASE_URL}/rest/v1/rpc/match_ncert",
         headers=headers,
         json={
             "query_embedding": embedding,
-            "match_threshold": 0.5,
+            "match_threshold": threshold,
             "match_count": limit,
-            "filter_language": _detect_query_language(query)
+            "filter_language": language
         }
     )
     if response.status_code == 200:
