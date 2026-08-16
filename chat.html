@@ -530,6 +530,19 @@
     .action-btn.speaking { color: #4f8ef7; }
     .action-btn.speaking:hover { color: #4f8ef7; }
     body.light-mode .action-btn.speaking { color: #4f8ef7 !important; }
+    /* Retry regenerates in place: the previous answer stays visible but dimmed (never removed)
+       until real new content actually arrives, so a failed/aborted retry always has something
+       correct to fall back to instead of an empty bubble. */
+    .message-bubble.regenerating { position: relative; opacity: 0.35; pointer-events: none; transition: opacity 0.15s ease; }
+    .inline-regen-spinner { display: flex; justify-content: center; padding: 16px 0; }
+    .version-nav { display: flex; align-items: center; gap: 2px; color: #777; user-select: none; }
+    .version-nav-btn { background: transparent; border: none; color: #777; cursor: pointer; width: 18px; height: 18px; display: flex; align-items: center; justify-content: center; border-radius: 4px; font-size: 13px; line-height: 1; padding: 0; transition: background 0.15s ease, color 0.15s ease; }
+    .version-nav-btn:hover:not(:disabled) { background: #1a1a1a; color: #ccc; }
+    .version-nav-btn:disabled { opacity: 0.3; cursor: default; }
+    .version-nav-count { font-size: 11px; color: rgba(255,255,255,0.35); padding: 0 2px; }
+    body.light-mode .version-nav, body.light-mode .version-nav-btn { color: #8a8a94 !important; }
+    body.light-mode .version-nav-btn:hover:not(:disabled) { background: rgba(0,0,0,0.06) !important; color: #333 !important; }
+    body.light-mode .version-nav-count { color: rgba(0,0,0,0.35) !important; }
     #pyq-modal ul, #pyq-modal ol { padding-left: 16px; margin: 4px 0; }
     #pyq-modal li { word-wrap: break-word; overflow-wrap: break-word; }
     #pyq-modal .katex-display { overflow-x: auto; overflow-y: hidden; }
@@ -2854,7 +2867,7 @@ let selectedImages = [];
       speechSynthesis.speak(utterance);
     }
 
-    function buildActionsDiv(role, timeStr) {
+    function buildActionsDiv(role, timeStr, msg) {
       const actions = document.createElement('div');
       actions.className = 'message-actions';
       if (role === 'ai') {
@@ -2864,7 +2877,18 @@ let selectedImages = [];
         const readAloudBtnHtml = speechSupported ? `
           <button class="action-btn" title="Read aloud" onclick="toggleSpeech(this)">${SPEAK_ICON}</button>
         ` : '';
+        // Only shown once a message has more than one version (i.e. retried at least once) --
+        // matches Claude.ai's own pattern of hiding the nav entirely on a single-version answer
+        // rather than always showing a static "1/1".
+        const versionNavHtml = (msg && msg.versions && msg.versions.length > 1) ? `
+          <span class="version-nav">
+            <button class="version-nav-btn" title="Previous version" onclick="switchVersion(this,-1)" ${msg.activeVersionIndex === 0 ? 'disabled' : ''}>‹</button>
+            <span class="version-nav-count">${msg.activeVersionIndex + 1}/${msg.versions.length}</span>
+            <button class="version-nav-btn" title="Next version" onclick="switchVersion(this,1)" ${msg.activeVersionIndex === msg.versions.length - 1 ? 'disabled' : ''}>›</button>
+          </span>
+        ` : '';
         actions.innerHTML = `
+          ${versionNavHtml}
           <span class="message-time">${timeStr}</span>
           <button class="action-btn" title="Copy" onclick="copyMessage(this)">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
@@ -2893,7 +2917,7 @@ let selectedImages = [];
       return actions;
     }
 
-    function addMessageRow(role, text, userQuestion, msgIndex, diagram) {
+    function addMessageRow(role, text, userQuestion, msgIndex, diagram, msgObj) {
       const row = document.createElement('div');
       row.className = 'message-row ' + role;
       if (msgIndex !== undefined) row.dataset.msgIndex = msgIndex;
@@ -2971,7 +2995,7 @@ let selectedImages = [];
         }
 
         contentWrapper.appendChild(bubble);
-        contentWrapper.appendChild(buildActionsDiv('ai', timeStr));
+        contentWrapper.appendChild(buildActionsDiv('ai', timeStr, msgObj));
       } else {
         bubble.textContent = text;
         contentWrapper.appendChild(bubble);
@@ -3026,6 +3050,16 @@ function plainTextFromMarkdown(text) {
       }
     }
 
+    // Lazily upgrades a pre-version-history AI message (saved before this feature existed, or
+    // any edge case that pushed a plain {role:'ai', text, diagram} entry) to carry a versions
+    // array -- called before anything reads/writes .versions so old conversations self-heal on
+    // first retry instead of throwing.
+    function ensureVersions(msg) {
+      if (msg.versions) return;
+      msg.versions = [{ text: msg.text, diagram: msg.diagram }];
+      msg.activeVersionIndex = 0;
+    }
+
     async function retryMessage(btn) {
       if (isStreaming) return;
       const row = btn.closest('.message-row');
@@ -3035,15 +3069,115 @@ function plainTextFromMarkdown(text) {
       if (!userMsg || userMsg.role !== 'user') return;
       const questionText = userMsg.text;
 
-      let node = row;
-      while (node) {
-        const next = node.nextSibling;
-        node.remove();
-        node = next;
+      // In-place regenerate, matching Claude.ai's retry pattern: the row/bubble stay exactly
+      // where they are -- no DOM removal, no new row appended elsewhere. The previous
+      // implementation removed this row AND every sibling after it from both the DOM and
+      // currentConversation: for the last message that just meant the answer visibly vanished
+      // behind a generic thinking row elsewhere on screen (not a smooth in-place regenerate);
+      // for any EARLIER message it silently deleted the rest of the conversation, since the
+      // removal loop doesn't stop at one row.
+      //
+      // The old answer is dimmed, not cleared -- streamAIResponse only actually replaces it
+      // once real new content starts arriving (see its ensureAiRow), so a failed/aborted retry
+      // (network error, quota newly hit, Stop clicked) leaves the original answer intact rather
+      // than an empty bubble.
+      const bubble = row.querySelector('.message-bubble');
+      bubble.classList.add('regenerating');
+
+      await streamAIResponse(questionText, { skipCache: true, retryTarget: { row, bubble, aiIndex } });
+    }
+
+    // Instant, no-network version flip -- both versions are already fully generated text/
+    // diagram sitting in memory, so this never touches quota or /chat. A short opacity
+    // transition (not a hard cut) is the only concession to "smooth" per spec; everything else
+    // about the swap is synchronous.
+    function switchVersion(btn, delta) {
+      const row = btn.closest('.message-row');
+      const aiIndex = parseInt(row.dataset.msgIndex, 10);
+      const msg = currentConversation[aiIndex];
+      if (!msg) return;
+      ensureVersions(msg);
+      const newIndex = msg.activeVersionIndex + delta;
+      if (newIndex < 0 || newIndex >= msg.versions.length) return;
+      msg.activeVersionIndex = newIndex;
+      const v = msg.versions[newIndex];
+      msg.text = v.text;
+      msg.diagram = v.diagram;
+
+      const userMsg = currentConversation[aiIndex - 1];
+      const pyqSearchText = (userMsg && userMsg.role === 'user') ? userMsg.text : v.text;
+
+      const bubble = row.querySelector('.message-bubble');
+      bubble.style.transition = 'opacity 0.12s ease';
+      bubble.style.opacity = '0';
+      setTimeout(() => {
+        const { cleanText, metaHtml } = extractAnswerMeta(v.text);
+        bubble.innerHTML = metaHtml + parseWithMath(cleanText);
+        renderMermaidBlocksIn(bubble);
+        if (v.diagram) insertAutoEmbedDiagram(bubble, bubble.firstChild, v.diagram);
+
+        // Mirrors addMessageRow's ai-branch diagram/PYQ row exactly -- without this, a version
+        // that wasn't auto-embedded (medium-confidence match, or VISUAL_INTENT: no) would silently
+        // lose its "Show Diagram" button after switching to it, since bubble.innerHTML above just
+        // replaced everything including whatever button row the PREVIOUS version had.
+        const actionsRow = document.createElement('div');
+        actionsRow.className = 'answer-actions-row';
+        if (!v.diagram) {
+          const diagramBtn = document.createElement('button');
+          diagramBtn.className = 'diagram-btn';
+          diagramBtn.innerHTML = '🖼️ Show Diagram';
+          diagramBtn.onclick = () => handleShowDiagramClick(diagramBtn, pyqSearchText, v.text);
+          actionsRow.appendChild(diagramBtn);
+        }
+        const pyqBtn = document.createElement('button');
+        pyqBtn.className = 'pyq-btn';
+        pyqBtn.innerHTML = '📋 Previous Year Questions';
+        pyqBtn.onclick = async function() {
+          pyqBtn.disabled = true;
+          pyqBtn.innerHTML = '⏳ Searching PYQs...';
+          try {
+            const res = await fetch(`${API_BASE}/pyq`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ text: pyqSearchText })
+            });
+            const data = await res.json();
+            if (data.pyqs && data.pyqs.length > 0) {
+              showPYQModal(data.pyqs);
+              pyqBtn.innerHTML = '📋 Previous Year Questions';
+              pyqBtn.disabled = false;
+            } else {
+              pyqBtn.innerHTML = '❌ No PYQs found';
+            }
+          } catch(e) {
+            pyqBtn.innerHTML = '❌ Error loading';
+          }
+        };
+        actionsRow.appendChild(pyqBtn);
+        bubble.appendChild(actionsRow);
+
+        bubble.style.opacity = '1';
+      }, 120);
+
+      const oldActions = row.querySelector('.message-actions');
+      if (oldActions) {
+        const keepTimeStr = oldActions.querySelector('.message-time')?.textContent || '';
+        oldActions.replaceWith(buildActionsDiv('ai', keepTimeStr, msg));
       }
 
-      currentConversation = currentConversation.slice(0, aiIndex);
-      await streamAIResponse(questionText, { skipCache: true });
+      persistConversationSilently();
+    }
+
+    // Shared tail of streamAIResponse's own persistence block, factored out so switchVersion
+    // (a pure UI navigation action, not a generation) can save the same way without dragging in
+    // pendingSidebarSave/quota logic that only makes sense mid-generation.
+    async function persistConversationSilently() {
+      const conv = conversations.find(c => c.id === currentId || c.supabaseId === currentId);
+      if (conv) conv.messages = currentConversation;
+      const { data: { session } } = await client.auth.getSession();
+      if (session && conv && conv.supabaseId) {
+        await client.from('chats').update({ messages: currentConversation }).eq('id', conv.supabaseId).eq('user_id', session.user.id);
+      }
     }
 
     function editMessage(btn) {
@@ -3753,7 +3887,7 @@ function plainTextFromMarkdown(text) {
           lastUserText = msg.text;
           addMessageRow(msg.role, msg.text, undefined, i);
         } else if (msg.role === 'ai') {
-          const bubble = addMessageRow('ai', msg.text, lastUserText, i, msg.diagram);
+          const bubble = addMessageRow('ai', msg.text, lastUserText, i, msg.diagram, msg);
         }
       });
       currentConversation = chat.messages;
@@ -3773,7 +3907,7 @@ function plainTextFromMarkdown(text) {
           lastUserText = msg.text;
           addMessageRow(msg.role, msg.text, undefined, i);
         } else if (msg.role === 'ai') {
-          addMessageRow('ai', msg.text, lastUserText, i, msg.diagram);
+          addMessageRow('ai', msg.text, lastUserText, i, msg.diagram, msg);
         }
       });
       currentConversation = conv.messages;
@@ -4158,31 +4292,55 @@ function plainTextFromMarkdown(text) {
       // content of its own. Those pass the ORIGINAL doubt's text here instead, so the PYQ button
       // still searches on the actual topic rather than the wrapper instruction around it.
       const pyqSearchText = options.pyqSearchText || questionText;
+      const retryTarget = options.retryTarget || null;
       isStreaming = true;
       document.getElementById('sendIcon').style.display = 'none';
       document.getElementById('stopIcon').style.display = 'block';
 
-      const typingRow = document.createElement('div');
-      typingRow.className = 'typing-row';
-      typingRow.innerHTML = '<div class="avatar ai"><img src="assets/logo.svg" alt="NEET-AI" width="32" height="32" /></div><div class="thinking-indicator"><span class="thinking-orb"></span><span class="thinking-text"></span></div>';
-      chatWindow.appendChild(typingRow);
-      // Cycles through a few NEET/study-themed phrases while the real answer is still being
-      // generated server-side (NCERT search, model routing, first token) -- reads the phrase
-      // fresh via t() on every tick rather than building the array once, so a language switch
-      // mid-flight (rare, but possible) is picked up immediately instead of finishing in the
-      // old language. The interval id lives on the row itself so any code path that removes
-      // this row (including the plain querySelectorAll cleanup on Stop) can also clear it.
-      const THINKING_PHRASE_KEYS = ['thinkingPhrase1', 'thinkingPhrase2', 'thinkingPhrase3', 'thinkingPhrase4', 'thinkingPhrase5'];
-      const thinkingTextEl = typingRow.querySelector('.thinking-text');
-      let thinkingPhraseIdx = 0;
-      thinkingTextEl.textContent = t('chat', THINKING_PHRASE_KEYS[0]);
-      typingRow._thinkingInterval = setInterval(() => {
-        thinkingPhraseIdx = (thinkingPhraseIdx + 1) % THINKING_PHRASE_KEYS.length;
-        thinkingTextEl.textContent = t('chat', THINKING_PHRASE_KEYS[thinkingPhraseIdx]);
-      }, 2000);
+      // A retry reuses the existing message row in place (see retryTarget below) -- it must
+      // never get the normal new-message typing row appended elsewhere in chatWindow, or the
+      // answer reads as "vanishing" behind an unrelated indicator instead of regenerating in
+      // its own slot. A small spinner inside the SAME bubble stands in for it instead.
+      let typingRow = null;
+      let inlineSpinner = null;
+      if (retryTarget) {
+        inlineSpinner = document.createElement('div');
+        inlineSpinner.className = 'inline-regen-spinner';
+        inlineSpinner.innerHTML = '<span class="thinking-orb"></span>';
+        retryTarget.bubble.appendChild(inlineSpinner);
+      } else {
+        typingRow = document.createElement('div');
+        typingRow.className = 'typing-row';
+        typingRow.innerHTML = '<div class="avatar ai"><img src="assets/logo.svg" alt="NEET-AI" width="32" height="32" /></div><div class="thinking-indicator"><span class="thinking-orb"></span><span class="thinking-text"></span></div>';
+        chatWindow.appendChild(typingRow);
+        // Cycles through a few NEET/study-themed phrases while the real answer is still being
+        // generated server-side (NCERT search, model routing, first token) -- reads the phrase
+        // fresh via t() on every tick rather than building the array once, so a language switch
+        // mid-flight (rare, but possible) is picked up immediately instead of finishing in the
+        // old language. The interval id lives on the row itself so any code path that removes
+        // this row (including the plain querySelectorAll cleanup on Stop) can also clear it.
+        const THINKING_PHRASE_KEYS = ['thinkingPhrase1', 'thinkingPhrase2', 'thinkingPhrase3', 'thinkingPhrase4', 'thinkingPhrase5'];
+        const thinkingTextEl = typingRow.querySelector('.thinking-text');
+        let thinkingPhraseIdx = 0;
+        thinkingTextEl.textContent = t('chat', THINKING_PHRASE_KEYS[0]);
+        typingRow._thinkingInterval = setInterval(() => {
+          thinkingPhraseIdx = (thinkingPhraseIdx + 1) % THINKING_PHRASE_KEYS.length;
+          thinkingTextEl.textContent = t('chat', THINKING_PHRASE_KEYS[thinkingPhraseIdx]);
+        }, 2000);
+      }
       function removeTypingRow() {
-        clearInterval(typingRow._thinkingInterval);
-        if (typingRow.parentNode === chatWindow) chatWindow.removeChild(typingRow);
+        if (typingRow) {
+          clearInterval(typingRow._thinkingInterval);
+          if (typingRow.parentNode === chatWindow) chatWindow.removeChild(typingRow);
+        }
+        if (inlineSpinner) {
+          inlineSpinner.remove();
+          inlineSpinner = null;
+        }
+        // Covers the early-return/error/abort paths below, none of which reach ensureAiRow --
+        // the dimmed old answer must always end up fully opaque again, whether the retry
+        // actually replaced it or not.
+        if (retryTarget) retryTarget.bubble.classList.remove('regenerating');
       }
       scrollBottom();
 
@@ -4241,21 +4399,31 @@ function plainTextFromMarkdown(text) {
           return;
         }
 
-        const aiIndex = currentConversation.length;
-        // Not created until the first real chunk arrives (see ensureAiRow below) -- creating
-        // it right here, while the thinking row is still on screen, put a second (empty)
-        // avatar row on screen at the same time, since this row's own avatar renders
-        // regardless of whether its bubble has any text yet.
-        let aiRow = null;
-        let bubble = null;
+        const aiIndex = retryTarget ? retryTarget.aiIndex : currentConversation.length;
+        // Not created/cleared until the first real chunk arrives (see ensureAiRow below) --
+        // for a brand-new message this puts the avatar row on screen before its bubble has any
+        // text; for a retry it means the dimmed previous answer stays fully intact on screen
+        // right up until there's real new content to replace it with.
+        let aiRow = retryTarget ? retryTarget.row : null;
+        let bubble = retryTarget ? retryTarget.bubble : null;
         // Text always renders into this inner container, never into `bubble` itself -- an
         // auto-embedded diagram (see the diagram-first block in the loop below) is inserted as
         // bubble's FIRST child, before this one, so it's never wiped by a later text re-render
         // (renderStreamingText/the final render both do a blind innerHTML overwrite of whatever
         // element they're given, by design -- see renderStreamingText's own comment -- so they
-        // must never be pointed at an element that also holds the diagram).
+        // must never be pointed at an element that also holds the diagram). Deliberately left
+        // unset for a retry until ensureAiRow actually commits the regenerate below.
         let textArea = null;
+        let retryContentCleared = false;
         function ensureAiRow() {
+          if (retryTarget) {
+            if (retryContentCleared) return;
+            retryContentCleared = true;
+            bubble.classList.remove('regenerating');
+            bubble.innerHTML = '<div class="bubble-text"></div>';
+            textArea = bubble.querySelector('.bubble-text');
+            return;
+          }
           if (aiRow) return;
           aiRow = document.createElement('div');
           aiRow.className = 'message-row ai';
@@ -4385,7 +4553,18 @@ function plainTextFromMarkdown(text) {
           // turn survives a reload/sidebar-switch, just the abbreviated version.
           renderClarifyUI(bubble, textArea, parseClarification(fullText), pyqSearchText);
 
-          currentConversation.push({ role: 'ai', text: fullText });
+          if (retryTarget) {
+            // Rare edge case: retrying a real answer landed on a clarification instead. There's
+            // no sensible "version" of an answer vs. a clarifying question, so this replaces the
+            // slot outright rather than appending to versions -- and since clarify turns never
+            // get an actions row, any stale Retry/version-nav row from the answer it replaced
+            // must go with it (nothing left that's retriable in place here).
+            currentConversation[aiIndex] = { role: 'ai', text: fullText };
+            const oldActions = aiRow.querySelector('.message-actions');
+            if (oldActions) oldActions.remove();
+          } else {
+            currentConversation.push({ role: 'ai', text: fullText });
+          }
 
           if (pendingSidebarSave) {
             await pendingSidebarSave;
@@ -4460,15 +4639,34 @@ function plainTextFromMarkdown(text) {
         }
 
         const aiTimeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        aiRow.querySelector('.message-content').appendChild(buildActionsDiv('ai', aiTimeStr));
-
         // Save the matched diagram alongside the text when auto-embedded, or a reload/switch
         // (loadConversation/loadConversationFromSupabase -> addMessageRow) has nothing to restore
         // it from and silently falls back to the button -- previously the diagram lived only in
         // the DOM the live stream built, never in the data that actually gets persisted
         // (localStorage and the `chats.messages` JSONB column both just serialize whatever shape
         // this object is, so adding a field here needs no migration on either side).
-        currentConversation.push({ role: 'ai', text: fullText, diagram: isAutoEmbed ? diagramPrefetch : undefined });
+        const newVersion = { text: fullText, diagram: isAutoEmbed ? diagramPrefetch : undefined };
+        let aiMsg;
+        if (retryTarget) {
+          // Same message, new version -- append to its history rather than pushing a second,
+          // separate currentConversation entry (which is what used to make retry look like a
+          // stacked duplicate instead of a version of the original answer).
+          aiMsg = currentConversation[aiIndex];
+          ensureVersions(aiMsg);
+          aiMsg.versions.push(newVersion);
+          aiMsg.activeVersionIndex = aiMsg.versions.length - 1;
+          aiMsg.text = newVersion.text;
+          aiMsg.diagram = newVersion.diagram;
+          // The existing actions row (copy/retry/share/version-nav) already lives in
+          // .message-content from this row's original generation -- replace it in place with
+          // one reflecting the new version count instead of appending a second row alongside it.
+          const oldActions = aiRow.querySelector('.message-actions');
+          oldActions.replaceWith(buildActionsDiv('ai', oldActions.querySelector('.message-time')?.textContent || aiTimeStr, aiMsg));
+        } else {
+          aiMsg = { role: 'ai', text: newVersion.text, diagram: newVersion.diagram, versions: [newVersion], activeVersionIndex: 0 };
+          currentConversation.push(aiMsg);
+          aiRow.querySelector('.message-content').appendChild(buildActionsDiv('ai', aiTimeStr, aiMsg));
+        }
 
         // Wait for the sidebar save (title generation + the initial insert that assigns
         // conv.supabaseId and the real currentId) to actually finish before relying on either --
