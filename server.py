@@ -1219,6 +1219,28 @@ async def _diagram_exists_for(text: str) -> bool:
         pass
     return False
 
+# Rule 11's topic-ambiguity whitelist (resistance/cycle/potential/diffusion/current/valence)
+# reliably stopped false-triggering for every word it covers once prompt-only enforcement moved
+# from open-ended judgment to a closed list -- except "reflex", which kept false-triggering even
+# though it was never listed and the instruction explicitly says not to reason about unlisted
+# words at all (44% false-trigger rate across repeated live testing, three separate prompt
+# rewrites in a row). That's a compliance ceiling, not a wording problem -- this denylist is the
+# deterministic backstop for words with that same confirmed, repeated-and-still-failing evidence.
+# Keep this list small and evidence-based, not a general-purpose ambiguity filter: only add a
+# word here after prompt-only fixes have genuinely failed on it, the way they did for "reflex".
+FALSE_POSITIVE_CLARIFY_WORDS = {
+    "reflex", "reflexes",
+    "रिफ्लेक्स", "प्रतिवर्ती क्रिया", "प्रतिवर्ती", "प्रतिवर्त",
+}
+
+def _is_denylisted_clarify_doubt(text: str) -> bool:
+    """Exact match only, not substring -- Rule 11 itself only ever fires on a bare word/short
+    phrase doubt (its own full-sentence guard already handles longer doubts that merely mention
+    one of these words), so an exact match on the whole stripped doubt is enough and avoids ever
+    matching a denylisted word that's incidentally part of a real, different question."""
+    normalized = text.strip()
+    return normalized.lower() in FALSE_POSITIVE_CLARIFY_WORDS or normalized in FALSE_POSITIVE_CLARIFY_WORDS
+
 # chat.html's streamAIResponse sends this exact string as `text` when an image doubt has no
 # real typed question (`text || 'Describe this image...'`) -- must stay in sync with that
 # literal. A placeholder like this has no real topic for NCERT search to match against, so
@@ -1605,16 +1627,69 @@ IMPORTANT -- BE CONCISE:
             # revealed "AMBIGUOUS: yes" (that marker is always within the first line, yielded
             # many chunks before the short clarification response ends).
             billing_context = {"bill": True}
-            # Reliably logs on normal completion. This is a native async generator, so an early
-            # client disconnect propagates via GeneratorExit at the next yield point -- usage
-            # logging for whichever provider actually served the request happens inside
-            # _stream_qwen/_stream_deepseek's own finally blocks either way, same accepted
-            # partial-under-count-on-disconnect tradeoff as before this routing was added.
-            async for text_chunk in _stream_with_peak_fallback(full_system, messages, user_id, ip, "/chat", billing_context):
-                full_answer += text_chunk
-                if billing_context["bill"] and full_answer.strip().startswith("AMBIGUOUS: yes"):
-                    billing_context["bill"] = False
-                yield text_chunk
+            # Cheap, one-time check against a tiny set -- decides which of the two loops below
+            # runs, so a non-denylisted doubt (the overwhelming majority) takes the exact same
+            # unbuffered fast path as before this guard existed, with zero added latency.
+            denylisted_doubt = _is_denylisted_clarify_doubt(text)
+            if not denylisted_doubt:
+                # Reliably logs on normal completion. This is a native async generator, so an
+                # early client disconnect propagates via GeneratorExit at the next yield point --
+                # usage logging for whichever provider actually served the request happens
+                # inside _stream_qwen/_stream_deepseek's own finally blocks either way, same
+                # accepted partial-under-count-on-disconnect tradeoff as before this routing was
+                # added.
+                async for text_chunk in _stream_with_peak_fallback(full_system, messages, user_id, ip, "/chat", billing_context):
+                    full_answer += text_chunk
+                    if billing_context["bill"] and full_answer.strip().startswith("AMBIGUOUS: yes"):
+                        billing_context["bill"] = False
+                    yield text_chunk
+            else:
+                # Rule 11's prompt-only enforcement has confirmed, repeated evidence of not
+                # holding for this doubt (see FALSE_POSITIVE_CLARIFY_WORDS above) -- buffer just
+                # the first line (same one-line lookahead chat.html's own client-side VISUAL_
+                # INTENT/AMBIGUOUS buffering already uses) before letting anything reach the
+                # student, so a fabricated clarify response can be caught and discarded before a
+                # single byte of it streams out, not just flagged after the fact.
+                first_line_buffer = ""
+                first_line_resolved = False
+                override_needed = False
+                async for text_chunk in _stream_with_peak_fallback(full_system, messages, user_id, ip, "/chat", billing_context):
+                    full_answer += text_chunk
+                    if not first_line_resolved:
+                        first_line_buffer += text_chunk
+                        nl_idx = first_line_buffer.find("\n")
+                        if nl_idx == -1 and len(first_line_buffer) < 64:
+                            continue
+                        first_line_resolved = True
+                        first_line = (first_line_buffer[:nl_idx] if nl_idx != -1 else first_line_buffer).strip()
+                        if first_line == "AMBIGUOUS: yes":
+                            override_needed = True
+                            break
+                        if billing_context["bill"] and full_answer.strip().startswith("AMBIGUOUS: yes"):
+                            billing_context["bill"] = False
+                        yield first_line_buffer
+                        continue
+                    if billing_context["bill"] and full_answer.strip().startswith("AMBIGUOUS: yes"):
+                        billing_context["bill"] = False
+                    yield text_chunk
+                if override_needed:
+                    # The discarded attempt's own tiny (one-line) token cost still gets logged by
+                    # _stream_qwen/_stream_deepseek's own finally block when the `break` above
+                    # closes it via GeneratorExit -- same accepted partial-cost tradeoff noted
+                    # above, and negligible next to a full response's cost either way. This
+                    # second call is a completely fresh request/response cycle, billed normally.
+                    override_system = full_system + (
+                        "\n\nOVERRIDE (server-enforced, not optional): this exact doubt has been "
+                        "confirmed through repeated real testing to NOT be genuinely ambiguous, "
+                        "despite rule 11 above. Answer it directly and normally in the standard "
+                        "format starting with VISUAL_INTENT -- do not output AMBIGUOUS/"
+                        "CLARIFY_TYPE under any circumstances for this doubt."
+                    )
+                    full_answer = ""
+                    billing_context = {"bill": True}
+                    async for text_chunk in _stream_with_peak_fallback(override_system, messages, user_id, ip, "/chat", billing_context):
+                        full_answer += text_chunk
+                        yield text_chunk
             if not images and not pdf and use_shared_cache:
                 await async_client.post(
                     f"{SUPABASE_URL}/rest/v1/answer_cache",
