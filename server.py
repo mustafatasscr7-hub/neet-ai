@@ -2201,15 +2201,24 @@ async def usage_summary(user_id: str):
         today_start_utc = _ist_today_start_utc_iso()
         doubts_today = sum(1 for r in rows if r["created_at"] >= today_start_utc)
 
-        # Last 7 IST calendar days including today, oldest first -- purely informational per
-        # product decision, no weekly cap enforced.
-        day_labels = [(date.fromisoformat(today) - timedelta(days=i)).isoformat() for i in range(6, -1, -1)]
-        day_counts = {d: 0 for d in day_labels}
-        for r in rows:
-            r_date = datetime.fromisoformat(r["created_at"].replace("Z", "+00:00")).astimezone(IST).date().isoformat()
-            if r_date in day_counts:
-                day_counts[r_date] += 1
-        weekly_days = [{"date": d, "doubts": day_counts[d]} for d in day_labels]
+        # Last 7 IST calendar days including today -- real doubt count, purely informational
+        # (product decision: no weekly cap enforced yet). The no-longer-used per-day breakdown
+        # (that used to back a bar-chart UI) was dropped; only the 7-day total is needed now.
+        week_day_labels = [(date.fromisoformat(today) - timedelta(days=i)).isoformat() for i in range(7)]
+        weekly_doubts = sum(1 for r in rows if
+            datetime.fromisoformat(r["created_at"].replace("Z", "+00:00")).astimezone(IST).date().isoformat() in week_day_labels)
+
+        # Weekly token total, same table/column the daily figure above uses -- lets the Weekly
+        # section show a bar on the same real footing as Today's (tokens against the real budget,
+        # here projected across 7 days) rather than a different, doubt-count-only metric.
+        week_resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/usage_log", headers=ADMIN_HEADERS,
+            params={"user_id": f"eq.{user_id}", "usage_date": f"in.({','.join(week_day_labels)})",
+                    "select": "tokens_used"}
+        )
+        weekly_tokens_used = sum(r["tokens_used"] for r in week_resp.json()) if week_resp.status_code == 200 else 0
+        weekly_budget = None if unlimited else DAILY_TOKEN_BUDGET_FREE * 7
+        weekly_percent_used = None if unlimited else round(min(100, weekly_tokens_used / weekly_budget * 100), 1)
 
         provider_counts = {}
         for r in rows:
@@ -2226,7 +2235,10 @@ async def usage_summary(user_id: str):
                 "tokens_used": tokens_used, "budget": budget, "percent_used": percent_used,
                 "doubts_today": doubts_today, "reset_in_seconds": max(0, reset_in_seconds), "unlimited": unlimited
             },
-            "weekly": {"days": weekly_days, "total_doubts": sum(day_counts.values())},
+            "weekly": {
+                "tokens_used": weekly_tokens_used, "budget": weekly_budget, "percent_used": weekly_percent_used,
+                "total_doubts": weekly_doubts, "unlimited": unlimited
+            },
             "providers": {"period_days": USAGE_PROVIDER_BREAKDOWN_DAYS, "total_requests": total_requests, "breakdown": breakdown}
         }
     except Exception as e:

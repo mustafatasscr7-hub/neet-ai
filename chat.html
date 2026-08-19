@@ -282,28 +282,24 @@
       #displayNameInput { flex: 1; min-width: 0; width: auto; }
     }
 
-    /* Usage tab (Settings > Usage). Track/fill colors match the app's existing accent palette
-       (#4f8ef7 blue is already the primary accent everywhere else -- toggle switches, buttons;
-       #4ade80 green already means "healthy/good" elsewhere -- streak fire, Protected badge; the
-       provider colors just extend that same palette rather than introducing new ones). */
-    .usage-progress-track { width: 100%; height: 8px; background: #1e1e1e; border-radius: 20px; overflow: hidden; }
-    .usage-progress-fill { height: 100%; background: #4f8ef7; border-radius: 20px; transition: width 0.3s ease; }
-    .usage-progress-fill.unlimited { background: #4ade80; }
+    /* Usage tab (Settings > Usage) -- flat rows matching Claude's own usage page rather than
+       boxed cards: each section is a label+stat row, a thin bar, then a muted sub-line, separated
+       only by a hairline border-bottom (the same divider treatment every other Settings row in
+       this file already uses), no background/border/padding "card" wrapper around each one. */
+    .usage-section { padding: 18px 0; border-bottom: 1px solid #1e1e1e; }
+    .usage-section:last-child { border-bottom: none; }
+    .usage-section-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+    .usage-section-title { font-size: 14px; font-weight: 600; color: #ececec; }
+    .usage-section-title .usage-section-title-sub { font-weight: 400; color: #555; }
+    .usage-section-stat { font-size: 13px; font-weight: 600; color: #999; white-space: nowrap; }
+    .usage-section-sub { font-size: 12px; color: #666; margin-top: 8px; }
+    /* Thin (not the old 8px) to match the reference's minimal bar weight; background color on
+       .usage-bar-fill is set inline per-render since it shifts with usage level (see
+       usageBarColor() in JS) rather than being a fixed class. */
+    .usage-bar-track { width: 100%; height: 5px; background: #1e1e1e; border-radius: 20px; overflow: hidden; display: flex; }
+    .usage-bar-fill { height: 100%; border-radius: 20px; transition: width 0.3s ease, background-color 0.3s ease; }
 
-    /* .usage-week-bar-track has a fixed height so the bar's percentage-height inside it is
-       unambiguous -- letting the bar be a direct percentage-height child of the whole column
-       (which also holds the count/label text) would make its computed height depend on how much
-       room that text happens to take up, which isn't what "60% full" should mean. */
-    .usage-week-bars { display: flex; align-items: flex-end; gap: 8px; height: 90px; }
-    .usage-week-bar-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; height: 100%; justify-content: flex-end; }
-    .usage-week-bar-track { width: 100%; max-width: 28px; height: 56px; display: flex; align-items: flex-end; }
-    .usage-week-bar { width: 100%; background: #4f8ef7; border-radius: 3px 3px 0 0; min-height: 3px; }
-    .usage-week-bar-count { font-size: 10px; color: #888; }
-    .usage-week-bar-label { font-size: 10px; color: #555; text-transform: uppercase; }
-
-    .usage-provider-stack { display: flex; width: 100%; height: 8px; border-radius: 20px; overflow: hidden; background: #1e1e1e; margin-bottom: 16px; }
-    .usage-provider-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid #1e1e1e; }
-    .usage-provider-row:first-of-type { border-top: none; padding-top: 0; }
+    .usage-provider-row { display: flex; align-items: center; gap: 10px; padding: 7px 0; }
     .usage-provider-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
     .usage-provider-name { flex: 1; font-size: 13px; color: #ececec; }
     .usage-provider-pct { font-size: 13px; color: #ececec; font-weight: 600; min-width: 42px; text-align: right; }
@@ -5057,16 +5053,16 @@ function plainTextFromMarkdown(text) {
       return `${localizeNum(h)} ${hUnit} ${localizeNum(m)} ${mUnit}`;
     }
 
-    function formatUsageWeekdayLabel(dateStr) {
-      // Local, not UTC -- dateStr is an IST calendar date ("YYYY-MM-DD"), and parsing it as a
-      // bare date would apply the BROWSER's local offset, which can land on the wrong day. Adding
-      // T00:00:00 pins it to midnight in a way Date treats consistently for weekday extraction.
-      const d = new Date(dateStr + 'T00:00:00');
-      // Hindi weekday abbreviations (सोम/मंगल/...) aren't single letters the way "M"/"T" are in
-      // English -- truncating to one Devanagari character would make Fri/Sat ambiguous (both
-      // start "श"), so the full short form is used instead of [0].
-      if (getLang() === 'hi') return d.toLocaleDateString('hi-IN', { weekday: 'short' });
-      return d.toLocaleDateString(undefined, { weekday: 'short' })[0];
+    // Claude's own reference shifts the bar's color by how close it is to the limit rather than
+    // always using one accent color -- blue reads as "normal", amber as "getting close", red as
+    // "at/near the limit". Unlimited plans are handled entirely separately by the caller (green,
+    // full bar) since "0% of an uncapped plan" isn't really the same kind of state as "0% used
+    // of a real limit" -- conflating them under this function would make a brand-new low-usage
+    // student's bar look identical in color to an unlimited plan's, which is misleading.
+    function usageBarColor(percent) {
+      if (percent >= 90) return '#ef4444';
+      if (percent >= 75) return '#f59e0b';
+      return '#4f8ef7';
     }
 
     async function renderUsageSection(isManualRefresh) {
@@ -5085,53 +5081,48 @@ function plainTextFromMarkdown(text) {
         const todayData = data.today;
         const w = data.weekly;
         const p = data.providers;
-        const maxWeekCount = Math.max(1, ...w.days.map(d => d.doubts));
+
+        const todayColor = todayData.unlimited ? '#4ade80' : usageBarColor(todayData.percent_used);
+        const weekColor = w.unlimited ? '#4ade80' : usageBarColor(w.percent_used);
 
         container.innerHTML = `
-          <div style="margin-bottom:28px;">
-            <h3 style="font-size:13px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:16px;">${t('chat', 'usageTodayHeading')}</h3>
-            <div style="background:#111;border:1px solid #1e1e1e;border-radius:12px;padding:20px;">
-              <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px;flex-wrap:wrap;gap:6px;">
-                <span style="font-size:14px;color:#ececec;">${t('chat', 'usageDoubtsToday').replace('{n}', localizeNum(todayData.doubts_today))}</span>
-                <span style="font-size:13px;color:${todayData.unlimited ? '#4ade80' : '#999'};font-weight:600;">${todayData.unlimited ? t('chat', 'usageUnlimited') : t('chat', 'usagePercentUsed').replace('{n}', localizeNum(todayData.percent_used))}</span>
-              </div>
-              <div class="usage-progress-track">
-                <div class="usage-progress-fill${todayData.unlimited ? ' unlimited' : ''}" style="width:${todayData.unlimited ? 100 : todayData.percent_used}%;"></div>
-              </div>
-              <div style="font-size:12px;color:#666;margin-top:10px;">
-                ${todayData.unlimited ? t('chat', 'usageNoDailyLimit') : t('chat', 'usageResetsIn').replace('{duration}', formatUsageDuration(todayData.reset_in_seconds))}
-              </div>
+          <div class="usage-section">
+            <div class="usage-section-head">
+              <span class="usage-section-title">${t('chat', 'usageTodayHeading')}</span>
+              <span class="usage-section-stat" style="color:${todayColor};">${todayData.unlimited ? t('chat', 'usageUnlimited') : t('chat', 'usagePercentUsed').replace('{n}', localizeNum(todayData.percent_used))}</span>
+            </div>
+            <div class="usage-bar-track">
+              <div class="usage-bar-fill" style="width:${todayData.unlimited ? 100 : todayData.percent_used}%;background:${todayColor};"></div>
+            </div>
+            <div class="usage-section-sub">
+              ${todayData.unlimited ? t('chat', 'usageNoDailyLimit') : t('chat', 'usageResetsIn').replace('{duration}', formatUsageDuration(todayData.reset_in_seconds))}
             </div>
           </div>
 
-          <div style="margin-bottom:28px;">
-            <h3 style="font-size:13px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:16px;">${t('chat', 'usageWeeklyHeading')}</h3>
-            <div style="background:#111;border:1px solid #1e1e1e;border-radius:12px;padding:20px;">
-              <div style="font-size:13px;color:#ececec;margin-bottom:16px;">${t('chat', 'usageDoubtsInWeek').replace('{n}', localizeNum(w.total_doubts))}</div>
-              <div class="usage-week-bars">
-                ${w.days.map(d => `
-                  <div class="usage-week-bar-col" title="${d.date}: ${t('chat', 'usageDoubtCount').replace('{n}', localizeNum(d.doubts))}">
-                    <span class="usage-week-bar-count">${localizeNum(d.doubts)}</span>
-                    <div class="usage-week-bar-track">
-                      <div class="usage-week-bar" style="height:${d.doubts === 0 ? 0 : Math.max(8, d.doubts / maxWeekCount * 100)}%;"></div>
-                    </div>
-                    <span class="usage-week-bar-label">${formatUsageWeekdayLabel(d.date)}</span>
-                  </div>
-                `).join('')}
-              </div>
+          <div class="usage-section">
+            <div class="usage-section-head">
+              <span class="usage-section-title">${t('chat', 'usageWeeklyHeading')}</span>
+              <span class="usage-section-stat" style="color:${weekColor};">${w.unlimited ? t('chat', 'usageUnlimited') : t('chat', 'usagePercentUsed').replace('{n}', localizeNum(w.percent_used))}</span>
             </div>
+            <div class="usage-bar-track">
+              <div class="usage-bar-fill" style="width:${w.unlimited ? 100 : w.percent_used}%;background:${weekColor};"></div>
+            </div>
+            <div class="usage-section-sub">${t('chat', 'usageDoubtsInWeek').replace('{n}', localizeNum(w.total_doubts))}</div>
           </div>
 
-          <div>
-            <h3 style="font-size:13px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:16px;">${t('chat', 'usageModelsHeading')} <span style="text-transform:none;font-weight:400;color:#555;">· ${t('chat', 'usageLastNDays').replace('{n}', localizeNum(p.period_days))}</span></h3>
-            <div style="background:#111;border:1px solid #1e1e1e;border-radius:12px;padding:20px;">
-              ${p.total_requests === 0 ? `
-                <div style="font-size:13px;color:#666;">${t('chat', 'usageNoDoubtsYet')}</div>
-              ` : `
-                <div class="usage-provider-stack">
-                  ${p.breakdown.map(b => `<div style="width:${b.percent}%;background:${(USAGE_PROVIDER_INFO[b.provider] || { color: '#666' }).color};"></div>`).join('')}
-                </div>
-                ${p.breakdown.map(b => `
+          <div class="usage-section">
+            <div class="usage-section-head">
+              <span class="usage-section-title">${t('chat', 'usageModelsHeading')} <span class="usage-section-title-sub">· ${t('chat', 'usageLastNDays').replace('{n}', localizeNum(p.period_days))}</span></span>
+            </div>
+            <div class="usage-bar-track">
+              ${p.total_requests === 0
+                ? `<div style="width:100%;background:#2a2a2a;"></div>`
+                : p.breakdown.map(b => `<div style="width:${b.percent}%;background:${(USAGE_PROVIDER_INFO[b.provider] || { color: '#666' }).color};"></div>`).join('')}
+            </div>
+            <div style="margin-top:10px;">
+              ${p.total_requests === 0
+                ? `<div class="usage-section-sub" style="margin-top:0;">${t('chat', 'usageNoDoubtsYet')}</div>`
+                : p.breakdown.map(b => `
                   <div class="usage-provider-row">
                     <span class="usage-provider-dot" style="background:${(USAGE_PROVIDER_INFO[b.provider] || { color: '#666' }).color};"></span>
                     <span class="usage-provider-name">${(USAGE_PROVIDER_INFO[b.provider] || { label: b.provider }).label}</span>
@@ -5139,7 +5130,6 @@ function plainTextFromMarkdown(text) {
                     <span class="usage-provider-pct">${localizeNum(b.percent)}%</span>
                   </div>
                 `).join('')}
-              `}
             </div>
           </div>
         `;
@@ -5426,7 +5416,7 @@ function openSettings() {
         `;
         applyTranslations();
       } else if (section === 'usage') {
-        const planLabel = userPlan === 'max' ? t('chat', 'usageMaxName') : userPlan === 'pro' ? t('chat', 'planProName') : t('chat', 'free');
+        const planLabel = userPlan === 'max' ? t('chat', 'usageMaxName') : userPlan === 'pro' ? t('chat', 'usageProName') : t('chat', 'free');
         content.innerHTML = `
           <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:24px;flex-wrap:wrap;gap:8px;">
             <h2 style="font-size:18px;font-weight:700;color:#fff;">
