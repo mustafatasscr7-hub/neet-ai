@@ -2150,6 +2150,89 @@ async def merge_guest_usage(req: MergeGuestUsageRequest, request: Request):
     except Exception as e:
         return {"merged": 0, "error": str(e)}
 
+USAGE_PROVIDER_BREAKDOWN_DAYS = 30  # no real billing-cycle concept exists yet (flat subscription,
+                                     # Razorpay not live) -- a rolling 30-day window is used as the
+                                     # closest honest stand-in for "current billing period" and is
+                                     # labeled as "last 30 days" client-side rather than implying a
+                                     # real cycle boundary that doesn't exist.
+
+# Powers the Settings > Usage tab in chat.html. Every doubt COUNT here (today/weekly/provider
+# breakdown) comes from provider_usage_log -- one real row per completed /chat or /solve request,
+# so these are exact counts, not estimates. The one thing that ISN'T doubt-denominated is the
+# actual daily budget itself (DAILY_TOKEN_BUDGET_FREE is a TOKEN ceiling, and tokens/doubt varies
+# by question) -- so the progress bar/percent below is computed from usage_log's tokens_used
+# against that real token budget (the same numbers enforce_daily_budget actually checks), while
+# the "N doubts today" label next to it is a separate, exact count. Deliberately doesn't invent a
+# fake "doubts allowed" ceiling by dividing the token budget by an average -- that would look
+# precise while actually being a guess.
+@app.get("/usage/summary")
+async def usage_summary(user_id: str):
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+    try:
+        plan = await get_user_plan(user_id)
+        unlimited = plan != "free"  # matches enforce_daily_budget's own "paid = unlimited for now"
+
+        today, yesterday, rows_by_date = await _fetch_usage_rows("usage_log", "user_id", user_id)
+        today_row = rows_by_date.get(today)
+        tokens_used = today_row["tokens_used"] if today_row else 0
+
+        cooldown_remaining = _active_cooldown_seconds(today, yesterday, rows_by_date)
+        if cooldown_remaining is not None:
+            reset_in_seconds = cooldown_remaining
+        else:
+            # No active block: "reset" just means the next IST midnight, when a fresh usage_date
+            # row starts and today's count naturally reads back to 0.
+            now_ist = datetime.now(timezone.utc).astimezone(IST)
+            next_ist_midnight = datetime.combine(now_ist.date() + timedelta(days=1), datetime.min.time(), tzinfo=IST)
+            reset_in_seconds = int((next_ist_midnight - now_ist).total_seconds())
+
+        percent_used = None if unlimited else round(min(100, tokens_used / DAILY_TOKEN_BUDGET_FREE * 100), 1)
+        budget = None if unlimited else DAILY_TOKEN_BUDGET_FREE
+
+        window_start_iso = (datetime.now(timezone.utc) - timedelta(days=USAGE_PROVIDER_BREAKDOWN_DAYS)).isoformat()
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/provider_usage_log", headers=ADMIN_HEADERS,
+            params={"user_id": f"eq.{user_id}", "created_at": f"gte.{window_start_iso}",
+                    "select": "provider,created_at", "order": "created_at.asc"}
+        )
+        rows = resp.json() if resp.status_code == 200 else []
+
+        today_start_utc = _ist_today_start_utc_iso()
+        doubts_today = sum(1 for r in rows if r["created_at"] >= today_start_utc)
+
+        # Last 7 IST calendar days including today, oldest first -- purely informational per
+        # product decision, no weekly cap enforced.
+        day_labels = [(date.fromisoformat(today) - timedelta(days=i)).isoformat() for i in range(6, -1, -1)]
+        day_counts = {d: 0 for d in day_labels}
+        for r in rows:
+            r_date = datetime.fromisoformat(r["created_at"].replace("Z", "+00:00")).astimezone(IST).date().isoformat()
+            if r_date in day_counts:
+                day_counts[r_date] += 1
+        weekly_days = [{"date": d, "doubts": day_counts[d]} for d in day_labels]
+
+        provider_counts = {}
+        for r in rows:
+            provider_counts[r["provider"]] = provider_counts.get(r["provider"], 0) + 1
+        total_requests = len(rows)
+        breakdown = [
+            {"provider": p, "count": c, "percent": round(c / total_requests * 100, 1) if total_requests else 0}
+            for p, c in sorted(provider_counts.items(), key=lambda kv: -kv[1])
+        ]
+
+        return {
+            "plan": plan,
+            "today": {
+                "tokens_used": tokens_used, "budget": budget, "percent_used": percent_used,
+                "doubts_today": doubts_today, "reset_in_seconds": max(0, reset_in_seconds), "unlimited": unlimited
+            },
+            "weekly": {"days": weekly_days, "total_doubts": sum(day_counts.values())},
+            "providers": {"period_days": USAGE_PROVIDER_BREAKDOWN_DAYS, "total_requests": total_requests, "breakdown": breakdown}
+        }
+    except Exception as e:
+        print(f"USAGE SUMMARY ERROR: {e}", flush=True)
+        raise HTTPException(status_code=500, detail="Failed to load usage summary")
+
 REPORT_REASONS = {"wrong_answer", "unclear", "diagram_issue", "duplicate", "other"}
 MAX_REPORTS_PER_DAY = 20
 # mustafatasscr7@gmail.com (owner account) -- exempt from the daily report cap by request, so
