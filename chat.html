@@ -8,6 +8,9 @@
   <link rel="icon" type="image/svg+xml" href="assets/logo.svg" />
   <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+  <!-- Chat Font setting (Settings > General > Appearance): serif option only, sans/system/dyslexic-friendly
+       need no external font -- System uses the OS stack, Dyslexic-friendly is self-hosted (assets/fonts/). -->
+  <link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet"/>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
@@ -15,6 +18,11 @@
   <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
   <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
+    /* Self-hosted (assets/fonts/) rather than a third-party CDN at runtime -- one less external
+       dependency for a feature that only a small slice of users will ever select, and it means
+       the "Dyslexic Friendly" chat font option keeps working even if that CDN ever goes away. */
+    @font-face { font-family: 'OpenDyslexic'; src: url('assets/fonts/OpenDyslexic-Regular.woff') format('woff'); font-weight: 400; font-style: normal; font-display: swap; }
+    @font-face { font-family: 'OpenDyslexic'; src: url('assets/fonts/OpenDyslexic-Bold.woff') format('woff'); font-weight: 700; font-style: normal; font-display: swap; }
     body { font-family: 'Inter', sans-serif; background: #0d0d0d; color: #ececec; height: 100vh; display: flex; overflow: hidden; user-select: none; -webkit-user-select: none; }
     /* Div/span-based controls (nav items, buttons, badges) don't get the browser's implicit
        user-select:none that a native <button> has, so clicking their text was dropping a text
@@ -379,7 +387,12 @@
     .message-content.user { display: flex; flex-direction: column; align-items: flex-end; width: fit-content; align-self: flex-end; }
     .message-bubble { padding: 12px 16px; border-radius: 12px; font-size: var(--chat-font-size, 14px); line-height: 1.7; }
     .message-bubble.user { background: #1e1e2e; border: 1px solid #2a2a3a; color: #ececec; max-width: 500px; }
-    .message-bubble.ai { background: transparent; color: #d4d4d4; padding: 4px 0; }
+    .message-bubble.ai { background: transparent; color: #d4d4d4; padding: 4px 0; font-family: var(--chat-font-family, 'Inter', sans-serif); }
+    /* KaTeX ships its own @font-face rules targeting .katex/.katex * directly, so inheriting a
+       chat-font change from an ancestor never actually overrides them in practice (an element's
+       own explicit rule always wins over an inherited value, regardless of source order) -- this
+       is a defensive, explicit backstop for that guarantee, not a fix for an observed leak. */
+    .message-bubble.ai .katex, .message-bubble.ai .katex * { font-family: KaTeX_Main, KaTeX_Math, "Times New Roman", serif !important; }
     .pyq-sol-box ul, .pyq-sol-box ol { margin: 0; padding-left: 20px; }
     .pyq-sol-box p { margin: 0 0 8px 0; }
     .pyq-sol-box p:last-child { margin-bottom: 0; }
@@ -4864,6 +4877,13 @@ function openSettings() {
               </div>
               ${renderSettingsDropdown('fontSize')}
             </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid #1e1e1e;">
+              <div>
+                <div style="font-size:14px;color:#ececec;margin-bottom:2px;" data-i18n="chat.chatFont">Chat Font</div>
+                <div style="font-size:12px;color:#555;" data-i18n="chat.chatFontDesc">Choose the font used for AI responses</div>
+              </div>
+              ${renderSettingsDropdown('chatFont')}
+            </div>
           </div>
 
          <div style="margin-bottom:32px;">
@@ -5021,7 +5041,21 @@ function openSettings() {
       localStorage.setItem('fontSize', size);
     }
 
-    // ---------- Reusable settings dropdown (Theme / Font Size / Answer Style / Language) ----------
+    // Scoped to --chat-font-family (read only by .message-bubble.ai, see its own CSS rule) --
+    // deliberately never touches body's own font-family, so this only ever changes AI response
+    // text, never the sidebar/buttons/user's own messages/rest of the UI chrome.
+    const CHAT_FONT_STACKS = {
+      sans: "'Inter', sans-serif",
+      serif: "'Source Serif 4', Georgia, serif",
+      system: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
+      dyslexic: "'OpenDyslexic', 'Inter', sans-serif"
+    };
+    function setChatFont(font) {
+      document.documentElement.style.setProperty('--chat-font-family', CHAT_FONT_STACKS[font] || CHAT_FONT_STACKS.sans);
+      localStorage.setItem('chatFont', font);
+    }
+
+    // ---------- Reusable settings dropdown (Theme / Font Size / Chat Font / Answer Style / Language) ----------
     const SETTINGS_DROPDOWNS = {
       theme: {
         options: [{ value: 'dark', labelKey: 'themeDark' }, { value: 'light', labelKey: 'themeLight' }],
@@ -5032,6 +5066,18 @@ function openSettings() {
         options: [{ value: 'small', labelKey: 'small' }, { value: 'medium', labelKey: 'medium' }, { value: 'large', labelKey: 'large' }],
         get: () => localStorage.getItem('fontSize') || 'medium',
         set: (v) => setFontSize(v)
+      },
+      chatFont: {
+        // Literal labels, not i18n labelKeys -- same precedent as the language dropdown's own
+        // "English"/"हिंदी" entries just below: these are font names, not UI copy to translate.
+        options: [
+          { value: 'serif', label: 'NEET-AI Serif' },
+          { value: 'sans', label: 'NEET-AI Sans' },
+          { value: 'system', label: 'System' },
+          { value: 'dyslexic', label: 'Dyslexic Friendly' }
+        ],
+        get: () => localStorage.getItem('chatFont') || 'sans',
+        set: (v) => setChatFont(v)
       },
       answerStyle: {
         options: [{ value: 'concise', labelKey: 'concise' }, { value: 'detailed', labelKey: 'detailed' }],
@@ -5248,9 +5294,11 @@ function openSettings() {
     function applyAllSettings() {
       const savedTheme = localStorage.getItem('theme');
       const savedFontSize = localStorage.getItem('fontSize');
+      const savedChatFont = localStorage.getItem('chatFont');
       const savedAnswerStyle = localStorage.getItem('answerStyle');
       if (savedTheme === 'light') setTheme('light');
       if (savedFontSize) setFontSize(savedFontSize);
+      if (savedChatFont) setChatFont(savedChatFont);
       if (savedAnswerStyle) setAnswerStyle(savedAnswerStyle);
     }
     applyAllSettings();
