@@ -774,7 +774,7 @@ DEVICE_LIMITS = {"free": None, "pro": 1, "max": 2}
 DEVICE_SESSION_ACTIVE_WINDOW_MINUTES = 20  # a session with no heartbeat in this long is treated
                                             # as closed/idle and stops counting against the limit
                                             # -- self-healing, no explicit logout tracking needed.
-DEVICE_SESSION_GRACE_PERIOD_MINUTES = 5
+DEVICE_SESSION_GRACE_PERIOD_MINUTES = int(os.environ.get("DEVICE_SESSION_GRACE_PERIOD_MINUTES_OVERRIDE", "5"))
 
 def _parse_ts(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
