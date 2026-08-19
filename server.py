@@ -766,6 +766,145 @@ async def validate_pdf_limits(pdf_b64: "str | None", user_id: str):
             "tier": tier, "next_tier": next_tier
         })
 
+# ---------- Device-limit enforcement (Pro = 1 device, Max = 2, Free = unenforced) ----------
+# Free is deliberately excluded -- no paid incentive to share a free account, and enforcing this
+# adds friction/support burden for zero revenue protection (explicit product decision, not an
+# oversight). "None" here means "no limit checked at all", not "unlimited devices tracked".
+DEVICE_LIMITS = {"free": None, "pro": 1, "max": 2}
+DEVICE_SESSION_ACTIVE_WINDOW_MINUTES = 20  # a session with no heartbeat in this long is treated
+                                            # as closed/idle and stops counting against the limit
+                                            # -- self-healing, no explicit logout tracking needed.
+DEVICE_SESSION_GRACE_PERIOD_MINUTES = 5
+
+def _parse_ts(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+async def _expire_due_grace_periods(rows: list) -> list:
+    """Any row whose grace period has passed but isn't marked kicked yet gets kicked_at set now
+    -- checked eagerly here (not just lazily whenever THAT device's own next heartbeat happens)
+    so a third device registering right as an old grace period lapses sees an accurate, current
+    active count instead of briefly overcounting a session that's already effectively expired."""
+    now = datetime.now(timezone.utc)
+    for r in rows:
+        if r.get("kicked_at"):
+            continue
+        deadline = r.get("kick_grace_deadline")
+        if deadline and now > _parse_ts(deadline):
+            r["kicked_at"] = now.isoformat()
+            try:
+                await async_client.patch(
+                    f"{SUPABASE_URL}/rest/v1/active_sessions", headers=ADMIN_HEADERS,
+                    params={"id": f"eq.{r['id']}"},
+                    json={"kicked_at": r["kicked_at"]}
+                )
+            except Exception:
+                pass
+    return rows
+
+class SessionHeartbeatRequest(BaseModel):
+    user_id: str
+    device_id: str
+    device_label: str = ""
+    is_login: bool = False  # true only for the one call made right after a fresh sign-in (see
+                             # chat.html) -- distinguishes "genuine new session, re-evaluate me"
+                             # from "routine poll of a device that's already been kicked", which
+                             # must keep reporting kicked rather than silently un-kicking itself
+                             # the moment that device's own polling happens to run again.
+
+@app.post("/session/heartbeat")
+async def session_heartbeat(req: SessionHeartbeatRequest):
+    """Called once right after login (is_login=True) and then periodically while chat.html stays
+    open (is_login=False), so a kicked device finds out within one polling cycle rather than only
+    whenever it next happens to send a /chat message.
+
+    Warning-then-kick, never an instant kick: a login that would exceed the plan's device limit
+    doesn't block itself or immediately kick anything -- it starts a grace period against the
+    OLDEST other active session and tells the NEW device to show a countdown. Only once that
+    grace period actually lapses does the old session get marked kicked, discovered on its own
+    next heartbeat (or proactively by _expire_due_grace_periods if a third check-in lands first).
+    Fails open throughout: any lookup/write error here returns "ok" rather than blocking a real
+    login over this table's own availability."""
+    if not req.user_id or not req.device_id:
+        return {"status": "ok"}
+    try:
+        plan = await get_user_plan(req.user_id)
+        limit = DEVICE_LIMITS.get(plan)
+        if limit is None:
+            return {"status": "ok"}
+
+        now = datetime.now(timezone.utc)
+        active_cutoff = now - timedelta(minutes=DEVICE_SESSION_ACTIVE_WINDOW_MINUTES)
+
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/active_sessions", headers=ADMIN_HEADERS,
+            params={"user_id": f"eq.{req.user_id}", "select": "*"}
+        )
+        rows = resp.json() if resp.status_code == 200 else []
+        rows = await _expire_due_grace_periods(rows)
+        existing = next((r for r in rows if r["device_id"] == req.device_id), None)
+
+        # A routine poll (not a fresh login) of an already-kicked device always just reports
+        # kicked again -- never silently un-kicks itself just because it happened to check in.
+        if existing and existing.get("kicked_at") and not req.is_login:
+            return {"status": "kicked"}
+
+        if existing and not existing.get("kicked_at"):
+            # Ordinary heartbeat: same device, still in good standing.
+            await async_client.patch(
+                f"{SUPABASE_URL}/rest/v1/active_sessions", headers=ADMIN_HEADERS,
+                params={"id": f"eq.{existing['id']}"},
+                json={"last_active_at": now.isoformat(), "device_label": req.device_label or existing.get("device_label")}
+            )
+            return {"status": "ok"}
+
+        if existing and existing.get("kicked_at") and req.is_login:
+            # A previously-kicked device logging in again for real -- clean slate. created_at
+            # resets too: this is a brand new session as far as seniority/grace-period targeting
+            # is concerned, it shouldn't inherit standing from the session that got kicked.
+            patch_resp = await async_client.patch(
+                f"{SUPABASE_URL}/rest/v1/active_sessions",
+                headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
+                params={"id": f"eq.{existing['id']}"},
+                json={"kicked_at": None, "kick_grace_deadline": None, "created_at": now.isoformat(),
+                      "last_active_at": now.isoformat(), "device_label": req.device_label or existing.get("device_label")}
+            )
+            working_row = patch_resp.json()[0] if patch_resp.status_code == 200 else {"id": existing["id"], "device_id": req.device_id, "created_at": now.isoformat()}
+        else:
+            # Brand-new device for this user.
+            insert_resp = await async_client.post(
+                f"{SUPABASE_URL}/rest/v1/active_sessions",
+                headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
+                json={"user_id": req.user_id, "device_id": req.device_id, "device_label": req.device_label or "Unknown device"}
+            )
+            if insert_resp.status_code not in (200, 201):
+                return {"status": "ok"}
+            working_row = insert_resp.json()[0]
+
+        active_others = [
+            r for r in rows
+            if r["device_id"] != req.device_id
+            and not r.get("kicked_at")
+            and r.get("last_active_at") and _parse_ts(r["last_active_at"]) > active_cutoff
+        ]
+        if len(active_others) + 1 <= limit:
+            return {"status": "ok"}
+
+        active_others.sort(key=lambda r: r["created_at"])
+        oldest = active_others[0]
+        if oldest.get("kick_grace_deadline"):
+            deadline = oldest["kick_grace_deadline"]
+        else:
+            deadline = (now + timedelta(minutes=DEVICE_SESSION_GRACE_PERIOD_MINUTES)).isoformat()
+            await async_client.patch(
+                f"{SUPABASE_URL}/rest/v1/active_sessions", headers=ADMIN_HEADERS,
+                params={"id": f"eq.{oldest['id']}"},
+                json={"kick_grace_deadline": deadline}
+            )
+        return {"status": "warning", "grace_period_ends_at": deadline, "plan": plan, "device_limit": limit}
+    except Exception as e:
+        print(f"SESSION HEARTBEAT ERROR (failing open): {e}", flush=True)
+        return {"status": "ok"}
+
 DAILY_TOKEN_BUDGET_GUEST = 14000  # ~2.5 doubts/day -- deliberately tight vs. the logged-in free
                                   # tier: the goal is to force a login, not to be a usable tier on
                                   # its own. Same 2026-08-16 re-recalibration and same root cause

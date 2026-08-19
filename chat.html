@@ -4717,10 +4717,132 @@ function plainTextFromMarkdown(text) {
       focusMessageInput();
     }
 
+    // ---------- Device-session limit enforcement (Pro=1, Max=2 devices; Free unenforced) ----------
+    // Persisted per-browser, not per-tab/session -- the same physical device+browser keeps the
+    // same id across reloads and logins, so a routine page refresh never looks like a new device
+    // to the server. Deliberately just a random UUID (not real fingerprinting): proportionate for
+    // "stop 3 people sharing one paid account", not a security boundary.
+    function getDeviceId() {
+      let id = localStorage.getItem('deviceId');
+      if (!id) {
+        id = (crypto.randomUUID ? crypto.randomUUID() : 'dev-' + Date.now() + '-' + Math.random().toString(36).slice(2));
+        localStorage.setItem('deviceId', id);
+      }
+      return id;
+    }
+
+    // Light, best-effort UA parsing purely for the student to recognize their own devices in the
+    // warning message -- not used for anything security-relevant, so it doesn't need to be exact.
+    function getDeviceLabel() {
+      const ua = navigator.userAgent;
+      let browser = 'Browser';
+      if (ua.includes('Edg/')) browser = 'Edge';
+      else if (ua.includes('Firefox/')) browser = 'Firefox';
+      else if (ua.includes('Chrome/') && !ua.includes('Chromium')) browser = 'Chrome';
+      else if (ua.includes('Safari/') && !ua.includes('Chrome')) browser = 'Safari';
+      let os = 'device';
+      if (ua.includes('Windows')) os = 'Windows';
+      else if (ua.includes('Mac OS X')) os = 'Mac';
+      else if (ua.includes('Android')) os = 'Android';
+      else if (ua.includes('iPhone') || ua.includes('iPad')) os = 'iOS';
+      else if (ua.includes('Linux')) os = 'Linux';
+      return `${browser} on ${os}`;
+    }
+
+    let deviceHeartbeatInterval = null;
+    let deviceWarningCountdownInterval = null;
+    // 45s: frequent enough that a kicked device finds out within about one polling cycle (the
+    // grace period itself is minutes long, so this doesn't need to be near-real-time), rare
+    // enough not to be a meaningful load/cost concern against a lightweight table lookup.
+    const DEVICE_HEARTBEAT_INTERVAL_MS = 45000;
+
+    async function sendDeviceHeartbeat(userId, isLogin) {
+      try {
+        const res = await fetch(`${API_BASE}/session/heartbeat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_id: userId, device_id: getDeviceId(), device_label: getDeviceLabel(), is_login: !!isLogin })
+        });
+        const data = await res.json();
+        if (data.status === 'warning') showDeviceWarningBanner(data.grace_period_ends_at);
+        else if (data.status === 'kicked') showDeviceKickedModal();
+        else hideDeviceWarningBanner();
+      } catch (e) {
+        // Fail silent/open client-side too -- a network hiccup here should never block using the
+        // app itself, same fail-open philosophy as the server endpoint.
+      }
+    }
+
+    function initDeviceSessionTracking(userId) {
+      sendDeviceHeartbeat(userId, true);
+      if (deviceHeartbeatInterval) clearInterval(deviceHeartbeatInterval);
+      deviceHeartbeatInterval = setInterval(() => sendDeviceHeartbeat(userId, false), DEVICE_HEARTBEAT_INTERVAL_MS);
+    }
+
+    function showDeviceWarningBanner(graceEndsAtIso) {
+      let banner = document.getElementById('deviceWarningBanner');
+      if (!banner) {
+        banner = document.createElement('div');
+        banner.id = 'deviceWarningBanner';
+        banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:900;background:#7c3f0d;color:#ffd9a8;padding:10px 16px;font-size:13px;text-align:center;display:flex;align-items:center;justify-content:center;gap:10px;box-shadow:0 2px 8px rgba(0,0,0,0.3);';
+        document.body.appendChild(banner);
+      }
+      banner.style.display = 'flex';
+
+      const deadline = new Date(graceEndsAtIso).getTime();
+      if (deviceWarningCountdownInterval) clearInterval(deviceWarningCountdownInterval);
+      function tick() {
+        const remainingMs = deadline - Date.now();
+        if (remainingMs <= 0) {
+          banner.textContent = "⚠️ You're logged in on another device. The other session is being logged out now.";
+          clearInterval(deviceWarningCountdownInterval);
+          deviceWarningCountdownInterval = null;
+          return;
+        }
+        const mins = Math.floor(remainingMs / 60000);
+        const secs = Math.floor((remainingMs % 60000) / 1000);
+        banner.textContent = `⚠️ You're logged in on another device. To keep using this account here, the other session will be logged out in ${mins}:${String(secs).padStart(2, '0')}.`;
+      }
+      tick();
+      deviceWarningCountdownInterval = setInterval(tick, 1000);
+    }
+
+    function hideDeviceWarningBanner() {
+      const banner = document.getElementById('deviceWarningBanner');
+      if (banner) banner.style.display = 'none';
+      if (deviceWarningCountdownInterval) { clearInterval(deviceWarningCountdownInterval); deviceWarningCountdownInterval = null; }
+    }
+
+    async function showDeviceKickedModal() {
+      if (document.getElementById('deviceKickedModal')) return; // already showing, don't stack
+      if (deviceHeartbeatInterval) { clearInterval(deviceHeartbeatInterval); deviceHeartbeatInterval = null; }
+      if (deviceWarningCountdownInterval) { clearInterval(deviceWarningCountdownInterval); deviceWarningCountdownInterval = null; }
+      hideDeviceWarningBanner();
+
+      const modal = document.createElement('div');
+      modal.id = 'deviceKickedModal';
+      modal.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:2000;display:flex;align-items:center;justify-content:center;';
+      modal.innerHTML = `
+        <div style="background:#1e1e2e;border-radius:12px;padding:32px;max-width:400px;width:90%;color:#fff;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,0.5);">
+          <div style="font-size:32px;margin-bottom:12px;">🔒</div>
+          <h3 style="margin:0 0 10px;color:#fff;font-size:18px;">Logged out</h3>
+          <p style="color:#aaa;font-size:14px;line-height:1.6;margin-bottom:20px;">You've been logged out because this account was accessed from another device.</p>
+          <button id="deviceKickedLoginBtn" style="background:linear-gradient(135deg,#4f8ef7,#7c3aed);border:none;color:white;padding:10px 24px;border-radius:8px;cursor:pointer;font-size:14px;font-weight:600;font-family:'Inter',sans-serif;">Log In Again</button>
+        </div>
+      `;
+      document.body.appendChild(modal);
+      document.getElementById('deviceKickedLoginBtn').onclick = () => { window.location.href = './login.html'; };
+      // Clear the local session so any other tab/reload doesn't just silently resume as if
+      // nothing happened -- the modal above is un-dismissable except via this button, which is
+      // the only way back in (a fresh, real login, correctly re-evaluated against the limit).
+      await client.auth.signOut();
+    }
+
     client.auth.getSession().then(async ({ data: { session } }) => {
       isLoggedIn = !!session;
       if (session) {
         const user = session.user;
+        initDeviceSessionTracking(user.id);
         const name = user.user_metadata.full_name || user.email || user.phone || 'Student';
         const initial = name[0].toUpperCase();
         document.querySelector('.profile-name').textContent = name;
