@@ -779,6 +779,30 @@ DEVICE_SESSION_GRACE_PERIOD_MINUTES = int(os.environ.get("DEVICE_SESSION_GRACE_P
 def _parse_ts(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
+async def _lookup_session_location(ip: str) -> str:
+    """Best-effort "City, Region" label for the Active Sessions list. Free, keyless lookup
+    (ip-api.com) with a short timeout -- called only once per session (new device, or a fresh
+    relogin on a previously-kicked one), never on routine heartbeats, since the result is cached
+    on the row. Any failure (timeout, private/local IP during dev, service error) degrades to
+    "Unknown" rather than ever blocking or failing the login/heartbeat itself."""
+    if not ip or ip in ("unknown", "127.0.0.1", "localhost", "::1") or ip.startswith(("10.", "192.168.", "172.")):
+        return "Unknown"
+    try:
+        resp = await async_client.get(
+            f"http://ip-api.com/json/{ip}",
+            params={"fields": "status,city,regionName"},
+            timeout=3.0
+        )
+        data = resp.json()
+        if data.get("status") != "success":
+            return "Unknown"
+        city = data.get("city") or ""
+        region = data.get("regionName") or ""
+        label = ", ".join(p for p in (city, region) if p)
+        return label or "Unknown"
+    except Exception:
+        return "Unknown"
+
 async def _expire_due_grace_periods(rows: list) -> list:
     """Any row whose grace period has passed but isn't marked kicked yet gets kicked_at set now
     -- checked eagerly here (not just lazily whenever THAT device's own next heartbeat happens)
@@ -812,7 +836,7 @@ class SessionHeartbeatRequest(BaseModel):
                              # the moment that device's own polling happens to run again.
 
 @app.post("/session/heartbeat")
-async def session_heartbeat(req: SessionHeartbeatRequest):
+async def session_heartbeat(req: SessionHeartbeatRequest, request: Request):
     """Called once right after login (is_login=True) and then periodically while chat.html stays
     open (is_login=False), so a kicked device finds out within one polling cycle rather than only
     whenever it next happens to send a /chat message.
@@ -861,20 +885,25 @@ async def session_heartbeat(req: SessionHeartbeatRequest):
             # A previously-kicked device logging in again for real -- clean slate. created_at
             # resets too: this is a brand new session as far as seniority/grace-period targeting
             # is concerned, it shouldn't inherit standing from the session that got kicked.
+            # Location is re-resolved too -- a genuine relogin may well be from a different place.
+            location = await _lookup_session_location(_client_ip(request))
             patch_resp = await async_client.patch(
                 f"{SUPABASE_URL}/rest/v1/active_sessions",
                 headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
                 params={"id": f"eq.{existing['id']}"},
                 json={"kicked_at": None, "kick_grace_deadline": None, "created_at": now.isoformat(),
-                      "last_active_at": now.isoformat(), "device_label": req.device_label or existing.get("device_label")}
+                      "last_active_at": now.isoformat(), "device_label": req.device_label or existing.get("device_label"),
+                      "location": location}
             )
             working_row = patch_resp.json()[0] if patch_resp.status_code == 200 else {"id": existing["id"], "device_id": req.device_id, "created_at": now.isoformat()}
         else:
             # Brand-new device for this user.
+            location = await _lookup_session_location(_client_ip(request))
             insert_resp = await async_client.post(
                 f"{SUPABASE_URL}/rest/v1/active_sessions",
                 headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
-                json={"user_id": req.user_id, "device_id": req.device_id, "device_label": req.device_label or "Unknown device"}
+                json={"user_id": req.user_id, "device_id": req.device_id, "device_label": req.device_label or "Unknown device",
+                      "location": location}
             )
             if insert_resp.status_code not in (200, 201):
                 return {"status": "ok"}
@@ -904,6 +933,75 @@ async def session_heartbeat(req: SessionHeartbeatRequest):
     except Exception as e:
         print(f"SESSION HEARTBEAT ERROR (failing open): {e}", flush=True)
         return {"status": "ok"}
+
+class SessionListRequest(BaseModel):
+    user_id: str
+    device_id: str = ""  # used only to flag which row is "this" session in the response
+
+@app.post("/session/list")
+async def session_list(req: SessionListRequest):
+    """Powers the Active Sessions table in chat.html's Account settings tab. Returns only
+    sessions that are actually active right now (same window used to enforce the device limit,
+    so this list matches what's really counted against it) -- kicked-out and long-idle rows are
+    left out rather than accumulating forever. Sorted most-recently-active first, per spec."""
+    if not req.user_id:
+        return {"sessions": []}
+    try:
+        active_cutoff = datetime.now(timezone.utc) - timedelta(minutes=DEVICE_SESSION_ACTIVE_WINDOW_MINUTES)
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/active_sessions", headers=ADMIN_HEADERS,
+            params={"user_id": f"eq.{req.user_id}", "select": "*"}
+        )
+        rows = resp.json() if resp.status_code == 200 else []
+        active = [
+            r for r in rows
+            if not r.get("kicked_at")
+            and r.get("last_active_at") and _parse_ts(r["last_active_at"]) > active_cutoff
+        ]
+        active.sort(key=lambda r: r["last_active_at"], reverse=True)
+        return {"sessions": [
+            {
+                "device_id": r["device_id"],
+                "device_label": r.get("device_label") or "Unknown device",
+                "location": r.get("location") or "Unknown",
+                "created_at": r["created_at"],
+                "last_active_at": r["last_active_at"],
+                "is_current": r["device_id"] == req.device_id,
+            } for r in active
+        ]}
+    except Exception as e:
+        print(f"SESSION LIST ERROR: {e}", flush=True)
+        return {"sessions": []}
+
+class SessionLogoutRequest(BaseModel):
+    user_id: str
+    target_device_id: str  # the session being logged out, may be the caller's own device
+
+@app.post("/session/logout")
+async def session_logout(req: SessionLogoutRequest):
+    """Manual logout from the Active Sessions list -- an immediate kick (no grace period; the
+    student explicitly chose this, unlike the automatic device-limit kick). Reuses the exact same
+    kicked_at mechanism, so the target device is discovered and signed out via its own next
+    heartbeat exactly like an over-limit kick, and the freed slot is picked up automatically by
+    the device-limit check on any subsequent login (no separate bookkeeping needed)."""
+    if not req.user_id or not req.target_device_id:
+        raise HTTPException(status_code=400, detail="user_id and target_device_id are required")
+    try:
+        resp = await async_client.patch(
+            f"{SUPABASE_URL}/rest/v1/active_sessions",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
+            params={"user_id": f"eq.{req.user_id}", "device_id": f"eq.{req.target_device_id}"},
+            json={"kicked_at": datetime.now(timezone.utc).isoformat()}
+        )
+        rows = resp.json() if resp.status_code == 200 else []
+        if not rows:
+            raise HTTPException(status_code=404, detail="Session not found")
+        return {"status": "ok"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"SESSION LOGOUT ERROR: {e}", flush=True)
+        raise HTTPException(status_code=500, detail="Failed to log out session")
 
 DAILY_TOKEN_BUDGET_GUEST = 14000  # ~2.5 doubts/day -- deliberately tight vs. the logged-in free
                                   # tier: the goal is to force a login, not to be a usable tier on

@@ -4838,6 +4838,88 @@ function plainTextFromMarkdown(text) {
       await client.auth.signOut();
     }
 
+    // ---------- Active Sessions list (Settings > Account) ----------
+    // Reads the same active_sessions rows the device-limit feature writes; a manual "Log out"
+    // here just sets kicked_at directly (no grace period -- this is an explicit, immediate
+    // choice, unlike the automatic over-limit kick), so the target device is discovered and
+    // signed out via its own next heartbeat exactly like a limit-triggered kick, and the freed
+    // slot is picked up automatically on that device's next login.
+    function formatSessionTime(iso) {
+      const d = new Date(iso);
+      const diffMs = Date.now() - d.getTime();
+      const mins = Math.floor(diffMs / 60000);
+      if (mins < 1) return 'Just now';
+      if (mins < 60) return `${mins} minute${mins === 1 ? '' : 's'} ago`;
+      const hours = Math.floor(mins / 60);
+      if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'} ago`;
+      const days = Math.floor(hours / 24);
+      if (days < 7) return `${days} day${days === 1 ? '' : 's'} ago`;
+      return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+    }
+
+    async function renderActiveSessions() {
+      const container = document.getElementById('activeSessionsContainer');
+      if (!container) return;
+      const { data: { session } } = await client.auth.getSession();
+      if (!session) return;
+      try {
+        const res = await fetch(`${API_BASE}/session/list`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_id: session.user.id, device_id: getDeviceId() })
+        });
+        const data = await res.json();
+        const sessions = data.sessions || [];
+        if (document.getElementById('activeSessionsContainer') !== container) return; // settings tab changed mid-fetch
+
+        if (sessions.length === 0) {
+          container.innerHTML = `<div style="font-size:13px;color:#555;padding:16px 0;">No active sessions found.</div>`;
+          return;
+        }
+
+        container.innerHTML = `
+          <div style="border:1px solid #1e1e1e;border-radius:10px;overflow:hidden;">
+            <div style="display:grid;grid-template-columns:2fr 1.5fr 1.3fr 1.3fr 64px;padding:10px 14px;background:#111;font-size:11px;font-weight:600;color:#666;text-transform:uppercase;letter-spacing:0.04em;">
+              <div>Device</div><div>Location</div><div>Created</div><div>Updated</div><div></div>
+            </div>
+            ${sessions.map(s => `
+              <div style="display:grid;grid-template-columns:2fr 1.5fr 1.3fr 1.3fr 64px;align-items:center;padding:12px 14px;border-top:1px solid #1e1e1e;font-size:13px;color:#ececec;">
+                <div style="display:flex;align-items:center;gap:8px;min-width:0;">
+                  <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(s.device_label)}</span>
+                  ${s.is_current ? `<span style="flex-shrink:0;font-size:10px;font-weight:600;color:#4ade80;background:rgba(74,222,128,0.12);padding:2px 8px;border-radius:20px;">Current</span>` : ''}
+                </div>
+                <div style="color:#999;font-size:12px;">${escapeHtml(s.location)}</div>
+                <div style="color:#999;font-size:12px;">${formatSessionTime(s.created_at)}</div>
+                <div style="color:#999;font-size:12px;">${formatSessionTime(s.last_active_at)}</div>
+                <div>
+                  ${s.is_current ? '' : `<button onclick="logoutSession('${s.device_id}', this)" style="background:transparent;border:none;color:#ef4444;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;padding:0;">Log out</button>`}
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        `;
+      } catch (e) {
+        container.innerHTML = `<div style="font-size:13px;color:#555;padding:16px 0;">Couldn't load sessions.</div>`;
+      }
+    }
+
+    async function logoutSession(targetDeviceId, btn) {
+      const { data: { session } } = await client.auth.getSession();
+      if (!session) return;
+      if (btn) { btn.disabled = true; btn.textContent = '…'; }
+      try {
+        const res = await fetch(`${API_BASE}/session/logout`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_id: session.user.id, target_device_id: targetDeviceId })
+        });
+        if (!res.ok) throw new Error('logout failed');
+      } catch (e) {
+        alert("Couldn't log out that session. Please try again.");
+      }
+      renderActiveSessions();
+    }
+
     client.auth.getSession().then(async ({ data: { session } }) => {
       isLoggedIn = !!session;
       if (session) {
@@ -5072,10 +5154,18 @@ function openSettings() {
             </div>
             <div id="phoneLinkPanel" style="display:none;padding:12px 0;border-bottom:1px solid #1e1e1e;"></div>
           </div>
+
+          <div style="margin-bottom:32px;">
+            <h3 style="font-size:13px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:16px;" data-i18n="chat.activeSessions">Active Sessions</h3>
+            <div id="activeSessionsContainer">
+              <div style="font-size:13px;color:#555;padding:16px 0;">Loading…</div>
+            </div>
+          </div>
         `;
         applyTranslations();
         renderPhoneLinkStatus();
         initDisplayNameSaveState();
+        renderActiveSessions();
       } else if (section === 'plan') {
         const pro = isPro();
         const isMax = userPlan === 'max';
