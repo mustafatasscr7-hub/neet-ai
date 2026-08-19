@@ -5049,10 +5049,12 @@ function plainTextFromMarkdown(text) {
     function formatUsageDuration(totalSeconds) {
       const h = Math.floor(totalSeconds / 3600);
       const m = Math.floor((totalSeconds % 3600) / 60);
-      if (h <= 0 && m <= 0) return 'less than a minute';
-      if (h <= 0) return `${m} min`;
-      if (m <= 0) return `${h} hr`;
-      return `${h} hr ${m} min`;
+      if (h <= 0 && m <= 0) return t('chat', 'usageLessThanMinute');
+      const hUnit = t('chat', 'usageHrUnit');
+      const mUnit = t('chat', 'usageMinUnit');
+      if (h <= 0) return `${localizeNum(m)} ${mUnit}`;
+      if (m <= 0) return `${localizeNum(h)} ${hUnit}`;
+      return `${localizeNum(h)} ${hUnit} ${localizeNum(m)} ${mUnit}`;
     }
 
     function formatUsageWeekdayLabel(dateStr) {
@@ -5060,6 +5062,10 @@ function plainTextFromMarkdown(text) {
       // bare date would apply the BROWSER's local offset, which can land on the wrong day. Adding
       // T00:00:00 pins it to midnight in a way Date treats consistently for weekday extraction.
       const d = new Date(dateStr + 'T00:00:00');
+      // Hindi weekday abbreviations (सोम/मंगल/...) aren't single letters the way "M"/"T" are in
+      // English -- truncating to one Devanagari character would make Fri/Sat ambiguous (both
+      // start "श"), so the full short form is used instead of [0].
+      if (getLang() === 'hi') return d.toLocaleDateString('hi-IN', { weekday: 'short' });
       return d.toLocaleDateString(undefined, { weekday: 'short' })[0];
     }
 
@@ -5076,36 +5082,36 @@ function plainTextFromMarkdown(text) {
         const data = await res.json();
         if (document.getElementById('usageSummaryContainer') !== container) return; // tab changed mid-fetch
 
-        const t = data.today;
+        const todayData = data.today;
         const w = data.weekly;
         const p = data.providers;
         const maxWeekCount = Math.max(1, ...w.days.map(d => d.doubts));
 
         container.innerHTML = `
           <div style="margin-bottom:28px;">
-            <h3 style="font-size:13px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:16px;">Today's Usage</h3>
+            <h3 style="font-size:13px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:16px;">${t('chat', 'usageTodayHeading')}</h3>
             <div style="background:#111;border:1px solid #1e1e1e;border-radius:12px;padding:20px;">
               <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px;flex-wrap:wrap;gap:6px;">
-                <span style="font-size:14px;color:#ececec;">${t.doubts_today} doubt${t.doubts_today === 1 ? '' : 's'} used today</span>
-                <span style="font-size:13px;color:${t.unlimited ? '#4ade80' : '#999'};font-weight:600;">${t.unlimited ? 'Unlimited' : `${t.percent_used}% used`}</span>
+                <span style="font-size:14px;color:#ececec;">${t('chat', 'usageDoubtsToday').replace('{n}', localizeNum(todayData.doubts_today))}</span>
+                <span style="font-size:13px;color:${todayData.unlimited ? '#4ade80' : '#999'};font-weight:600;">${todayData.unlimited ? t('chat', 'usageUnlimited') : t('chat', 'usagePercentUsed').replace('{n}', localizeNum(todayData.percent_used))}</span>
               </div>
               <div class="usage-progress-track">
-                <div class="usage-progress-fill${t.unlimited ? ' unlimited' : ''}" style="width:${t.unlimited ? 100 : t.percent_used}%;"></div>
+                <div class="usage-progress-fill${todayData.unlimited ? ' unlimited' : ''}" style="width:${todayData.unlimited ? 100 : todayData.percent_used}%;"></div>
               </div>
               <div style="font-size:12px;color:#666;margin-top:10px;">
-                ${t.unlimited ? 'No daily limit on your plan' : `Resets in ${formatUsageDuration(t.reset_in_seconds)}`}
+                ${todayData.unlimited ? t('chat', 'usageNoDailyLimit') : t('chat', 'usageResetsIn').replace('{duration}', formatUsageDuration(todayData.reset_in_seconds))}
               </div>
             </div>
           </div>
 
           <div style="margin-bottom:28px;">
-            <h3 style="font-size:13px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:16px;">Weekly Usage</h3>
+            <h3 style="font-size:13px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:16px;">${t('chat', 'usageWeeklyHeading')}</h3>
             <div style="background:#111;border:1px solid #1e1e1e;border-radius:12px;padding:20px;">
-              <div style="font-size:13px;color:#ececec;margin-bottom:16px;">${w.total_doubts} doubt${w.total_doubts === 1 ? '' : 's'} in the last 7 days</div>
+              <div style="font-size:13px;color:#ececec;margin-bottom:16px;">${t('chat', 'usageDoubtsInWeek').replace('{n}', localizeNum(w.total_doubts))}</div>
               <div class="usage-week-bars">
                 ${w.days.map(d => `
-                  <div class="usage-week-bar-col" title="${d.date}: ${d.doubts} doubt${d.doubts === 1 ? '' : 's'}">
-                    <span class="usage-week-bar-count">${d.doubts}</span>
+                  <div class="usage-week-bar-col" title="${d.date}: ${t('chat', 'usageDoubtCount').replace('{n}', localizeNum(d.doubts))}">
+                    <span class="usage-week-bar-count">${localizeNum(d.doubts)}</span>
                     <div class="usage-week-bar-track">
                       <div class="usage-week-bar" style="height:${d.doubts === 0 ? 0 : Math.max(8, d.doubts / maxWeekCount * 100)}%;"></div>
                     </div>
@@ -5117,10 +5123,10 @@ function plainTextFromMarkdown(text) {
           </div>
 
           <div>
-            <h3 style="font-size:13px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:16px;">All Models <span style="text-transform:none;font-weight:400;color:#555;">· last ${p.period_days} days</span></h3>
+            <h3 style="font-size:13px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:16px;">${t('chat', 'usageModelsHeading')} <span style="text-transform:none;font-weight:400;color:#555;">· ${t('chat', 'usageLastNDays').replace('{n}', localizeNum(p.period_days))}</span></h3>
             <div style="background:#111;border:1px solid #1e1e1e;border-radius:12px;padding:20px;">
               ${p.total_requests === 0 ? `
-                <div style="font-size:13px;color:#666;">No doubts answered yet in this window.</div>
+                <div style="font-size:13px;color:#666;">${t('chat', 'usageNoDoubtsYet')}</div>
               ` : `
                 <div class="usage-provider-stack">
                   ${p.breakdown.map(b => `<div style="width:${b.percent}%;background:${(USAGE_PROVIDER_INFO[b.provider] || { color: '#666' }).color};"></div>`).join('')}
@@ -5129,8 +5135,8 @@ function plainTextFromMarkdown(text) {
                   <div class="usage-provider-row">
                     <span class="usage-provider-dot" style="background:${(USAGE_PROVIDER_INFO[b.provider] || { color: '#666' }).color};"></span>
                     <span class="usage-provider-name">${(USAGE_PROVIDER_INFO[b.provider] || { label: b.provider }).label}</span>
-                    <span style="font-size:12px;color:#555;">${b.count} doubt${b.count === 1 ? '' : 's'}</span>
-                    <span class="usage-provider-pct">${b.percent}%</span>
+                    <span style="font-size:12px;color:#555;">${t('chat', 'usageDoubtCount').replace('{n}', localizeNum(b.count))}</span>
+                    <span class="usage-provider-pct">${localizeNum(b.percent)}%</span>
                   </div>
                 `).join('')}
               `}
@@ -5139,9 +5145,9 @@ function plainTextFromMarkdown(text) {
         `;
 
         const lastUpdatedEl = document.getElementById('usageLastUpdated');
-        if (lastUpdatedEl) lastUpdatedEl.textContent = 'Last updated: just now';
+        if (lastUpdatedEl) lastUpdatedEl.textContent = t('chat', 'usageLastUpdatedJustNow');
       } catch (e) {
-        container.innerHTML = `<div style="font-size:13px;color:#555;padding:16px 0;">Couldn't load usage data.</div>`;
+        container.innerHTML = `<div style="font-size:13px;color:#555;padding:16px 0;">${t('chat', 'usageCouldntLoad')}</div>`;
       } finally {
         container.style.opacity = '1';
       }
@@ -5420,7 +5426,7 @@ function openSettings() {
         `;
         applyTranslations();
       } else if (section === 'usage') {
-        const planLabel = userPlan === 'max' ? 'Max' : userPlan === 'pro' ? 'Pro' : 'Free';
+        const planLabel = userPlan === 'max' ? t('chat', 'usageMaxName') : userPlan === 'pro' ? t('chat', 'planProName') : t('chat', 'free');
         content.innerHTML = `
           <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:24px;flex-wrap:wrap;gap:8px;">
             <h2 style="font-size:18px;font-weight:700;color:#fff;">
@@ -5428,8 +5434,8 @@ function openSettings() {
               <span style="font-size:13px;font-weight:600;color:#4f8ef7;">[${planLabel}]</span>
             </h2>
             <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#555;">
-              <span id="usageLastUpdated">Last updated: just now</span>
-              <button onclick="renderUsageSection(true)" title="Refresh" style="background:transparent;border:none;color:#666;cursor:pointer;padding:2px;display:flex;align-items:center;">
+              <span id="usageLastUpdated" data-i18n="chat.usageLastUpdatedJustNow">Last updated: just now</span>
+              <button onclick="renderUsageSection(true)" data-i18n-title="chat.usageRefresh" title="Refresh" style="background:transparent;border:none;color:#666;cursor:pointer;padding:2px;display:flex;align-items:center;">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/></svg>
               </button>
             </div>
