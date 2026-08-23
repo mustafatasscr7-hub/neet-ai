@@ -3928,7 +3928,17 @@ function plainTextFromMarkdown(text) {
       }
     }
 
+    // Looks up the display name BEFORE anything is touched (the actual deletion below removes
+    // this same id from `conversations`, so the lookup has to happen first or there'd be nothing
+    // left to find a title from) and shows a confirm dialog; the real deletion only runs from
+    // the dialog's Delete button, never on the initial click.
     async function deleteConversationById(id) {
+      const conv = conversations.find(c => c.id === id || c.supabaseId === id);
+      const chatName = conv?.title || document.getElementById('conv-' + id)?.querySelector('.item-title')?.textContent || 'this chat';
+      showDeleteConfirmModal(chatName, () => _performDeleteConversation(id));
+    }
+
+    async function _performDeleteConversation(id) {
       document.getElementById('conv-' + id)?.remove();
       document.getElementById('menu-' + id)?.remove();
       conversations = conversations.filter(c => c.id !== id);
@@ -5073,6 +5083,39 @@ function plainTextFromMarkdown(text) {
       // nothing happened -- the modal above is un-dismissable except via this button, which is
       // the only way back in (a fresh, real login, correctly re-evaluated against the limit).
       await client.auth.signOut();
+    }
+
+    // Delete-chat confirmation -- box treatment matches showDeviceKickedModal's exact style
+    // (same dark modal this session already established), just left-aligned text + a two-button
+    // row instead of that one's centered single-button layout, since this needs a real
+    // Cancel-vs-Delete choice rather than a single acknowledgement.
+    function showDeleteConfirmModal(chatName, onConfirm) {
+      const existing = document.getElementById('deleteConfirmModal');
+      if (existing) existing.remove();
+
+      const modal = document.createElement('div');
+      modal.id = 'deleteConfirmModal';
+      modal.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.75);z-index:2000;display:flex;align-items:center;justify-content:center;';
+      modal.onclick = function(e) { if (e.target === modal) modal.remove(); };
+
+      const box = document.createElement('div');
+      box.style.cssText = 'background:#1e1e2e;border-radius:12px;padding:24px;max-width:400px;width:90%;color:#fff;box-shadow:0 20px 60px rgba(0,0,0,0.5);';
+      box.innerHTML = `
+        <h3 style="margin:0 0 10px;color:#fff;font-size:16px;font-weight:600;">Delete chat?</h3>
+        <p style="margin:0 0 22px;color:#aaa;font-size:13px;line-height:1.6;">This will delete <strong style="color:#ececec;">"${escapeHtml(chatName)}"</strong>. This action cannot be undone.</p>
+        <div style="display:flex;justify-content:flex-end;gap:10px;">
+          <button id="deleteConfirmCancelBtn" style="padding:8px 16px;border-radius:8px;border:1px solid #3a3a3a;background:transparent;color:#ececec;cursor:pointer;font-size:13px;font-family:'Inter',sans-serif;">Cancel</button>
+          <button id="deleteConfirmDeleteBtn" style="padding:8px 16px;border-radius:8px;border:none;background:#ef4444;color:white;cursor:pointer;font-size:13px;font-weight:600;font-family:'Inter',sans-serif;">Delete</button>
+        </div>
+      `;
+      modal.appendChild(box);
+      document.body.appendChild(modal);
+
+      box.querySelector('#deleteConfirmCancelBtn').onclick = () => modal.remove();
+      box.querySelector('#deleteConfirmDeleteBtn').onclick = async () => {
+        modal.remove();
+        await onConfirm();
+      };
     }
 
     // ---------- Active Sessions list (Settings > Account) ----------
