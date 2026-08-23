@@ -699,12 +699,24 @@ COOLDOWN_HOURS = 24  # how long a block lasts once the budget is actually crosse
 def _ist_today() -> str:
     return datetime.now(timezone.utc).astimezone(IST).date().isoformat()
 
+CST = timezone(timedelta(hours=8))  # China Standard Time, fixed offset (no DST) -- DeepSeek's
+
+# weekend-off-peak rule (effective 2026-08-23) is defined in Beijing time specifically, unlike
+# the weekday windows below which are published in UTC -- these are two different reference
+# timezones for the same pricing page, not an inconsistency to "fix" by converting one to match
+# the other.
 def _is_deepseek_peak_hour() -> bool:
-    """DeepSeek's own published peak-pricing windows are 01:00-04:00 and 06:00-10:00, stated in
-    UTC on their pricing page -- checked directly against UTC rather than converting from IST or
-    server-local time, since UTC is the timezone the windows are actually defined in and adding
-    an extra conversion step would just risk an offset bug for zero benefit."""
-    hour = datetime.now(timezone.utc).hour
+    """DeepSeek's own published peak-pricing windows are 01:00-04:00 and 06:00-10:00 UTC on
+    weekdays. Since 2026-08-23, Saturday and Sunday in BEIJING TIME are always off-peak all day
+    (no weekday-style split) -- checked first and short-circuits the UTC-hour check entirely,
+    since the weekend rule overrides it regardless of what UTC hour it happens to be. The weekday
+    windows themselves stay checked directly against UTC (not IST/server-local), since UTC is the
+    timezone they're actually published in and converting would just risk an offset bug for
+    zero benefit."""
+    now_utc = datetime.now(timezone.utc)
+    if now_utc.astimezone(CST).weekday() >= 5:  # 5=Saturday, 6=Sunday
+        return False
+    hour = now_utc.hour
     return (1 <= hour < 4) or (6 <= hour < 10)
 
 async def get_user_plan(user_id: str) -> str:
