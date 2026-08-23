@@ -518,14 +518,35 @@
     .message-bubble.ai p { margin: 8px 0; }
     .message-bubble.ai code { background: #1a1a1a; padding: 2px 6px; border-radius: 4px; font-size: calc(var(--chat-font-size, 14px) - 1px); color: #4f8ef7; }
 
-    .mermaid-diagram { margin: 12px 0; padding: 16px; background: #111111; border: 1px solid #2a2a2a; border-radius: 10px; overflow-x: auto; text-align: center; }
+    /* Clickable (opens showMermaidModal at full natural size) -- cursor + hover border/expand-icon
+       give the same "this opens bigger" affordance the diagram image preview already has. */
+    .mermaid-diagram { position: relative; margin: 12px 0; padding: 16px; background: #111111; border: 1px solid #2a2a2a; border-radius: 10px; overflow-x: auto; text-align: center; cursor: pointer; transition: border-color 0.15s ease; }
+    .mermaid-diagram:hover { border-color: #4f8ef760; }
+    .mermaid-diagram::after {
+      content: '⛶'; position: absolute; top: 8px; right: 8px; width: 26px; height: 26px;
+      border-radius: 6px; background: rgba(0,0,0,0.45); color: #ececec; font-size: 15px;
+      display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity 0.15s ease; pointer-events: none;
+    }
+    .mermaid-diagram:hover::after { opacity: 1; }
     /* Mermaid's SVG root ships with width="100%" -- left alone, that stretches even a small
        2-3 node diagram to fill the whole bubble width, and since height scales to match the
        same aspect ratio, a narrow/tall diagram balloons into something enormous. Overriding to
        the SVG's own natural size, only capped back down by max-width if it's genuinely wider
-       than the bubble (a diagram with many parallel branches, for instance). */
+       than the bubble (a diagram with many parallel branches, for instance) -- overflow-x:auto
+       above lets a student scroll to see the rest at full legibility instead of everything
+       shrinking to fit, and the click-to-expand modal is the real fix for a many-branch diagram
+       like this needing more room than an inline chat bubble can give it either way. */
     .mermaid-diagram svg { width: auto; max-width: 100%; height: auto; }
     body.light-mode .mermaid-diagram { background: #f9f9fb !important; border-color: #e0e0e5 !important; }
+    body.light-mode .mermaid-diagram::after { background: rgba(255,255,255,0.7) !important; color: #333 !important; }
+
+    /* Mermaid modal (showMermaidModal) -- wider than diagram-modal-box since flowcharts are
+       usually wide/branching rather than portrait like a diagram image, and its own
+       overflow:auto (not diagram-modal's, which is sized for a single centered image) lets a
+       diagram still too big for even 95vw pan/scroll rather than get force-fit and re-shrunk. */
+    .mermaid-modal-box { background: #1e1e2e; border-radius: 12px; padding: 20px; width: min(95vw, 1200px); max-height: 90vh; overflow: auto; display: flex; flex-direction: column; align-items: center; }
+    .mermaid-modal-box svg { width: auto; height: auto; max-width: none; }
+    body.light-mode .mermaid-modal-box { background: #ffffff !important; }
     .mermaid-placeholder { margin: 12px 0; padding: 16px; background: #111111; border: 1px dashed #2a2a2a; border-radius: 10px; text-align: center; color: #666; font-size: calc(var(--chat-font-size, 14px) - 1px); animation: thinkingFade 1.6s ease-in-out infinite; }
     body.light-mode .mermaid-placeholder { background: #f9f9fb !important; border-color: #d5d5dd !important; color: #999 !important; }
 
@@ -1865,7 +1886,7 @@ let selectedImages = [];
         mainBkg: '#f5f5f7',
         nodeTextColor: '#0d0d0d',
         fontFamily: 'Inter, sans-serif',
-        fontSize: '13px'
+        fontSize: '15px'
       } : {
         background: '#0d0d0d',
         primaryColor: '#1e1e2e',
@@ -1878,7 +1899,7 @@ let selectedImages = [];
         mainBkg: '#1e1e2e',
         nodeTextColor: '#ececec',
         fontFamily: 'Inter, sans-serif',
-        fontSize: '13px'
+        fontSize: '15px'
       };
     }
 
@@ -1897,14 +1918,18 @@ let selectedImages = [];
         fontFamily: 'Inter, sans-serif',
         securityLevel: 'strict',
         // Mermaid's defaults (16px font, ~50px node/rank spacing, ~15px node padding) produce
-        // a noticeably oversized diagram compared to the chat text around it -- tightened here
-        // so a several-node flowchart stays compact instead of dominating the whole reply.
+        // a noticeably oversized diagram compared to the chat text around it, so these stay
+        // below default -- but the FIRST cut of this (25/32/8, 13px font) was tightened too far
+        // and made multi-branch diagrams (a 9-branch flowchart, for instance) illegible at
+        // inline size. Loosened one notch; the real fix for a genuinely complex diagram is
+        // click-to-expand (showMermaidModal below), not trying to make every diagram legible
+        // shrunk into a chat bubble.
         flowchart: {
           htmlLabels: true,
           curve: 'basis',
-          nodeSpacing: 25,
-          rankSpacing: 32,
-          padding: 8
+          nodeSpacing: 35,
+          rankSpacing: 42,
+          padding: 10
         },
         // Without this, a parse failure both rejects our own promise (which the catch below
         // already handles) AND independently injects Mermaid's own floating "Syntax error in
@@ -1929,11 +1954,69 @@ let selectedImages = [];
           const wrapper = document.createElement('div');
           wrapper.className = 'mermaid-diagram';
           wrapper.innerHTML = svg;
+          sizeMermaidSvgToNatural(wrapper.querySelector('svg'));
+          wrapper.onclick = () => showMermaidModal(svg);
           preEl.replaceWith(wrapper);
         } catch (e) {
           console.warn('Mermaid render failed, leaving plain text in place:', e);
         }
       }
+    }
+
+    // Mermaid's own SVG ships width="100%" plus an inline max-width computed from its layout --
+    // combined with this file's width:auto/height:auto CSS (needed so a tiny diagram doesn't
+    // stretch to fill the bubble), that "auto" resolution turned out to be unreliable inside an
+    // overflow:auto ancestor: measured live, it sometimes rendered a several-hundred-px-wide
+    // flowchart correctly and sometimes collapsed a modal copy of the exact same SVG to 0x0.
+    // Setting explicit pixel width/height from the SVG's own viewBox is deterministic regardless
+    // of ancestor/CSS context -- used for both the inline render (relies on .mermaid-diagram's
+    // overflow-x:auto if the natural width exceeds the chat column) and the modal (relies on
+    // .mermaid-modal-box's overflow:auto the same way, just with far more room before that
+    // matters). maxWidth is cleared too, since otherwise Mermaid's own inline max-width -- higher
+    // specificity than any external stylesheet rule -- would still cap the explicit width back
+    // down.
+    function sizeMermaidSvgToNatural(svgEl) {
+      if (!svgEl || !svgEl.viewBox || !svgEl.viewBox.baseVal) return;
+      const vb = svgEl.viewBox.baseVal;
+      if (!vb.width || !vb.height) return;
+      svgEl.style.width = vb.width + 'px';
+      svgEl.style.height = vb.height + 'px';
+      svgEl.style.maxWidth = 'none';
+    }
+
+    // Reuses the exact SVG already rendered inline (no second mermaid.render call needed) --
+    // just displayed without the inline view's max-width:100% shrink, at its true natural size,
+    // inside a box wide/tall enough that most diagrams need no scrolling at all, and overflow:auto
+    // as the fallback for ones that still do (works for pinch-zoom-and-pan on mobile too, since
+    // nothing here disables default touch/viewport zoom behavior).
+    function showMermaidModal(svg) {
+      const existing = document.getElementById('mermaid-modal');
+      if (existing) existing.remove();
+
+      const modal = document.createElement('div');
+      modal.id = 'mermaid-modal';
+      modal.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.75);z-index:1000;display:flex;align-items:center;justify-content:center;';
+      modal.onclick = function(e) { if (e.target === modal) modal.remove(); };
+
+      const box = document.createElement('div');
+      box.className = 'mermaid-modal-box';
+
+      const header = document.createElement('div');
+      header.style.cssText = 'display:flex;justify-content:flex-end;align-items:center;width:100%;margin-bottom:8px;';
+      const closeBtn = document.createElement('button');
+      closeBtn.textContent = '✕';
+      closeBtn.style.cssText = 'background:none;border:none;color:#888;font-size:20px;cursor:pointer;flex-shrink:0;';
+      closeBtn.onclick = () => modal.remove();
+      header.appendChild(closeBtn);
+      box.appendChild(header);
+
+      const svgHolder = document.createElement('div');
+      svgHolder.innerHTML = svg;
+      sizeMermaidSvgToNatural(svgHolder.querySelector('svg'));
+      box.appendChild(svgHolder);
+
+      modal.appendChild(box);
+      document.body.appendChild(modal);
     }
 
     function escapeHtml(str) {
