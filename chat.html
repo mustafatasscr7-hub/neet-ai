@@ -2701,6 +2701,19 @@ let selectedImages = [];
           };
           card.appendChild(meta);
           card.appendChild(question);
+          // Question-level diagram (as opposed to a per-option one, already handled inline
+          // above via q['option_'+opt+'_diagram_url']) -- reuses buildDiagramImage/
+          // showDiagramModal, the same lightbox the diagram-matching feature already built,
+          // rather than a second bespoke <img> pattern. Those two functions expect a
+          // {image_url, name, description} shape (the diagrams table's own columns), so this
+          // adapts pyq's diagram_url into that shape rather than changing either function.
+          if (q.diagram_url) {
+            const diagramWrap = document.createElement('div');
+            diagramWrap.style.cssText = 'margin-bottom:12px;';
+            const diagramAdapter = { image_url: q.diagram_url, name: 'Diagram for this question', description: null };
+            diagramWrap.appendChild(buildDiagramImage(diagramAdapter, { maxHeight: '260px', onClick: () => showDiagramModal(diagramAdapter) }));
+            card.appendChild(diagramWrap);
+          }
           card.appendChild(optionsDiv);
           card.appendChild(solBtn);
           card.appendChild(saveBtn);
