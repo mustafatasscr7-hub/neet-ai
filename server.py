@@ -1268,6 +1268,21 @@ def build_diagram_embedding_text(name: str, description: str, chapter: str):
     parts.append(chapter)
     return " ".join(p for p in parts if p)
 
+def build_pyq_embedding_text(question: str, chapter: str = None, option_a: str = None,
+                              option_b: str = None, option_c: str = None, option_d: str = None):
+    # Same join-non-empty-parts shape as build_diagram_embedding_text above. Options are included
+    # (not just the question) because a real fraction of NEET questions are generic on their own
+    # ("Select the correct statements.", "Which of the following is true?") -- the actual subject
+    # matter often only shows up in the options, so question-only embeddings would under-match
+    # exactly the rows most likely to need help matching in the first place.
+    parts = [question]
+    if chapter:
+        parts.append(chapter)
+    for opt in (option_a, option_b, option_c, option_d):
+        if opt:
+            parts.append(opt)
+    return " ".join(p for p in parts if p)
+
 DEVANAGARI_RE = re.compile(r'[ऀ-ॿ]')
 
 def _detect_query_language(query: str) -> str:
@@ -1349,6 +1364,20 @@ def _ncert_chapter_citation(subject: str, class_num, chapter_name: str, lookup_n
         return f"NCERT Class {class_key}, Chapter {chapters.index(match) + 1} — {chapter_name}"
     return f"NCERT Class {class_key}, {subject} — {chapter_name}"
 
+# Re-measured 2026-08-24 after backfilling embeddings for the ~80% of pyq rows that had none
+# (984/5,084 -> 5,084/5,084) -- worth re-checking since 4x more embedded content changes what a
+# given similarity score actually means. Real scores against the now-complete set: 9 genuinely
+# on-topic test queries across all 3 subjects (photosynthesis, Newton's second law, SN1/SN2,
+# periodic trends, enzymes, DNA structure, osmosis, escape velocity, Mendel's law) scored
+# 0.416-0.657 on their real top match; 4 deliberately irrelevant queries (capital of France,
+# baking a cake, movie recommendations, weather) topped out at 0.282. That's a clean ~0.13 gap
+# with 0.4 sitting in the middle -- raising it would start rejecting genuine matches (escape
+# velocity's real top hit is 0.416, Newton's second law's 2nd-best is 0.411), lowering it doesn't
+# fix anything real (the one still-failing case, "Wheatstone bridge", has zero embedded rows on
+# the topic at all -- a content gap no threshold change can paper over). Conclusion: 0.4 remains
+# correct, unchanged from its original value.
+PYQ_MATCH_THRESHOLD = 0.4
+
 async def search_pyq(query: str, limit: int = 5):
     embedding = await get_embedding(query)
     headers = {
@@ -1361,7 +1390,7 @@ async def search_pyq(query: str, limit: int = 5):
         headers=headers,
         json={
             "query_embedding": embedding,
-            "match_threshold": 0.4,
+            "match_threshold": PYQ_MATCH_THRESHOLD,
             "match_count": limit
         }
     )
@@ -3662,6 +3691,45 @@ async def admin_diagrams_backfill_embeddings(_: None = Depends(verify_admin)):
             if patch_resp.status_code < 400:
                 updated += 1
         return {"updated": updated, "total_missing": len(rows)}
+    except Exception as e:
+        return {"error": str(e)}
+
+# One-off backfill for PYQ rows created before embedding generation existed -- unlike
+# diagrams-backfill-embeddings above, admin_pyq_bulk_create below does NOT set embedding on
+# create (bulk PDF/PDF-review/scanned-paste ingestion, all synchronous per-row OpenAI calls would
+# add real latency to that live admin workflow -- deliberately left alone, a separate decision
+# from this backfill), so this endpoint is the only path that currently populates pyq.embedding
+# at all. Paginated (batch_size below) since the real backlog here is thousands of rows, not the
+# few dozen diagrams-backfill-embeddings was written for -- a single unbounded fetch would either
+# hit PostgREST's default row cap or time out the request well before finishing.
+@app.post("/admin/pyq-backfill-embeddings")
+async def admin_pyq_backfill_embeddings(batch_size: int = 200, _: None = Depends(verify_admin)):
+    try:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/pyq",
+            headers=ADMIN_HEADERS,
+            params={"select": "id,question,chapter,option_a,option_b,option_c,option_d",
+                    "embedding": "is.null", "order": "id.asc", "limit": batch_size}
+        )
+        if resp.status_code >= 400:
+            return {"error": resp.text}
+        rows = resp.json()
+        updated = 0
+        for row in rows:
+            embed_text = build_pyq_embedding_text(
+                row["question"], row.get("chapter"),
+                row.get("option_a"), row.get("option_b"), row.get("option_c"), row.get("option_d")
+            )
+            embedding = await get_embedding(embed_text)
+            patch_resp = await async_client.patch(
+                f"{SUPABASE_URL}/rest/v1/pyq",
+                headers={**ADMIN_HEADERS, "Content-Type": "application/json"},
+                params={"id": f"eq.{row['id']}"},
+                json={"embedding": embedding}
+            )
+            if patch_resp.status_code < 400:
+                updated += 1
+        return {"updated": updated, "batch_size": len(rows), "done": len(rows) < batch_size}
     except Exception as e:
         return {"error": str(e)}
 

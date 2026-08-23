@@ -3109,12 +3109,16 @@ let selectedImages = [];
               if (data.pyqs && data.pyqs.length > 0) {
                 showPYQModal(data.pyqs);
                 pyqBtn.innerHTML = '📋 Previous Year Questions';
-                pyqBtn.disabled = false;
               } else {
                 pyqBtn.innerHTML = '❌ No PYQs found';
               }
             } catch(e) {
               pyqBtn.innerHTML = '❌ Error loading';
+            } finally {
+              // Re-enable in every outcome (success, no-results, error) -- previously only the
+              // success branch reset this, so a "no results"/error click permanently disabled
+              // the button with no way to retry.
+              pyqBtn.disabled = false;
             }
           };
           actionsRow.appendChild(pyqBtn);
@@ -3273,12 +3277,16 @@ function plainTextFromMarkdown(text) {
             if (data.pyqs && data.pyqs.length > 0) {
               showPYQModal(data.pyqs);
               pyqBtn.innerHTML = '📋 Previous Year Questions';
-              pyqBtn.disabled = false;
             } else {
               pyqBtn.innerHTML = '❌ No PYQs found';
             }
           } catch(e) {
             pyqBtn.innerHTML = '❌ Error loading';
+          } finally {
+            // Re-enable in every outcome (success, no-results, error) -- previously only the
+            // success branch reset this, so a "no results"/error click permanently disabled
+            // the button with no way to retry.
+            pyqBtn.disabled = false;
           }
         };
         actionsRow.appendChild(pyqBtn);
@@ -4745,12 +4753,16 @@ function plainTextFromMarkdown(text) {
             if (data.pyqs && data.pyqs.length > 0) {
               showPYQModal(data.pyqs);
               pyqBtn.innerHTML = '📋 Previous Year Questions';
-              pyqBtn.disabled = false;
             } else {
               pyqBtn.innerHTML = '❌ No PYQs found';
             }
           } catch(e) {
             pyqBtn.innerHTML = '❌ Error loading';
+          } finally {
+            // Re-enable in every outcome (success, no-results, error) -- previously only the
+            // success branch reset this, so a "no results"/error click permanently disabled
+            // the button with no way to retry.
+            pyqBtn.disabled = false;
           }
         };
         actionsRow.appendChild(pyqBtn);
