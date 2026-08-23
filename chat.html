@@ -442,6 +442,14 @@
     .profile-menu-item:hover { background: #2a2a2a; }
     .profile-menu-item.logout { color: #ef4444; }
     .profile-menu-divider { height: 1px; background: #2a2a2a; margin: 4px 0; }
+    /* Learn More / Language rows show this chevron; the flyout itself (openProfileSubmenu)
+       reuses .item-menu -- NOT a nested child positioned via left:100%, because .sidebar has
+       overflow:hidden (for the collapsed icon-rail state) which silently clipped a flyout that
+       needs to extend past the sidebar's own right edge. .item-menu is already the established,
+       working pattern for exactly this (appended to document.body, position:fixed, positioned
+       via positionItemMenu's own viewport-edge-aware placement) -- see chatTitleMenu for the
+       precedent this mirrors. */
+    .profile-menu-chevron { margin-left: auto; flex-shrink: 0; width: 14px; height: 14px; display: flex; align-items: center; justify-content: center; color: #666; }
 
     .login-nudge { display: flex; flex-direction: column; gap: 10px; padding: 12px; background: #1a1a1a; border-radius: 10px; border: 1px solid #2a2a2a; }
     .nudge-text { display: flex; flex-direction: column; gap: 3px; }
@@ -802,8 +810,19 @@
     <div class="sidebar-bottom">
       <div class="profile-menu" id="profileMenu" style="display:none">
         <div class="profile-menu-email" id="profileMenuEmail" style="display:none"></div>
-        <div class="profile-menu-item" onclick="alert('Coming soon!')"><span class="item-menu-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></span><span data-i18n="chat.myPlan">My Plan</span></div>
+        <div class="profile-menu-item" id="myPlanMenuItem" style="display:none;" onclick="alert('Coming soon!')"><span class="item-menu-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></span><span data-i18n="chat.myPlan">My Plan</span></div>
+        <div class="profile-menu-item" id="upgradePlanMenuItem" onclick="window.open('./pricing.html','_blank')"><span class="item-menu-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg></span><span data-i18n="chat.upgradePlan">Upgrade Plan</span></div>
         <div class="profile-menu-item" onclick="document.getElementById('profileMenu').style.display='none';openSettings();"><span class="item-menu-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span><span data-i18n="chat.settings">Settings</span></div>
+        <div class="profile-menu-item" onclick="event.stopPropagation(); openProfileSubmenu('language', this)">
+          <span class="item-menu-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></span>
+          <span data-i18n="chat.language">Language</span>
+          <span class="profile-menu-chevron"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></span>
+        </div>
+        <div class="profile-menu-item" onclick="event.stopPropagation(); openProfileSubmenu('learnMore', this)">
+          <span class="item-menu-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg></span>
+          <span data-i18n="chat.learnMore">Learn More</span>
+          <span class="profile-menu-chevron"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></span>
+        </div>
         <div class="profile-menu-divider"></div>
         <div class="profile-menu-item logout" id="logoutBtn"><span class="item-menu-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></span><span data-i18n="chat.logout">Log out</span></div>
       </div>
@@ -4312,6 +4331,14 @@ function plainTextFromMarkdown(text) {
       if (headerBtn) headerBtn.style.display = pro ? 'none' : '';
       const planLabelEl = document.querySelector('.profile-plan');
       if (planLabelEl) planLabelEl.textContent = pro ? t('chat', 'proPlan') : t('chat', 'freePlan');
+
+      // Account dropdown's first item: Max is the top tier (no upgrade path), so it keeps "My
+      // Plan"; Free and Pro both still have somewhere to go, so they see "Upgrade Plan" instead.
+      const isMax = userPlan === 'max';
+      const myPlanItem = document.getElementById('myPlanMenuItem');
+      const upgradePlanItem = document.getElementById('upgradePlanMenuItem');
+      if (myPlanItem) myPlanItem.style.display = isMax ? 'flex' : 'none';
+      if (upgradePlanItem) upgradePlanItem.style.display = isMax ? 'none' : 'flex';
     }
 
     async function refreshUsageBanner() {
@@ -5670,6 +5697,44 @@ function openSettings() {
           </div>
         </div>
       `;
+    }
+
+    // Account dropdown's Language/Learn More flyouts. Reuses .item-menu (the same fixed-position,
+    // document.body-appended menu the chat-title "..." dropdown already uses -- see
+    // chatTitleMenu above) rather than a child nested inside #profileMenu: .sidebar has
+    // overflow:hidden (for the collapsed icon-rail state), which silently clips anything
+    // positioned to extend past the sidebar's own edge, exactly what a side flyout needs to do.
+    // Trigger rows call this with event.stopPropagation() so opening a flyout doesn't also close
+    // #profileMenu -- but option clicks inside the flyout deliberately do NOT stop propagation,
+    // so the click bubbles to the existing document-level listener that already hides both
+    // #profileMenu and every .item-menu on any outside click, closing everything in one place
+    // once the actual action (setLang / window.open) has run.
+    const PROFILE_SUBMENU_CONTENT = {
+      language: () =>
+        `<div class="item-menu-option" onclick="setLang('en')">English</div>` +
+        `<div class="item-menu-option" onclick="setLang('hi')">हिंदी</div>`,
+      learnMore: () =>
+        `<div class="item-menu-option" onclick="window.open('./index.html','_blank')">${t('chat', 'learnMoreNeetAi')}</div>` +
+        `<div class="item-menu-option" onclick="window.open('./privacy.html','_blank')">${t('chat', 'learnMorePrivacy')}</div>` +
+        `<div class="item-menu-option" onclick="window.open('./terms.html','_blank')">${t('chat', 'learnMoreTerms')}</div>`,
+    };
+
+    function openProfileSubmenu(key, anchorEl) {
+      document.querySelectorAll('.item-menu').forEach(m => m.style.display = 'none');
+      let menu = document.getElementById('profileSubmenu-' + key);
+      if (!menu) {
+        menu = document.createElement('div');
+        menu.id = 'profileSubmenu-' + key;
+        menu.className = 'item-menu';
+        menu.style.display = 'none';
+        document.body.appendChild(menu);
+      }
+      // Rebuilt every open (not just once) -- Learn More's labels run through t(), so switching
+      // Language and reopening Learn More should show the newly-selected language's wording,
+      // not whatever was cached in the DOM from before the switch.
+      menu.innerHTML = PROFILE_SUBMENU_CONTENT[key]();
+      menu.style.display = 'block';
+      positionItemMenu(menu, anchorEl.getBoundingClientRect());
     }
 
     function toggleSettingsDropdown(key) {
