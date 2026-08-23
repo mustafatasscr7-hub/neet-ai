@@ -3694,14 +3694,14 @@ async def admin_diagrams_backfill_embeddings(_: None = Depends(verify_admin)):
     except Exception as e:
         return {"error": str(e)}
 
-# One-off backfill for PYQ rows created before embedding generation existed -- unlike
-# diagrams-backfill-embeddings above, admin_pyq_bulk_create below does NOT set embedding on
-# create (bulk PDF/PDF-review/scanned-paste ingestion, all synchronous per-row OpenAI calls would
-# add real latency to that live admin workflow -- deliberately left alone, a separate decision
-# from this backfill), so this endpoint is the only path that currently populates pyq.embedding
-# at all. Paginated (batch_size below) since the real backlog here is thousands of rows, not the
-# few dozen diagrams-backfill-embeddings was written for -- a single unbounded fetch would either
-# hit PostgREST's default row cap or time out the request well before finishing.
+# One-off/ongoing backfill, same role as diagrams-backfill-embeddings above -- covers rows from
+# before embedding-on-create existed (the 2026-08 gap this whole feature was built to close) and
+# doubles as the recovery path for admin_pyq_bulk_create's background embedding attempts below
+# that failed (a failed attempt deliberately leaves embedding NULL rather than writing anything
+# partial, so it's indistinguishable from -- and automatically caught by -- this same query).
+# Paginated (batch_size below) since the real backlog here can be thousands of rows, not the few
+# dozen diagrams-backfill-embeddings was written for -- a single unbounded fetch would either hit
+# PostgREST's default row cap or time out the request well before finishing.
 @app.post("/admin/pyq-backfill-embeddings")
 async def admin_pyq_backfill_embeddings(batch_size: int = 200, _: None = Depends(verify_admin)):
     try:
@@ -3732,6 +3732,30 @@ async def admin_pyq_backfill_embeddings(batch_size: int = 200, _: None = Depends
         return {"updated": updated, "batch_size": len(rows), "done": len(rows) < batch_size}
     except Exception as e:
         return {"error": str(e)}
+
+# Fire-and-forget embedding generation for one freshly-created pyq row -- scheduled via
+# asyncio.create_task() from admin_pyq_bulk_create below rather than awaited, same pattern
+# get_embedding() already uses for its own cache write, so the admin's save request returns as
+# soon as the row is in the DB instead of waiting on an extra per-question OpenAI round-trip.
+# On any failure this deliberately leaves embedding NULL rather than writing something partial --
+# a NULL embedding is exactly what /admin/pyq-backfill-embeddings already selects for, so a
+# failed row here needs no separate failure-tracking table, it's just picked up by the next
+# backfill run. Still printed clearly (PYQ EMBEDDING FAILED) so a failure is visible in a Railway
+# log scan rather than only discoverable by noticing it during a backfill.
+async def _embed_pyq_row_background(row_id, question, chapter, option_a, option_b, option_c, option_d):
+    try:
+        embed_text = build_pyq_embedding_text(question, chapter, option_a, option_b, option_c, option_d)
+        embedding = await get_embedding(embed_text)
+        patch_resp = await async_client.patch(
+            f"{SUPABASE_URL}/rest/v1/pyq",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json"},
+            params={"id": f"eq.{row_id}"},
+            json={"embedding": embedding}
+        )
+        if patch_resp.status_code >= 400:
+            print(f"PYQ EMBEDDING FAILED (write) id={row_id}: {patch_resp.status_code} {patch_resp.text[:200]}", flush=True)
+    except Exception as e:
+        print(f"PYQ EMBEDDING FAILED (generation) id={row_id}: {e}", flush=True)
 
 @app.post("/admin/pyq-bulk-create")
 async def admin_pyq_bulk_create(body: PyqBulkCreate, _: None = Depends(verify_admin)):
@@ -3786,7 +3810,13 @@ async def admin_pyq_bulk_create(body: PyqBulkCreate, _: None = Depends(verify_ad
         )
         if response.status_code >= 400:
             return {"error": response.text}
-        return {"created": response.json()}
+        created = response.json()
+        for row in created:
+            asyncio.create_task(_embed_pyq_row_background(
+                row["id"], row.get("question"), row.get("chapter"),
+                row.get("option_a"), row.get("option_b"), row.get("option_c"), row.get("option_d")
+            ))
+        return {"created": created}
     except Exception as e:
         return {"error": str(e)}
 
