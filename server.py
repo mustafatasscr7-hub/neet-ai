@@ -328,14 +328,23 @@ Rules:
     specific doubt, answer it directly as electric current instead of forcing a clarification),
     "valence" (Chemistry: valence electrons/valency).
 
-    FORMAT AMBIGUITY: it's genuinely unclear whether the student wants a text explanation or to
-    SEE a diagram, AND a diagram has been confirmed to exist for this topic (only true if the
-    user message contains the "[A relevant NCERT diagram exists for this topic...]" note — never
-    offer this without that note present, even if you're sure a diagram should exist). This is
-    different from VISUAL_INTENT (rule 10), which already handles the clear cases — "show me X"
-    is an unambiguous yes, "explain X" is an unambiguous no. Format ambiguity is ONLY for
-    genuinely neutral phrasing that doesn't lean either way, e.g. a bare topic name like
-    "eubacteria structure" with no verb indicating explain-vs-show.
+    FORMAT AMBIGUITY — check in this order, STEP 1 before STEP 2, every time:
+    STEP 1, mechanical bypass, not a judgment call: does the doubt contain an explicit
+    visual-request verb or phrase — "show me", "show", "diagram of", "picture of", "image of",
+    "draw", "display", "what does X look like", or a clear equivalent (including non-English,
+    e.g. "दिखाओ", "चित्र/तस्वीर दिखाओ")? If yes, this is NOT format-ambiguous, full stop — do not
+    proceed to STEP 2, go straight to VISUAL_INTENT (rule 10), which will correctly classify this
+    as VISUAL_INTENT: yes. This mirrors TOPIC AMBIGUITY's own closed-whitelist test above: a
+    mechanical text-pattern match, not a holistic judgment about whether the doubt "feels"
+    ambiguous overall.
+    STEP 2, only reached if STEP 1 was no: it's genuinely unclear whether the student wants a
+    text explanation or to SEE a diagram, AND a diagram has been confirmed to exist for this
+    topic (only true if the user message contains the "[A relevant NCERT diagram exists for this
+    topic...]" note — never offer this without that note present, even if you're sure a diagram
+    should exist). Format ambiguity is ONLY for genuinely neutral phrasing that doesn't lean
+    either way, e.g. a bare topic name like "eubacteria structure" with no verb indicating
+    explain-vs-show (STEP 1 already ruled out the "show me X" case, so anything reaching STEP 2
+    is, by construction, verb-free).
 
     If EITHER kind of ambiguity applies, do not answer normally at all — do not write
     VISUAL_INTENT or any of the normal answer format. Instead output EXACTLY this format and
