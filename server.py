@@ -2423,6 +2423,36 @@ async def diagram_match(req: DiagramMatchRequest, _: None = Depends(rate_limiter
     except Exception:
         return {"matched": False}
 
+# Powers diagram-library.html's browsable gallery -- the student-facing counterpart to
+# /admin/diagrams-list, which requires the admin password. Uses the anon key (not
+# ADMIN_HEADERS), same as diagram_match's own chapter lookup above -- reviewed=true rows are
+# already anon-readable under this table's RLS policy. reviewed=true is hardcoded, never a
+# caller-supplied param, so this can never leak an unreviewed diagram to a student regardless
+# of what query params are sent.
+@app.get("/diagrams")
+async def list_diagrams(subject: str = "", class_num: int = 0, _: None = Depends(rate_limiter(30, 60))):
+    try:
+        params = {
+            "select": "id,subject,class,chapter,name,description,name_hi,description_hi,image_url",
+            "reviewed": "eq.true",
+            "order": "chapter.asc,name.asc",
+            "limit": 500
+        }
+        if subject:
+            params["subject"] = f"eq.{subject}"
+        if class_num:
+            params["class"] = f"eq.{class_num}"
+        response = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/diagrams",
+            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+            params=params
+        )
+        if response.status_code >= 400:
+            return {"error": response.text}
+        return {"diagrams": response.json()}
+    except Exception as e:
+        return {"error": str(e)}
+
 @app.get("/mock-test-questions")
 async def get_mock_test_questions():
     try:

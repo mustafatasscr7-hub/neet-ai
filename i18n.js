@@ -432,6 +432,7 @@ const TRANSLATIONS = {
       chatsHeading: 'Chats',
       pyqBank: 'PYQ Bank',
       savedQuestions: 'Saved Questions',
+      diagramLibrary: 'Diagram Library',
       mockTests: 'Mock Tests',
       scoreboard: 'Scoreboard',
       recent: 'Recent',
@@ -578,6 +579,7 @@ const TRANSLATIONS = {
       chatsHeading: 'चैट',
       pyqBank: 'PYQ बैंक',
       savedQuestions: 'सहेजे गए प्रश्न',
+      diagramLibrary: 'डायग्राम लाइब्रेरी',
       mockTests: 'मॉक टेस्ट',
       scoreboard: 'स्कोरबोर्ड',
       recent: 'हाल की',
@@ -1230,6 +1232,31 @@ const TRANSLATIONS = {
       loginToSeePrefix: 'कृपया अपने सहेजे गए प्रश्न देखने के लिए ',
       loginToSeeSuffix: '।',
       failedLoadSaved: 'सहेजे गए प्रश्न लोड करने में विफल।'
+    }
+  },
+
+  diagramlibrary: {
+    en: {
+      headerTitle: 'Diagram Library',
+      pageTitle: 'Diagram Library',
+      pageSubtitle: 'Browse reviewed NCERT diagrams by subject and class',
+      allSubjects: 'All Subjects',
+      allClasses: 'All Classes',
+      classWord: 'Class',
+      loadingDiagrams: 'Loading diagrams...',
+      noDiagramsGeneric: 'No diagrams yet — check back soon as more are added.',
+      noDiagramsFor: 'No diagrams yet for'
+    },
+    hi: {
+      headerTitle: 'डायग्राम लाइब्रेरी',
+      pageTitle: 'डायग्राम लाइब्रेरी',
+      pageSubtitle: 'विषय और कक्षा के अनुसार समीक्षित NCERT डायग्राम ब्राउज़ करें',
+      allSubjects: 'सभी विषय',
+      allClasses: 'सभी कक्षाएँ',
+      classWord: 'कक्षा',
+      loadingDiagrams: 'डायग्राम लोड हो रहे हैं...',
+      noDiagramsGeneric: 'अभी तक कोई डायग्राम नहीं है — जल्द ही और जोड़े जाएँगे।',
+      noDiagramsFor: 'के लिए अभी तक कोई डायग्राम नहीं है:'
     }
   },
 

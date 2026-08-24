@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Diagram Library — NEET-AI</title>
+  <link rel="icon" href="assets/favicon.ico" sizes="any" />
+  <link rel="icon" type="image/svg+xml" href="assets/logo.svg" />
+  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Inter', sans-serif; background: #0d0d0d; color: #ececec; min-height: 100vh; }
+    .header { padding: 14px 24px; border-bottom: 1px solid #1a1a1a; display: flex; align-items: center; justify-content: space-between; background: #0d0d0d; position: sticky; top: 0; z-index: 10; }
+    .header-title { font-size: 15px; font-weight: 700; color: #fff; }
+    .header-title span { color: #4f8ef7; }
+
+    .container { max-width: 1100px; margin: 0 auto; padding: 16px 24px; }
+
+    .page-header-row { display: flex; align-items: center; gap: 14px; margin-bottom: 24px; }
+    .page-icon-badge { width: 40px; height: 40px; border-radius: 10px; background: linear-gradient(135deg, #4f8ef7, #7c3aed); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .page-icon-badge svg { width: 20px; height: 20px; }
+    .page-title { font-size: 22px; font-weight: 700; color: #fff; margin-bottom: 4px; }
+    .page-subtitle { font-size: 13px; color: #555; }
+
+    /* Filter bar -- same select treatment as pyqbank.html's .year-filter-select */
+    .filter-bar { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 24px; }
+    .filter-select { background: #0d0d12; border: 1px solid #2a2a35; border-radius: 8px; padding: 8px 12px; color: #ececec; font-size: 13px; font-family: 'Inter', sans-serif; cursor: pointer; }
+
+    /* Diagram grid -- same card language as pyqbank.html's .class-card/.question-card
+       (dark #111 panel, #1e1e1e border, subtle hover lift) with a thumbnail on top instead of
+       centered stat text, matching mocktest.html's post-redesign restraint (no glow/solid-color
+       blocks). Subject colour is confined to the small tag pill, same treatment as pyqbank's
+       .subject-count-dot. */
+    .diagram-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 16px; }
+    .diagram-card { background: #111; border: 1px solid #1e1e1e; border-radius: 12px; overflow: hidden; cursor: pointer; transition: border-color 0.2s ease, transform 0.15s ease; }
+    .diagram-card:hover { border-color: #4f8ef750; transform: translateY(-2px); }
+    .diagram-card-thumb-wrap { width: 100%; aspect-ratio: 1; background: #0a0a0c; display: flex; align-items: center; justify-content: center; overflow: hidden; position: relative; }
+    /* Full-size NCERT scans can be several hundred KB, slow enough on a real connection that a
+       plain <img> would sit blank for a beat -- same shimmer treatment as chat.html's
+       .diagram-skeleton (minus the spinner/label, too small a thumbnail to fit them) rather than
+       a bare black box, removed via .loaded once the image actually finishes loading. */
+    .diagram-card-thumb-wrap.thumb-loading { background: linear-gradient(100deg, #1a1a26 30%, #26263a 50%, #1a1a26 70%); background-size: 200% 100%; animation: diagramShimmer 1.4s ease-in-out infinite; }
+    .diagram-card-thumb { width: 100%; height: 100%; object-fit: contain; padding: 10px; box-sizing: border-box; opacity: 0; transition: opacity 0.3s ease; }
+    .diagram-card-thumb.loaded { opacity: 1; }
+    .diagram-card-body { padding: 12px 14px; border-top: 1px solid #1a1a1a; }
+    .diagram-card-name { font-size: 13px; font-weight: 600; color: #ececec; margin-bottom: 8px; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .diagram-card-tag { font-size: 10.5px; color: #999; display: inline-flex; align-items: center; gap: 6px; background: #1a1a1a; padding: 3px 9px; border-radius: 20px; border: 1px solid #26262e; max-width: 100%; }
+    .diagram-card-tag span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .diagram-card-tag-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
+
+    .loading { text-align: center; padding: 60px; color: #555; }
+    .spinner { width: 32px; height: 32px; border: 3px solid #1e1e1e; border-top-color: #4f8ef7; border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 16px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .empty { text-align: center; padding: 60px; color: #555; font-size: 14px; }
+
+    /* ===== Diagram modal (showDiagramModal / buildDiagramImage), copied verbatim from
+       chat.html so this page reuses the exact same lightbox rather than building a new one. ===== */
+    .diagram-skeleton { width: min(300px, calc(100vw - 140px)); aspect-ratio: 0.95; border-radius: 6px; background: linear-gradient(100deg, #1a1a26 30%, #26263a 50%, #1a1a26 70%); background-size: 200% 100%; animation: diagramShimmer 1.4s ease-in-out infinite; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; }
+    @keyframes diagramShimmer { 0% { background-position: 150% 0; } 100% { background-position: -150% 0; } }
+    .diagram-skeleton-label { font-size: 12px; color: #888; animation: thinkingFade 2.2s ease-in-out infinite; }
+    .thinking-orb { position: relative; width: 18px; height: 18px; flex-shrink: 0; }
+    .thinking-orb::before, .thinking-orb::after { content: ''; position: absolute; inset: 0; border-radius: 50%; border: 2px solid transparent; }
+    .thinking-orb::before { border-top-color: #4f8ef7; border-right-color: #4f8ef7; animation: thinkingSpin 1.6s linear infinite; }
+    .thinking-orb::after { border-bottom-color: #7c3aed; border-left-color: #7c3aed; animation: thinkingSpin 2.2s linear infinite reverse; }
+    @keyframes thinkingSpin { to { transform: rotate(360deg); } }
+    @keyframes thinkingFade { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
+
+    /* Smooth fade-in on page load */
+    body { animation: pageFadeIn 0.22s ease; }
+    @keyframes pageFadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+    /* ===== LIGHT MODE ===== */
+    body.light-mode { background: #f5f5f5 !important; color: #0d0d0d !important; }
+    body.light-mode .header { background: #ffffff !important; border-color: #e3e3ea !important; }
+    body.light-mode .header-title { color: #0d0d0d !important; }
+    body.light-mode .lang-toggle { background: #ffffff !important; border-color: #d5d5dd !important; color: #55555f !important; }
+    body.light-mode button[onclick*="chat.html"] { color: #55555f !important; }
+    body.light-mode button[onclick*="chat.html"]:hover { color: #4f8ef7 !important; }
+    body.light-mode .page-title { color: #0d0d0d !important; }
+    body.light-mode .page-subtitle { color: #7a7a85 !important; }
+    body.light-mode .filter-select { background: #ffffff !important; border-color: #d5d5dd !important; color: #0d0d0d !important; }
+    body.light-mode .diagram-card { background: #ffffff !important; border-color: #e3e3ea !important; box-shadow: 0 1px 3px rgba(0,0,0,0.04) !important; }
+    body.light-mode .diagram-card:hover { border-color: #4f8ef750 !important; }
+    body.light-mode .diagram-card-thumb-wrap { background: #f5f5f7 !important; }
+    body.light-mode .diagram-card-thumb-wrap.thumb-loading { background: linear-gradient(100deg, #ececf0 30%, #f7f7fa 50%, #ececf0 70%) !important; background-size: 200% 100% !important; }
+    body.light-mode .diagram-card-body { border-color: #e3e3ea !important; }
+    body.light-mode .diagram-card-name { color: #0d0d0d !important; }
+    body.light-mode .diagram-card-tag { color: #55555f !important; background: #f5f5f7 !important; border-color: #e3e3ea !important; }
+    body.light-mode .loading { color: #7a7a85 !important; }
+    body.light-mode .spinner { border-color: #e3e3ea !important; border-top-color: #4f8ef7 !important; }
+    body.light-mode .empty { color: #7a7a85 !important; }
+    body.light-mode .diagram-skeleton { background: linear-gradient(100deg, #ececf0 30%, #f7f7fa 50%, #ececf0 70%) !important; background-size: 200% 100% !important; }
+    body.light-mode .diagram-skeleton-label { color: #7a7a85 !important; }
+    body.light-mode .diagram-modal-box { background: #ffffff !important; }
+    body.light-mode .diagram-modal-title { color: #7c3aed !important; }
+    body.light-mode .diagram-modal-close { color: #7a7a85 !important; }
+    body.light-mode .diagram-modal-imgframe { background: #f5f5f7 !important; }
+    body.light-mode .diagram-modal-caption { color: #55555f !important; }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <div style="display:flex;align-items:center;gap:16px;">
+      <button onclick="window.location.href='./chat.html'" style="background:transparent;border:none;color:#555;cursor:pointer;font-size:13px;font-family:Inter,sans-serif;padding:0;" onmouseover="this.style.color='#4f8ef7'" onmouseout="this.style.color=(typeof getTheme==='function'&&getTheme()==='light')?'#55555f':'#555'" data-i18n="common.back">← Back</button>
+      <span class="header-title">NEET<span>-AI</span> <span data-i18n="diagramlibrary.headerTitle">Diagram Library</span></span>
+    </div>
+    <div style="display:flex;gap:10px;">
+      <button class="lang-toggle" onclick="toggleLang(); renderDiagrams();" style="background:transparent;border:1px solid #2a2a2a;color:#888;padding:8px 14px;border-radius:8px;cursor:pointer;font-size:13px;font-family:Inter,sans-serif;">हिं</button>
+    </div>
+  </div>
+
+  <div class="container">
+    <div class="page-header-row">
+      <div class="page-icon-badge">
+        <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+      </div>
+      <div>
+        <div class="page-title" data-i18n="diagramlibrary.pageTitle">Diagram Library</div>
+        <div class="page-subtitle" data-i18n="diagramlibrary.pageSubtitle">Browse reviewed NCERT diagrams by subject and class</div>
+      </div>
+    </div>
+
+    <div class="filter-bar">
+      <select id="subjectFilter" class="filter-select" onchange="renderDiagrams()">
+        <option value="" data-i18n="diagramlibrary.allSubjects">All Subjects</option>
+        <option value="Biology">Biology</option>
+        <option value="Physics">Physics</option>
+        <option value="Chemistry">Chemistry</option>
+      </select>
+      <select id="classFilter" class="filter-select" onchange="renderDiagrams()">
+        <option value="" data-i18n="diagramlibrary.allClasses">All Classes</option>
+        <option value="11">Class 11</option>
+        <option value="12">Class 12</option>
+      </select>
+    </div>
+
+    <div id="mainContent">
+      <div class="loading"><div class="spinner"></div><span data-i18n="diagramlibrary.loadingDiagrams">Loading diagrams...</span></div>
+    </div>
+  </div>
+
+  <script src="./theme.js"></script>
+  <script src="./i18n.js"></script>
+  <script>
+    const API_BASE = 'https://neet-ai-production.up.railway.app';
+
+    const subjectConfig = {
+      'Biology': { icon: '🔬', color: '#4ade80' },
+      'Physics': { icon: '⚡', color: '#4f8ef7' },
+      'Chemistry': { icon: '⚗️', color: '#f97316' }
+    };
+
+    let allDiagrams = [];
+
+    async function renderDiagrams() {
+      applyTranslations();
+      const subject = document.getElementById('subjectFilter').value;
+      const classNum = document.getElementById('classFilter').value;
+      const mainContent = document.getElementById('mainContent');
+      mainContent.innerHTML = `<div class="loading"><div class="spinner"></div>${t('diagramlibrary', 'loadingDiagrams')}</div>`;
+
+      try {
+        const params = new URLSearchParams();
+        if (subject) params.set('subject', subject);
+        if (classNum) params.set('class_num', classNum);
+        const res = await fetch(`${API_BASE}/diagrams?${params.toString()}`);
+        const data = await res.json();
+        allDiagrams = data.diagrams || [];
+      } catch (e) {
+        allDiagrams = [];
+      }
+
+      if (allDiagrams.length === 0) {
+        const emptyText = subject
+          ? `${t('diagramlibrary', 'noDiagramsFor')} ${subjectName(subject)}`
+          : t('diagramlibrary', 'noDiagramsGeneric');
+        mainContent.innerHTML = `<div class="empty">${emptyText}</div>`;
+        return;
+      }
+
+      mainContent.innerHTML = `
+        <div class="diagram-grid">
+          ${allDiagrams.map((d, i) => {
+            const cfg = subjectConfig[d.subject] || { color: '#888' };
+            const lang = getLang();
+            const displayName = (lang === 'hi' && d.name_hi) ? d.name_hi : d.name;
+            const chapterLabel = chapterName(d.chapter || '');
+            return `
+              <div class="diagram-card" onclick="openDiagram(${i})">
+                <div class="diagram-card-thumb-wrap thumb-loading">
+                  <img class="diagram-card-thumb" src="${d.image_url}" alt="${escapeHtml(displayName || '')}" loading="lazy" onload="this.classList.add('loaded');this.parentElement.classList.remove('thumb-loading')" onerror="this.parentElement.classList.remove('thumb-loading')" />
+                </div>
+                <div class="diagram-card-body">
+                  <div class="diagram-card-name">${escapeHtml(displayName || '')}</div>
+                  <div class="diagram-card-tag">
+                    <span class="diagram-card-tag-dot" style="background:${cfg.color}"></span>
+                    <span>${escapeHtml(subjectName(d.subject))}${chapterLabel ? ' · ' + escapeHtml(chapterLabel) : ''}</span>
+                  </div>
+                </div>
+              </div>
+            `;
+          }).join('')}
+        </div>
+      `;
+    }
+
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
+    function openDiagram(index) {
+      const d = allDiagrams[index];
+      const lang = getLang();
+      const diagram = {
+        image_url: d.image_url,
+        name: (lang === 'hi' && d.name_hi) ? d.name_hi : d.name,
+        description: (lang === 'hi' && d.description_hi) ? d.description_hi : d.description
+      };
+      showDiagramModal(diagram);
+    }
+
+    // ===== Diagram modal (showDiagramModal / buildDiagramImage), copied verbatim from
+    // chat.html so this page reuses the exact same lightbox component rather than building a
+    // new one -- same skeleton-load/fade-in/error-fallback behaviour and visual frame. =====
+    const MIN_SKELETON_MS = 450;
+
+    function buildDiagramImage(diagram, { maxHeight, onClick }) {
+      const container = document.createElement('div');
+      container.style.cssText = 'display:flex;align-items:center;justify-content:center;';
+
+      const skeleton = document.createElement('div');
+      skeleton.className = 'diagram-skeleton';
+      const orb = document.createElement('div');
+      orb.className = 'thinking-orb';
+      skeleton.appendChild(orb);
+      const label = document.createElement('span');
+      label.className = 'diagram-skeleton-label';
+      label.textContent = 'Loading diagram…';
+      skeleton.appendChild(label);
+      container.appendChild(skeleton);
+
+      const img = document.createElement('img');
+      img.alt = diagram.name || 'Diagram';
+      img.style.cssText = `max-width:100%;max-height:${maxHeight};display:none;border-radius:6px;opacity:0;transform:scale(0.98);transition:opacity 0.35s ease,transform 0.35s ease;${onClick ? 'cursor:pointer;' : ''}`;
+      if (onClick) img.onclick = onClick;
+
+      const skeletonShownAt = Date.now();
+      function afterMinSkeletonTime(fn) {
+        const remaining = MIN_SKELETON_MS - (Date.now() - skeletonShownAt);
+        if (remaining > 0) setTimeout(fn, remaining); else fn();
+      }
+
+      img.onload = () => afterMinSkeletonTime(() => {
+        skeleton.remove();
+        img.style.display = 'block';
+        void img.offsetWidth;
+        img.style.opacity = '1';
+        img.style.transform = 'scale(1)';
+      });
+      img.onerror = () => afterMinSkeletonTime(() => {
+        skeleton.remove();
+        const fallback = document.createElement('div');
+        fallback.style.cssText = 'width:min(240px, calc(100vw - 140px));padding:28px 12px;text-align:center;color:#888;font-size:13px;';
+        fallback.textContent = '🖼️ Diagram could not be loaded';
+        container.appendChild(fallback);
+      });
+      img.src = diagram.image_url;
+      container.appendChild(img);
+      return container;
+    }
+
+    function showDiagramModal(diagram) {
+      const existing = document.getElementById('diagram-modal');
+      if (existing) existing.remove();
+
+      const modal = document.createElement('div');
+      modal.id = 'diagram-modal';
+      modal.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.75);z-index:1000;display:flex;align-items:center;justify-content:center;';
+      modal.onclick = function(e) { if (e.target === modal) modal.remove(); };
+
+      const box = document.createElement('div');
+      box.className = 'diagram-modal-box';
+      box.style.cssText = 'background:#1e1e2e;border-radius:12px;padding:20px;width:min(92vw,560px);max-height:85vh;overflow:auto;display:flex;flex-direction:column;align-items:center;';
+
+      const header = document.createElement('div');
+      header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px;width:100%;';
+      const title = document.createElement('h3');
+      title.className = 'diagram-modal-title';
+      title.style.cssText = 'margin:0;color:#a78bfa;font-size:15px;';
+      title.textContent = diagram.name || 'Diagram';
+      header.appendChild(title);
+      const closeBtn = document.createElement('button');
+      closeBtn.className = 'diagram-modal-close';
+      closeBtn.textContent = '✕';
+      closeBtn.style.cssText = 'background:none;border:none;color:#888;font-size:20px;cursor:pointer;flex-shrink:0;';
+      closeBtn.onclick = () => modal.remove();
+      header.appendChild(closeBtn);
+      box.appendChild(header);
+
+      const imgFrame = document.createElement('div');
+      imgFrame.className = 'diagram-modal-imgframe';
+      imgFrame.style.cssText = 'background:#141420;border-radius:10px;padding:12px;display:flex;align-items:center;justify-content:center;width:100%;';
+      imgFrame.appendChild(buildDiagramImage(diagram, { maxHeight: '65vh' }));
+      box.appendChild(imgFrame);
+
+      if (diagram.description) {
+        const caption = document.createElement('p');
+        caption.className = 'diagram-modal-caption';
+        caption.style.cssText = 'margin:14px 0 0;color:#c4c4c4;font-size:13px;line-height:1.6;text-align:center;width:100%;';
+        caption.textContent = diagram.description;
+        box.appendChild(caption);
+      }
+
+      modal.appendChild(box);
+      document.body.appendChild(modal);
+    }
+
+    renderDiagrams();
+  </script>
+</body>
+</html>
