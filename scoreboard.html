@@ -72,28 +72,25 @@
     .test-time { font-size: 10.5px; color: #444; margin-top: 2px; text-align: right; }
 
     /* Test card restructured into an outer flex-column wrapper: .test-card keeps its original
-       flex-row content (unchanged), .review-toggle-row + .review-panel sit below it as new
+       flex-row content (unchanged), .review-cat-row + .review-panel sit below it as new
        full-width children -- a flex-row child can't host a full-width row itself. */
     .test-card-wrap { background: #111116; border: 1px solid #1e1e24; border-radius: 16px; transition: all 0.2s; }
     .test-card-wrap:hover { border-color: #2f2f3a; }
     .test-card-wrap .test-card { border: none; border-radius: 0; cursor: default; }
     .test-card-wrap .test-card:hover { transform: none; background: transparent; }
-    .review-toggle-row { padding: 0 22px 16px; }
-    /* Same tinted-pill button language as pyqbank.html's .sol-btn (Show Solution) -- this is
-       the closest existing expand/collapse analog in the app, reused rather than inventing a
-       different button treatment for what's functionally the same interaction. */
-    .review-btn { background: #a78bfa1c; border: none; color: #a78bfa; padding: 7px 16px; border-radius: 9px; cursor: pointer; font-size: 12px; font-weight: 600; font-family: 'Inter', sans-serif; transition: filter 0.15s ease; }
-    .review-btn:hover { filter: brightness(1.15); }
+    .review-cat-row { display: flex; gap: 8px; flex-wrap: wrap; padding: 0 22px 16px; }
+    /* Same .filter-tab pill language mockresults.html's own Question Review already uses,
+       just tinted per-category (green/red/gray) to match this file's existing
+       .test-stat-correct/.wrong/.skipped and .review-q-status colour conventions, instead of
+       the single blue active state mockresults.html uses for its All/Correct/Wrong/Skipped
+       tabs -- there's no single "active colour" here since each button IS a distinct category. */
+    .review-cat-btn { padding: 6px 14px; border-radius: 6px; border: 1px solid #2a2a2a; background: transparent; color: #666; font-size: 12px; font-weight: 600; font-family: 'Inter', sans-serif; cursor: pointer; transition: all 0.2s; text-transform: capitalize; }
+    .review-cat-btn:hover { border-color: #38383f; color: #ccc; }
+    .review-cat-btn.active.correct { background: #4ade8020; border-color: #4ade80; color: #4ade80; }
+    .review-cat-btn.active.wrong { background: #ef444420; border-color: #ef4444; color: #ef4444; }
+    .review-cat-btn.active.skipped { background: #ececec20; border-color: #8a8a92; color: #ccc; }
     .review-panel { display: none; border-top: 1px solid #1e1e24; padding: 16px 22px 20px; }
     .review-panel.open { display: block; }
-    .review-panel-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
-    .review-filter-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #999; }
-    .toggle-switch-sm { position: relative; display: inline-block; width: 32px; height: 18px; flex-shrink: 0; cursor: pointer; }
-    .toggle-switch-sm input { opacity: 0; width: 0; height: 0; }
-    .toggle-switch-sm .toggle-track { position: absolute; inset: 0; background: #2a2a2a; border-radius: 18px; transition: background 0.2s; }
-    .toggle-switch-sm .toggle-thumb { position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; background: #ececec; border-radius: 50%; transition: transform 0.2s; }
-    .toggle-switch-sm input:checked + .toggle-track { background: #4f8ef7; }
-    .toggle-switch-sm input:checked + .toggle-track .toggle-thumb { transform: translateX(14px); }
 
     .review-unavailable { padding: 20px 4px; color: #666; font-size: 12.5px; text-align: center; }
     .review-empty { padding: 20px 4px; color: #666; font-size: 12.5px; text-align: center; }
@@ -177,12 +174,12 @@
     body.light-mode .test-stat-skipped { color: #9a9aa5 !important; }
     body.light-mode .test-time { color: #b0b0ba !important; }
 
-    body.light-mode .review-btn { background: #a78bfa1a !important; color: #7c3aed !important; }
+    body.light-mode .review-cat-btn { border-color: #d5d5dd !important; color: #55555f !important; }
+    body.light-mode .review-cat-btn:hover { border-color: #c8c8d0 !important; color: #222228 !important; }
+    body.light-mode .review-cat-btn.active.correct { background: #4ade8018 !important; border-color: #4ade80 !important; color: #2f9d5e !important; }
+    body.light-mode .review-cat-btn.active.wrong { background: #ef444418 !important; border-color: #ef4444 !important; color: #d13a3a !important; }
+    body.light-mode .review-cat-btn.active.skipped { background: #00000008 !important; border-color: #9a9aa5 !important; color: #55555f !important; }
     body.light-mode .review-panel { border-color: #e5e5ea !important; }
-    body.light-mode .review-filter-row { color: #7a7a85 !important; }
-    body.light-mode .toggle-switch-sm .toggle-track { background: #d5d5dd !important; }
-    body.light-mode .toggle-switch-sm .toggle-thumb { background: #ffffff !important; }
-    body.light-mode .toggle-switch-sm input:checked + .toggle-track { background: #4f8ef7 !important; }
     body.light-mode .review-unavailable, body.light-mode .review-empty { color: #9a9aa5 !important; }
     body.light-mode .review-question-card { background: #f7f7fa !important; border-color: #e5e5ea !important; }
     body.light-mode .review-q-text { color: #16161d !important; }
@@ -432,10 +429,14 @@
         `;
         wrap.appendChild(card);
 
-        const toggleRow = document.createElement('div');
-        toggleRow.className = 'review-toggle-row';
-        toggleRow.innerHTML = `<button class="review-btn" id="review-btn-${i}" onclick="toggleReview(${i})">${t('scoreboard','reviewQuestions')}</button>`;
-        wrap.appendChild(toggleRow);
+        const catRow = document.createElement('div');
+        catRow.className = 'review-cat-row';
+        catRow.innerHTML = `
+          <button class="review-cat-btn correct" id="review-cat-btn-${i}-correct" onclick="toggleReviewCategory(${i}, 'correct')">${t('scoreboard','correctWord')} (${localizeNum(r.correct)})</button>
+          <button class="review-cat-btn wrong" id="review-cat-btn-${i}-wrong" onclick="toggleReviewCategory(${i}, 'wrong')">${t('scoreboard','wrongWord')} (${localizeNum(r.wrong)})</button>
+          <button class="review-cat-btn skipped" id="review-cat-btn-${i}-skipped" onclick="toggleReviewCategory(${i}, 'skipped')">${t('scoreboard','skippedWord')} (${localizeNum(r.skipped)})</button>
+        `;
+        wrap.appendChild(catRow);
 
         const panel = document.createElement('div');
         panel.className = 'review-panel';
@@ -570,67 +571,49 @@
     // isn't needed -- this page never re-renders the list on lang toggle today, matching its
     // existing behaviour (lang-toggle here only affects data-i18n text, same as before this
     // feature).
-    const reviewState = {}; // { [index]: { open: bool, wrongOnly: bool } }
+    const reviewState = {}; // { [index]: 'correct' | 'wrong' | 'skipped' | null (collapsed) }
 
-    function toggleReview(i) {
+    // Clicking the already-active category collapses the panel (toggle behaviour); clicking a
+    // different category swaps the list in place -- only ever one category's questions on
+    // screen at a time, never stacked. The three buttons themselves are always visible (they
+    // ARE the compact default view alongside the existing summary stats); only the expanded
+    // question list underneath is what opens/closes.
+    function toggleReviewCategory(i, category) {
       const panel = document.getElementById(`review-panel-${i}`);
-      const btn = document.getElementById(`review-btn-${i}`);
-      const state = reviewState[i] || (reviewState[i] = { open: false, wrongOnly: true });
-      state.open = !state.open;
-      if (state.open) {
-        panel.classList.add('open');
-        btn.textContent = t('scoreboard', 'hideReview');
-        renderReviewPanel(i);
-      } else {
+      const wasActive = reviewState[i] === category;
+      reviewState[i] = wasActive ? null : category;
+
+      document.querySelectorAll(`#review-cat-btn-${i}-correct, #review-cat-btn-${i}-wrong, #review-cat-btn-${i}-skipped`)
+        .forEach(b => b.classList.remove('active'));
+
+      if (wasActive) {
         panel.classList.remove('open');
-        btn.textContent = t('scoreboard', 'reviewQuestions');
+        panel.innerHTML = '';
+        return;
       }
+
+      document.getElementById(`review-cat-btn-${i}-${category}`).classList.add('active');
+      panel.classList.add('open');
+      renderReviewList(i, category);
     }
 
-    function toggleWrongOnly(i, checked) {
-      reviewState[i].wrongOnly = checked;
-      renderReviewList(i);
-    }
-
-    function renderReviewPanel(i) {
+    function renderReviewList(i, category) {
       const r = allResults[i];
       const panel = document.getElementById(`review-panel-${i}`);
-      const state = reviewState[i];
 
       if (!r.question_details || !Array.isArray(r.question_details) || r.question_details.length === 0) {
         panel.innerHTML = `<div class="review-unavailable">${t('scoreboard', 'reviewNotAvailable')}</div>`;
         return;
       }
 
-      panel.innerHTML = `
-        <div class="review-panel-header">
-          <label class="review-filter-row">
-            <span class="toggle-switch-sm">
-              <input type="checkbox" id="wrong-only-${i}" ${state.wrongOnly ? 'checked' : ''} onchange="toggleWrongOnly(${i}, this.checked)"/>
-              <span class="toggle-track"><span class="toggle-thumb"></span></span>
-            </span>
-            ${t('scoreboard', 'wrongOnly')}
-          </label>
-        </div>
-        <div id="review-list-${i}"></div>
-      `;
-      renderReviewList(i);
-    }
-
-    function renderReviewList(i) {
-      const r = allResults[i];
-      const state = reviewState[i];
-      const listEl = document.getElementById(`review-list-${i}`);
-      const questions = state.wrongOnly
-        ? r.question_details.filter(q => q.status === 'wrong' || q.status === 'skipped')
-        : r.question_details;
+      const questions = r.question_details.filter(q => q.status === category);
 
       if (questions.length === 0) {
-        listEl.innerHTML = `<div class="review-empty">${t('scoreboard', 'noQuestionsInFilter')}</div>`;
+        panel.innerHTML = `<div class="review-empty">${t('scoreboard', 'noQuestionsInFilter')}</div>`;
         return;
       }
 
-      listEl.innerHTML = questions.map(q => {
+      panel.innerHTML = questions.map(q => {
         const correctAns = q.correct_answer ? q.correct_answer.toLowerCase().trim() : null;
         const userAns = q.userAnswer ? q.userAnswer.toLowerCase().trim() : null;
         const opts = ['a', 'b', 'c', 'd'].map(opt => {
@@ -664,7 +647,7 @@
       // diagram-library.html and the PYQ diagram fix already do this. Host divs and questions
       // walk in lockstep (both in the same original array order), so no id-matching is needed.
       let diagIndex = 0;
-      const diagHosts = listEl.querySelectorAll('[id^="diag-"]');
+      const diagHosts = panel.querySelectorAll('[id^="diag-"]');
       questions.forEach(q => {
         if (!q.diagram_url) return;
         const host = diagHosts[diagIndex++];

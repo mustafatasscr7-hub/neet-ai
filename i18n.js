@@ -933,17 +933,13 @@ const TRANSLATIONS = {
       bioPill: 'Bio',
       phyPill: 'Phy',
       chemPill: 'Chem',
-      reviewQuestions: '📋 Review Questions',
-      hideReview: '🔼 Hide Review',
-      wrongOnly: 'Wrong only',
       yourAnswer: 'Your answer:',
       correctAnswer: 'Correct answer:',
       statusCorrect: '✅ Correct',
       statusWrong: '❌ Wrong',
       statusSkipped: '⬜ Skipped',
       reviewNotAvailable: "Detailed question review isn't available for this attempt (taken before this feature was added).",
-      noQuestionsInFilter: 'No questions in this category.',
-      loadingReview: 'Loading review...'
+      noQuestionsInFilter: 'No questions in this category.'
     },
     hi: {
       headerTitle: 'स्कोरबोर्ड',
@@ -969,17 +965,13 @@ const TRANSLATIONS = {
       bioPill: 'जीव',
       phyPill: 'भौतिक',
       chemPill: 'रसायन',
-      reviewQuestions: '📋 प्रश्न समीक्षा',
-      hideReview: '🔼 समीक्षा छिपाएँ',
-      wrongOnly: 'केवल गलत',
       yourAnswer: 'आपका उत्तर:',
       correctAnswer: 'सही उत्तर:',
       statusCorrect: '✅ सही',
       statusWrong: '❌ गलत',
       statusSkipped: '⬜ छोड़ा गया',
       reviewNotAvailable: 'इस प्रयास के लिए विस्तृत प्रश्न समीक्षा उपलब्ध नहीं है (यह सुविधा जुड़ने से पहले लिया गया था)।',
-      noQuestionsInFilter: 'इस श्रेणी में कोई प्रश्न नहीं है।',
-      loadingReview: 'समीक्षा लोड हो रही है...'
+      noQuestionsInFilter: 'इस श्रेणी में कोई प्रश्न नहीं है।'
     }
   },
 
