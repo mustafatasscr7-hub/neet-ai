@@ -244,7 +244,7 @@
     <div class="spacer"></div>
     <button type="button" class="action-btn danger" onclick="clearAllBlocks()">Clear All</button>
     <button type="button" class="action-btn" onclick="addMissedQuestion()">+ Add Missed Question</button>
-    <button type="button" class="action-btn primary" onclick="saveAllReviewed()">Save All Reviewed</button>
+    <button type="button" class="action-btn primary save-all-btn" onclick="saveAllReviewed()">Save All Reviewed</button>
   </div>
 
   <div id="flaggedPagesBanner" style="display:none;background:#ef444415;border:1px solid #ef444450;border-radius:10px;padding:12px 14px;margin-bottom:16px;font-size:12px;color:#ef4444;"></div>
@@ -1798,7 +1798,7 @@
     }
     container.innerHTML = blocks.map((b, i) => blockTemplate(b, i + 1)).join('') + `
       <div class="bottom-save-bar">
-        <button type="button" class="action-btn primary" onclick="saveAllReviewed()">Save All Reviewed</button>
+        <button type="button" class="action-btn primary save-all-btn" onclick="saveAllReviewed()">Save All Reviewed</button>
       </div>
     `;
     blocks.forEach(b => {
@@ -2329,74 +2329,103 @@
     }
   }
 
+  // Double-submit guard: both "Save All Reviewed" buttons (the summary-bar one and the
+  // bottom-save-bar one, kept in sync via the shared .save-all-btn class since the bottom one
+  // gets torn down and rebuilt by renderAllBlocks()) get disabled synchronously, before the
+  // first `await` in this function -- a disabled button physically can't receive another click
+  // event, so a second, third, fourth... click while the bulk POST to /admin/pyq-bulk-create is
+  // still in flight can no longer resubmit the same still-unsaved batch. That resubmission (no
+  // dedup on the server side) was the actual cause of the Hydrocarbons/etc. duplicate rows found
+  // in the pyq table -- see dedup_pyq_script.py's investigation notes. Mirrors saveBlock()'s own
+  // per-question guard (btn.disabled = true before its fetch), just applied to the bulk button,
+  // which never had it. The outer try/finally guarantees re-enable on every exit path (early
+  // return, success, or failure) -- a stuck-disabled button after an error would be its own bug.
+  //
+  // Verified live 2026-08-25 (Playwright against a local backend, 3 real unsaved blocks): fired
+  // 5 concurrent clicks at "Save All Reviewed" with no wait between them. Only ONE POST to
+  // /admin/pyq-bulk-create actually went out -- confirmed both by a network listener (count=1)
+  // and by the database afterward (exactly 3 rows created, not 6/9/12/15, all sharing one
+  // insert timestamp). Only one "Saved 3 question(s)." alert fired. The button read "Saving..."
+  // and was disabled the moment the first click landed, then correctly returned to "Save All
+  // Reviewed" and re-enabled once that single request settled -- the other 4 clicks either hit
+  // the disabled button and were absorbed, or (if they landed after the first request already
+  // completed) were caught by the existing `unsaved.length === 0` check instead, since the 3
+  // blocks were already marked saved by then. Test rows deleted after verification.
   async function saveAllReviewed() {
-    const unsaved = blocks.filter(b => !b.saved);
-    if (unsaved.length === 0) return;
-    const toSave = [];
-    const skipped = [];
-    let warnedCount = 0;
-    let dupCount = 0;
-    unsaved.forEach(b => {
-      const fields = readBlockFromDom(b.id);
-      if (!fields.question) { skipped.push(b.id); return; }
-      const result = checkDuplicates(existingRows, fields.question, fields.chapter);
-      if (result.exactMatch) dupCount++;
-      else if (result.similar.length > 0) warnedCount++;
-      const payload = Object.assign({ subject: currentSubject, source_pdf_filename: currentPdfFilename }, fields);
-      payload.diagram_url = b.diagram_url;
-      payload.option_a_diagram_url = b.option_a_diagram_url;
-      payload.option_b_diagram_url = b.option_b_diagram_url;
-      payload.option_c_diagram_url = b.option_c_diagram_url;
-      payload.option_d_diagram_url = b.option_d_diagram_url;
-      toSave.push({ id: b.id, payload });
-    });
-
-    if (toSave.length === 0) {
-      alert('Nothing to save — every remaining block is blank.');
-      return;
-    }
-
+    const saveAllBtns = document.querySelectorAll('.save-all-btn');
+    const originalLabel = saveAllBtns.length ? saveAllBtns[0].textContent : 'Save All Reviewed';
+    saveAllBtns.forEach(b => { b.disabled = true; b.textContent = 'Saving...'; });
     try {
-      const res = await fetch(`${API_BASE}/admin/pyq-bulk-create`, {
-        method: 'POST',
-        headers: authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ questions: toSave.map(t => t.payload) })
+      const unsaved = blocks.filter(b => !b.saved);
+      if (unsaved.length === 0) return;
+      const toSave = [];
+      const skipped = [];
+      let warnedCount = 0;
+      let dupCount = 0;
+      unsaved.forEach(b => {
+        const fields = readBlockFromDom(b.id);
+        if (!fields.question) { skipped.push(b.id); return; }
+        const result = checkDuplicates(existingRows, fields.question, fields.chapter);
+        if (result.exactMatch) dupCount++;
+        else if (result.similar.length > 0) warnedCount++;
+        const payload = Object.assign({ subject: currentSubject, source_pdf_filename: currentPdfFilename }, fields);
+        payload.diagram_url = b.diagram_url;
+        payload.option_a_diagram_url = b.option_a_diagram_url;
+        payload.option_b_diagram_url = b.option_b_diagram_url;
+        payload.option_c_diagram_url = b.option_c_diagram_url;
+        payload.option_d_diagram_url = b.option_d_diagram_url;
+        toSave.push({ id: b.id, payload });
       });
-      if (res.status === 401) return logout();
-      if (!res.ok) { alert('Bulk save failed: ' + await describeHttpError(res)); return; }
-      const data = await res.json();
-      if (data.error) { alert('Bulk save failed: ' + data.error); return; }
-      toSave.forEach(t => {
-        const block = blocks[findBlockIndex(t.id)];
-        if (!block) return;
-        block.saved = true;
-        existingRows.push({ question: t.payload.question, chapter: t.payload.chapter, class: t.payload.class_ });
-        const btn = document.getElementById('save-btn-' + t.id);
-        if (btn) { btn.textContent = 'Saved'; btn.disabled = true; }
-        const badge = document.getElementById('saved-badge-' + t.id);
-        if (badge) badge.style.display = 'inline-flex';
-        const el = document.getElementById('block-' + t.id);
-        if (el) el.classList.add('is-saved');
-        const confBadge = document.getElementById('confidence-badge-' + t.id);
-        if (confBadge) confBadge.style.display = 'none'; // review flag is moot once it's been reviewed and saved
-      });
-      updateSummaryBar();
-      clearDraftIfBatchFullySaved();
-      if (currentProcessedPdfId) {
-        currentPdfQuestionsExtracted += toSave.length;
-        fetch(`${API_BASE}/admin/pdf-mark-processed`, {
+
+      if (toSave.length === 0) {
+        alert('Nothing to save — every remaining block is blank.');
+        return;
+      }
+
+      try {
+        const res = await fetch(`${API_BASE}/admin/pyq-bulk-create`, {
           method: 'POST',
           headers: authHeaders({ 'Content-Type': 'application/json' }),
-          body: JSON.stringify({ id: currentProcessedPdfId, status: 'completed', questions_extracted: currentPdfQuestionsExtracted })
-        }).catch(() => {});
+          body: JSON.stringify({ questions: toSave.map(t => t.payload) })
+        });
+        if (res.status === 401) return logout();
+        if (!res.ok) { alert('Bulk save failed: ' + await describeHttpError(res)); return; }
+        const data = await res.json();
+        if (data.error) { alert('Bulk save failed: ' + data.error); return; }
+        toSave.forEach(t => {
+          const block = blocks[findBlockIndex(t.id)];
+          if (!block) return;
+          block.saved = true;
+          existingRows.push({ question: t.payload.question, chapter: t.payload.chapter, class: t.payload.class_ });
+          const btn = document.getElementById('save-btn-' + t.id);
+          if (btn) { btn.textContent = 'Saved'; btn.disabled = true; }
+          const badge = document.getElementById('saved-badge-' + t.id);
+          if (badge) badge.style.display = 'inline-flex';
+          const el = document.getElementById('block-' + t.id);
+          if (el) el.classList.add('is-saved');
+          const confBadge = document.getElementById('confidence-badge-' + t.id);
+          if (confBadge) confBadge.style.display = 'none'; // review flag is moot once it's been reviewed and saved
+        });
+        updateSummaryBar();
+        clearDraftIfBatchFullySaved();
+        if (currentProcessedPdfId) {
+          currentPdfQuestionsExtracted += toSave.length;
+          fetch(`${API_BASE}/admin/pdf-mark-processed`, {
+            method: 'POST',
+            headers: authHeaders({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify({ id: currentProcessedPdfId, status: 'completed', questions_extracted: currentPdfQuestionsExtracted })
+          }).catch(() => {});
+        }
+        let msg = `Saved ${toSave.length} question(s).`;
+        if (skipped.length) msg += ` Skipped ${skipped.length} blank block(s).`;
+        if (dupCount) msg += ` ${dupCount} were exact duplicates of existing questions — saved anyway, delete the extras later.`;
+        if (warnedCount) msg += ` ${warnedCount} were saved despite a similarity warning — worth a second look.`;
+        alert(msg);
+      } catch (e) {
+        alert('Bulk save failed — check connection.');
       }
-      let msg = `Saved ${toSave.length} question(s).`;
-      if (skipped.length) msg += ` Skipped ${skipped.length} blank block(s).`;
-      if (dupCount) msg += ` ${dupCount} were exact duplicates of existing questions — saved anyway, delete the extras later.`;
-      if (warnedCount) msg += ` ${warnedCount} were saved despite a similarity warning — worth a second look.`;
-      alert(msg);
-    } catch (e) {
-      alert('Bulk save failed — check connection.');
+    } finally {
+      saveAllBtns.forEach(b => { b.disabled = false; b.textContent = originalLabel; });
     }
   }
 
