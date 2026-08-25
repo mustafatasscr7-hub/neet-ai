@@ -110,6 +110,19 @@
     .review-q-answer-note { font-size: 11px; color: #666; }
     .review-q-diagram-img { max-width: 100%; height: auto; display: block; border-radius: 8px; margin: 10px 0; border: 1px solid #26262e; }
 
+    /* Show Explanation -- same .sol-btn/.sol-div treatment pyqbank.html/mockresults.html/
+       personalised-test.html/savedquestions.html already use for their own "Show Solution"
+       buttons, reused here rather than a new visual style. Wrong-only: correct answers don't
+       need a solution reveal, skipped ones aren't in scope for this task either. */
+    .sol-btn { background: #a78bfa1c; border: none; color: #a78bfa; padding: 6px 14px; border-radius: 8px; cursor: pointer; font-size: 11.5px; font-weight: 600; font-family: 'Inter', sans-serif; transition: filter 0.15s ease, transform 0.1s ease; margin-top: 8px; }
+    .sol-btn:hover { filter: brightness(1.15); }
+    .sol-btn:active { transform: scale(0.97); }
+    .sol-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .sol-div { display: none; margin-top: 10px; padding: 12px; background: #16161f; border-radius: 8px; border: 1px solid #2a2a3a; color: #c4c4c4; line-height: 1.65; font-size: 12.5px; overflow-x: auto; word-wrap: break-word; }
+    .sol-error-text { color: #ef4444; }
+    .thinking-indicator { display: flex; align-items: center; gap: 10px; }
+    .thinking-text { font-size: 12.5px; color: #888; animation: thinkingFade 2.2s ease-in-out infinite; }
+
     /* Report-a-question: identical component to pyqbank.html/mockresults.html/chat.html --
        this review panel was missing it entirely (an oversight from when it was first built),
        even though every sibling page showing the same pyq_id-backed diagram_url already has it. */
@@ -206,6 +219,9 @@
     body.light-mode .review-q-option.correct-ans { background: #4ade8018 !important; border-color: #4ade8050 !important; color: #2f9d5e !important; }
     body.light-mode .review-q-option.wrong-ans { background: #ef444415 !important; border-color: #ef444450 !important; color: #d13a3a !important; }
     body.light-mode .review-q-answer-note { color: #9a9aa5 !important; }
+    body.light-mode .sol-btn { background: #a78bfa1a !important; color: #7c3aed !important; }
+    body.light-mode .sol-div { background: #f5f5f7 !important; border-color: #d5d5dd !important; color: #333338 !important; }
+    body.light-mode .thinking-text { color: #7a7a85 !important; }
     body.light-mode .review-q-diagram-img { border-color: #e5e5ea !important; }
     body.light-mode .report-popup { background: #ffffff !important; border-color: #e3e3ea !important; box-shadow: 0 8px 24px rgba(0,0,0,0.12) !important; }
     body.light-mode .report-popup-title { color: #0d0d0d !important; }
@@ -603,7 +619,13 @@
       }
       if (lastIndex < text.length) parts.push({ type: 'text', value: text.slice(lastIndex) });
       return parts.map(p => {
-        if (p.type === 'text') return escapeHtml(p.value).replace(/\n/g, '<br>');
+        // **bold** -> <strong> on the escaped text -- not a full markdown parser (still no
+        // lists/headers/etc, same "compact secondary view" scope as the comment above), just
+        // enough that /solve's own output (its system prompt wraps key terms in **bold**, same
+        // template every "Show Solution" button elsewhere already renders as real markdown) doesn't
+        // show raw asterisks here specifically, since this panel is the one place using this
+        // lighter renderer against genuinely markdown-formatted AI text rather than plain PYQ text.
+        if (p.type === 'text') return escapeHtml(p.value).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>');
         try {
           return katex.renderToString(p.value, { displayMode: p.type === 'display', throwOnError: false });
         } catch (e) {
@@ -740,7 +762,7 @@
         return;
       }
 
-      panel.innerHTML = questions.map(q => {
+      panel.innerHTML = questions.map((q, qIdx) => {
         const correctAns = q.correct_answer ? q.correct_answer.toLowerCase().trim() : null;
         const userAns = q.userAnswer ? q.userAnswer.toLowerCase().trim() : null;
         const opts = ['a', 'b', 'c', 'd'].map(opt => {
@@ -755,6 +777,16 @@
         const statusText = q.status === 'correct' ? t('scoreboard', 'statusCorrect') : q.status === 'wrong' ? t('scoreboard', 'statusWrong') : t('scoreboard', 'statusSkipped');
         const diagramId = 'diag-' + Math.random().toString(36).slice(2);
 
+        // Show Explanation -- wrong answers only (correct answers don't need a solution reveal;
+        // skipped ones are out of scope for this task). Looked up fresh from allResults[i] by
+        // (category, qIdx) inside toggleExplanation rather than serializing q into the onclick
+        // attribute -- avoids the quote-escaping fragility of embedding a full question object
+        // (with LaTeX backslashes, quoted phrases, etc) as inline HTML.
+        const explanationHtml = q.status === 'wrong'
+          ? `<button class="sol-btn" id="sol-btn-${i}-${qIdx}" onclick="toggleExplanation(${i}, '${category}', ${qIdx}, this)">${t('scoreboard', 'showExplanation')}</button>
+             <div class="sol-div" id="sol-div-${i}-${qIdx}"></div>`
+          : '';
+
         return `
           <div class="review-question-card">
             <div class="review-q-meta">
@@ -766,6 +798,7 @@
             ${q.diagram_url ? `<div id="${diagramId}"></div>` : ''}
             <div class="review-q-options">${opts}</div>
             ${q.userAnswer ? `<div class="review-q-answer-note">${t('scoreboard', 'yourAnswer')} ${q.userAnswer.toUpperCase()}${q.status === 'wrong' && correctAns ? ` · ${t('scoreboard', 'correctAnswer')} ${correctAns.toUpperCase()}` : ''}</div>` : ''}
+            ${explanationHtml}
           </div>
         `;
       }).join('');
@@ -783,6 +816,116 @@
         const diagram = { image_url: q.diagram_url, name: q.chapter || 'Diagram', description: null };
         host.appendChild(buildDiagramImage(diagram, { maxHeight: '220px', onClick: () => showDiagramModal(diagram) }));
       });
+    }
+
+    // ===== Show Explanation (wrong answers only) =====
+    // Reuses the app's EXISTING lazy-generate-and-cache solution pipeline (/solve +
+    // pyq_solution_cache, permanent cache keyed by pyq_id+language) rather than a new endpoint --
+    // pyq has no explanation/solution column, but this mechanism already exists and is already
+    // used by pyqbank.html/mocktest.html/personalised-test.html/savedquestions.html/
+    // mockresults.html's own "Show Solution" buttons. toggleExplanation() below mirrors
+    // pyqbank.html's toggleSolution() (same cache-hit fast path, same streaming render, same 402
+    // quota handling), minus the alternate-method append and rotating thinking phrases -- this
+    // panel is a compact secondary view, not a replacement for those dedicated pages, matching
+    // the same scope decision already made for renderMathInText's simpler formatting above.
+    //
+    // Cost note: this adds NO new inference cost model -- /solve already runs the same
+    // enforce_daily_budget check as every other doubt, and the permanent cache means a question
+    // already solved via PYQ Bank/a mock test/etc. is a free, instant cache hit here too, not a
+    // second paid generation. The only genuinely new spend is the first time ANY student solves
+    // a given question through ANY entry point, same as today.
+
+    async function ensureCorrectAnswer(q) {
+      if (q && q.correct_answer) return q.correct_answer.toLowerCase().trim();
+      try {
+        const resp = await fetch(`${API_BASE}/ensure-correct-answer`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pyq_id: q.id })
+        });
+        const data = await resp.json();
+        if (data && data.correct_answer) {
+          q.correct_answer = data.correct_answer; // mutates the shared question_details entry -- next open (this card or another) sees the resolved value, no re-resolve needed
+          return data.correct_answer.toLowerCase().trim();
+        }
+      } catch (e) {
+        console.error('ensure-correct-answer failed', e);
+      }
+      return '';
+    }
+
+    async function toggleExplanation(i, category, qIdx, btn) {
+      const questions = allResults[i].question_details.filter(qq => qq.status === category);
+      const q = questions[qIdx];
+      const solDiv = document.getElementById(`sol-div-${i}-${qIdx}`);
+
+      if (solDiv.style.display === 'block') {
+        solDiv.style.display = 'none';
+        btn.textContent = t('scoreboard', 'showExplanation');
+        return;
+      }
+      if (solDiv.innerHTML) {
+        solDiv.style.display = 'block';
+        btn.textContent = t('scoreboard', 'hideExplanation');
+        return;
+      }
+
+      btn.textContent = t('scoreboard', 'generatingExplanation');
+      btn.disabled = true;
+      solDiv.style.display = 'block';
+      solDiv.innerHTML = `<div class="thinking-indicator"><span class="thinking-orb"></span><span class="thinking-text">${t('scoreboard', 'generatingExplanation')}</span></div>`;
+
+      try {
+        const resolvedAnswer = await ensureCorrectAnswer(q);
+        const { data: { session } } = await client.auth.getSession();
+        const res = await fetch(`${API_BASE}/solve`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            pyq_id: q.id, question: q.question,
+            option_a: q.option_a, option_b: q.option_b, option_c: q.option_c, option_d: q.option_d,
+            correct_answer: resolvedAnswer, language: getLang(), user_id: session?.user?.id || ''
+          })
+        });
+        if (res.status === 402) {
+          const guest = !session;
+          const link = guest ? './login.html' : './pricing.html';
+          solDiv.innerHTML = `<span class="sol-error-text">${t('chat', guest ? 'guestLimitReachedMessage' : 'limitReachedMessage')} <a href="${link}">${t('chat', guest ? 'login' : 'upgradeToPro')}</a></span>`;
+          btn.textContent = t('scoreboard', 'showExplanation');
+          btn.disabled = false;
+          return;
+        }
+        if (!res.ok) throw new Error('solve failed');
+
+        // Cache-hit fast path: near-instant, so hold the thinking indicator briefly rather than
+        // having the explanation jarringly pop in -- same X-Cache-driven approach pyqbank.html uses.
+        if (res.headers.get('X-Cache') === 'HIT') {
+          await new Promise(r => setTimeout(r, 600));
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let fullText = '';
+        let lastRenderTime = 0;
+        const RENDER_THROTTLE_MS = 100;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          fullText += decoder.decode(value);
+          const now = Date.now();
+          if (now - lastRenderTime >= RENDER_THROTTLE_MS) {
+            solDiv.innerHTML = renderMathInText(fullText);
+            lastRenderTime = now;
+          }
+        }
+        solDiv.innerHTML = renderMathInText(fullText);
+        btn.textContent = t('scoreboard', 'hideExplanation');
+        btn.disabled = false;
+      } catch (e) {
+        solDiv.innerHTML = `<span class="sol-error-text">${t('scoreboard', 'failedExplanation')}</span>`;
+        btn.textContent = t('scoreboard', 'showExplanation');
+        btn.disabled = false;
+      }
     }
 
     loadScoreboard();

@@ -939,7 +939,11 @@ const TRANSLATIONS = {
       statusWrong: '❌ Wrong',
       statusSkipped: '⬜ Skipped',
       reviewNotAvailable: "Detailed question review isn't available for this attempt (taken before this feature was added).",
-      noQuestionsInFilter: 'No questions in this category.'
+      noQuestionsInFilter: 'No questions in this category.',
+      showExplanation: '💡 Show Explanation',
+      hideExplanation: '🔼 Hide Explanation',
+      generatingExplanation: '⏳ Generating...',
+      failedExplanation: 'Failed to generate explanation.'
     },
     hi: {
       headerTitle: 'स्कोरबोर्ड',
@@ -971,7 +975,11 @@ const TRANSLATIONS = {
       statusWrong: '❌ गलत',
       statusSkipped: '⬜ छोड़ा गया',
       reviewNotAvailable: 'इस प्रयास के लिए विस्तृत प्रश्न समीक्षा उपलब्ध नहीं है (यह सुविधा जुड़ने से पहले लिया गया था)।',
-      noQuestionsInFilter: 'इस श्रेणी में कोई प्रश्न नहीं है।'
+      noQuestionsInFilter: 'इस श्रेणी में कोई प्रश्न नहीं है।',
+      showExplanation: '💡 व्याख्या दिखाएँ',
+      hideExplanation: '🔼 व्याख्या छिपाएँ',
+      generatingExplanation: '⏳ बनाया जा रहा है...',
+      failedExplanation: 'व्याख्या बनाने में विफल।'
     }
   },
 
