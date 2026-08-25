@@ -932,7 +932,18 @@ const TRANSLATIONS = {
       skippedWord: 'skipped',
       bioPill: 'Bio',
       phyPill: 'Phy',
-      chemPill: 'Chem'
+      chemPill: 'Chem',
+      reviewQuestions: '📋 Review Questions',
+      hideReview: '🔼 Hide Review',
+      wrongOnly: 'Wrong only',
+      yourAnswer: 'Your answer:',
+      correctAnswer: 'Correct answer:',
+      statusCorrect: '✅ Correct',
+      statusWrong: '❌ Wrong',
+      statusSkipped: '⬜ Skipped',
+      reviewNotAvailable: "Detailed question review isn't available for this attempt (taken before this feature was added).",
+      noQuestionsInFilter: 'No questions in this category.',
+      loadingReview: 'Loading review...'
     },
     hi: {
       headerTitle: 'स्कोरबोर्ड',
@@ -957,7 +968,18 @@ const TRANSLATIONS = {
       skippedWord: 'छोड़े गए',
       bioPill: 'जीव',
       phyPill: 'भौतिक',
-      chemPill: 'रसायन'
+      chemPill: 'रसायन',
+      reviewQuestions: '📋 प्रश्न समीक्षा',
+      hideReview: '🔼 समीक्षा छिपाएँ',
+      wrongOnly: 'केवल गलत',
+      yourAnswer: 'आपका उत्तर:',
+      correctAnswer: 'सही उत्तर:',
+      statusCorrect: '✅ सही',
+      statusWrong: '❌ गलत',
+      statusSkipped: '⬜ छोड़ा गया',
+      reviewNotAvailable: 'इस प्रयास के लिए विस्तृत प्रश्न समीक्षा उपलब्ध नहीं है (यह सुविधा जुड़ने से पहले लिया गया था)।',
+      noQuestionsInFilter: 'इस श्रेणी में कोई प्रश्न नहीं है।',
+      loadingReview: 'समीक्षा लोड हो रही है...'
     }
   },
 
@@ -1242,10 +1264,11 @@ const TRANSLATIONS = {
       pageSubtitle: 'Browse reviewed NCERT diagrams by subject and class',
       allSubjects: 'All Subjects',
       allClasses: 'All Classes',
+      allChapters: 'All Chapters',
       classWord: 'Class',
       loadingDiagrams: 'Loading diagrams...',
       noDiagramsGeneric: 'No diagrams yet — check back soon as more are added.',
-      noDiagramsFor: 'No diagrams yet for'
+      noDiagramsFor: 'No diagrams yet for {label}'
     },
     hi: {
       headerTitle: 'डायग्राम लाइब्रेरी',
@@ -1253,10 +1276,11 @@ const TRANSLATIONS = {
       pageSubtitle: 'विषय और कक्षा के अनुसार समीक्षित NCERT डायग्राम ब्राउज़ करें',
       allSubjects: 'सभी विषय',
       allClasses: 'सभी कक्षाएँ',
+      allChapters: 'सभी अध्याय',
       classWord: 'कक्षा',
       loadingDiagrams: 'डायग्राम लोड हो रहे हैं...',
       noDiagramsGeneric: 'अभी तक कोई डायग्राम नहीं है — जल्द ही और जोड़े जाएँगे।',
-      noDiagramsFor: 'के लिए अभी तक कोई डायग्राम नहीं है:'
+      noDiagramsFor: '{label} के लिए अभी तक कोई डायग्राम नहीं है।'
     }
   },
 

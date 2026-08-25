@@ -236,6 +236,25 @@
 
     const data = JSON.parse(sessionStorage.getItem('mockTestResults') || 'null');
 
+    // Trims each question object down to just what a review display needs before persisting --
+    // `results` entries are full pyq-table rows spread with userAnswer/status, which includes a
+    // 1536-float `embedding` column (~19KB of JSON per question, ~96% of the payload measured on
+    // a real 10-question test). Storing that in every mock_results row would balloon a 180-Q full
+    // mock test to several MB for data that review display never reads.
+    function trimQuestionDetails(results) {
+      if (!results) return null;
+      return results.map(q => ({
+        id: q.id, subject: q.subject, chapter: q.chapter, year: q.year, difficulty: q.difficulty,
+        question: q.question,
+        option_a: q.option_a, option_b: q.option_b, option_c: q.option_c, option_d: q.option_d,
+        correct_answer: q.correct_answer,
+        diagram_url: q.diagram_url,
+        option_a_diagram_url: q.option_a_diagram_url, option_b_diagram_url: q.option_b_diagram_url,
+        option_c_diagram_url: q.option_c_diagram_url, option_d_diagram_url: q.option_d_diagram_url,
+        userAnswer: q.userAnswer, status: q.status
+      }));
+    }
+
     async function saveResultToSupabase(data, subjectData) {
       const { createClient } = supabase;
       const client = createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -253,6 +272,11 @@
         subject_physics_score: Math.max(0, (subjectData.Physics.correct * 4) - subjectData.Physics.wrong),
         subject_chemistry_score: Math.max(0, (subjectData.Chemistry.correct * 4) - subjectData.Chemistry.wrong),
         mock_test_id: data.mockTestId || null,
+        // Persists a trimmed version of the per-question array this page already renders its
+        // own Question Review from (question + userAnswer + status) -- previously only lived in
+        // sessionStorage, so scoreboard.html's history view had nothing to show for past
+        // attempts. See add_question_details_to_mock_results.sql.
+        question_details: trimQuestionDetails(data.results),
       });
     }
 

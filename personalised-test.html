@@ -1849,6 +1849,27 @@
       }
     }
 
+    // Trims each question object down to just what a review display needs before persisting --
+    // `results` entries are full pyq-table rows spread with userAnswer/status, which includes a
+    // 1536-float `embedding` column (~19KB of JSON per question, ~96% of the payload measured on
+    // a real 10-question test). Storing that in every mock_results row would balloon a 180-Q full
+    // mock test to several MB for data that review display never reads. Same helper as
+    // mockresults.html's saveResultToSupabase (duplicated, not shared, since these two files
+    // don't share a JS module).
+    function trimQuestionDetails(results) {
+      if (!results) return null;
+      return results.map(q => ({
+        id: q.id, subject: q.subject, chapter: q.chapter, year: q.year, difficulty: q.difficulty,
+        question: q.question,
+        option_a: q.option_a, option_b: q.option_b, option_c: q.option_c, option_d: q.option_d,
+        correct_answer: q.correct_answer,
+        diagram_url: q.diagram_url,
+        option_a_diagram_url: q.option_a_diagram_url, option_b_diagram_url: q.option_b_diagram_url,
+        option_c_diagram_url: q.option_c_diagram_url, option_d_diagram_url: q.option_d_diagram_url,
+        userAnswer: q.userAnswer, status: q.status
+      }));
+    }
+
     async function saveResultToSupabase(data) {
       try {
         const { data: { session } } = await client.auth.getSession();
@@ -1877,7 +1898,10 @@
           subject_biology_score: subjectScore.Biology,
           subject_physics_score: subjectScore.Physics,
           subject_chemistry_score: subjectScore.Chemistry,
-          source: 'personalised'
+          source: 'personalised',
+          // Same addition as mockresults.html's saveResultToSupabase -- see
+          // add_question_details_to_mock_results.sql for why this was missing before.
+          question_details: trimQuestionDetails(data.results),
         });
       } catch (e) {
         console.log('Result save error:', e);

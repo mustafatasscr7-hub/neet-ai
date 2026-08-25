@@ -8,6 +8,8 @@
   <link rel="icon" type="image/svg+xml" href="assets/logo.svg" />
   <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: 'Inter', sans-serif; background: #08080c; color: #ececec; min-height: 100vh; }
@@ -69,6 +71,61 @@
     .che-pill { background: #f9731614; color: #f97316; border: 1px solid #f9731628; }
     .test-time { font-size: 10.5px; color: #444; margin-top: 2px; text-align: right; }
 
+    /* Test card restructured into an outer flex-column wrapper: .test-card keeps its original
+       flex-row content (unchanged), .review-toggle-row + .review-panel sit below it as new
+       full-width children -- a flex-row child can't host a full-width row itself. */
+    .test-card-wrap { background: #111116; border: 1px solid #1e1e24; border-radius: 16px; transition: all 0.2s; }
+    .test-card-wrap:hover { border-color: #2f2f3a; }
+    .test-card-wrap .test-card { border: none; border-radius: 0; cursor: default; }
+    .test-card-wrap .test-card:hover { transform: none; background: transparent; }
+    .review-toggle-row { padding: 0 22px 16px; }
+    /* Same tinted-pill button language as pyqbank.html's .sol-btn (Show Solution) -- this is
+       the closest existing expand/collapse analog in the app, reused rather than inventing a
+       different button treatment for what's functionally the same interaction. */
+    .review-btn { background: #a78bfa1c; border: none; color: #a78bfa; padding: 7px 16px; border-radius: 9px; cursor: pointer; font-size: 12px; font-weight: 600; font-family: 'Inter', sans-serif; transition: filter 0.15s ease; }
+    .review-btn:hover { filter: brightness(1.15); }
+    .review-panel { display: none; border-top: 1px solid #1e1e24; padding: 16px 22px 20px; }
+    .review-panel.open { display: block; }
+    .review-panel-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+    .review-filter-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #999; }
+    .toggle-switch-sm { position: relative; display: inline-block; width: 32px; height: 18px; flex-shrink: 0; cursor: pointer; }
+    .toggle-switch-sm input { opacity: 0; width: 0; height: 0; }
+    .toggle-switch-sm .toggle-track { position: absolute; inset: 0; background: #2a2a2a; border-radius: 18px; transition: background 0.2s; }
+    .toggle-switch-sm .toggle-thumb { position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; background: #ececec; border-radius: 50%; transition: transform 0.2s; }
+    .toggle-switch-sm input:checked + .toggle-track { background: #4f8ef7; }
+    .toggle-switch-sm input:checked + .toggle-track .toggle-thumb { transform: translateX(14px); }
+
+    .review-unavailable { padding: 20px 4px; color: #666; font-size: 12.5px; text-align: center; }
+    .review-empty { padding: 20px 4px; color: #666; font-size: 12.5px; text-align: center; }
+
+    .review-question-card { background: #16161b; border: 1px solid #22222a; border-radius: 12px; padding: 16px; margin-bottom: 10px; }
+    .review-question-card:last-child { margin-bottom: 0; }
+    .review-q-meta { display: flex; align-items: center; gap: 10px; font-size: 11px; color: #555; margin-bottom: 10px; }
+    .review-q-status { font-size: 11px; font-weight: 600; }
+    .review-q-status.correct { color: #4ade80; }
+    .review-q-status.wrong { color: #ef4444; }
+    .review-q-status.skipped { color: #7a7a85; }
+    .review-q-text { font-size: 13.5px; color: #ececec; line-height: 1.65; margin-bottom: 12px; }
+    .review-q-options { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+    .review-q-option { padding: 8px 12px; border-radius: 7px; font-size: 12.5px; background: #1a1a20; color: #888; border: 1px solid #26262e; }
+    .review-q-option.correct-ans { background: #4ade8018; border-color: #4ade8050; color: #4ade80; }
+    .review-q-option.wrong-ans { background: #ef444415; border-color: #ef444450; color: #ef4444; }
+    .review-q-answer-note { font-size: 11px; color: #666; }
+    .review-q-diagram-img { max-width: 100%; height: auto; display: block; border-radius: 8px; margin: 10px 0; border: 1px solid #26262e; }
+
+    /* Diagram lightbox (buildDiagramImage/showDiagramModal) -- copied verbatim from chat.html,
+       same as diagram-library.html did, so this reuses the exact same component instead of a
+       third bespoke image display. */
+    .diagram-skeleton { width: min(300px, calc(100vw - 140px)); aspect-ratio: 0.95; border-radius: 6px; background: linear-gradient(100deg, #1a1a26 30%, #26263a 50%, #1a1a26 70%); background-size: 200% 100%; animation: diagramShimmer 1.4s ease-in-out infinite; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; }
+    @keyframes diagramShimmer { 0% { background-position: 150% 0; } 100% { background-position: -150% 0; } }
+    .diagram-skeleton-label { font-size: 12px; color: #888; animation: thinkingFade 2.2s ease-in-out infinite; }
+    .thinking-orb { position: relative; width: 18px; height: 18px; flex-shrink: 0; }
+    .thinking-orb::before, .thinking-orb::after { content: ''; position: absolute; inset: 0; border-radius: 50%; border: 2px solid transparent; }
+    .thinking-orb::before { border-top-color: #4f8ef7; border-right-color: #4f8ef7; animation: thinkingSpin 1.6s linear infinite; }
+    .thinking-orb::after { border-bottom-color: #7c3aed; border-left-color: #7c3aed; animation: thinkingSpin 2.2s linear infinite reverse; }
+    @keyframes thinkingSpin { to { transform: rotate(360deg); } }
+    @keyframes thinkingFade { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
+
     .score-bar-wrap { width: 76px; height: 76px; position: relative; flex-shrink: 0; }
     .score-circle { transform: rotate(-90deg); }
     .score-circle-bg { fill: none; stroke: #1c1c22; stroke-width: 6; }
@@ -112,13 +169,35 @@
     body.light-mode .chart-hint { color: #9a9aa5 !important; }
     body.light-mode .chart-empty { color: #9a9aa5 !important; }
 
-    body.light-mode .test-card { background: #ffffff !important; border-color: #e5e5ea !important; box-shadow: 0 1px 3px rgba(0,0,0,0.04) !important; }
-    body.light-mode .test-card:hover { border-color: #d5d5dd !important; background: #f7f7fa !important; }
+    body.light-mode .test-card-wrap { background: #ffffff !important; border-color: #e5e5ea !important; box-shadow: 0 1px 3px rgba(0,0,0,0.04) !important; }
+    body.light-mode .test-card-wrap:hover { border-color: #d5d5dd !important; }
     body.light-mode .test-number { background: #eeeef1 !important; color: #55555f !important; }
     body.light-mode .test-date { color: #9a9aa5 !important; }
     body.light-mode .test-score .out-of { color: #9a9aa5 !important; }
     body.light-mode .test-stat-skipped { color: #9a9aa5 !important; }
     body.light-mode .test-time { color: #b0b0ba !important; }
+
+    body.light-mode .review-btn { background: #a78bfa1a !important; color: #7c3aed !important; }
+    body.light-mode .review-panel { border-color: #e5e5ea !important; }
+    body.light-mode .review-filter-row { color: #7a7a85 !important; }
+    body.light-mode .toggle-switch-sm .toggle-track { background: #d5d5dd !important; }
+    body.light-mode .toggle-switch-sm .toggle-thumb { background: #ffffff !important; }
+    body.light-mode .toggle-switch-sm input:checked + .toggle-track { background: #4f8ef7 !important; }
+    body.light-mode .review-unavailable, body.light-mode .review-empty { color: #9a9aa5 !important; }
+    body.light-mode .review-question-card { background: #f7f7fa !important; border-color: #e5e5ea !important; }
+    body.light-mode .review-q-text { color: #16161d !important; }
+    body.light-mode .review-q-option { background: #eeeef1 !important; color: #55555f !important; border-color: #d5d5dd !important; }
+    body.light-mode .review-q-option.correct-ans { background: #4ade8018 !important; border-color: #4ade8050 !important; color: #2f9d5e !important; }
+    body.light-mode .review-q-option.wrong-ans { background: #ef444415 !important; border-color: #ef444450 !important; color: #d13a3a !important; }
+    body.light-mode .review-q-answer-note { color: #9a9aa5 !important; }
+    body.light-mode .review-q-diagram-img { border-color: #e5e5ea !important; }
+    body.light-mode .diagram-skeleton { background: linear-gradient(100deg, #ececf0 30%, #f7f7fa 50%, #ececf0 70%) !important; background-size: 200% 100% !important; }
+    body.light-mode .diagram-skeleton-label { color: #7a7a85 !important; }
+    body.light-mode .diagram-modal-box { background: #ffffff !important; }
+    body.light-mode .diagram-modal-title { color: #7c3aed !important; }
+    body.light-mode .diagram-modal-close { color: #7a7a85 !important; }
+    body.light-mode .diagram-modal-imgframe { background: #f5f5f7 !important; }
+    body.light-mode .diagram-modal-caption { color: #55555f !important; }
 
     body.light-mode .bio-pill { background: #4ade8014 !important; color: #2f9d5e !important; border-color: #4ade8030 !important; }
     body.light-mode .phy-pill { background: #4f8ef714 !important; color: #3b7de8 !important; border-color: #4f8ef730 !important; }
@@ -185,6 +264,8 @@
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh2aG5mdHRyZm91YWpseWh2dW5xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg5NDI1NTIsImV4cCI6MjA5NDUxODU1Mn0.8RaSu5yiTpQCEUGKrFO2y6oiRXSqdBehIz933j9Z7WA';
     const { createClient } = supabase;
     const client = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+    let allResults = []; // set in loadScoreboard(), indexed the same way as the review-panel-{i}/review-btn-{i} DOM ids
 
     function formatTime(seconds) {
       const h = Math.floor(seconds / 3600);
@@ -311,11 +392,16 @@
       const container = document.createElement('div');
       container.className = 'tests-list';
 
+      allResults = results; // module-level, so toggleReview(i)/renderReviewList(i) can look up r.question_details by the same index used to build the DOM ids below
+
       results.forEach((r, i) => {
         const pct = Math.round((r.score / 720) * 100);
         const circumference = 2 * Math.PI * 26;
         const offset = circumference - (Math.max(0, Math.min(100, pct)) / 100) * circumference;
         const color = getScoreColor(r.score);
+
+        const wrap = document.createElement('div');
+        wrap.className = 'test-card-wrap';
 
         const card = document.createElement('div');
         card.className = 'test-card';
@@ -344,10 +430,248 @@
             <div class="test-time">⏱ ${formatTime(r.time_taken)}</div>
           </div>
         `;
-        container.appendChild(card);
+        wrap.appendChild(card);
+
+        const toggleRow = document.createElement('div');
+        toggleRow.className = 'review-toggle-row';
+        toggleRow.innerHTML = `<button class="review-btn" id="review-btn-${i}" onclick="toggleReview(${i})">${t('scoreboard','reviewQuestions')}</button>`;
+        wrap.appendChild(toggleRow);
+
+        const panel = document.createElement('div');
+        panel.className = 'review-panel';
+        panel.id = `review-panel-${i}`;
+        wrap.appendChild(panel);
+
+        container.appendChild(wrap);
       });
 
       list.appendChild(container);
+    }
+
+    // ===== Question review (per-attempt expand/collapse) =====
+
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str == null ? '' : String(str);
+      return div.innerHTML;
+    }
+
+    // Renders $$...$$ (display) and $...$ (inline) LaTeX via KaTeX, escaping everything else --
+    // same approach as mockresults.html's own renderMathInText, copied rather than reinvented.
+    // Its match-list/assertion-reason/sequence-list special-format detectors are NOT ported here
+    // (this is a compact secondary view, not a replacement for mockresults.html's dedicated
+    // review page) -- a question needing that formatting still renders correctly here, just as
+    // plain KaTeX-rendered text rather than segmented into per-part lines.
+    function renderMathInText(text) {
+      if (!text) return '';
+      const parts = [];
+      let lastIndex = 0;
+      const re = /\$\$([^$]+)\$\$|\$([^$\n]+)\$/g;
+      let m;
+      while ((m = re.exec(text)) !== null) {
+        if (m.index > lastIndex) parts.push({ type: 'text', value: text.slice(lastIndex, m.index) });
+        parts.push(m[1] !== undefined ? { type: 'display', value: m[1].trim() } : { type: 'inline', value: m[2].trim() });
+        lastIndex = re.lastIndex;
+      }
+      if (lastIndex < text.length) parts.push({ type: 'text', value: text.slice(lastIndex) });
+      return parts.map(p => {
+        if (p.type === 'text') return escapeHtml(p.value).replace(/\n/g, '<br>');
+        try {
+          return katex.renderToString(p.value, { displayMode: p.type === 'display', throwOnError: false });
+        } catch (e) {
+          return escapeHtml(p.type === 'display' ? '$$' + p.value + '$$' : '$' + p.value + '$');
+        }
+      }).join('');
+    }
+
+    // ===== Diagram lightbox (buildDiagramImage/showDiagramModal), copied verbatim from
+    // chat.html -- same component diagram-library.html already reuses, so a diagram-bearing
+    // review question opens in the exact same lightbox as everywhere else in the app. =====
+    const MIN_SKELETON_MS = 450;
+
+    function buildDiagramImage(diagram, { maxHeight, onClick }) {
+      const container = document.createElement('div');
+      container.style.cssText = 'display:flex;align-items:center;justify-content:center;';
+      const skeleton = document.createElement('div');
+      skeleton.className = 'diagram-skeleton';
+      const orb = document.createElement('div');
+      orb.className = 'thinking-orb';
+      skeleton.appendChild(orb);
+      const label = document.createElement('span');
+      label.className = 'diagram-skeleton-label';
+      label.textContent = 'Loading diagram…';
+      skeleton.appendChild(label);
+      container.appendChild(skeleton);
+
+      const img = document.createElement('img');
+      img.alt = diagram.name || 'Diagram';
+      img.style.cssText = `max-width:100%;max-height:${maxHeight};display:none;border-radius:6px;opacity:0;transform:scale(0.98);transition:opacity 0.35s ease,transform 0.35s ease;${onClick ? 'cursor:pointer;' : ''}`;
+      if (onClick) img.onclick = onClick;
+
+      const skeletonShownAt = Date.now();
+      function afterMinSkeletonTime(fn) {
+        const remaining = MIN_SKELETON_MS - (Date.now() - skeletonShownAt);
+        if (remaining > 0) setTimeout(fn, remaining); else fn();
+      }
+      img.onload = () => afterMinSkeletonTime(() => {
+        skeleton.remove();
+        img.style.display = 'block';
+        void img.offsetWidth;
+        img.style.opacity = '1';
+        img.style.transform = 'scale(1)';
+      });
+      img.onerror = () => afterMinSkeletonTime(() => {
+        skeleton.remove();
+        const fallback = document.createElement('div');
+        fallback.style.cssText = 'width:min(240px, calc(100vw - 140px));padding:28px 12px;text-align:center;color:#888;font-size:13px;';
+        fallback.textContent = '🖼️ Diagram could not be loaded';
+        container.appendChild(fallback);
+      });
+      img.src = diagram.image_url;
+      container.appendChild(img);
+      return container;
+    }
+
+    function showDiagramModal(diagram) {
+      const existing = document.getElementById('diagram-modal');
+      if (existing) existing.remove();
+      const modal = document.createElement('div');
+      modal.id = 'diagram-modal';
+      modal.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.75);z-index:1000;display:flex;align-items:center;justify-content:center;';
+      modal.onclick = function(e) { if (e.target === modal) modal.remove(); };
+      const box = document.createElement('div');
+      box.className = 'diagram-modal-box';
+      box.style.cssText = 'background:#1e1e2e;border-radius:12px;padding:20px;width:min(92vw,560px);max-height:85vh;overflow:auto;display:flex;flex-direction:column;align-items:center;';
+      const header = document.createElement('div');
+      header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px;width:100%;';
+      const title = document.createElement('h3');
+      title.className = 'diagram-modal-title';
+      title.style.cssText = 'margin:0;color:#a78bfa;font-size:15px;';
+      title.textContent = diagram.name || 'Diagram';
+      header.appendChild(title);
+      const closeBtn = document.createElement('button');
+      closeBtn.className = 'diagram-modal-close';
+      closeBtn.textContent = '✕';
+      closeBtn.style.cssText = 'background:none;border:none;color:#888;font-size:20px;cursor:pointer;flex-shrink:0;';
+      closeBtn.onclick = () => modal.remove();
+      header.appendChild(closeBtn);
+      box.appendChild(header);
+      const imgFrame = document.createElement('div');
+      imgFrame.className = 'diagram-modal-imgframe';
+      imgFrame.style.cssText = 'background:#141420;border-radius:10px;padding:12px;display:flex;align-items:center;justify-content:center;width:100%;';
+      imgFrame.appendChild(buildDiagramImage(diagram, { maxHeight: '65vh' }));
+      box.appendChild(imgFrame);
+      modal.appendChild(box);
+      document.body.appendChild(modal);
+    }
+
+    // Tracks which attempts are currently expanded + their Wrong-only toggle state, so
+    // re-rendering on a language switch (applyTranslations doesn't touch these JS-built panels)
+    // isn't needed -- this page never re-renders the list on lang toggle today, matching its
+    // existing behaviour (lang-toggle here only affects data-i18n text, same as before this
+    // feature).
+    const reviewState = {}; // { [index]: { open: bool, wrongOnly: bool } }
+
+    function toggleReview(i) {
+      const panel = document.getElementById(`review-panel-${i}`);
+      const btn = document.getElementById(`review-btn-${i}`);
+      const state = reviewState[i] || (reviewState[i] = { open: false, wrongOnly: true });
+      state.open = !state.open;
+      if (state.open) {
+        panel.classList.add('open');
+        btn.textContent = t('scoreboard', 'hideReview');
+        renderReviewPanel(i);
+      } else {
+        panel.classList.remove('open');
+        btn.textContent = t('scoreboard', 'reviewQuestions');
+      }
+    }
+
+    function toggleWrongOnly(i, checked) {
+      reviewState[i].wrongOnly = checked;
+      renderReviewList(i);
+    }
+
+    function renderReviewPanel(i) {
+      const r = allResults[i];
+      const panel = document.getElementById(`review-panel-${i}`);
+      const state = reviewState[i];
+
+      if (!r.question_details || !Array.isArray(r.question_details) || r.question_details.length === 0) {
+        panel.innerHTML = `<div class="review-unavailable">${t('scoreboard', 'reviewNotAvailable')}</div>`;
+        return;
+      }
+
+      panel.innerHTML = `
+        <div class="review-panel-header">
+          <label class="review-filter-row">
+            <span class="toggle-switch-sm">
+              <input type="checkbox" id="wrong-only-${i}" ${state.wrongOnly ? 'checked' : ''} onchange="toggleWrongOnly(${i}, this.checked)"/>
+              <span class="toggle-track"><span class="toggle-thumb"></span></span>
+            </span>
+            ${t('scoreboard', 'wrongOnly')}
+          </label>
+        </div>
+        <div id="review-list-${i}"></div>
+      `;
+      renderReviewList(i);
+    }
+
+    function renderReviewList(i) {
+      const r = allResults[i];
+      const state = reviewState[i];
+      const listEl = document.getElementById(`review-list-${i}`);
+      const questions = state.wrongOnly
+        ? r.question_details.filter(q => q.status === 'wrong' || q.status === 'skipped')
+        : r.question_details;
+
+      if (questions.length === 0) {
+        listEl.innerHTML = `<div class="review-empty">${t('scoreboard', 'noQuestionsInFilter')}</div>`;
+        return;
+      }
+
+      listEl.innerHTML = questions.map(q => {
+        const correctAns = q.correct_answer ? q.correct_answer.toLowerCase().trim() : null;
+        const userAns = q.userAnswer ? q.userAnswer.toLowerCase().trim() : null;
+        const opts = ['a', 'b', 'c', 'd'].map(opt => {
+          if (!q['option_' + opt] && !q['option_' + opt + '_diagram_url']) return '';
+          let cls = 'review-q-option';
+          if (opt === correctAns) cls += ' correct-ans';
+          if (opt === userAns && opt !== correctAns) cls += ' wrong-ans';
+          const optImg = q['option_' + opt + '_diagram_url'] ? `<img class="review-q-diagram-img" src="${escapeHtml(q['option_' + opt + '_diagram_url'])}">` : '';
+          return `<div class="${cls}">${opt.toUpperCase()}) ${renderMathInText(q['option_' + opt])}${optImg}</div>`;
+        }).join('');
+
+        const statusText = q.status === 'correct' ? t('scoreboard', 'statusCorrect') : q.status === 'wrong' ? t('scoreboard', 'statusWrong') : t('scoreboard', 'statusSkipped');
+        const diagramId = 'diag-' + Math.random().toString(36).slice(2);
+
+        return `
+          <div class="review-question-card">
+            <div class="review-q-meta">
+              <span>${subjectName(q.subject) || ''}</span>
+              <span class="review-q-status ${q.status}">${statusText}</span>
+            </div>
+            <div class="review-q-text">${renderMathInText(q.question)}</div>
+            ${q.diagram_url ? `<div id="${diagramId}"></div>` : ''}
+            <div class="review-q-options">${opts}</div>
+            ${q.userAnswer ? `<div class="review-q-answer-note">${t('scoreboard', 'yourAnswer')} ${q.userAnswer.toUpperCase()}${q.status === 'wrong' && correctAns ? ` · ${t('scoreboard', 'correctAnswer')} ${correctAns.toUpperCase()}` : ''}</div>` : ''}
+          </div>
+        `;
+      }).join('');
+
+      // Diagram images are inserted via buildDiagramImage/showDiagramModal (the shared lightbox)
+      // after the HTML above lands, rather than as raw <img> tags -- mirrors how
+      // diagram-library.html and the PYQ diagram fix already do this. Host divs and questions
+      // walk in lockstep (both in the same original array order), so no id-matching is needed.
+      let diagIndex = 0;
+      const diagHosts = listEl.querySelectorAll('[id^="diag-"]');
+      questions.forEach(q => {
+        if (!q.diagram_url) return;
+        const host = diagHosts[diagIndex++];
+        if (!host) return;
+        const diagram = { image_url: q.diagram_url, name: q.chapter || 'Diagram', description: null };
+        host.appendChild(buildDiagramImage(diagram, { maxHeight: '220px', onClick: () => showDiagramModal(diagram) }));
+      });
     }
 
     loadScoreboard();
