@@ -2441,6 +2441,114 @@ let selectedImages = [];
       }
     }
 
+    // ---------------- Report a diagram ----------------
+    // Separate from the question-report flow above -- these target a standalone `diagrams` row
+    // (chat.html's auto-embedded/Show-Diagram diagrams, matched via /diagram-match), not a pyq_id,
+    // so they need their own request shape (diagram_id + source) and endpoint (/report-diagram).
+    // Reuses the exact same .report-popup/.report-reason-row/etc CSS as the question-report popup
+    // for visual consistency -- only the data/wiring differs, not the look. A PYQ-sourced diagram
+    // shown in the PYQ modal (renderPYQQuestions) has no diagram_id at all and is already covered
+    // by that question's own reportFlagBtnHtml (reason: "Diagram missing or broken"), so this
+    // button only ever appears where diagram.diagram_id is actually present.
+    const DIAGRAM_REPORT_REASONS = [
+      { value: 'wrong_image', label: 'Wrong image for this topic' },
+      { value: 'mislabeled', label: 'Mislabeled / incorrect caption' },
+      { value: 'low_quality', label: 'Low quality / hard to read' },
+      { value: 'incorrect_content', label: 'Incorrect content shown' },
+      { value: 'other', label: 'Other' }
+    ];
+
+    function diagramReportFlagBtnHtml(diagramId, source) {
+      return `<button type="button" class="report-flag-btn" title="Report a problem with this diagram" onclick="event.stopPropagation(); openDiagramReportPopup(${diagramId}, '${source}', this)"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><polygon points="12,3 22,21 2,21" fill="#ef4444" stroke="#ef4444" stroke-width="2.5" stroke-linejoin="round"/><rect x="10.8" y="9" width="2.4" height="6.5" rx="1.2" fill="#fff"/><circle cx="12" cy="18" r="1.3" fill="#fff"/></svg></button>`;
+    }
+
+    function closeDiagramReportPopup() {
+      const existing = document.getElementById('diagramReportPopup');
+      if (existing) existing.remove();
+      document.removeEventListener('click', diagramReportPopupOutsideClick, true);
+    }
+
+    function diagramReportPopupOutsideClick(e) {
+      const popup = document.getElementById('diagramReportPopup');
+      if (popup && !popup.contains(e.target)) closeDiagramReportPopup();
+    }
+
+    function toggleDiagramReportNote(radioEl) {
+      const note = document.getElementById('diagramReportNote');
+      if (note) note.style.display = radioEl.value === 'other' ? 'block' : 'none';
+    }
+
+    function openDiagramReportPopup(diagramId, source, btnEl) {
+      closeDiagramReportPopup();
+      closeReportPopup();
+      const popup = document.createElement('div');
+      popup.id = 'diagramReportPopup';
+      popup.className = 'report-popup';
+      popup.innerHTML = `
+        <div class="report-popup-title">Report a problem with this diagram</div>
+        ${DIAGRAM_REPORT_REASONS.map(r => `
+          <label class="report-reason-row">
+            <input type="radio" name="diagramReportReason" value="${r.value}" onchange="toggleDiagramReportNote(this)"/> ${r.label}
+          </label>`).join('')}
+        <textarea class="report-note" id="diagramReportNote" placeholder="Optional note..." style="display:none;" rows="2"></textarea>
+        <div class="report-popup-error" id="diagramReportError"></div>
+        <div class="report-popup-actions">
+          <button type="button" class="report-cancel-btn" onclick="closeDiagramReportPopup()">Cancel</button>
+          <button type="button" class="report-submit-btn" onclick="submitDiagramReport(${diagramId}, '${source}', this)">Submit</button>
+        </div>`;
+      document.body.appendChild(popup);
+      const rect = btnEl.getBoundingClientRect();
+      const popupRect = popup.getBoundingClientRect();
+      let left = Math.max(8, Math.min(rect.right - popupRect.width, document.documentElement.clientWidth - popupRect.width - 8));
+      let top = Math.min(rect.bottom + 6, document.documentElement.clientHeight - popupRect.height - 8);
+      popup.style.left = left + 'px';
+      popup.style.top = top + 'px';
+      document.addEventListener('click', diagramReportPopupOutsideClick, true);
+    }
+
+    async function submitDiagramReport(diagramId, source, btnEl) {
+      const popup = document.getElementById('diagramReportPopup');
+      const selected = popup.querySelector('input[name="diagramReportReason"]:checked');
+      const errEl = document.getElementById('diagramReportError');
+      if (!selected) { errEl.textContent = 'Pick a reason first.'; return; }
+      errEl.textContent = '';
+      const note = document.getElementById('diagramReportNote').value.trim();
+      btnEl.disabled = true;
+      btnEl.textContent = 'Submitting...';
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
+      try {
+        const abortPromise = new Promise((_, reject) => {
+          controller.signal.addEventListener('abort', () => reject(new DOMException('Timed out', 'AbortError')));
+        });
+        const { data: { session } } = await Promise.race([client.auth.getSession(), abortPromise]);
+        if (!session) {
+          errEl.textContent = 'Please log in to report a diagram.';
+          btnEl.disabled = false; btnEl.textContent = 'Submit';
+          return;
+        }
+        const res = await fetch(`${API_BASE}/report-diagram`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ diagram_id: diagramId, user_id: session.user.id, source, reason: selected.value, optional_note: note }),
+          signal: controller.signal
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.error) {
+          errEl.textContent = data.detail || data.error || 'Could not submit -- try again.';
+          btnEl.disabled = false; btnEl.textContent = 'Submit';
+          return;
+        }
+        popup.innerHTML = '<div class="report-popup-thanks">✓ Reported, thank you</div>';
+        setTimeout(closeDiagramReportPopup, 1600);
+      } catch (e) {
+        errEl.textContent = e.name === 'AbortError' ? 'Timed out -- try again.' : 'Could not reach server.';
+        btnEl.disabled = false; btnEl.textContent = 'Submit';
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    }
+
     async function showPYQModal(questions) {
       const existing = document.getElementById('pyq-modal');
       if (existing) existing.remove();
@@ -2853,12 +2961,25 @@ let selectedImages = [];
       title.style.cssText = 'margin:0;color:#a78bfa;font-size:15px;';
       title.textContent = diagram.name || 'Diagram';
       header.appendChild(title);
+
+      // Right-side group (report + close) kept together via its own flex container, not just
+      // appended straight into header's justify-content:space-between -- a 3rd direct child
+      // there would get spaced out into the middle instead of sitting next to the close button.
+      // Only shown when diagram.diagram_id is present -- a PYQ-modal diagram (renderPYQQuestions'
+      // adapter object) has no standalone diagrams-table id and is already covered by that
+      // question's own report button instead.
+      const rightGroup = document.createElement('div');
+      rightGroup.style.cssText = 'display:flex;align-items:center;gap:10px;flex-shrink:0;';
+      if (diagram.diagram_id) {
+        rightGroup.innerHTML = diagramReportFlagBtnHtml(diagram.diagram_id, 'chat');
+      }
       const closeBtn = document.createElement('button');
       closeBtn.className = 'diagram-modal-close';
       closeBtn.textContent = '✕';
       closeBtn.style.cssText = 'background:none;border:none;color:#888;font-size:20px;cursor:pointer;flex-shrink:0;';
       closeBtn.onclick = () => modal.remove();
-      header.appendChild(closeBtn);
+      rightGroup.appendChild(closeBtn);
+      header.appendChild(rightGroup);
       box.appendChild(header);
 
       const imgFrame = document.createElement('div');
@@ -2938,6 +3059,12 @@ let selectedImages = [];
         caption.style.cssText = 'margin:10px 0 0;color:#c4c4c4;font-size:12px;line-height:1.6;text-align:center;width:100%;';
         caption.textContent = diagram.description;
         wrap.appendChild(caption);
+      }
+      if (diagram.diagram_id) {
+        const reportRow = document.createElement('div');
+        reportRow.style.cssText = 'display:flex;justify-content:flex-end;width:100%;margin-top:6px;';
+        reportRow.innerHTML = diagramReportFlagBtnHtml(diagram.diagram_id, 'chat');
+        wrap.appendChild(reportRow);
       }
       grow.appendChild(wrap);
       return grow;

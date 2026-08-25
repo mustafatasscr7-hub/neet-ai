@@ -48,6 +48,25 @@
     .diagram-card-tag { font-size: 10.5px; color: #999; display: inline-flex; align-items: center; gap: 6px; background: #1a1a1a; padding: 3px 9px; border-radius: 20px; border: 1px solid #26262e; max-width: 100%; }
     .diagram-card-tag span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .diagram-card-tag-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
+    .diagram-card-report-row { display: flex; justify-content: flex-end; margin-top: 6px; }
+
+    /* Report-a-diagram: identical to pyqbank.html/chat.html's report-a-question component --
+       same flag icon, same popup treatment, same colours -- just wired to /report-diagram. */
+    .report-flag-btn { background: none; border: none; cursor: pointer; display: inline-flex; align-items: center; opacity: 0.35; padding: 2px 4px; transition: opacity 0.15s, transform 0.15s; }
+    .report-flag-btn:hover, .report-flag-btn:focus-visible { opacity: 1; transform: scale(1.15); }
+    .report-popup { position: fixed; z-index: 2000; background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 10px; padding: 12px; width: 220px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); font-size: 12px; }
+    .report-popup-title { font-weight: 600; margin-bottom: 8px; color: #ececec; }
+    .report-reason-row { display: flex; align-items: center; gap: 6px; padding: 4px 0; color: #ccc; cursor: pointer; font-size: 12px; }
+    .report-reason-row input { cursor: pointer; }
+    .report-note { width: 100%; background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 6px; padding: 6px 8px; color: #ececec; font-size: 12px; font-family: 'Inter', sans-serif; margin: 6px 0; resize: vertical; }
+    .report-popup-error { color: #ef4444; font-size: 11px; min-height: 14px; margin: 4px 0; }
+    .report-popup-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
+    .report-cancel-btn { background: #ffffff10; border: none; color: #9a9aa5; padding: 6px 12px; border-radius: 8px; font-size: 11px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; transition: filter 0.15s ease; }
+    .report-cancel-btn:hover { filter: brightness(1.2); }
+    .report-submit-btn { background: #ef4444; border: none; color: white; padding: 6px 14px; border-radius: 8px; font-size: 11px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; transition: filter 0.15s ease; }
+    .report-submit-btn:hover { filter: brightness(1.1); }
+    .report-submit-btn:disabled { opacity: 0.6; cursor: default; }
+    .report-popup-thanks { text-align: center; padding: 8px 4px; color: #4ade80; font-weight: 600; }
 
     .loading { text-align: center; padding: 60px; color: #555; }
     .spinner { width: 32px; height: 32px; border: 3px solid #1e1e1e; border-top-color: #4f8ef7; border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 16px; }
@@ -87,6 +106,11 @@
     body.light-mode .diagram-card-body { border-color: #e3e3ea !important; }
     body.light-mode .diagram-card-name { color: #0d0d0d !important; }
     body.light-mode .diagram-card-tag { color: #55555f !important; background: #f5f5f7 !important; border-color: #e3e3ea !important; }
+    body.light-mode .report-popup { background: #ffffff !important; border-color: #e3e3ea !important; box-shadow: 0 8px 24px rgba(0,0,0,0.12) !important; }
+    body.light-mode .report-popup-title { color: #0d0d0d !important; }
+    body.light-mode .report-reason-row { color: #33333d !important; }
+    body.light-mode .report-note { background: #f7f7fa !important; border-color: #e3e3ea !important; color: #0d0d0d !important; }
+    body.light-mode .report-cancel-btn { background: #00000008 !important; color: #7a7a85 !important; }
     body.light-mode .loading { color: #7a7a85 !important; }
     body.light-mode .spinner { border-color: #e3e3ea !important; border-top-color: #4f8ef7 !important; }
     body.light-mode .empty { color: #7a7a85 !important; }
@@ -125,14 +149,17 @@
     <div class="filter-bar">
       <select id="subjectFilter" class="filter-select" onchange="renderDiagrams()">
         <option value="" data-i18n="diagramlibrary.allSubjects">All Subjects</option>
-        <option value="Biology">Biology</option>
-        <option value="Physics">Physics</option>
-        <option value="Chemistry">Chemistry</option>
+        <option value="Biology" class="i18n-subject-opt">Biology</option>
+        <option value="Physics" class="i18n-subject-opt">Physics</option>
+        <option value="Chemistry" class="i18n-subject-opt">Chemistry</option>
       </select>
       <select id="classFilter" class="filter-select" onchange="renderDiagrams()">
         <option value="" data-i18n="diagramlibrary.allClasses">All Classes</option>
-        <option value="11">Class 11</option>
-        <option value="12">Class 12</option>
+        <option value="11" class="i18n-class-opt">Class 11</option>
+        <option value="12" class="i18n-class-opt">Class 12</option>
+      </select>
+      <select id="chapterFilter" class="filter-select" onchange="applyChapterFilter()">
+        <option value="" data-i18n="diagramlibrary.allChapters">All Chapters</option>
       </select>
     </div>
 
@@ -141,10 +168,18 @@
     </div>
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="./theme.js"></script>
   <script src="./i18n.js"></script>
   <script>
     const API_BASE = 'https://neet-ai-production.up.railway.app';
+    // Only needed for the report-a-diagram flow's client.auth.getSession() call (to attach the
+    // logged-in student's user_id) -- this page otherwise talks only to /diagrams, no auth
+    // required to browse.
+    const SUPABASE_URL = 'https://hvhnfttrfouajlyhvunq.supabase.co';
+    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh2aG5mdHRyZm91YWpseWh2dW5xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg5NDI1NTIsImV4cCI6MjA5NDUxODU1Mn0.8RaSu5yiTpQCEUGKrFO2y6oiRXSqdBehIz933j9Z7WA';
+    const { createClient } = supabase;
+    const client = createClient(SUPABASE_URL, SUPABASE_KEY);
 
     const subjectConfig = {
       'Biology': { icon: '🔬', color: '#4ade80' },
@@ -152,10 +187,26 @@
       'Chemistry': { icon: '⚗️', color: '#f97316' }
     };
 
-    let allDiagrams = [];
+let allDiagrams = [];      // everything matching the current Subject+Class fetch (server-side)
+    let displayedDiagrams = [];  // allDiagrams further narrowed by the Chapter dropdown (client-side)
+
+    // Subject/Class change -> real /diagrams re-fetch (server-side filter). Chapter list is
+    // dynamic, not a hardcoded syllabus -- populated from whatever chapters actually have a
+    // reviewed diagram under the new Subject/Class, same "only show what's real" spirit as the
+    // empty-state handling elsewhere on this page. Mirrors admin-pyq-preview's
+    // onSubjectChange -> repopulate filterChapter pattern.
+    // applyTranslations() only handles data-i18n text/attribute targets, not individual <option>
+    // labels inside a <select> -- Subject uses subjectName() (same helper the diagram-card tags
+    // already use) and Class builds "{classWord} {n}" from the dictionary, matching the {label}
+    // convention used for noDiagramsFor below rather than hardcoding Hindi digit/word order here.
+    function translateFilterOptions() {
+      document.querySelectorAll('.i18n-subject-opt').forEach(opt => { opt.textContent = subjectName(opt.value); });
+      document.querySelectorAll('.i18n-class-opt').forEach(opt => { opt.textContent = `${t('diagramlibrary', 'classWord')} ${localizeNum(opt.value)}`; });
+    }
 
     async function renderDiagrams() {
       applyTranslations();
+      translateFilterOptions();
       const subject = document.getElementById('subjectFilter').value;
       const classNum = document.getElementById('classFilter').value;
       const mainContent = document.getElementById('mainContent');
@@ -172,17 +223,46 @@
         allDiagrams = [];
       }
 
-      if (allDiagrams.length === 0) {
-        const emptyText = subject
-          ? `${t('diagramlibrary', 'noDiagramsFor')} ${subjectName(subject)}`
-          : t('diagramlibrary', 'noDiagramsGeneric');
+      const chapterSelect = document.getElementById('chapterFilter');
+      const chapters = [...new Set(allDiagrams.map(d => d.chapter).filter(Boolean))]
+        .sort((a, b) => chapterName(a).localeCompare(chapterName(b)));
+      const prevChapter = chapterSelect.value;
+      chapterSelect.innerHTML = `<option value="">${t('diagramlibrary', 'allChapters')}</option>` +
+        chapters.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(chapterName(c))}</option>`).join('');
+      // Keep the previously-picked chapter selected across a re-fetch (e.g. a language toggle)
+      // if it's still a valid option under the new result set; otherwise fall back to "All".
+      chapterSelect.value = chapters.includes(prevChapter) ? prevChapter : '';
+
+      applyChapterFilter();
+    }
+
+    function applyChapterFilter() {
+      const subject = document.getElementById('subjectFilter').value;
+      const chapter = document.getElementById('chapterFilter').value;
+      const mainContent = document.getElementById('mainContent');
+
+      displayedDiagrams = chapter ? allDiagrams.filter(d => d.chapter === chapter) : allDiagrams;
+
+      if (displayedDiagrams.length === 0) {
+        let emptyText;
+        const label = chapter ? chapterName(chapter) : (subject ? subjectName(subject) : '');
+        if (chapter || subject) {
+          // {label} sits in a different position in the Hindi phrase than the English one
+          // (subject/chapter name comes first in Hindi) -- same {placeholder}.replace()
+          // convention pyqbank.html already uses for questionOf/questionsAvailable, so the
+          // dictionary owns word order per language instead of JS concatenating pieces in a
+          // fixed order.
+          emptyText = t('diagramlibrary', 'noDiagramsFor').replace('{label}', label);
+        } else {
+          emptyText = t('diagramlibrary', 'noDiagramsGeneric');
+        }
         mainContent.innerHTML = `<div class="empty">${emptyText}</div>`;
         return;
       }
 
       mainContent.innerHTML = `
         <div class="diagram-grid">
-          ${allDiagrams.map((d, i) => {
+          ${displayedDiagrams.map((d, i) => {
             const cfg = subjectConfig[d.subject] || { color: '#888' };
             const lang = getLang();
             const displayName = (lang === 'hi' && d.name_hi) ? d.name_hi : d.name;
@@ -198,6 +278,7 @@
                     <span class="diagram-card-tag-dot" style="background:${cfg.color}"></span>
                     <span>${escapeHtml(subjectName(d.subject))}${chapterLabel ? ' · ' + escapeHtml(chapterLabel) : ''}</span>
                   </div>
+                  <div class="diagram-card-report-row">${diagramReportFlagBtnHtml(d.id, 'library')}</div>
                 </div>
               </div>
             `;
@@ -213,9 +294,10 @@
     }
 
     function openDiagram(index) {
-      const d = allDiagrams[index];
+      const d = displayedDiagrams[index];
       const lang = getLang();
       const diagram = {
+        diagram_id: d.id,
         image_url: d.image_url,
         name: (lang === 'hi' && d.name_hi) ? d.name_hi : d.name,
         description: (lang === 'hi' && d.description_hi) ? d.description_hi : d.description
@@ -293,12 +375,22 @@
       title.style.cssText = 'margin:0;color:#a78bfa;font-size:15px;';
       title.textContent = diagram.name || 'Diagram';
       header.appendChild(title);
+
+      // Right-side group (report + close) kept together via its own flex container, not just
+      // appended straight into header's justify-content:space-between -- a 3rd direct child
+      // there would get spaced out into the middle instead of sitting next to the close button.
+      const rightGroup = document.createElement('div');
+      rightGroup.style.cssText = 'display:flex;align-items:center;gap:10px;flex-shrink:0;';
+      if (diagram.diagram_id) {
+        rightGroup.innerHTML = diagramReportFlagBtnHtml(diagram.diagram_id, 'library');
+      }
       const closeBtn = document.createElement('button');
       closeBtn.className = 'diagram-modal-close';
       closeBtn.textContent = '✕';
       closeBtn.style.cssText = 'background:none;border:none;color:#888;font-size:20px;cursor:pointer;flex-shrink:0;';
       closeBtn.onclick = () => modal.remove();
-      header.appendChild(closeBtn);
+      rightGroup.appendChild(closeBtn);
+      header.appendChild(rightGroup);
       box.appendChild(header);
 
       const imgFrame = document.createElement('div');
@@ -317,6 +409,108 @@
 
       modal.appendChild(box);
       document.body.appendChild(modal);
+    }
+
+    // ===== Report a diagram -- same component chat.html's auto-embed/Show-Diagram flow uses,
+    // copied rather than shared (no JS module system in this app), wired to source='library'
+    // instead of 'chat'. See create_diagram_reports_table.sql / server.py's /report-diagram for
+    // why this is a separate table+endpoint from the pyq question-report flow. =====
+    const DIAGRAM_REPORT_REASONS = [
+      { value: 'wrong_image', label: 'Wrong image for this topic' },
+      { value: 'mislabeled', label: 'Mislabeled / incorrect caption' },
+      { value: 'low_quality', label: 'Low quality / hard to read' },
+      { value: 'incorrect_content', label: 'Incorrect content shown' },
+      { value: 'other', label: 'Other' }
+    ];
+
+    function diagramReportFlagBtnHtml(diagramId, source) {
+      return `<button type="button" class="report-flag-btn" title="Report a problem with this diagram" onclick="event.stopPropagation(); openDiagramReportPopup(${diagramId}, '${source}', this)"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><polygon points="12,3 22,21 2,21" fill="#ef4444" stroke="#ef4444" stroke-width="2.5" stroke-linejoin="round"/><rect x="10.8" y="9" width="2.4" height="6.5" rx="1.2" fill="#fff"/><circle cx="12" cy="18" r="1.3" fill="#fff"/></svg></button>`;
+    }
+
+    function closeDiagramReportPopup() {
+      const existing = document.getElementById('diagramReportPopup');
+      if (existing) existing.remove();
+      document.removeEventListener('click', diagramReportPopupOutsideClick, true);
+    }
+
+    function diagramReportPopupOutsideClick(e) {
+      const popup = document.getElementById('diagramReportPopup');
+      if (popup && !popup.contains(e.target)) closeDiagramReportPopup();
+    }
+
+    function toggleDiagramReportNote(radioEl) {
+      const note = document.getElementById('diagramReportNote');
+      if (note) note.style.display = radioEl.value === 'other' ? 'block' : 'none';
+    }
+
+    function openDiagramReportPopup(diagramId, source, btnEl) {
+      closeDiagramReportPopup();
+      const popup = document.createElement('div');
+      popup.id = 'diagramReportPopup';
+      popup.className = 'report-popup';
+      popup.innerHTML = `
+        <div class="report-popup-title">Report a problem with this diagram</div>
+        ${DIAGRAM_REPORT_REASONS.map(r => `
+          <label class="report-reason-row">
+            <input type="radio" name="diagramReportReason" value="${r.value}" onchange="toggleDiagramReportNote(this)"/> ${r.label}
+          </label>`).join('')}
+        <textarea class="report-note" id="diagramReportNote" placeholder="Optional note..." style="display:none;" rows="2"></textarea>
+        <div class="report-popup-error" id="diagramReportError"></div>
+        <div class="report-popup-actions">
+          <button type="button" class="report-cancel-btn" onclick="closeDiagramReportPopup()">Cancel</button>
+          <button type="button" class="report-submit-btn" onclick="submitDiagramReport(${diagramId}, '${source}', this)">Submit</button>
+        </div>`;
+      document.body.appendChild(popup);
+      const rect = btnEl.getBoundingClientRect();
+      const popupRect = popup.getBoundingClientRect();
+      let left = Math.max(8, Math.min(rect.right - popupRect.width, document.documentElement.clientWidth - popupRect.width - 8));
+      let top = Math.min(rect.bottom + 6, document.documentElement.clientHeight - popupRect.height - 8);
+      popup.style.left = left + 'px';
+      popup.style.top = top + 'px';
+      document.addEventListener('click', diagramReportPopupOutsideClick, true);
+    }
+
+    async function submitDiagramReport(diagramId, source, btnEl) {
+      const popup = document.getElementById('diagramReportPopup');
+      const selected = popup.querySelector('input[name="diagramReportReason"]:checked');
+      const errEl = document.getElementById('diagramReportError');
+      if (!selected) { errEl.textContent = 'Pick a reason first.'; return; }
+      errEl.textContent = '';
+      const note = document.getElementById('diagramReportNote').value.trim();
+      btnEl.disabled = true;
+      btnEl.textContent = 'Submitting...';
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
+      try {
+        const abortPromise = new Promise((_, reject) => {
+          controller.signal.addEventListener('abort', () => reject(new DOMException('Timed out', 'AbortError')));
+        });
+        const { data: { session } } = await Promise.race([client.auth.getSession(), abortPromise]);
+        if (!session) {
+          errEl.textContent = 'Please log in to report a diagram.';
+          btnEl.disabled = false; btnEl.textContent = 'Submit';
+          return;
+        }
+        const res = await fetch(`${API_BASE}/report-diagram`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ diagram_id: diagramId, user_id: session.user.id, source, reason: selected.value, optional_note: note }),
+          signal: controller.signal
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.error) {
+          errEl.textContent = data.detail || data.error || 'Could not submit -- try again.';
+          btnEl.disabled = false; btnEl.textContent = 'Submit';
+          return;
+        }
+        popup.innerHTML = '<div class="report-popup-thanks">✓ Reported, thank you</div>';
+        setTimeout(closeDiagramReportPopup, 1600);
+      } catch (e) {
+        errEl.textContent = e.name === 'AbortError' ? 'Timed out -- try again.' : 'Could not reach server.';
+        btnEl.disabled = false; btnEl.textContent = 'Submit';
+      } finally {
+        clearTimeout(timeoutId);
+      }
     }
 
     renderDiagrams();

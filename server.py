@@ -411,6 +411,13 @@ class ReportQuestionRequest(BaseModel):
     reason: str
     optional_note: str = ""
 
+class ReportDiagramRequest(BaseModel):
+    diagram_id: int
+    user_id: str
+    source: str  # 'chat' or 'library' -- the two places a standalone diagrams-table row is shown
+    reason: str
+    optional_note: str = ""
+
 class PersonalisedTestSelection(BaseModel):
     subject: str
     chapters: list = []
@@ -2332,6 +2339,44 @@ async def report_question(req: ReportQuestionRequest, _: None = Depends(rate_lim
             f"{SUPABASE_URL}/rest/v1/question_reports",
             headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=minimal"},
             json={"pyq_id": req.pyq_id, "user_id": req.user_id, "reason": req.reason, "optional_note": note}
+        )
+        if response.status_code >= 400:
+            return {"error": response.text}
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return {"error": str(e)}
+
+DIAGRAM_REPORT_REASONS = {"wrong_image", "mislabeled", "low_quality", "incorrect_content", "other"}
+DIAGRAM_REPORT_SOURCES = {"chat", "library"}
+
+# Separate table/cap from /report-question -- see create_diagram_reports_table.sql for why this
+# isn't just question_reports with an extra column. Own independent MAX_REPORTS_PER_DAY budget
+# (not blended with question reports) rather than querying both tables on every submit -- 20/day
+# is already a generous anti-spam ceiling for a feature this size on its own.
+@app.post("/report-diagram")
+async def report_diagram(req: ReportDiagramRequest, _: None = Depends(rate_limiter(20, 60))):
+    if not req.user_id:
+        raise HTTPException(status_code=401, detail="Please log in to report a diagram.")
+    if req.reason not in DIAGRAM_REPORT_REASONS:
+        return {"error": "Invalid reason"}
+    if req.source not in DIAGRAM_REPORT_SOURCES:
+        return {"error": "Invalid source"}
+    try:
+        if req.user_id not in UNLIMITED_REPORT_USER_IDS:
+            today_rows = await async_client.get(
+                f"{SUPABASE_URL}/rest/v1/diagram_reports", headers=ADMIN_HEADERS,
+                params={"user_id": f"eq.{req.user_id}", "created_at": f"gte.{_ist_today_start_utc_iso()}",
+                        "select": "id", "limit": MAX_REPORTS_PER_DAY}
+            )
+            if len(today_rows.json()) >= MAX_REPORTS_PER_DAY:
+                raise HTTPException(status_code=429, detail="You've reached today's report limit. Try again tomorrow.")
+        note = (req.optional_note or "").strip()[:500] or None
+        response = await async_client.post(
+            f"{SUPABASE_URL}/rest/v1/diagram_reports",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=minimal"},
+            json={"diagram_id": req.diagram_id, "user_id": req.user_id, "source": req.source, "reason": req.reason, "optional_note": note}
         )
         if response.status_code >= 400:
             return {"error": response.text}
@@ -4405,6 +4450,84 @@ async def admin_resolve_question_reports(pyq_id: str, _: None = Depends(verify_a
             f"{SUPABASE_URL}/rest/v1/question_reports",
             headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
             params={"pyq_id": f"eq.{pyq_id}", "resolved": "eq.false"},
+            json={"resolved": True}
+        )
+        if response.status_code >= 400:
+            return {"error": response.text}
+        return {"success": True, "resolved_count": len(response.json())}
+    except Exception as e:
+        return {"error": str(e)}
+
+# Mirrors /admin/question-reports exactly, grouped by diagram_id instead of pyq_id and joined
+# against the diagrams table instead of pyq -- surfaces in admin-pyq-preview.html's existing
+# Diagram Review section via a new "Reported" status filter, not a separate top-level view.
+@app.get("/admin/diagram-reports")
+async def admin_diagram_reports(resolved: str = "false", _: None = Depends(verify_admin)):
+    try:
+        all_reports = []
+        page_size = 1000
+        offset = 0
+        resolved_filter = "eq.true" if resolved == "true" else "eq.false"
+        while True:
+            response = await async_client.get(
+                f"{SUPABASE_URL}/rest/v1/diagram_reports",
+                headers=ADMIN_HEADERS,
+                params={
+                    "resolved": resolved_filter,
+                    "select": "id,diagram_id,user_id,source,reason,optional_note,created_at",
+                    "order": "created_at.desc",
+                    "limit": page_size,
+                    "offset": offset
+                }
+            )
+            page = response.json()
+            all_reports.extend(page)
+            if len(page) < page_size:
+                break
+            offset += page_size
+
+        groups_by_diagram = {}
+        for r in all_reports:
+            did = r["diagram_id"]
+            g = groups_by_diagram.setdefault(did, {
+                "diagram_id": did, "count": 0, "reasons": {}, "sources": {}, "notes": [], "latest_report_at": r["created_at"]
+            })
+            g["count"] += 1
+            g["reasons"][r["reason"]] = g["reasons"].get(r["reason"], 0) + 1
+            g["sources"][r["source"]] = g["sources"].get(r["source"], 0) + 1
+            if r["optional_note"]:
+                g["notes"].append(r["optional_note"])
+            if r["created_at"] > g["latest_report_at"]:
+                g["latest_report_at"] = r["created_at"]
+
+        diagram_ids = list(groups_by_diagram.keys())
+        diagrams_by_id = {}
+        for i in range(0, len(diagram_ids), 200):
+            chunk = diagram_ids[i:i + 200]
+            resp = await async_client.get(
+                f"{SUPABASE_URL}/rest/v1/diagrams", headers=ADMIN_HEADERS,
+                params={"id": f"in.({','.join(str(d) for d in chunk)})",
+                        "select": "id,subject,class,chapter,name,description,name_hi,description_hi,image_url,reviewed,created_at"}
+            )
+            for row in resp.json():
+                diagrams_by_id[row["id"]] = row
+
+        groups = []
+        for did, g in groups_by_diagram.items():
+            g["diagram"] = diagrams_by_id.get(did)  # None if the diagram was since deleted
+            groups.append(g)
+        groups.sort(key=lambda g: g["count"], reverse=True)
+        return {"groups": groups}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.patch("/admin/diagram-reports/{diagram_id}/resolve")
+async def admin_resolve_diagram_reports(diagram_id: int, _: None = Depends(verify_admin)):
+    try:
+        response = await async_client.patch(
+            f"{SUPABASE_URL}/rest/v1/diagram_reports",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
+            params={"diagram_id": f"eq.{diagram_id}", "resolved": "eq.false"},
             json={"resolved": True}
         )
         if response.status_code >= 400:

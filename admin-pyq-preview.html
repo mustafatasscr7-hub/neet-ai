@@ -268,9 +268,10 @@
         <option value="">All Chapters</option>
       </select>
       <input type="text" id="diagramFilterSubtopic" placeholder="Search subtopic..." oninput="renderDiagramReview()" style="display:none"/>
-      <select id="diagramFilterStatus" onchange="renderDiagramReview()" style="display:none">
+      <select id="diagramFilterStatus" onchange="onDiagramFilterStatusChange()" style="display:none">
         <option value="pending">Pending Review</option>
         <option value="confirmed">Confirmed</option>
+        <option value="reported">Reported</option>
         <option value="all">All</option>
       </select>
       <div class="result-count" id="resultCount"></div>
@@ -312,6 +313,8 @@
     let diagramMode = false;
     let allDiagrams = [];
     let diagramEditingIds = new Set();
+    let diagramReportGroups = [];
+    let diagramReportsById = {}; // diagram_id -> report group (count/reasons/notes), fetched lazily the first time "Reported" is selected
     let duplicatePairs = [];
     let duplicateRowsMap = {};
     let reportGroups = [];
@@ -1497,6 +1500,59 @@
       renderDiagramReview();
     }
 
+    // "Reported" is the one diagramFilterStatus value that isn't a pure client-side filter of
+    // the already-loaded allDiagrams array -- it needs report data from a separate table, fetched
+    // lazily here (once) rather than on every diagram-mode entry, since most admin visits to
+    // Diagram Review never touch this filter at all.
+    async function onDiagramFilterStatusChange() {
+      const status = document.getElementById('diagramFilterStatus').value;
+      if (status === 'reported' && diagramReportGroups.length === 0) {
+        await loadDiagramReports();
+      }
+      renderDiagramReview();
+    }
+
+    async function loadDiagramReports() {
+      try {
+        const res = await fetch(`${API_BASE}/admin/diagram-reports?resolved=false`, { headers: authHeaders() });
+        if (res.status === 401) return logout();
+        const data = await res.json();
+        if (data.error) { alert('Could not load diagram reports: ' + data.error); return; }
+        diagramReportGroups = data.groups || [];
+        diagramReportsById = {};
+        diagramReportGroups.forEach(g => { diagramReportsById[g.diagram_id] = g; });
+      } catch (e) {
+        alert('Could not reach server for diagram reports.');
+      }
+    }
+
+    const DIAGRAM_REPORT_REASON_LABELS = {
+      wrong_image: 'Wrong image', mislabeled: 'Mislabeled', low_quality: 'Low quality',
+      incorrect_content: 'Incorrect content', other: 'Other'
+    };
+
+    async function resolveDiagramReportGroup(diagramId, btnEl) {
+      const originalLabel = btnEl.textContent;
+      btnEl.disabled = true;
+      btnEl.textContent = 'Resolving...';
+      try {
+        const res = await fetch(`${API_BASE}/admin/diagram-reports/${diagramId}/resolve`, {
+          method: 'PATCH', headers: authHeaders()
+        });
+        if (res.status === 401) return logout();
+        if (!res.ok) { alert('Could not resolve: ' + await describeHttpError(res)); btnEl.disabled = false; btnEl.textContent = originalLabel; return; }
+        const data = await res.json();
+        if (data.error) { alert('Could not resolve: ' + data.error); btnEl.disabled = false; btnEl.textContent = originalLabel; return; }
+        diagramReportGroups = diagramReportGroups.filter(g => g.diagram_id !== diagramId);
+        delete diagramReportsById[diagramId];
+        renderDiagramReview();
+      } catch (e) {
+        alert('Could not reach server.');
+        btnEl.disabled = false;
+        btnEl.textContent = originalLabel;
+      }
+    }
+
     function renderDiagramReview() {
       const area = document.getElementById('resultsArea');
       const subject = document.getElementById('diagramFilterSubject').value;
@@ -1509,12 +1565,41 @@
       if (subtopicQuery) rows = rows.filter(d => (d.subtopic || '').toLowerCase().includes(subtopicQuery));
       if (status === 'pending') rows = rows.filter(d => !d.reviewed);
       else if (status === 'confirmed') rows = rows.filter(d => d.reviewed);
-      document.getElementById('resultCount').textContent = `${rows.length} diagram${rows.length === 1 ? '' : 's'}`;
+      else if (status === 'reported') rows = rows.filter(d => diagramReportsById[d.id]);
+      document.getElementById('resultCount').textContent = status === 'reported'
+        ? `${rows.length} diagram${rows.length === 1 ? '' : 's'} with unresolved reports`
+        : `${rows.length} diagram${rows.length === 1 ? '' : 's'}`;
       if (rows.length === 0) {
-        area.innerHTML = '<div class="empty-text">No diagrams match these filters.</div>';
+        area.innerHTML = status === 'reported' ? '<div class="empty-text">No unresolved diagram reports.</div>' : '<div class="empty-text">No diagrams match these filters.</div>';
         return;
       }
-      area.innerHTML = `<div class="diagram-grid">${rows.map(d => diagramEditingIds.has(d.id) ? diagramEditCardHtml(d) : diagramViewCardHtml(d)).join('')}</div>`;
+      if (status === 'reported') {
+        // Same .report-wrap list layout renderReportedQuestions() uses for question reports
+        // (count badge + reason chips + notes + Mark Resolved, with the real card underneath) --
+        // not the plain grid the other three status filters use, since each item here needs its
+        // own report header, mirroring the question-reports view exactly.
+        area.innerHTML = rows.map(d => {
+          const g = diagramReportsById[d.id];
+          const reasonsHtml = Object.entries(g.reasons || {})
+            .map(([reason, count]) => `<span class="report-reason-chip">${escapeHtml(DIAGRAM_REPORT_REASON_LABELS[reason] || reason)} × ${count}</span>`)
+            .join('');
+          const notesHtml = (g.notes || []).length
+            ? `<div class="report-notes">${g.notes.map(n => `<div>"${escapeHtml(n)}"</div>`).join('')}</div>`
+            : '';
+          return `
+            <div class="report-wrap">
+              <div class="report-header">
+                <span class="report-count-badge">${g.count} report${g.count === 1 ? '' : 's'}</span>
+                <div class="report-reasons-list">${reasonsHtml}</div>
+                <button type="button" class="report-resolve-btn" onclick="resolveDiagramReportGroup(${d.id}, this)">Mark Resolved</button>
+              </div>
+              ${notesHtml}
+              ${diagramEditingIds.has(d.id) ? diagramEditCardHtml(d) : diagramViewCardHtml(d)}
+            </div>`;
+        }).join('');
+      } else {
+        area.innerHTML = `<div class="diagram-grid">${rows.map(d => diagramEditingIds.has(d.id) ? diagramEditCardHtml(d) : diagramViewCardHtml(d)).join('')}</div>`;
+      }
       area.querySelectorAll('.q-edit-field textarea').forEach(autoResizeTextarea);
     }
 
