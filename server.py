@@ -2779,7 +2779,19 @@ async def admin_pyq_chapters(subject: str, _: None = Depends(verify_admin)):
     if subject not in ("Biology", "Physics", "Chemistry"):
         return {"error": "Invalid subject"}
     try:
-        response = http_requests.get(
+        # await async_client, not the blocking http_requests (sync `requests`) this used to call
+        # directly from an async def route -- with uvicorn.run() here started with no workers=
+        # arg (one process, one event loop) and Railway's numReplicas: 1, a blocking call ties up
+        # the ONLY event loop for its full duration, stalling every other concurrent request
+        # (including this same admin's own second Promise.all call to pyq-classifier-data below)
+        # until it returns. Found while investigating a "could not reach the server" report for
+        # Chemistry specifically -- couldn't reproduce a hard failure directly (all three subjects
+        # returned 200 in isolation, concurrently, and via a real browser against production), but
+        # this is a genuine root-cause candidate: Chemistry's classifier-data payload is the
+        # largest of the three subjects, making it the one most likely to hold the shared event
+        # loop hostage long enough to trip a timeout if the server happens to be busy with real
+        # traffic at that moment. Fixed regardless, since it's wrong either way.
+        response = await async_client.get(
             f"{SUPABASE_URL}/rest/v1/pyq",
             headers=ADMIN_HEADERS,
             params={
@@ -3500,20 +3512,39 @@ async def admin_pyq_classifier_data(subject: str, _: None = Depends(verify_admin
     if subject not in ("Biology", "Physics", "Chemistry"):
         return {"error": "Invalid subject"}
     try:
-        response = http_requests.get(
-            f"{SUPABASE_URL}/rest/v1/pyq",
-            headers=ADMIN_HEADERS,
-            params={
-                "subject": f"eq.{subject}",
-                "is_active": "eq.true",
-                "select": "question,chapter,class",
-                "limit": 3000
-            }
-        )
+        # await async_client (not blocking http_requests) -- same reasoning as pyq-chapters above.
+        # Also paginated now, not a single limit:3000 request: PostgREST caps a single response at
+        # 1000 rows regardless of what limit a caller asks for, which was silently truncating this
+        # for Chemistry (2305 active rows) and Biology (2249) -- confirmed live, both were quietly
+        # returning only 1000 rows to the frontend. That starved buildClassifier()'s chapter
+        # suggestions and checkDuplicates' exact-match check of more than half the real data for
+        # those two subjects, on every successful request, not just an intermittent failure.
+        # Same page-through-until-short-page pattern as /admin/question-reports.
+        all_rows = []
+        page_size = 1000
+        offset = 0
+        while True:
+            response = await async_client.get(
+                f"{SUPABASE_URL}/rest/v1/pyq",
+                headers=ADMIN_HEADERS,
+                params={
+                    "subject": f"eq.{subject}",
+                    "is_active": "eq.true",
+                    "select": "question,chapter,class",
+                    "order": "id.asc",
+                    "limit": page_size,
+                    "offset": offset
+                }
+            )
+            page = response.json()
+            all_rows.extend(page)
+            if len(page) < page_size:
+                break
+            offset += page_size
         # Includes rows with no chapter yet too, so the frontend's exact-duplicate
         # check can catch dupes against still-untagged rows. buildClassifier() itself
         # skips rows with no chapter since they're useless as labeled training examples.
-        return {"rows": response.json()}
+        return {"rows": all_rows}
     except Exception as e:
         return {"error": str(e)}
 
