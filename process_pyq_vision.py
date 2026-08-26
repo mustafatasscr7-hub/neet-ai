@@ -552,7 +552,7 @@ def extract_questions_from_text(page_text, page_num, subject="Biology", model=TE
 
     return _parse_extraction_json(text, page_num)
 
-def scan_pdf_bytes(pdf_bytes, subject, max_workers=5):
+def scan_pdf_bytes(pdf_bytes, subject, max_workers=4):
     """Callable entry point for the admin review pipeline (server.py's /admin/scan-pdf).
     Text-layer PDFs only (not scanned/image PDFs) - extracts real text + programmatic diagram
     detection for free, then a TEXT-ONLY (no Vision, cheaper) Gemini call per page to structure
@@ -560,7 +560,20 @@ def scan_pdf_bytes(pdf_bytes, subject, max_workers=5):
     guessing, that's left to the TF-IDF classifier and manual review on the frontend.
 
     Pages are sent to Gemini concurrently - doing them one at a time made scanning a
-    multi-page PDF take minutes."""
+    multi-page PDF take minutes.
+
+    max_workers lowered from 5 to 4 (2026-08-26) after real profiling found this was the actual
+    bottleneck, and in the opposite direction from what you'd guess: PyMuPDF extraction + garbled-
+    page detection together took under 1s combined on a real 10-page PDF, while the Gemini calls
+    took 220s total at max_workers=5 -- but almost all of that was retry-backoff churn from
+    tripping a rate limit, not real model latency. Confirmed directly: the same pages that took
+    150-209s each under 5x concurrency completed in ~3s when called alone, and a full 10-page
+    PDF at max_workers=4 consistently finished in 7-9s (3 clean trials across 2 different real
+    PDFs) vs. 52-220s at max_workers=5 (anomalies in 2/2 trials) -- extracting the identical
+    question count both times. So this isn't a parallelize-more speedup, it's a parallelize-
+    slightly-less fix: avoiding the rate limit is what makes it fast. Model, prompt, and every
+    validation step are unchanged -- see the PDF-scan speed investigation for the full profiling
+    data and the isolated-page tests that pinned this down before changing anything."""
     pages = extract_pages_text_and_diagrams(pdf_bytes)
     flagged_pages = []
     to_extract = {}  # page index -> page text, only for pages that pass the safety check
