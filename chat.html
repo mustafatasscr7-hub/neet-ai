@@ -374,6 +374,10 @@
        transform resets to '' on drop animates smoothly. */
     .history-item.dragging { transition: none; opacity: 0.85; box-shadow: 0 4px 14px rgba(0,0,0,0.35); background: #1a1a1a; z-index: 10; will-change: transform; }
     .history-item .item-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    /* Leading icon, not nested inside .item-title -- that span has overflow:hidden for its own
+       text-ellipsis, which would silently clip this if it were a child instead of a sibling. */
+    .pin-badge { flex-shrink: 0; width: 12px; height: 12px; margin-right: 6px; color: #666; display: flex; }
+    .history-item:hover .pin-badge, .history-item.active .pin-badge { color: #999; }
 
     .item-menu-btn { display: none; flex-shrink: 0; width: 24px; height: 24px; align-items: center; justify-content: center; border-radius: 5px; cursor: pointer; color: #666; margin-left: 4px; }
     .history-item:hover .item-menu-btn { display: flex; }
@@ -831,6 +835,8 @@
       </div>
     </div>
     <div class="sidebar-divider"></div>
+    <div class="sidebar-label" id="pinnedLabel" style="display:none;" data-i18n="chat.pinned">Pinned</div>
+    <div class="history-list" id="pinnedList" style="display:none;flex:0 0 auto;"></div>
     <div class="sidebar-label" data-i18n="chat.recent">Recent</div>
     <div class="history-list" id="historyList"></div>
 
@@ -4171,9 +4177,52 @@ function plainTextFromMarkdown(text) {
       showWelcome();
     }
 
-    function pinConversationById(id) {
+    // Adds/removes the small leading pin icon on an existing .history-item without rebuilding
+    // the rest of it -- called both at initial render (createHistoryItem) and on every toggle.
+    function setPinBadge(item, isPinned) {
+      const existing = item.querySelector('.pin-badge');
+      if (isPinned && !existing) {
+        const badge = document.createElement('span');
+        badge.className = 'pin-badge';
+        badge.innerHTML = PIN_ICON_SVG;
+        item.insertBefore(badge, item.firstChild);
+      } else if (!isPinned && existing) {
+        existing.remove();
+      }
+    }
+
+    // Shows/hides the "Pinned" section label + list based on whether it currently holds any
+    // items -- an empty pinned section with just a floating heading and nothing under it would
+    // look broken, so both are kept in sync rather than only ever set once at page load.
+    function refreshPinnedSectionVisibility() {
+      const list = document.getElementById('pinnedList');
+      const hasAny = list.children.length > 0;
+      list.style.display = hasAny ? 'flex' : 'none';
+      document.getElementById('pinnedLabel').style.display = hasAny ? 'block' : 'none';
+    }
+
+    async function togglePinConversation(id) {
       const item = document.getElementById('conv-' + id);
-      if (item) document.getElementById('historyList').prepend(item);
+      if (!item) return;
+      const conv = conversations.find(c => String(c.id) === String(id) || String(c.supabaseId) === String(id));
+      const newPinned = !(conv && conv.isPinned);
+      if (conv) conv.isPinned = newPinned;
+
+      setPinBadge(item, newPinned);
+      if (newPinned) {
+        document.getElementById('pinnedList').prepend(item);
+      } else {
+        document.getElementById('historyList').prepend(item);
+      }
+      refreshPinnedSectionVisibility();
+
+      const { data: { session } } = await client.auth.getSession();
+      if (!session) return; // guests never get a historyList populated in the first place
+      try {
+        await client.from('chats').update({ is_pinned: newPinned }).eq('id', id).eq('user_id', session.user.id);
+      } catch (e) {
+        console.error('Failed to save pin state', e);
+      }
     }
 
     // Positions a .item-menu next to its trigger, flipping to the left side (or clamping
@@ -4197,15 +4246,28 @@ function plainTextFromMarkdown(text) {
       menu.style.top = top + 'px';
     }
 
+    // Reused both for the "Pin chat"/"Unpin chat" menu option below and for the small pin-badge
+    // createHistoryItem() shows next to a pinned chat's title -- same icon everywhere "pinned"
+    // is communicated, not two different glyphs for the same meaning.
+    const PIN_ICON_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/></svg>';
+
     // Shared by both the per-item sidebar menu and the chat-title header dropdown so their
     // markup (icons, order, styling) can never drift apart. Order matches the ChatGPT reference
     // this was redesigned against: Share, Rename, Pin chat, then Delete below a divider.
+    // The pin option's text sits in its own .pin-label-text span so updatePinMenuLabel() can
+    // rewrite just that (Pin chat <-> Unpin chat, per the item's current state) without
+    // rebuilding the icon or the rest of the menu each time it opens.
     const ITEM_MENU_HTML =
       '<div class="item-menu-option" data-action="share"><span class="item-menu-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg></span>Share</div>' +
       '<div class="item-menu-option" data-action="rename"><span class="item-menu-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></span>Rename</div>' +
-      '<div class="item-menu-option" data-action="pin"><span class="item-menu-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/></svg></span>Pin chat</div>' +
+      '<div class="item-menu-option" data-action="pin"><span class="item-menu-icon">' + PIN_ICON_SVG + '</span><span class="pin-label-text">Pin chat</span></div>' +
       '<div class="item-menu-divider"></div>' +
       '<div class="item-menu-option delete" data-action="delete"><span class="item-menu-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></span>Delete</div>';
+
+    function updatePinMenuLabel(menu, isPinned) {
+      const el = menu.querySelector('.pin-label-text');
+      if (el) el.textContent = isPinned ? 'Unpin chat' : 'Pin chat';
+    }
 
     function updateHeaderTitle(title) {
       document.getElementById('headerBrand').style.display = 'none';
@@ -4217,6 +4279,14 @@ function plainTextFromMarkdown(text) {
     function resetHeaderTitle() {
       document.getElementById('headerBrand').style.display = '';
       document.getElementById('chatTitleBtn').style.display = 'none';
+    }
+
+    // Looks up current pin state fresh (not from whatever it was at createHistoryItem() time) --
+    // both this and the sidebar per-item menu can toggle a chat's pin state independently, so
+    // either menu's label needs to reflect the latest, not whatever it was when first rendered.
+    function isConversationPinned(id) {
+      const conv = conversations.find(c => String(c.id) === String(id) || String(c.supabaseId) === String(id));
+      return !!(conv && conv.isPinned);
     }
 
     document.getElementById('chatTitleBtn').addEventListener('click', function(e) {
@@ -4241,18 +4311,19 @@ function plainTextFromMarkdown(text) {
             } else if (action === 'rename') {
               await renameConversationById(currentId, document.getElementById('chatTitleText').textContent);
             } else if (action === 'pin') {
-              pinConversationById(currentId);
+              await togglePinConversation(currentId);
             } else if (action === 'share') {
               alert('Share feature coming soon!');
             }
           });
         });
       }
+      updatePinMenuLabel(menu, isConversationPinned(currentId));
       menu.style.display = 'block';
       positionItemMenu(menu, this.getBoundingClientRect(), { belowInsteadOfRight: true });
     });
 
-    function createHistoryItem(id, title, onClickFn) {
+    function createHistoryItem(id, title, onClickFn, isPinned) {
       const item = document.createElement('div');
       item.className = 'history-item';
       item.id = 'conv-' + id;
@@ -4261,6 +4332,7 @@ function plainTextFromMarkdown(text) {
       titleSpan.className = 'item-title';
       titleSpan.textContent = title;
       item.appendChild(titleSpan);
+      setPinBadge(item, !!isPinned);
 
       const menuBtn = document.createElement('div');
       menuBtn.className = 'item-menu-btn';
@@ -4284,6 +4356,7 @@ function plainTextFromMarkdown(text) {
       menuBtn.addEventListener('click', function(e) {
         e.stopPropagation();
         document.querySelectorAll('.item-menu').forEach(m => m.style.display = 'none');
+        updatePinMenuLabel(menu, isConversationPinned(id));
         menu.style.display = 'block';
         positionItemMenu(menu, menuBtn.getBoundingClientRect());
       });
@@ -4298,7 +4371,7 @@ function plainTextFromMarkdown(text) {
           } else if (action === 'rename') {
             await renameConversationById(id, titleSpan.textContent);
           } else if (action === 'pin') {
-            pinConversationById(id);
+            await togglePinConversation(id);
           } else if (action === 'share') {
             alert('Share feature coming soon!');
           }
@@ -4444,10 +4517,10 @@ function plainTextFromMarkdown(text) {
         if (data.title) title = data.title;
       } catch(e) {}
 
-      const item = createHistoryItem(id, title, () => loadConversation(id));
+      const item = createHistoryItem(id, title, () => loadConversation(id), false);
       item.classList.add('active');
       document.getElementById('historyList').prepend(item);
-      conversations.push({ id: id, title: title, messages: currentConversation });
+      conversations.push({ id: id, title: title, messages: currentConversation, isPinned: false });
       updateHeaderTitle(title);
 
       const { data: { session } } = await client.auth.getSession();
@@ -5683,10 +5756,11 @@ function plainTextFromMarkdown(text) {
         const { data: chats } = await client.from('chats').select('*').eq('user_id', user.id).order('sort_order', { ascending: true });
         if (chats && chats.length > 0) {
           chats.forEach(chat => {
-            const item = createHistoryItem(chat.id, chat.title, () => loadConversationFromSupabase(chat));
-            document.getElementById('historyList').appendChild(item);
-            conversations.push({ id: chat.id, title: chat.title, messages: chat.messages, supabaseId: chat.id, sortOrder: chat.sort_order });
+            const item = createHistoryItem(chat.id, chat.title, () => loadConversationFromSupabase(chat), chat.is_pinned);
+            document.getElementById(chat.is_pinned ? 'pinnedList' : 'historyList').appendChild(item);
+            conversations.push({ id: chat.id, title: chat.title, messages: chat.messages, supabaseId: chat.id, sortOrder: chat.sort_order, isPinned: !!chat.is_pinned });
           });
+          refreshPinnedSectionVisibility();
           makeHistoryListSortable(document.getElementById('historyList'));
         }
       } else {
