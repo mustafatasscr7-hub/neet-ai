@@ -100,15 +100,15 @@ NEET Importance: [N]/5
 
 📚 Chapter: [copied verbatim from a "Retrieved from:" entry given to you — see Rule 1. Omit this whole line if no "Retrieved from:" entries were given.]
 
-📝 Answer:
+Answer:
 [Give the answer in clear points]
 
-🔑 Key Points:
+Key Points:
 - [Point 1]
 - [Point 2]
 - [Point 3]
 
-🧠 Easy Way to Remember: (see rule 9 below — omit this entire section if no genuinely good mnemonic exists)
+Quick Recall: (see rule 9 below — omit this entire section if no genuinely good mnemonic exists)
 [A real, well-known mnemonic if one exists, or a genuinely clever invented one]
 
 For numerical problems, lay out Given/Formula/Solution VERTICALLY, one item per physical line —
@@ -133,7 +133,7 @@ $0 = 400 - 20h$
 $h = 400 / 20$
 $h = 20$ m
 
-Answer: Maximum height = 20 m
+Final Answer: Maximum height = 20 m
 
 Rules:
 1. Answer ONLY from the NCERT content provided to you. This applies most strictly to the 📚
@@ -249,7 +249,7 @@ Rules:
      text (e.g. light node text on a light fill you chose). Structure and labels only.
    - Still follow the normal answer format around it (NEET Importance, Chapter, etc.) — the
      diagram supplements the answer, it doesn't replace that structure
-9. For "Easy Way to Remember": recall the REAL, well-known mnemonic actual NEET/coaching students
+9. For "Quick Recall": recall the REAL, well-known mnemonic actual NEET/coaching students
    use for this fact and give that (e.g. "King Philip Came Over For Good Soup" for taxonomic
    ranks, "OIL RIG" or "LEO says GER" for oxidation/reduction electron transfer, "Roy G. Biv" for
    the visible spectrum, "Never Eat Shredded Wheat" for compass directions) — almost every named
@@ -1809,7 +1809,7 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
         import sys
         name_context = f"\n\nThe student name is {student_name}. Use their name naturally and occasionally in responses to make it personal." if student_name else ""
         style_context = "\n\nIMPORTANT: The student has selected CONCISE mode. Give a very short answer — maximum 3 sentences only. No bullet points, no key points section, no memory tricks. Just the core answer." if answer_style == "concise" else ""
-        lang_context = "\n\nIMPORTANT: Respond ONLY in Hindi (Devanagari script). Every word — headings, key points, explanations, memory tricks — must be in Hindi. Do not mix in English words or Hinglish, even for common scientific terms (e.g. write \"गुणसूत्र\" not \"chromosome\"). The ONLY exceptions are: LaTeX/KaTeX math notation, chemical formulas/symbols (e.g. $H_2O$), units (e.g. m/s, kg), and proper nouns like NEET or NCERT — keep those exactly as-is, do not translate or romanize them." if language == "hi" else ""
+        lang_context = "\n\nIMPORTANT: Respond ONLY in Hindi (Devanagari script). Every word — headings, key points, explanations, memory tricks — must be in Hindi. Do not mix in English words or Hinglish, even for common scientific terms (e.g. write \"गुणसूत्र\" not \"chromosome\"). The ONLY exceptions are: LaTeX/KaTeX math notation, chemical formulas/symbols (e.g. $H_2O$), units (e.g. m/s, kg), and proper nouns like NEET or NCERT — keep those exactly as-is, do not translate or romanize them. For the section headers specifically, use these EXACT fixed Hindi labels rather than inventing your own translation each time: \"Answer:\" becomes \"उत्तर:\", \"Key Points:\" becomes \"मुख्य बिंदु:\", \"Quick Recall:\" becomes \"त्वरित याद:\". \"NEET Importance:\" and \"Chapter:\" stay in English exactly as given in the format above — never translate those two labels." if language == "hi" else ""
         # Graph/curve-matching questions are Gemini's one consistently weak category (~73%
         # across 4 rounds of testing, vs 95-100% on everything else) -- this can't be gated on
         # chapter/question-type ahead of time since the chapter is an OUTPUT of the answer (the
@@ -1832,7 +1832,7 @@ IMPORTANT -- BE CONCISE:
   -- show the necessary steps only, never restate the same substitution twice.
 - Do not repeat the same fact in both the Answer section and the Key Points section -- each
   should add distinct information, not duplicate it.
-- Keep the Easy Way to Remember line to one short sentence.
+- Keep the Quick Recall line to one short sentence.
 - Never use filler transition phrases like "Let's break this down" or "To understand this, we
   need to first" -- start directly with the substantive content.""" if images else ""
         full_system = SYSTEM_PROMPT + name_context + style_context + lang_context + student_context + graph_context + conciseness_context
