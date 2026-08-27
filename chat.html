@@ -372,7 +372,7 @@
        the base transition above would otherwise fight/lag behind the pointer instead of
        tracking it 1:1. Re-enabled the instant this class comes off, so the final snap when
        transform resets to '' on drop animates smoothly. */
-    .history-item.dragging { transition: none; opacity: 0.85; box-shadow: 0 4px 14px rgba(0,0,0,0.35); background: #1a1a1a; z-index: 10; }
+    .history-item.dragging { transition: none; opacity: 0.85; box-shadow: 0 4px 14px rgba(0,0,0,0.35); background: #1a1a1a; z-index: 10; will-change: transform; }
     .history-item .item-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
     .item-menu-btn { display: none; flex-shrink: 0; width: 24px; height: 24px; align-items: center; justify-content: center; border-radius: 5px; cursor: pointer; color: #666; margin-left: 4px; }
@@ -4335,6 +4335,17 @@ function plainTextFromMarkdown(text) {
         }
         draggedEl.style.transform = `translateY(${deltaY}px)`;
 
+        // FLIP (First-Last-Invert-Play): snapshot every sibling's position before any swap this
+        // event might cause. Without this, insertBefore() below just teleports a displaced
+        // sibling to its new spot with no animation -- the "snap" the item feels. Snapshotting
+        // once per event (not once per swap below) also means a fast drag that hops several
+        // positions in one event still animates as one smooth slide per sibling, not several
+        // jittery micro-snaps chained together.
+        const before = new Map();
+        for (const sib of container.children) {
+          if (sib !== draggedEl) before.set(sib, sib.getBoundingClientRect().top);
+        }
+
         // Swap with whichever immediate sibling the pointer has crossed the vertical midpoint
         // of. Loops until nothing more qualifies (not just one hop) -- a single move event can
         // carry a large jump (a fast flick, or coarse-grained event sampling), and one hop per
@@ -4362,6 +4373,21 @@ function plainTextFromMarkdown(text) {
               break;
             }
           }
+        }
+
+        // Play: for every sibling whose position actually changed this event, invert it back to
+        // where it visually was (transition off), force the browser to commit that instantly,
+        // then hand it back to the normal CSS transition (transform 0.12s ease) targeting its
+        // real new position -- it slides from old spot to new instead of snapping there.
+        for (const [sib, oldTop] of before) {
+          const newTop = sib.getBoundingClientRect().top;
+          const delta = oldTop - newTop;
+          if (delta === 0) continue;
+          sib.style.transition = 'none';
+          sib.style.transform = `translateY(${delta}px)`;
+          sib.getBoundingClientRect(); // forces layout so the inverted position above actually commits
+          sib.style.transition = '';
+          sib.style.transform = '';
         }
       }
 
