@@ -516,6 +516,11 @@
        own explicit rule always wins over an inherited value, regardless of source order) -- this
        is a defensive, explicit backstop for that guarantee, not a fix for an observed leak. */
     .message-bubble.ai .katex, .message-bubble.ai .katex * { font-family: KaTeX_Main, KaTeX_Math, "Times New Roman", serif !important; }
+    /* Scoped to .message-bubble.ai so the same wrapper class parseWithMath() also produces for
+       the PYQ-modal solve box (a different container, not an answer bubble) is unaffected --
+       this rule simply doesn't match there, no JS-side conditional needed. */
+    .message-bubble.ai .chat-math-inline { font-size: 1.15em; }
+    .message-bubble.ai .chat-math-display { font-size: 1.3em; }
     .pyq-sol-box ul, .pyq-sol-box ol { margin: 0; padding-left: 20px; }
     .pyq-sol-box p { margin: 0 0 8px 0; }
     .pyq-sol-box p:last-child { margin-bottom: 0; }
@@ -1806,18 +1811,20 @@ let selectedImages = [];
       let html = text;
       html = html.replace(/\$\$([^$]+)\$\$/g, function(_, math) {
         try {
-          return '<div style="text-align:center;margin:12px 0;overflow-x:auto;">' + katex.renderToString(math.trim(), { displayMode: true, throwOnError: false }) + '</div>';
+          return '<div class="chat-math-display" style="text-align:center;margin:12px 0;overflow-x:auto;">' + katex.renderToString(math.trim(), { displayMode: true, throwOnError: false }) + '</div>';
         } catch(e) { return _; }
       });
       html = html.replace(/\$([^$\n]+)\$/g, function(_, math) {
         try {
-          // Wrapped at 1.15em rather than sized via a competing CSS rule on .katex directly --
+          // Wrapped in a class rather than sized via a competing CSS rule on .katex directly --
           // KaTeX's own stylesheet already sets .katex's font-size to a deliberately-tuned ratio
           // (its math font's proportions read too small at a flat 1:1 with body text), so a CSS
           // rule targeting .katex would replace that tuning outright instead of building on it.
           // A wrapper span scales relative to ITS OWN font-size context, which KaTeX's internal
-          // em-based sizing then still correctly inherits and scales from.
-          return '<span style="font-size:1.15em;">' + katex.renderToString(math.trim(), { displayMode: false, throwOnError: false }) + '</span>';
+          // em-based sizing then still correctly inherits and scales from. The actual size lives
+          // in CSS (.chat-math-inline, scoped to .message-bubble.ai) rather than inline here, so
+          // it applies uniformly and stays out of non-bubble contexts like the PYQ solve box.
+          return '<span class="chat-math-inline">' + katex.renderToString(math.trim(), { displayMode: false, throwOnError: false }) + '</span>';
         } catch(e) { return _; }
       });
       // breaks:true so a single newline in question/option text (e.g. one option per line)
