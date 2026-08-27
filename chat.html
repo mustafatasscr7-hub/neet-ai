@@ -365,9 +365,14 @@
     .history-list::-webkit-scrollbar { width: 3px; }
     .history-list::-webkit-scrollbar-thumb { background: #2a2a2a; border-radius: 4px; }
 
-    .history-item { box-sizing: border-box; height: 38px; padding: 0 12px; border-radius: 8px; font-size: 13px; line-height: 1.4; color: #888; cursor: pointer; transition: background 0.15s, color 0.15s; border: 1px solid transparent; position: relative; display: flex; align-items: center; flex-shrink: 0; }
+    .history-item { box-sizing: border-box; height: 38px; padding: 0 12px; border-radius: 8px; font-size: 13px; line-height: 1.4; color: #888; cursor: pointer; transition: background 0.15s, color 0.15s, transform 0.12s ease; border: 1px solid transparent; position: relative; display: flex; align-items: center; flex-shrink: 0; }
     .history-item:hover { background: #1a1a1a; color: #ccc; }
     .history-item.active { background: #1a1a1a; color: #ececec; }
+    /* transition:none while actively dragging -- transform is set on every pointermove, and
+       the base transition above would otherwise fight/lag behind the pointer instead of
+       tracking it 1:1. Re-enabled the instant this class comes off, so the final snap when
+       transform resets to '' on drop animates smoothly. */
+    .history-item.dragging { transition: none; opacity: 0.85; box-shadow: 0 4px 14px rgba(0,0,0,0.35); background: #1a1a1a; z-index: 10; }
     .history-item .item-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
     .item-menu-btn { display: none; flex-shrink: 0; width: 24px; height: 24px; align-items: center; justify-content: center; border-radius: 5px; cursor: pointer; color: #666; margin-left: 4px; }
@@ -4296,6 +4301,101 @@ function plainTextFromMarkdown(text) {
       return item;
     }
 
+    // ---- Drag-and-drop reordering for the Recent chat list ----
+    // Vanilla Pointer Events, not @dnd-kit -- chat.html is a single static HTML file with no
+    // React/bundler anywhere in the project (package.json only has @supabase/supabase-js for a
+    // test script), so useSortable()/DndContext/SortableContext aren't usable here as-is. This
+    // mirrors dnd-kit's own UX contract instead: a ~5px movement threshold before a drag starts
+    // (so a plain click still opens the chat -- pointerdown/pointerup firing close together
+    // with no movement in between is a click, untouched by any of this), transform-based drag
+    // follow, and a persisted order on drop.
+    function makeHistoryListSortable(container) {
+      const DRAG_THRESHOLD = 5;
+      let draggedEl = null, startY = 0, dragging = false, pointerId = null;
+
+      container.addEventListener('pointerdown', function(e) {
+        const item = e.target.closest('.history-item');
+        if (!item || e.target.closest('.item-menu-btn')) return;
+        draggedEl = item;
+        startY = e.clientY;
+        dragging = false;
+        pointerId = e.pointerId;
+        document.addEventListener('pointermove', onPointerMove);
+        document.addEventListener('pointerup', onPointerUp, { once: true });
+      });
+
+      function onPointerMove(e) {
+        if (!draggedEl) return;
+        const deltaY = e.clientY - startY;
+        if (!dragging) {
+          if (Math.abs(deltaY) < DRAG_THRESHOLD) return;
+          dragging = true;
+          draggedEl.classList.add('dragging');
+          draggedEl.setPointerCapture(pointerId);
+        }
+        draggedEl.style.transform = `translateY(${deltaY}px)`;
+
+        // Swap with whichever immediate sibling the pointer has crossed the vertical midpoint
+        // of. Loops until nothing more qualifies (not just one hop) -- a single move event can
+        // carry a large jump (a fast flick, or coarse-grained event sampling), and one hop per
+        // event would leave the dragged item lagging behind the cursor instead of landing where
+        // it's actually pointing. Bounded by list length; each iteration strictly moves
+        // draggedEl one position closer to stable, so this always terminates.
+        let moved = true;
+        while (moved) {
+          moved = false;
+          for (const sib of container.children) {
+            if (sib === draggedEl) continue;
+            const rect = sib.getBoundingClientRect();
+            const midpoint = rect.top + rect.height / 2;
+            if (sib.previousElementSibling === draggedEl && e.clientY > midpoint) {
+              // dragging down: pointer has passed the next item's midpoint -- hop past it
+              container.insertBefore(draggedEl, sib.nextElementSibling);
+              startY = e.clientY - deltaY; // re-anchor so the transform stays continuous, no jump
+              moved = true;
+              break;
+            } else if (sib.nextElementSibling === draggedEl && e.clientY < midpoint) {
+              // dragging up: pointer has passed the previous item's midpoint -- hop before it
+              container.insertBefore(draggedEl, sib);
+              startY = e.clientY - deltaY;
+              moved = true;
+              break;
+            }
+          }
+        }
+      }
+
+      function onPointerUp() {
+        document.removeEventListener('pointermove', onPointerMove);
+        if (dragging && draggedEl) {
+          draggedEl.releasePointerCapture(pointerId);
+          draggedEl.classList.remove('dragging');
+          draggedEl.style.transform = '';
+          persistHistoryOrder();
+        }
+        draggedEl = null;
+        dragging = false;
+      }
+    }
+
+    // Writes the Recent list's current DOM order back to chats.sort_order, and keeps the
+    // in-memory conversations array (read/written elsewhere by id -- rename, delete, etc.) in
+    // the same order for consistency.
+    async function persistHistoryOrder() {
+      const idsInOrder = [...document.getElementById('historyList').children].map(el => el.id.replace('conv-', ''));
+      conversations.sort((a, b) => idsInOrder.indexOf(String(a.id)) - idsInOrder.indexOf(String(b.id)));
+
+      const { data: { session } } = await client.auth.getSession();
+      if (!session) return; // guests never get a historyList populated in the first place
+      try {
+        await Promise.all(idsInOrder.map((id, index) =>
+          client.from('chats').update({ sort_order: index }).eq('id', id).eq('user_id', session.user.id)
+        ));
+      } catch (e) {
+        console.error('Failed to save chat order', e);
+      }
+    }
+
     async function saveToSidebar(firstMessage) {
       const id = Date.now();
       currentId = id;
@@ -4319,10 +4419,12 @@ function plainTextFromMarkdown(text) {
 
       const { data: { session } } = await client.auth.getSession();
       if (session) {
+        const minSortOrder = conversations.reduce((min, c) => typeof c.sortOrder === 'number' && c.sortOrder < min ? c.sortOrder : min, 0);
         const { data: inserted, error } = await client.from('chats').insert({
           user_id: session.user.id,
           title: title,
-          messages: currentConversation
+          messages: currentConversation,
+          sort_order: minSortOrder - 1
         }).select();
         if (!error && inserted && inserted[0]) {
           conversations[conversations.length - 1].supabaseId = inserted[0].id;
@@ -5545,13 +5647,14 @@ function plainTextFromMarkdown(text) {
         document.getElementById('guestAvatarBtn').style.display = 'none';
         document.getElementById('profileSection').style.display = 'flex';
 
-        const { data: chats } = await client.from('chats').select('*').eq('user_id', user.id).order('created_at', { ascending: false });
+        const { data: chats } = await client.from('chats').select('*').eq('user_id', user.id).order('sort_order', { ascending: true });
         if (chats && chats.length > 0) {
           chats.forEach(chat => {
             const item = createHistoryItem(chat.id, chat.title, () => loadConversationFromSupabase(chat));
             document.getElementById('historyList').appendChild(item);
-            conversations.push({ id: chat.id, title: chat.title, messages: chat.messages, supabaseId: chat.id });
+            conversations.push({ id: chat.id, title: chat.title, messages: chat.messages, supabaseId: chat.id, sortOrder: chat.sort_order });
           });
+          makeHistoryListSortable(document.getElementById('historyList'));
         }
       } else {
         document.getElementById('loginNudge').style.display = 'flex';
