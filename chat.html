@@ -2839,8 +2839,14 @@ let selectedImages = [];
                 if (res.status === 402) {
                   clearInterval(thinkingInterval);
                   const guest = !session;
+                  // Pro can now hit a real 402 too (previously only free/guest could) -- "You've
+                  // used all your free doubts" would be wrong/confusing for someone already
+                  // paying, so it gets its own message + an Upgrade-to-Max CTA instead.
+                  const pro = !guest && userPlan === 'pro';
                   const link = guest ? './login.html' : './pricing.html';
-                  solDiv.innerHTML = `<span style="color:#ef4444;">${t('chat', guest ? 'guestLimitReachedMessage' : 'limitReachedMessage')} <a href="${link}">${t('chat', guest ? 'login' : 'upgradeToPro')}</a></span>`;
+                  const msgKey = guest ? 'guestLimitReachedMessage' : (pro ? 'proLimitReachedMessage' : 'limitReachedMessage');
+                  const ctaKey = guest ? 'login' : (pro ? 'upgradeToMax' : 'upgradeToPro');
+                  solDiv.innerHTML = `<span style="color:#ef4444;">${t('chat', msgKey)} <a href="${link}">${t('chat', ctaKey)}</a></span>`;
                   solBtn.textContent = '💡 Show Solution';
                   solBtn.disabled = false;
                   refreshUsageBanner();
@@ -4621,10 +4627,16 @@ function plainTextFromMarkdown(text) {
     // Daily usage banner: reads usage_log/user_plan directly (RLS allows reading only your own
     // rows) for display purposes only -- real enforcement is server-side in server.py, so this
     // can't be used to bypass anything, it just decides what to show.
-    const DAILY_TOKEN_BUDGET_FREE = 3600;  // must match server.py's constant
-    const DAILY_TOKEN_BUDGET_GUEST = 1000; // must match server.py's constant
-    const AVG_TOKENS_PER_DOUBT = 400;      // rough display-only estimate, not the real enforcement --
-                                            // measured DeepSeek average post-migration (was 2440 for Claude)
+    const DAILY_TOKEN_BUDGET_FREE = 50000;  // must match server.py's constant
+    const DAILY_TOKEN_BUDGET_GUEST = 14000; // must match server.py's constant
+    const DAILY_TOKEN_LIMIT_PRO = 950000;   // must match server.py's constant -- real, enforced,
+                                             // visible daily cap. Max's own ceiling is a silent
+                                             // backend-only safety net and deliberately has no
+                                             // frontend constant at all -- it must never be
+                                             // knowable from this file.
+    const AVG_TOKENS_PER_DOUBT = 5400;     // rough display-only estimate, not the real enforcement --
+                                            // real blended average across all 3 providers, measured
+                                            // from provider_usage_log (2026-08-27, n=285)
     const WARNING_THRESHOLD_DOUBTS = 3;
 
     function getISTDateString() {
@@ -4680,9 +4692,13 @@ function plainTextFromMarkdown(text) {
     // an absolute timestamp (not a stored "seconds remaining" snapshot) so the tick stays
     // accurate between refreshes instead of drifting or needing to know how long ago it was set.
     let usageDisplayState = null;
-    function applyUsageDisplay(used, budget, isGuest, retryAfterSeconds) {
+    // tier: 'guest' | 'free' | 'pro' -- decides both the blocked-banner wording and its CTA.
+    // 'pro' is a genuinely new case (Pro previously never reached this function at all): a
+    // blocked Pro user is already paying, so "Upgrade to Pro" would be a nonsense CTA -- they
+    // get "Upgrade to Max" instead, since Max is the only tier that removes this wall.
+    function applyUsageDisplay(used, budget, tier, retryAfterSeconds) {
       usageDisplayState = {
-        used, budget, isGuest,
+        used, budget, tier,
         cooldownDeadlineMs: (retryAfterSeconds != null) ? Date.now() + retryAfterSeconds * 1000 : null
       };
       renderUsageDisplay();
@@ -4690,21 +4706,23 @@ function plainTextFromMarkdown(text) {
 
     function renderUsageDisplay() {
       if (!usageDisplayState) return;
-      const { used, budget, isGuest, cooldownDeadlineMs } = usageDisplayState;
+      const { used, budget, tier, cooldownDeadlineMs } = usageDisplayState;
       const warningEl = document.getElementById('usageWarning');
       const limitEl = document.getElementById('limitBanner');
       const limitText = document.getElementById('limitBannerText');
       const limitBtn = document.getElementById('limitBannerBtn');
 
-      // Blocked -- a fixed 24h cooldown from whenever the budget was actually crossed, not a
-      // countdown to IST midnight (that meant the wait could be anywhere from 1 minute to ~24h
-      // depending on what time of day the limit was hit).
+      // Blocked. Free/guest: a fixed 24h cooldown from whenever the budget was actually crossed
+      // (not a countdown to IST midnight -- that meant the wait could be anywhere from 1 minute
+      // to ~24h depending on what time of day the limit was hit). Pro: a real countdown to the
+      // actual next IST midnight, which is genuinely when Pro's cap resets -- see
+      // _check_pro_daily_limit server-side.
       if (cooldownDeadlineMs !== null) {
         const remainingMs = Math.max(0, cooldownDeadlineMs - Date.now());
         const countdown = t('chat', 'resetsIn').replace('{time}', formatCountdown(remainingMs));
-        limitText.textContent = t('chat', isGuest ? 'guestLimitReached' : 'dailyLimitReached') + ' — ' + countdown;
-        limitBtn.textContent = t('chat', isGuest ? 'login' : 'upgradeToPro');
-        limitBtn.onclick = function() { window.location.href = isGuest ? './login.html' : './pricing.html'; };
+        limitText.textContent = t('chat', tier === 'guest' ? 'guestLimitReached' : 'dailyLimitReached') + ' — ' + countdown;
+        limitBtn.textContent = t('chat', tier === 'guest' ? 'login' : (tier === 'pro' ? 'upgradeToMax' : 'upgradeToPro'));
+        limitBtn.onclick = function() { window.location.href = tier === 'guest' ? './login.html' : './pricing.html'; };
         limitEl.style.display = 'flex';
         warningEl.style.display = 'none';
         setSendEnabled(false);
@@ -4778,7 +4796,7 @@ function plainTextFromMarkdown(text) {
         try {
           const res = await fetch(`${API_BASE}/guest-usage-status`);
           const data = await res.json();
-          applyUsageDisplay(data.tokens_used || 0, data.budget || DAILY_TOKEN_BUDGET_GUEST, true, data.retry_after_seconds);
+          applyUsageDisplay(data.tokens_used || 0, data.budget || DAILY_TOKEN_BUDGET_GUEST, 'guest', data.retry_after_seconds);
         } catch (e) {
           warningEl.style.display = 'none'; limitEl.style.display = 'none'; setSendEnabled(true);
         }
@@ -4788,10 +4806,26 @@ function plainTextFromMarkdown(text) {
       const { data: planRow } = await client.from('user_plan').select('plan').eq('user_id', session.user.id).single();
       userPlan = (planRow && planRow.plan) || 'free';
       applyProUIState();
-      if (isPro()) {
+      if (userPlan === 'max') {
+        // Genuinely unlimited from the student's POV -- Max's real safety-net ceiling is a
+        // silent backend-only concept (see server.py's check_max_usage_tier) and this file has
+        // no knowledge of that number at all, deliberately.
         warningEl.style.display = 'none';
         limitEl.style.display = 'none';
         setSendEnabled(true);
+        return;
+      }
+      if (userPlan === 'pro') {
+        // Real, enforced, midnight-IST-anchored cap -- reuses /usage/summary (already backs the
+        // Usage tab) rather than duplicating the free-tier's client-side rolling-cooldown math,
+        // since Pro's reset is a plain "next real midnight", already computed server-side there.
+        try {
+          const res = await fetch(`${API_BASE}/usage/summary?user_id=${session.user.id}`);
+          const data = await res.json();
+          applyUsageDisplay(data.today.tokens_used, data.today.budget, 'pro', data.today.blocked ? data.today.reset_in_seconds : null);
+        } catch (e) {
+          warningEl.style.display = 'none'; limitEl.style.display = 'none'; setSendEnabled(true);
+        }
         return;
       }
 
@@ -4804,7 +4838,7 @@ function plainTextFromMarkdown(text) {
       const todayRow = (usageRows || []).find(r => r.usage_date === todayStr);
       const used = todayRow ? todayRow.tokens_used : 0;
       const retryAfterSeconds = computeActiveCooldownSeconds(usageRows, todayStr, yesterdayStr);
-      applyUsageDisplay(used, DAILY_TOKEN_BUDGET_FREE, false, retryAfterSeconds);
+      applyUsageDisplay(used, DAILY_TOKEN_BUDGET_FREE, 'free', retryAfterSeconds);
     }
 
  async function sendMessage() {
@@ -5045,8 +5079,9 @@ function plainTextFromMarkdown(text) {
         if (!response.ok) {
           removeTypingRow();
           if (response.status === 402) {
-            await refreshUsageBanner();
-            addMessageRow('ai', t('chat', session ? 'limitReachedMessage' : 'guestLimitReachedMessage'));
+            await refreshUsageBanner(); // updates userPlan too, so the check below reflects the real plan
+            const msgKey = !session ? 'guestLimitReachedMessage' : (userPlan === 'pro' ? 'proLimitReachedMessage' : 'limitReachedMessage');
+            addMessageRow('ai', t('chat', msgKey));
           } else if (response.status === 413) {
             let detail = {};
             try { detail = (await response.json()).detail || {}; } catch (e) {}

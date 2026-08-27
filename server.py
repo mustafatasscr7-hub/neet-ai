@@ -724,8 +724,26 @@ DAILY_TOKEN_BUDGET_FREE = 50000  # ~9 doubts/day -- re-recalibrated 2026-08-16. 
                                   # re-measure before trusting this ceiling.
 COOLDOWN_HOURS = 24  # how long a block lasts once the budget is actually crossed
 
+# Pro: a real, ENFORCED, user-visible daily ceiling -- unlike Free's rolling 24h-from-crossing
+# cooldown above, this resets at true IST midnight (see _check_pro_daily_limit), and the
+# countdown shown to the student must be accurate to that real reset moment. Max: genuinely
+# unlimited from the student's perspective -- these two numbers are a silent backend safety net
+# only and must NEVER appear in any user-facing text, error, or UI. Soft zone logs the account
+# for manual review with no other effect; past breakeven, remaining calls that day silently route
+# to the cheapest available model (see check_max_usage_tier) instead of being blocked. All three
+# numbers locked in 2026-08-27 from real per-call cost data in provider_usage_log + a 40% target
+# margin.
+DAILY_TOKEN_LIMIT_PRO = 950_000
+MAX_SOFT_ZONE_THRESHOLD = 2_100_000
+MAX_BREAKEVEN_THRESHOLD = 2_670_000  # past this, the student costs more than they pay
+
 def _ist_today() -> str:
     return datetime.now(timezone.utc).astimezone(IST).date().isoformat()
+
+def _seconds_until_ist_midnight() -> int:
+    now_ist = datetime.now(timezone.utc).astimezone(IST)
+    next_midnight_ist = datetime.combine(now_ist.date() + timedelta(days=1), datetime.min.time(), tzinfo=IST)
+    return int((next_midnight_ist - now_ist).total_seconds())
 
 CST = timezone(timedelta(hours=8))  # China Standard Time, fixed offset (no DST) -- DeepSeek's
 
@@ -1107,10 +1125,75 @@ async def _check_rolling_cooldown(table: str, id_field: str, id_value: str, budg
         return COOLDOWN_HOURS * 3600
     return None
 
+async def _check_pro_daily_limit(user_id: str):
+    """Pro-specific: a real, midnight-IST-anchored daily cap, unlike Free's rolling
+    24h-from-crossing cooldown above. usage_log is already keyed by IST calendar day (see
+    _ist_today), so this is a direct read against today's row -- no separate cooldown-state
+    (limit_reached_at) tracking needed the way Free's rolling window requires, since a fresh
+    usage_date row naturally appears the moment real midnight IST passes."""
+    today = _ist_today()
+    resp = await async_client.get(
+        f"{SUPABASE_URL}/rest/v1/usage_log", headers=ADMIN_HEADERS,
+        params={"user_id": f"eq.{user_id}", "usage_date": f"eq.{today}", "select": "tokens_used"}
+    )
+    rows = resp.json()
+    tokens_used = rows[0]["tokens_used"] if rows else 0
+    if tokens_used >= DAILY_TOKEN_LIMIT_PRO:
+        raise HTTPException(status_code=402, detail={
+            "message": "Daily limit reached",
+            "retry_after_seconds": _seconds_until_ist_midnight(),
+            "reset_at_midnight_ist": True
+        })
+
+async def _log_max_usage_alert(user_id: str, tokens_used: int, tier: str, action_taken: str):
+    """Admin-visible audit trail for Max's silent soft-zone/breakeven handling -- never surfaced
+    to the student. Idempotent per (user_id, usage_date, tier) via a unique index +
+    ignore-duplicates, so repeated calls while a user sits in the same tier the same day don't
+    spam the table -- one row per tier crossed per day."""
+    try:
+        await async_client.post(
+            f"{SUPABASE_URL}/rest/v1/max_usage_alerts",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "resolution=ignore-duplicates"},
+            json={"user_id": user_id, "usage_date": _ist_today(), "tokens_used": tokens_used, "tier": tier, "action_taken": action_taken}
+        )
+    except Exception as e:
+        print(f"MAX USAGE ALERT LOG FAILED: {e}", flush=True)
+
+async def check_max_usage_tier(user_id: str) -> "str | None":
+    """Max plan only (returns None immediately for any other plan) -- silent, two-tier usage
+    escalation. NEVER blocks, NEVER shown to the student in any form. Soft zone
+    (MAX_SOFT_ZONE_THRESHOLD-MAX_BREAKEVEN_THRESHOLD tokens today): logs for manual admin review,
+    no other effect. Past breakeven: also logs, and the caller (stream_response's text branch)
+    uses the "breakeven" return value to force the rest of today's text-doubt calls onto
+    Qwen-Flash -- cheap, flat-rate, no peak surcharge -- instead of the normal peak/off-peak
+    DeepSeek routing. Image/PDF doubts are never affected: Gemini is the only vision-capable
+    model available, so there is no cheaper substitute to downgrade to."""
+    plan = await get_user_plan(user_id)
+    if plan != "max":
+        return None
+    today = _ist_today()
+    resp = await async_client.get(
+        f"{SUPABASE_URL}/rest/v1/usage_log", headers=ADMIN_HEADERS,
+        params={"user_id": f"eq.{user_id}", "usage_date": f"eq.{today}", "select": "tokens_used"}
+    )
+    rows = resp.json()
+    tokens_used = rows[0]["tokens_used"] if rows else 0
+    if tokens_used >= MAX_BREAKEVEN_THRESHOLD:
+        await _log_max_usage_alert(user_id, tokens_used, "breakeven", "downgraded_to_cheapest_model")
+        return "breakeven"
+    if tokens_used >= MAX_SOFT_ZONE_THRESHOLD:
+        await _log_max_usage_alert(user_id, tokens_used, "soft_zone", "logged_for_review")
+        return "soft_zone"
+    return None
+
 async def enforce_daily_budget(user_id: str, ip: str = ""):
     if user_id:
-        if await get_user_plan(user_id) != "free":
-            return  # paid = unlimited for now
+        plan = await get_user_plan(user_id)
+        if plan == "pro":
+            await _check_pro_daily_limit(user_id)
+            return
+        if plan == "max":
+            return  # never blocked -- see check_max_usage_tier for Max's silent handling
         remaining = await _check_rolling_cooldown("usage_log", "user_id", user_id, DAILY_TOKEN_BUDGET_FREE)
         if remaining is not None:
             raise HTTPException(status_code=402, detail={"message": "Daily limit reached", "retry_after_seconds": remaining})
@@ -1688,12 +1771,23 @@ async def _stream_deepseek(system: str, messages: list, user_id: str, ip: str, i
             except Exception:
                 pass
 
-async def _stream_with_peak_fallback(system: str, messages: list, user_id: str, ip: str, endpoint: str, billing_context: dict = None):
+async def _stream_with_peak_fallback(system: str, messages: list, user_id: str, ip: str, endpoint: str, billing_context: dict = None, force_qwen: bool = False):
     """Routes text-doubt generation (/chat, /solve -- never image/PDF doubts, those stay on
     Gemini regardless of time of day) to Qwen-Flash during DeepSeek's published peak-pricing
     windows (_is_deepseek_peak_hour), DeepSeek everywhere else. Confirmed via a live 45-question
     test that the two are equivalent on accuracy/reliability, so this is purely a cost-avoidance
     swap, not a quality tradeoff.
+
+    force_qwen: set by the caller when a Max-plan user has crossed MAX_BREAKEVEN_THRESHOLD for
+    today (see check_max_usage_tier) -- routes to Qwen regardless of the real peak/off-peak clock,
+    since Qwen's flat rate has no peak surcharge and is reliably cheap. Deliberately reuses this
+    same function (not a separate code path) specifically to inherit its existing Qwen-then-
+    DeepSeek failover for free: if Qwen is ever down, a downgraded Max user still gets a normal
+    answer via DeepSeek, never an error -- exactly the "no error, no message" requirement for
+    Max's silent handling. is_peak passed to the DeepSeek fallback below still reflects the REAL
+    clock (not force_qwen) -- a force-routed call during a genuinely off-peak hour that has to
+    fall back to DeepSeek must still bill DeepSeek's off-peak rate, not be charged peak pricing
+    just because Qwen was tried first.
 
     Failover: if Qwen fails before yielding anything, the same request is retried on DeepSeek
     transparently -- the student never sees the difference, and this accepts DeepSeek's peak
@@ -1703,7 +1797,8 @@ async def _stream_with_peak_fallback(system: str, messages: list, user_id: str, 
     so the failure just propagates like any other mid-stream error in this file -- the caller's
     own try/except turns it into a yielded "Error: ..." message and correctly skips caching a
     partial answer, exactly as it already does for a mid-stream DeepSeek failure."""
-    if _is_deepseek_peak_hour():
+    is_peak = _is_deepseek_peak_hour()
+    if force_qwen or is_peak:
         sent_any = False
         try:
             async for chunk in _stream_qwen(system, messages, user_id, ip, endpoint, billing_context):
@@ -1714,7 +1809,7 @@ async def _stream_with_peak_fallback(system: str, messages: list, user_id: str, 
             if sent_any:
                 raise
             print(f"QWEN UNAVAILABLE BEFORE FIRST TOKEN, FALLING BACK TO DEEPSEEK: {e}", flush=True)
-        async for chunk in _stream_deepseek(system, messages, user_id, ip, True, endpoint, billing_context):
+        async for chunk in _stream_deepseek(system, messages, user_id, ip, is_peak, endpoint, billing_context):
             yield chunk
         return
     async for chunk in _stream_deepseek(system, messages, user_id, ip, False, endpoint, billing_context):
@@ -1922,7 +2017,12 @@ IMPORTANT -- BE CONCISE:
             return
         else:
             is_peak = _is_deepseek_peak_hour()
-            print(f"MODEL SELECTED: {'qwen-flash (DeepSeek peak-hour fallback)' if is_peak else 'deepseek-v4-flash'}", flush=True)
+            # Max plan only (no-op/instant None for every other plan) -- see check_max_usage_tier
+            # for the full soft-zone/breakeven logic. force_qwen only affects TEXT doubts: there's
+            # no cheaper substitute for Gemini on image/PDF doubts, so those are never touched.
+            max_tier = await check_max_usage_tier(user_id)
+            force_qwen = max_tier == "breakeven"
+            print(f"MODEL SELECTED: {'qwen-flash (Max breakeven downgrade)' if force_qwen else ('qwen-flash (DeepSeek peak-hour fallback)' if is_peak else 'deepseek-v4-flash')}", flush=True)
             sys.stdout.flush()
             full_answer = ""
             # billing_context lets this loop waive the student's daily-budget charge the moment
@@ -1944,7 +2044,7 @@ IMPORTANT -- BE CONCISE:
                 # inside _stream_qwen/_stream_deepseek's own finally blocks either way, same
                 # accepted partial-under-count-on-disconnect tradeoff as before this routing was
                 # added.
-                async for text_chunk in _stream_with_peak_fallback(full_system, messages, user_id, ip, "/chat", billing_context):
+                async for text_chunk in _stream_with_peak_fallback(full_system, messages, user_id, ip, "/chat", billing_context, force_qwen):
                     full_answer += text_chunk
                     if billing_context["bill"] and full_answer.strip().startswith("AMBIGUOUS: yes"):
                         billing_context["bill"] = False
@@ -1959,7 +2059,7 @@ IMPORTANT -- BE CONCISE:
                 first_line_buffer = ""
                 first_line_resolved = False
                 override_needed = False
-                async for text_chunk in _stream_with_peak_fallback(full_system, messages, user_id, ip, "/chat", billing_context):
+                async for text_chunk in _stream_with_peak_fallback(full_system, messages, user_id, ip, "/chat", billing_context, force_qwen):
                     full_answer += text_chunk
                     if not first_line_resolved:
                         first_line_buffer += text_chunk
@@ -1993,7 +2093,7 @@ IMPORTANT -- BE CONCISE:
                     )
                     full_answer = ""
                     billing_context = {"bill": True}
-                    async for text_chunk in _stream_with_peak_fallback(override_system, messages, user_id, ip, "/chat", billing_context):
+                    async for text_chunk in _stream_with_peak_fallback(override_system, messages, user_id, ip, "/chat", billing_context, force_qwen):
                         full_answer += text_chunk
                         yield text_chunk
             if not images and not pdf and use_shared_cache:
@@ -2063,8 +2163,11 @@ Rules:
         full_solution = ""
         # Same routing (Qwen during DeepSeek's peak windows, DeepSeek otherwise, with failover)
         # as stream_response()'s text branch above -- see _stream_with_peak_fallback for the
-        # shared logic and its accepted early-disconnect / mid-stream-failure tradeoffs.
-        async for text_chunk in _stream_with_peak_fallback(solve_system, solve_messages, user_id, ip, "/solve"):
+        # shared logic and its accepted early-disconnect / mid-stream-failure tradeoffs. Also
+        # subject to the same Max-plan breakeven downgrade (text-only endpoint, no image
+        # involved, same reasoning as stream_response's text branch).
+        force_qwen = (await check_max_usage_tier(user_id)) == "breakeven"
+        async for text_chunk in _stream_with_peak_fallback(solve_system, solve_messages, user_id, ip, "/solve", force_qwen=force_qwen):
             full_solution += text_chunk
             yield text_chunk
         if pyq_id and full_solution:
@@ -2240,24 +2343,34 @@ async def usage_summary(user_id: str):
         raise HTTPException(status_code=400, detail="user_id is required")
     try:
         plan = await get_user_plan(user_id)
-        unlimited = plan != "free"  # matches enforce_daily_budget's own "paid = unlimited for now"
+        # Only Max is actually unlimited in the UI sense -- Pro now gets a real, visible budget
+        # (DAILY_TOKEN_LIMIT_PRO). Max's own ceiling is a silent backend-only safety net (see
+        # check_max_usage_tier) and must never surface here as a number, hence still "unlimited".
+        unlimited = plan == "max"
+        budget_for_plan = DAILY_TOKEN_LIMIT_PRO if plan == "pro" else DAILY_TOKEN_BUDGET_FREE
 
         today, yesterday, rows_by_date = await _fetch_usage_rows("usage_log", "user_id", user_id)
         today_row = rows_by_date.get(today)
         tokens_used = today_row["tokens_used"] if today_row else 0
 
-        cooldown_remaining = _active_cooldown_seconds(today, yesterday, rows_by_date)
+        # Free's rolling 24h-from-crossing cooldown only ever applies to Free -- Pro's block (see
+        # _check_pro_daily_limit) never sets limit_reached_at at all, it's a pure midnight-IST
+        # reset, and checking this for Pro/Max risks picking up a stale limit_reached_at from
+        # before a same-day plan upgrade. Skipped entirely for anything but free.
+        cooldown_remaining = _active_cooldown_seconds(today, yesterday, rows_by_date) if plan == "free" else None
         if cooldown_remaining is not None:
             reset_in_seconds = cooldown_remaining
         else:
             # No active block: "reset" just means the next IST midnight, when a fresh usage_date
-            # row starts and today's count naturally reads back to 0.
+            # row starts and today's count naturally reads back to 0. Also the ONLY reset model
+            # Pro ever uses (see above).
             now_ist = datetime.now(timezone.utc).astimezone(IST)
             next_ist_midnight = datetime.combine(now_ist.date() + timedelta(days=1), datetime.min.time(), tzinfo=IST)
             reset_in_seconds = int((next_ist_midnight - now_ist).total_seconds())
 
-        percent_used = None if unlimited else round(min(100, tokens_used / DAILY_TOKEN_BUDGET_FREE * 100), 1)
-        budget = None if unlimited else DAILY_TOKEN_BUDGET_FREE
+        percent_used = None if unlimited else round(min(100, tokens_used / budget_for_plan * 100), 1)
+        budget = None if unlimited else budget_for_plan
+        blocked = (not unlimited) and tokens_used >= budget_for_plan
 
         window_start_iso = (datetime.now(timezone.utc) - timedelta(days=USAGE_PROVIDER_BREAKDOWN_DAYS)).isoformat()
         resp = await async_client.get(
@@ -2286,7 +2399,7 @@ async def usage_summary(user_id: str):
                     "select": "tokens_used"}
         )
         weekly_tokens_used = sum(r["tokens_used"] for r in week_resp.json()) if week_resp.status_code == 200 else 0
-        weekly_budget = None if unlimited else DAILY_TOKEN_BUDGET_FREE * 7
+        weekly_budget = None if unlimited else budget_for_plan * 7
         weekly_percent_used = None if unlimited else round(min(100, weekly_tokens_used / weekly_budget * 100), 1)
 
         provider_counts = {}
@@ -2302,7 +2415,8 @@ async def usage_summary(user_id: str):
             "plan": plan,
             "today": {
                 "tokens_used": tokens_used, "budget": budget, "percent_used": percent_used,
-                "doubts_today": doubts_today, "reset_in_seconds": max(0, reset_in_seconds), "unlimited": unlimited
+                "doubts_today": doubts_today, "reset_in_seconds": max(0, reset_in_seconds), "unlimited": unlimited,
+                "blocked": blocked
             },
             "weekly": {
                 "tokens_used": weekly_tokens_used, "budget": weekly_budget, "percent_used": weekly_percent_used,
