@@ -2803,17 +2803,34 @@ async def admin_pyq_chapters(subject: str, _: None = Depends(verify_admin)):
         # largest of the three subjects, making it the one most likely to hold the shared event
         # loop hostage long enough to trip a timeout if the server happens to be busy with real
         # traffic at that moment. Fixed regardless, since it's wrong either way.
-        response = await async_client.get(
-            f"{SUPABASE_URL}/rest/v1/pyq",
-            headers=ADMIN_HEADERS,
-            params={
-                "subject": f"eq.{subject}",
-                "chapter": "not.is.null",
-                "select": "chapter",
-                "limit": 5000
-            }
-        )
-        rows = response.json()
+        #
+        # limit:5000 here was never actually 5000 in practice -- PostgREST caps a single response
+        # at 1000 rows regardless of the limit param (same constraint already fixed for
+        # pyq-classifier-data below), and this query has no `order` at all, so which 1000 of
+        # Chemistry's 2700+ tagged rows came back was arbitrary and could silently omit a chapter
+        # whose PYQs are sparse. Paginated the same way as pyq-classifier-data now: exact total
+        # via Prefer: count=exact on the first page, remaining pages fetched concurrently.
+        page_size = 1000
+        params_base = {"subject": f"eq.{subject}", "chapter": "not.is.null", "select": "chapter", "limit": page_size}
+
+        async def fetch_page(offset, headers=ADMIN_HEADERS):
+            return await async_client.get(
+                f"{SUPABASE_URL}/rest/v1/pyq",
+                headers=headers,
+                params={**params_base, "offset": offset}
+            )
+
+        first_resp = await fetch_page(0, headers={**ADMIN_HEADERS, "Prefer": "count=exact"})
+        rows = first_resp.json()
+        content_range = first_resp.headers.get("content-range", "")
+        total = int(content_range.split("/")[-1]) if "/" in content_range else len(rows)
+
+        remaining_offsets = list(range(page_size, total, page_size))
+        if remaining_offsets:
+            remaining_responses = await asyncio.gather(*(fetch_page(o) for o in remaining_offsets))
+            for resp in remaining_responses:
+                rows.extend(resp.json())
+
         chapters = sorted(set(r["chapter"].strip() for r in rows if r.get("chapter") and r["chapter"].strip()))
         return {"chapters": chapters}
     except Exception as e:
@@ -3525,34 +3542,49 @@ async def admin_pyq_classifier_data(subject: str, _: None = Depends(verify_admin
         return {"error": "Invalid subject"}
     try:
         # await async_client (not blocking http_requests) -- same reasoning as pyq-chapters above.
-        # Also paginated now, not a single limit:3000 request: PostgREST caps a single response at
+        # Also paginated, not a single limit:3000 request: PostgREST caps a single response at
         # 1000 rows regardless of what limit a caller asks for, which was silently truncating this
-        # for Chemistry (2305 active rows) and Biology (2249) -- confirmed live, both were quietly
-        # returning only 1000 rows to the frontend. That starved buildClassifier()'s chapter
-        # suggestions and checkDuplicates' exact-match check of more than half the real data for
-        # those two subjects, on every successful request, not just an intermittent failure.
-        # Same page-through-until-short-page pattern as /admin/question-reports.
-        all_rows = []
+        # for Chemistry (2305 active rows then, 2719 now) and Biology (2249) -- confirmed live,
+        # both were quietly returning only 1000 rows to the frontend. That starved
+        # buildClassifier()'s chapter suggestions and checkDuplicates' exact-match check of more
+        # than half the real data for those two subjects, on every successful request, not just
+        # an intermittent failure.
+        #
+        # Pages fetched CONCURRENTLY, not one-at-a-time: sequential pagination was measured live
+        # at ~16s for Chemistry's 3 pages (2719 rows / 1000 per page) -- a connection held open
+        # that long is exactly the kind of thing a real (especially mobile) network drops
+        # mid-request, which surfaces to the admin as "could not reach the server" even though
+        # the backend itself never errored. Prefer: count=exact on the first page gets the real
+        # total from Content-Range (e.g. "0-999/2719"), so every remaining page's offset is known
+        # upfront and fired in one asyncio.gather batch -- no guessing a page-count cap, no
+        # wasted requests past the real end.
         page_size = 1000
-        offset = 0
-        while True:
-            response = await async_client.get(
+        params_base = {
+            "subject": f"eq.{subject}",
+            "is_active": "eq.true",
+            "select": "question,chapter,class",
+            "order": "id.asc",
+            "limit": page_size,
+        }
+
+        async def fetch_page(offset, headers=ADMIN_HEADERS):
+            return await async_client.get(
                 f"{SUPABASE_URL}/rest/v1/pyq",
-                headers=ADMIN_HEADERS,
-                params={
-                    "subject": f"eq.{subject}",
-                    "is_active": "eq.true",
-                    "select": "question,chapter,class",
-                    "order": "id.asc",
-                    "limit": page_size,
-                    "offset": offset
-                }
+                headers=headers,
+                params={**params_base, "offset": offset}
             )
-            page = response.json()
-            all_rows.extend(page)
-            if len(page) < page_size:
-                break
-            offset += page_size
+
+        first_resp = await fetch_page(0, headers={**ADMIN_HEADERS, "Prefer": "count=exact"})
+        all_rows = first_resp.json()
+        content_range = first_resp.headers.get("content-range", "")
+        total = int(content_range.split("/")[-1]) if "/" in content_range else len(all_rows)
+
+        remaining_offsets = list(range(page_size, total, page_size))
+        if remaining_offsets:
+            remaining_responses = await asyncio.gather(*(fetch_page(o) for o in remaining_offsets))
+            for resp in remaining_responses:
+                all_rows.extend(resp.json())
+
         # Includes rows with no chapter yet too, so the frontend's exact-duplicate
         # check can catch dupes against still-untagged rows. buildClassifier() itself
         # skips rows with no chapter since they're useless as labeled training examples.
