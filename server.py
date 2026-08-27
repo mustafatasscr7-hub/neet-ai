@@ -153,6 +153,16 @@ Rules:
    matters even more for non-English questions, since NCERT content search currently only covers
    English and often returns nothing for a question asked in Hindi — a confident-sounding but
    fabricated citation is worse than honestly saying none was found.
+   Separately, the same "ground yourself in what was actually retrieved, don't invent" principle
+   applies to Hindi technical terminology in the body of your answer, not just the Chapter line:
+   if the NCERT Content given to you contains the correct Hindi term for a concept you're
+   explaining (a mechanism, a named rule, a stereochemical outcome, etc.), reuse that exact Hindi
+   wording verbatim rather than translating or rephrasing it yourself — the retrieved text is the
+   authoritative source for that term's correct Hindi rendering, and re-translating a term the
+   retrieved content already gives you risks introducing an incorrect or internally inconsistent
+   translation. This only applies to terms that actually appear in the retrieved NCERT Content —
+   if a term you need isn't present in what was retrieved, use your own best Hindi terminology as
+   normal; never force-fit an unrelated retrieved term onto a concept it doesn't actually describe.
 2. Always show the NEET Importance rating AT THE TOP
 3. Use bullet points — never big paragraphs
 4. Answer length should match question complexity
@@ -1630,6 +1640,33 @@ def _is_denylisted_clarify_doubt(text: str) -> bool:
     normalized = text.strip()
     return normalized.lower() in FALSE_POSITIVE_CLARIFY_WORDS or normalized in FALSE_POSITIVE_CLARIFY_WORDS
 
+# The inverse of FALSE_POSITIVE_CLARIFY_WORDS above: rule 11's own CLOSED whitelist for
+# CLARIFY_TYPE: topic, mirrored here as a general server-side backstop rather than another
+# denylist entry. Confirmed live: "ले शातेलिए का सिद्धांत" (Le Chatelier's Principle) triggered a
+# hallucinated AMBIGUOUS response inventing two fake alternate meanings -- a direct violation of
+# rule 11's own explicit "if it's not on the list, it's not ambiguous, full stop" instruction.
+# 1/1 failure in the original audit, 0/3 on a same-day recheck: intermittent, not deterministic,
+# which per the "reflex" precedent above means prompt-only enforcement alone won't reliably hold
+# for every term that isn't on the list, only for the specific ones a denylist happens to cover.
+# Checking the model's claim against the whitelist directly (instead of enumerating every possible
+# hallucinated term one at a time, the way FALSE_POSITIVE_CLARIFY_WORDS had to for "reflex") means
+# this backstop already covers any FUTURE hallucinated term too, not just this one.
+TOPIC_AMBIGUITY_WHITELIST = {
+    "resistance", "प्रतिरोध",
+    "cycle", "चक्र",
+    "potential", "विभव",
+    "diffusion", "विसरण",
+    "current", "धारा",
+    "valence", "संयोजकता",
+}
+
+def _is_legitimate_topic_ambiguity(text: str) -> bool:
+    """Same exact-match philosophy as _is_denylisted_clarify_doubt above, for the same reason:
+    rule 11 only ever legitimately fires TOPIC AMBIGUITY for a bare word doubt that IS one of
+    these six terms, not a longer question that merely mentions one."""
+    normalized = text.strip()
+    return normalized.lower() in TOPIC_AMBIGUITY_WHITELIST or normalized in TOPIC_AMBIGUITY_WHITELIST
+
 # chat.html's streamAIResponse sends this exact string as `text` when an image doubt has no
 # real typed question (`text || 'Describe this image...'`) -- must stay in sync with that
 # literal. A placeholder like this has no real topic for NCERT search to match against, so
@@ -2033,69 +2070,89 @@ IMPORTANT -- BE CONCISE:
             # revealed "AMBIGUOUS: yes" (that marker is always within the first line, yielded
             # many chunks before the short clarification response ends).
             billing_context = {"bill": True}
-            # Cheap, one-time check against a tiny set -- decides which of the two loops below
-            # runs, so a non-denylisted doubt (the overwhelming majority) takes the exact same
-            # unbuffered fast path as before this guard existed, with zero added latency.
-            denylisted_doubt = _is_denylisted_clarify_doubt(text)
-            if not denylisted_doubt:
-                # Reliably logs on normal completion. This is a native async generator, so an
-                # early client disconnect propagates via GeneratorExit at the next yield point --
-                # usage logging for whichever provider actually served the request happens
-                # inside _stream_qwen/_stream_deepseek's own finally blocks either way, same
-                # accepted partial-under-count-on-disconnect tradeoff as before this routing was
-                # added.
-                async for text_chunk in _stream_with_peak_fallback(full_system, messages, user_id, ip, "/chat", billing_context, force_qwen):
-                    full_answer += text_chunk
+            # Every text doubt now goes through this same 2-line-deep buffered check (previously
+            # only FALSE_POSITIVE_CLARIFY_WORDS doubts like "reflex" were buffered at all, and
+            # only 1 line deep) -- a deliberate tradeoff of a small, constant, uniform buffering
+            # delay (at most two short header lines, ~128 chars) for every doubt, in exchange for
+            # a guard that catches ANY hallucinated CLARIFY_TYPE: topic response, not just
+            # pre-enumerated denylisted words. See TOPIC_AMBIGUITY_WHITELIST above for why a
+            # denylist alone (adding one bad term at a time, as happened for "reflex") isn't
+            # sufficient here -- Le Chatelier's Principle was never denylisted and still leaked.
+            #
+            # Checkpoint 0: buffer up to the first line. Not "AMBIGUOUS: yes" -> release
+            # everything buffered and pass every subsequent chunk straight through (checkpoint 2).
+            # Checkpoint 1 (only reached if AMBIGUOUS: yes): buffer up to the CLARIFY_TYPE line
+            # too -- format ambiguity is a different, legitimate mechanism with its own gate (the
+            # diagram-exists context note) and is never discarded here regardless of doubt text;
+            # only CLARIFY_TYPE: topic is checked against the whitelist. Denylisted doubts
+            # (FALSE_POSITIVE_CLARIFY_WORDS) are still discarded unconditionally regardless of
+            # type, exactly as before. Invalid -> break with nothing ever yielded, not even the
+            # first line -- a bad clarify attempt must never reach the student at all.
+            pending = ""
+            checkpoint = 0
+            override_needed = False
+            async for text_chunk in _stream_with_peak_fallback(full_system, messages, user_id, ip, "/chat", billing_context, force_qwen):
+                full_answer += text_chunk
+
+                if checkpoint == 2:
                     if billing_context["bill"] and full_answer.strip().startswith("AMBIGUOUS: yes"):
                         billing_context["bill"] = False
                     yield text_chunk
-            else:
-                # Rule 11's prompt-only enforcement has confirmed, repeated evidence of not
-                # holding for this doubt (see FALSE_POSITIVE_CLARIFY_WORDS above) -- buffer just
-                # the first line (same one-line lookahead chat.html's own client-side VISUAL_
-                # INTENT/AMBIGUOUS buffering already uses) before letting anything reach the
-                # student, so a fabricated clarify response can be caught and discarded before a
-                # single byte of it streams out, not just flagged after the fact.
-                first_line_buffer = ""
-                first_line_resolved = False
-                override_needed = False
-                async for text_chunk in _stream_with_peak_fallback(full_system, messages, user_id, ip, "/chat", billing_context, force_qwen):
-                    full_answer += text_chunk
-                    if not first_line_resolved:
-                        first_line_buffer += text_chunk
-                        nl_idx = first_line_buffer.find("\n")
-                        if nl_idx == -1 and len(first_line_buffer) < 64:
-                            continue
-                        first_line_resolved = True
-                        first_line = (first_line_buffer[:nl_idx] if nl_idx != -1 else first_line_buffer).strip()
-                        if first_line == "AMBIGUOUS: yes":
-                            override_needed = True
-                            break
+                    continue
+
+                pending += text_chunk
+
+                if checkpoint == 0:
+                    nl_idx = pending.find("\n")
+                    if nl_idx == -1 and len(pending) < 64:
+                        continue
+                    first_line = (pending[:nl_idx] if nl_idx != -1 else pending).strip()
+                    if first_line != "AMBIGUOUS: yes":
+                        checkpoint = 2
                         if billing_context["bill"] and full_answer.strip().startswith("AMBIGUOUS: yes"):
                             billing_context["bill"] = False
-                        yield first_line_buffer
+                        yield pending
+                        pending = ""
                         continue
+                    checkpoint = 1
+                    # Falls through to the checkpoint 1 block below in this same iteration -- a
+                    # real stream can deliver both header lines in a single chunk.
+
+                if checkpoint == 1:
+                    first_nl = pending.find("\n")
+                    second_nl = pending.find("\n", first_nl + 1)
+                    after_first_line = pending[first_nl + 1:]
+                    if second_nl == -1 and len(after_first_line) < 64:
+                        continue
+                    clarify_type_line = (pending[first_nl + 1:second_nl] if second_nl != -1 else after_first_line).strip()
+                    is_topic_type = "CLARIFY_TYPE:" in clarify_type_line and "topic" in clarify_type_line.lower()
+                    invalid = _is_denylisted_clarify_doubt(text) or (is_topic_type and not _is_legitimate_topic_ambiguity(text))
+                    if invalid:
+                        override_needed = True
+                        break
+                    checkpoint = 2
                     if billing_context["bill"] and full_answer.strip().startswith("AMBIGUOUS: yes"):
                         billing_context["bill"] = False
+                    yield pending
+                    pending = ""
+            if override_needed:
+                # The discarded attempt's own tiny (two-line) token cost still gets logged by
+                # _stream_qwen/_stream_deepseek's own finally block when the `break` above closes
+                # it via GeneratorExit -- same accepted partial-cost tradeoff as before, and
+                # negligible next to a full response's cost either way. This second call is a
+                # completely fresh request/response cycle, billed normally.
+                override_system = full_system + (
+                    "\n\nOVERRIDE (server-enforced, not optional): this exact doubt has been "
+                    "confirmed through repeated real testing to NOT be genuinely ambiguous, "
+                    "despite rule 11 above. Answer it directly and normally in the standard "
+                    "format starting with VISUAL_INTENT -- do not output AMBIGUOUS/"
+                    "CLARIFY_TYPE under any circumstances for this doubt."
+                )
+                full_answer = ""
+                billing_context = {"bill": True}
+                async for text_chunk in _stream_with_peak_fallback(override_system, messages, user_id, ip, "/chat", billing_context, force_qwen):
+                    full_answer += text_chunk
                     yield text_chunk
-                if override_needed:
-                    # The discarded attempt's own tiny (one-line) token cost still gets logged by
-                    # _stream_qwen/_stream_deepseek's own finally block when the `break` above
-                    # closes it via GeneratorExit -- same accepted partial-cost tradeoff noted
-                    # above, and negligible next to a full response's cost either way. This
-                    # second call is a completely fresh request/response cycle, billed normally.
-                    override_system = full_system + (
-                        "\n\nOVERRIDE (server-enforced, not optional): this exact doubt has been "
-                        "confirmed through repeated real testing to NOT be genuinely ambiguous, "
-                        "despite rule 11 above. Answer it directly and normally in the standard "
-                        "format starting with VISUAL_INTENT -- do not output AMBIGUOUS/"
-                        "CLARIFY_TYPE under any circumstances for this doubt."
-                    )
-                    full_answer = ""
-                    billing_context = {"bill": True}
-                    async for text_chunk in _stream_with_peak_fallback(override_system, messages, user_id, ip, "/chat", billing_context, force_qwen):
-                        full_answer += text_chunk
-                        yield text_chunk
             if not images and not pdf and use_shared_cache:
                 await async_client.post(
                     f"{SUPABASE_URL}/rest/v1/answer_cache",
