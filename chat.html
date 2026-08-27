@@ -738,8 +738,12 @@
     .settings-dropdown { position: relative; }
     .dropdown-trigger { display: flex; align-items: center; gap: 10px; padding: 7px 12px; border-radius: 8px; border: 1px solid #2a2a2a; background: #1a1a1a; color: #ececec; font-size: 12px; font-family: 'Inter', sans-serif; cursor: pointer; min-width: 120px; justify-content: space-between; transition: border-color 0.15s; }
     .dropdown-trigger:hover { border-color: #3a3a3a; }
-    .dropdown-trigger svg { width: 12px; height: 12px; color: #888; flex-shrink: 0; transition: transform 0.15s; }
-    .settings-dropdown.open .dropdown-trigger svg { transform: rotate(180deg); }
+    /* Scoped to .dropdown-chevron specifically (not a bare "svg" descendant selector) -- a
+       theme option's sun/moon icon also lives inside .dropdown-trigger now, and a generic
+       selector here would wrongly give it the chevron's 12px sizing and, worse, spin it
+       180deg every time the dropdown opens. */
+    .dropdown-trigger .dropdown-chevron { width: 12px; height: 12px; color: #888; flex-shrink: 0; transition: transform 0.15s; }
+    .settings-dropdown.open .dropdown-trigger .dropdown-chevron { transform: rotate(180deg); }
     .settings-dropdown.open .dropdown-trigger { border-color: #4f8ef7; }
     .dropdown-menu { position: absolute; top: calc(100% + 6px); right: 0; min-width: 170px; background: #1e1e1e; border: 1px solid #333; border-radius: 10px; padding: 4px; z-index: 50; box-shadow: 0 8px 24px rgba(0,0,0,0.5); display: none; }
     .settings-dropdown.open .dropdown-menu { display: block; }
@@ -747,10 +751,13 @@
     .dropdown-option:hover { background: #2a2a2a; }
     .dropdown-option.selected { color: #4f8ef7; }
     .dropdown-check { color: #4f8ef7; font-size: 12px; }
+    /* Groups an option's icon + label together so justify-content:space-between on the trigger/
+       option row still puts the chevron/checkmark on the far right, not after just the icon. */
+    .dropdown-option-label { display: flex; align-items: center; gap: 8px; min-width: 0; }
 
     body.light-mode .dropdown-trigger { background: #ffffff !important; border-color: #d5d5dd !important; color: #0d0d0d !important; }
     body.light-mode .settings-dropdown.open .dropdown-trigger { border-color: #4f8ef7 !important; }
-    body.light-mode .dropdown-trigger svg { color: #6b6b76 !important; }
+    body.light-mode .dropdown-trigger .dropdown-chevron { color: #6b6b76 !important; }
     body.light-mode .dropdown-menu { background: #ffffff !important; border-color: #e0e0e5 !important; box-shadow: 0 8px 24px rgba(0,0,0,0.12) !important; }
     body.light-mode .dropdown-option { color: #333338 !important; }
     body.light-mode .dropdown-option:hover { background: #f0f0f3 !important; }
@@ -6015,10 +6022,17 @@ function openSettings() {
       localStorage.setItem('chatFont', font);
     }
 
+    // Feather-style (viewBox 24x24, stroke-based) sun/moon icons, matching every other icon in
+    // this app -- replaces the old "🌙 Dark" / "☀️ Light" emoji-prefixed labels.
+    const THEME_ICONS = {
+      dark: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>',
+      light: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>'
+    };
+
     // ---------- Reusable settings dropdown (Theme / Font Size / Chat Font / Answer Style / Language) ----------
     const SETTINGS_DROPDOWNS = {
       theme: {
-        options: [{ value: 'dark', labelKey: 'themeDark' }, { value: 'light', labelKey: 'themeLight' }],
+        options: [{ value: 'dark', labelKey: 'themeDark', icon: THEME_ICONS.dark }, { value: 'light', labelKey: 'themeLight', icon: THEME_ICONS.light }],
         get: () => localStorage.getItem('theme') || 'dark',
         set: (v) => setTheme(v)
       },
@@ -6062,13 +6076,13 @@ function openSettings() {
       return `
         <div class="settings-dropdown" data-dropdown-key="${key}">
           <button type="button" class="dropdown-trigger" onclick="event.stopPropagation(); toggleSettingsDropdown('${key}')">
-            <span>${dropdownOptionLabel(currentOpt)}</span>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+            <span class="dropdown-option-label">${currentOpt.icon ? `<span class="item-menu-icon">${currentOpt.icon}</span>` : ''}<span>${dropdownOptionLabel(currentOpt)}</span></span>
+            <svg class="dropdown-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
           </button>
           <div class="dropdown-menu">
             ${cfg.options.map(o => `
               <div class="dropdown-option${o.value === current ? ' selected' : ''}" onclick="event.stopPropagation(); chooseSettingsDropdown('${key}','${o.value}')">
-                <span>${dropdownOptionLabel(o)}</span>
+                <span class="dropdown-option-label">${o.icon ? `<span class="item-menu-icon">${o.icon}</span>` : ''}<span>${dropdownOptionLabel(o)}</span></span>
                 ${o.value === current ? '<span class="dropdown-check">✓</span>' : ''}
               </div>
             `).join('')}
