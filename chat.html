@@ -521,6 +521,12 @@
        this rule simply doesn't match there, no JS-side conditional needed. */
     .message-bubble.ai .chat-math-inline { font-size: 1.15em; }
     .message-bubble.ai .chat-math-display { font-size: 1.3em; }
+    /* Unscoped (not .message-bubble.ai-prefixed like the two rules above) -- unlike those,
+       this needs to render identically inside the PYQ-modal solve box too, a different
+       container outside .message-bubble.ai entirely. max-width is required for margin:0 auto
+       to actually center anything -- a block-level div with no width cap already spans its
+       full parent width, so centering it is a no-op without one. */
+    .solution-steps { max-width: 90%; margin: 0 auto; text-align: center; }
     .pyq-sol-box ul, .pyq-sol-box ol { margin: 0; padding-left: 20px; }
     .pyq-sol-box p { margin: 0 0 8px 0; }
     .pyq-sol-box p:last-child { margin-bottom: 0; }
@@ -1807,8 +1813,57 @@ let selectedImages = [];
       focusMessageInput();
     }
 
+    // Wraps the AI's "Solution:" step-by-step block (server.py's numeric-answer template, and
+    // the /solve endpoint's own "Solution:" section reused by the PYQ-modal solve box -- both
+    // flow through parseWithMath) in a centered container, and renders its LAST math expression
+    // -- the final computed result -- at KaTeX's own \Large size instead of the CSS em-scaling
+    // every other formula in the answer gets. Called before parseWithMath's generic $$/$ passes
+    // below, so by the time those run there's no raw $...$ left inside this span for them to
+    // touch -- that's what keeps this scoped to the Solution: block instead of reaching into the
+    // rest of the answer.
+    function renderSolutionStepsHtml(stepsText) {
+      const matches = [];
+      const segRe = /\$\$([^$]+)\$\$|\$([^$\n]+)\$/g;
+      let sm;
+      while ((sm = segRe.exec(stepsText)) !== null) matches.push(sm);
+
+      const parts = [];
+      let lastIndex = 0;
+      matches.forEach((m, i) => {
+        if (m.index > lastIndex) parts.push({ type: 'text', value: stepsText.slice(lastIndex, m.index) });
+        const isDisplay = m[1] !== undefined;
+        parts.push({ type: isDisplay ? 'display' : 'inline', value: (isDisplay ? m[1] : m[2]).trim(), isLast: i === matches.length - 1 });
+        lastIndex = m.index + m[0].length;
+      });
+      if (lastIndex < stepsText.length) parts.push({ type: 'text', value: stepsText.slice(lastIndex) });
+
+      const rendered = parts.map(p => {
+        if (p.type === 'text') return escapeHtml(p.value).replace(/\n/g, '<br>');
+        try {
+          // \Large REPLACES the chat-math-inline/-display CSS scaling for this one segment
+          // rather than stacking with it -- rendering it natively bigger via KaTeX itself,
+          // not via an em-scaled wrapper span.
+          const source = p.isLast ? '\\Large ' + p.value : p.value;
+          const katexHtml = katex.renderToString(source, { displayMode: p.type === 'display', throwOnError: false });
+          return p.isLast ? katexHtml : '<span class="' + (p.type === 'display' ? 'chat-math-display' : 'chat-math-inline') + '">' + katexHtml + '</span>';
+        } catch (e) {
+          return escapeHtml(p.type === 'display' ? '$$' + p.value + '$$' : '$' + p.value + '$');
+        }
+      }).join('');
+
+      return '<div class="solution-steps">' + rendered + '</div>';
+    }
+
     function parseWithMath(text) {
       let html = text;
+      // Terminator covers both real "Solution:" templates in this codebase: server.py's chat
+      // numeric-answer format ends the block at "Final Answer:", the /solve endpoint's PYQ
+      // template (reused by the PYQ-modal solve box, also rendered through this function) has
+      // no Final Answer line and ends it at "🔑 Key Concept:" instead -- falls back to end of
+      // string if neither shows up.
+      html = html.replace(/Solution:\n([\s\S]*?)(?=\n\nFinal Answer:|\n\n🔑 Key Concept:|$)/, function(_, stepsText) {
+        return 'Solution:\n' + renderSolutionStepsHtml(stepsText);
+      });
       html = html.replace(/\$\$([^$]+)\$\$/g, function(_, math) {
         try {
           return '<div class="chat-math-display" style="text-align:center;margin:12px 0;overflow-x:auto;">' + katex.renderToString(math.trim(), { displayMode: true, throwOnError: false }) + '</div>';
