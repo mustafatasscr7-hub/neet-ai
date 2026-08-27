@@ -1885,7 +1885,11 @@
     if (lastIndex < text.length) parts.push({ type: 'text', value: text.slice(lastIndex) });
 
     return parts.map(p => {
-      if (p.type === 'text') return escapeHtml(p.value);
+      // \n -> <br> only here, after escaping -- text segments are the only ones that ever see
+      // this replacement, math segments go straight to katex.renderToString below and never
+      // pass through it, so a literal newline typed adjacent to (but outside) a $...$/$$...$$
+      // block can't ever land inside the LaTeX source KaTeX parses.
+      if (p.type === 'text') return escapeHtml(p.value).replace(/\n/g, '<br>');
       try {
         return katex.renderToString(p.value, { displayMode: p.type === 'display', throwOnError: false });
       } catch (e) {
