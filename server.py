@@ -2502,15 +2502,6 @@ async def usage_summary(user_id: str):
         weekly_budget = None if unlimited else budget_for_plan * 7
         weekly_percent_used = None if unlimited else round(min(100, weekly_tokens_used / weekly_budget * 100), 1)
 
-        provider_counts = {}
-        for r in rows:
-            provider_counts[r["provider"]] = provider_counts.get(r["provider"], 0) + 1
-        total_requests = len(rows)
-        breakdown = [
-            {"provider": p, "count": c, "percent": round(c / total_requests * 100, 1) if total_requests else 0}
-            for p, c in sorted(provider_counts.items(), key=lambda kv: -kv[1])
-        ]
-
         return {
             "plan": plan,
             "today": {
@@ -2521,8 +2512,7 @@ async def usage_summary(user_id: str):
             "weekly": {
                 "tokens_used": weekly_tokens_used, "budget": weekly_budget, "percent_used": weekly_percent_used,
                 "total_doubts": weekly_doubts, "unlimited": unlimited
-            },
-            "providers": {"period_days": USAGE_PROVIDER_BREAKDOWN_DAYS, "total_requests": total_requests, "breakdown": breakdown}
+            }
         }
     except Exception as e:
         print(f"USAGE SUMMARY ERROR: {e}", flush=True)

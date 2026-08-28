@@ -293,16 +293,17 @@
     .usage-section-title .usage-section-title-sub { font-weight: 400; color: #555; }
     .usage-section-stat { font-size: 13px; font-weight: 600; color: #999; white-space: nowrap; }
     .usage-section-sub { font-size: 12px; color: #666; margin-top: 8px; }
-    /* Thin (not the old 8px) to match the reference's minimal bar weight; background color on
-       .usage-bar-fill is set inline per-render since it shifts with usage level (see
-       usageBarColor() in JS) rather than being a fixed class. */
-    .usage-bar-track { width: 100%; height: 5px; background: #1e1e1e; border-radius: 20px; overflow: hidden; display: flex; }
-    .usage-bar-fill { height: 100%; border-radius: 20px; transition: width 0.3s ease, background-color 0.3s ease; }
+    /* Gradient fill (lighter tint -> the tier's solid color, left to right) with fully rounded
+       ends, matching the reference panel's bar treatment -- gradient stops are set inline per
+       render since they shift with usage level (see usageBarGradient() in JS) rather than being
+       a fixed class. Track height bumped from the old flat 5px to give the gradient room to read
+       as a gradient rather than a sliver. */
+    .usage-bar-track { width: 100%; height: 8px; background: #1e1e1e; border-radius: 20px; overflow: hidden; display: flex; }
+    .usage-bar-fill { height: 100%; border-radius: 20px; transition: width 0.3s ease, background 0.3s ease; }
 
-    .usage-provider-row { display: flex; align-items: center; gap: 10px; padding: 7px 0; }
-    .usage-provider-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-    .usage-provider-name { flex: 1; font-size: 13px; color: #ececec; }
-    .usage-provider-pct { font-size: 13px; color: #ececec; font-weight: 600; min-width: 42px; text-align: right; }
+    /* Muted plan-tier pill next to the "Usage" heading -- quiet background/text, no brackets, no
+       link-blue, so it reads as a static label rather than a clickable element. */
+    .usage-plan-badge { font-size: 11px; font-weight: 600; color: #999; background: #2a2a2a; padding: 3px 10px; border-radius: 20px; }
 
     /* Settings modal scroll area -- thin, mostly-invisible thumb that only shows a subtle accent
        tint on hover, replacing the browser's default chunky scrollbar. Same reveal-on-hover idea
@@ -5665,11 +5666,6 @@ function plainTextFromMarkdown(text) {
     }
 
     // ---------- Usage tab (Settings > Usage) ----------
-    const USAGE_PROVIDER_INFO = {
-      'deepseek-v4-flash': { label: 'DeepSeek', color: '#4f8ef7' },
-      'qwen-flash': { label: 'Qwen Flash', color: '#a78bfa' },
-      'gemini-3.5-flash-lite': { label: 'Gemini', color: '#4ade80' },
-    };
 
     function formatUsageDuration(totalSeconds) {
       const h = Math.floor(totalSeconds / 3600);
@@ -5694,6 +5690,16 @@ function plainTextFromMarkdown(text) {
       return '#4f8ef7';
     }
 
+    // Same three tiers as usageBarColor (kept as two separate functions since the color also
+    // colors the plain-text percent label next to the bar, where a gradient can't apply) -- a
+    // lighter tint of the tier's own hue fading into its solid color, left to right, per the
+    // reference panel's bar treatment.
+    function usageBarGradient(percent) {
+      if (percent >= 90) return 'linear-gradient(90deg,#f8b4ac,#ef4444)';
+      if (percent >= 75) return 'linear-gradient(90deg,#fbd39a,#f59e0b)';
+      return 'linear-gradient(90deg,#a9c9fb,#4f8ef7)';
+    }
+
     async function renderUsageSection(isManualRefresh) {
       const container = document.getElementById('usageSummaryContainer');
       if (!container) return;
@@ -5709,19 +5715,26 @@ function plainTextFromMarkdown(text) {
 
         const todayData = data.today;
         const w = data.weekly;
-        const p = data.providers;
 
-        const todayColor = todayData.unlimited ? '#4ade80' : usageBarColor(todayData.percent_used);
-        const weekColor = w.unlimited ? '#4ade80' : usageBarColor(w.percent_used);
+        // Rounded to whole numbers for display only (standard round-half-up, via Math.round) --
+        // the real percent_used from the server keeps its 1-decimal precision for whatever else
+        // might need it; this panel just never shows a decimal.
+        const todayPercent = Math.round(todayData.percent_used || 0);
+        const weekPercent = Math.round(w.percent_used || 0);
+
+        const todayColor = todayData.unlimited ? '#4ade80' : usageBarColor(todayPercent);
+        const weekColor = w.unlimited ? '#4ade80' : usageBarColor(weekPercent);
+        const todayGradient = todayData.unlimited ? 'linear-gradient(90deg,#86e6ae,#4ade80)' : usageBarGradient(todayPercent);
+        const weekGradient = w.unlimited ? 'linear-gradient(90deg,#86e6ae,#4ade80)' : usageBarGradient(weekPercent);
 
         container.innerHTML = `
           <div class="usage-section">
             <div class="usage-section-head">
               <span class="usage-section-title">${t('chat', 'usageTodayHeading')}</span>
-              <span class="usage-section-stat" style="color:${todayColor};">${todayData.unlimited ? t('chat', 'usageUnlimited') : t('chat', 'usagePercentUsed').replace('{n}', localizeNum(todayData.percent_used))}</span>
+              <span class="usage-section-stat" style="color:${todayColor};">${todayData.unlimited ? t('chat', 'usageUnlimited') : t('chat', 'usagePercentUsed').replace('{n}', localizeNum(todayPercent))}</span>
             </div>
             <div class="usage-bar-track">
-              <div class="usage-bar-fill" style="width:${todayData.unlimited ? 100 : todayData.percent_used}%;background:${todayColor};"></div>
+              <div class="usage-bar-fill" style="width:${todayData.unlimited ? 100 : todayPercent}%;background:${todayGradient};"></div>
             </div>
             <div class="usage-section-sub">
               ${todayData.unlimited ? t('chat', 'usageNoDailyLimit') : t('chat', 'usageResetsIn').replace('{duration}', formatUsageDuration(todayData.reset_in_seconds))}
@@ -5731,35 +5744,12 @@ function plainTextFromMarkdown(text) {
           <div class="usage-section">
             <div class="usage-section-head">
               <span class="usage-section-title">${t('chat', 'usageWeeklyHeading')}</span>
-              <span class="usage-section-stat" style="color:${weekColor};">${w.unlimited ? t('chat', 'usageUnlimited') : t('chat', 'usagePercentUsed').replace('{n}', localizeNum(w.percent_used))}</span>
+              <span class="usage-section-stat" style="color:${weekColor};">${w.unlimited ? t('chat', 'usageUnlimited') : t('chat', 'usagePercentUsed').replace('{n}', localizeNum(weekPercent))}</span>
             </div>
             <div class="usage-bar-track">
-              <div class="usage-bar-fill" style="width:${w.unlimited ? 100 : w.percent_used}%;background:${weekColor};"></div>
+              <div class="usage-bar-fill" style="width:${w.unlimited ? 100 : weekPercent}%;background:${weekGradient};"></div>
             </div>
             <div class="usage-section-sub">${t('chat', 'usageDoubtsInWeek').replace('{n}', localizeNum(w.total_doubts))}</div>
-          </div>
-
-          <div class="usage-section">
-            <div class="usage-section-head">
-              <span class="usage-section-title">${t('chat', 'usageModelsHeading')} <span class="usage-section-title-sub">· ${t('chat', 'usageLastNDays').replace('{n}', localizeNum(p.period_days))}</span></span>
-            </div>
-            <div class="usage-bar-track">
-              ${p.total_requests === 0
-                ? `<div style="width:100%;background:#2a2a2a;"></div>`
-                : p.breakdown.map(b => `<div style="width:${b.percent}%;background:${(USAGE_PROVIDER_INFO[b.provider] || { color: '#666' }).color};"></div>`).join('')}
-            </div>
-            <div style="margin-top:10px;">
-              ${p.total_requests === 0
-                ? `<div class="usage-section-sub" style="margin-top:0;">${t('chat', 'usageNoDoubtsYet')}</div>`
-                : p.breakdown.map(b => `
-                  <div class="usage-provider-row">
-                    <span class="usage-provider-dot" style="background:${(USAGE_PROVIDER_INFO[b.provider] || { color: '#666' }).color};"></span>
-                    <span class="usage-provider-name">${(USAGE_PROVIDER_INFO[b.provider] || { label: b.provider }).label}</span>
-                    <span style="font-size:12px;color:#555;">${t('chat', 'usageDoubtCount').replace('{n}', localizeNum(b.count))}</span>
-                    <span class="usage-provider-pct">${localizeNum(b.percent)}%</span>
-                  </div>
-                `).join('')}
-            </div>
           </div>
         `;
 
@@ -6050,9 +6040,9 @@ function openSettings() {
         const planLabel = userPlan === 'max' ? t('chat', 'usageMaxName') : userPlan === 'pro' ? t('chat', 'usageProName') : t('chat', 'free');
         content.innerHTML = `
           <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:24px;flex-wrap:wrap;gap:8px;">
-            <h2 style="font-size:18px;font-weight:700;color:#fff;">
+            <h2 style="font-size:18px;font-weight:700;color:#fff;display:flex;align-items:center;gap:8px;">
               <span data-i18n="chat.settingsUsage">Usage</span>
-              <span style="font-size:13px;font-weight:600;color:#4f8ef7;">[${planLabel}]</span>
+              <span class="usage-plan-badge">${planLabel}</span>
             </h2>
             <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#555;">
               <span id="usageLastUpdated" data-i18n="chat.usageLastUpdatedJustNow">Last updated: just now</span>
