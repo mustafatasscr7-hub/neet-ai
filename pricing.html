@@ -69,6 +69,11 @@
     .feature-check { color: var(--green); font-size: 13px; flex-shrink: 0; margin-top: 1px; font-weight: 700; }
     .feature-cross { color: var(--border-2); font-size: 12px; flex-shrink: 0; margin-top: 2px; }
     .soon-tag { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted-2); border: 1px solid var(--border-2); border-radius: 20px; padding: 1.5px 6px; margin-left: 6px; white-space: nowrap; vertical-align: 1px; }
+    /* Roadmap note (unbuilt Max features, consolidated into one line rather than 5 individual
+       checkmarked bullets) -- deliberately NOT a .feature-check row: no checkmark (that implies
+       "included today"), smaller/italic/more muted than a real .feature.yes line, so it visually
+       reads as a footnote about what's coming rather than something being paid for right now. */
+    .feature-roadmap-note { font-size: 11.5px; color: var(--muted-2); font-style: italic; line-height: 1.4; padding-top: 2px; }
 
     .footer-note { text-align: center; font-size: 12px; color: var(--muted-2); margin-top: 8px; }
     .footer-note a { color: var(--blue); text-decoration: none; }
@@ -203,12 +208,8 @@
         <div class="features-label" data-i18n="pricing.everythingInProPlus">Everything in Pro, plus</div>
         <div class="features">
           <div class="feature yes"><span class="feature-check">✓</span> <span data-i18n="pricing.max1">Truly unlimited usage — no daily cap</span></div>
-          <div class="feature yes soon"><span class="feature-check">✓</span> <span data-i18n="pricing.max2">Weak Topic Detector</span><span class="soon-tag" data-i18n="pricing.soon">Soon</span></div>
-          <div class="feature yes soon"><span class="feature-check">✓</span> <span data-i18n="pricing.max3">Personalized Study Plan</span><span class="soon-tag" data-i18n="pricing.soon">Soon</span></div>
-          <div class="feature yes soon"><span class="feature-check">✓</span> <span data-i18n="pricing.max4">Spaced Repetition Scheduler</span><span class="soon-tag" data-i18n="pricing.soon">Soon</span></div>
-          <div class="feature yes soon"><span class="feature-check">✓</span> <span data-i18n="pricing.max5">Topic Difficulty Ranking</span><span class="soon-tag" data-i18n="pricing.soon">Soon</span></div>
-          <div class="feature yes soon"><span class="feature-check">✓</span> <span data-i18n="pricing.max6">Read Aloud for AI answers</span><span class="soon-tag" data-i18n="pricing.soon">Soon</span></div>
           <div class="feature yes"><span class="feature-check">✓</span> <span data-i18n="pricing.max7">Priority, fastest response</span></div>
+          <div class="feature-roadmap-note" data-i18n="pricing.maxRoadmap">More advanced study tools coming soon (Weak Topic Detector, Study Plan & more)</div>
         </div>
       </div>
 
