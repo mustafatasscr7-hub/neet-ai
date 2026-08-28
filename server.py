@@ -1425,39 +1425,68 @@ NCERT_MATCH_THRESHOLD_EN = 0.5
 # sentence-aware chunks, not a fixed property of Hindi embeddings in general).
 NCERT_MATCH_THRESHOLD_HI = 0.40
 
-# SHADOW TRIAL ONLY -- not read by search_ncert() or any /chat call site yet. This is the
-# calibrated threshold for the parallel Hindi embedding space built by
-# add_ncert_content_gemini_embedding_shadow.sql + the embedding_gemini column (gemini-embedding-
-# 001, 3072 dims), queried via match_ncert_hi_gemini, not match_ncert. Calibrated the same way as
-# NCERT_MATCH_THRESHOLD_HI above: real correct-query-vs-real-chunk scores (10 pairs, covering the
-# 2 previously-failing SN1/SN2 and Markovnikov/peroxide topics plus 6 known-good regression
-# topics) vs real irrelevant cross-pairs (8 pairs, real queries against real but topically
-# unrelated chunks). Correct floor 0.6403, irrelevant ceiling 0.6065 -- a clean, non-overlapping
-# gap of 0.0339 (wider than NCERT_MATCH_THRESHOLD_HI's own calibration gap of 0.0129). 0.62 sits
-# in the middle of that gap. Cutover (pointing search_ncert()'s Hindi branch at
-# match_ncert_hi_gemini + this threshold, then eventually dropping the old `embedding` values for
-# Hindi rows) is a deliberate separate follow-up task, not done here.
+# LIVE as of the cutover below (2026-08-28) -- calibrated threshold for the Gemini-embedding-001
+# Hindi retrieval path (embedding_gemini column, 3072 dims, queried via match_ncert_hi_gemini).
+# Calibrated the same way as NCERT_MATCH_THRESHOLD_HI above: real correct-query-vs-real-chunk
+# scores (10 pairs, covering the 2 previously-failing SN1/SN2 and Markovnikov/peroxide topics
+# plus 6 known-good regression topics) vs real irrelevant cross-pairs (8 pairs, real queries
+# against real but topically unrelated chunks). Correct floor 0.6403, irrelevant ceiling 0.6065
+# -- a clean, non-overlapping gap of 0.0339 (wider than NCERT_MATCH_THRESHOLD_HI's own
+# calibration gap of 0.0129). 0.62 sits in the middle of that gap.
 NCERT_MATCH_THRESHOLD_HI_GEMINI = 0.62
 
+# Dedicated to the Hindi NCERT retrieval path (match_ncert_hi_gemini) -- deliberately NOT routed
+# through get_embedding()'s embedding_cache table like every other embedding call in this file.
+# That cache is a single hash-keyed table sized for the 1536-dim OpenAI vectors used everywhere
+# else (English NCERT, PYQ, diagrams); storing 3072-dim Gemini vectors under the same table would
+# risk a dimension mismatch for any other caller reading a cache entry written here. Real Hindi
+# query volume is small enough (a few hundred/month across ALL embedding call sites combined,
+# confirmed via a real embedding_cache growth-rate check before this cutover) that skipping
+# caching has no material cost.
+def _get_gemini_query_embedding(text: str):
+    resp = gemini_client.models.embed_content(model="gemini-embedding-001", contents=text)
+    return resp.embeddings[0].values
+
 async def search_ncert(query: str, limit: int = 3):
-    embedding = await get_embedding(query)
     headers = {
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
         "Content-Type": "application/json"
     }
     language = _detect_query_language(query)
-    threshold = NCERT_MATCH_THRESHOLD_HI if language == "hi" else NCERT_MATCH_THRESHOLD_EN
-    response = await async_client.post(
-        f"{SUPABASE_URL}/rest/v1/rpc/match_ncert",
-        headers=headers,
-        json={
-            "query_embedding": embedding,
-            "match_threshold": threshold,
-            "match_count": limit,
-            "filter_language": language
-        }
-    )
+    if language == "hi":
+        # Gemini gemini-embedding-001 shadow trial, cut over live 2026-08-28 -- see
+        # NCERT_MATCH_THRESHOLD_HI_GEMINI above for the calibration behind this threshold, and
+        # add_ncert_content_gemini_embedding_shadow.sql for the parallel column/RPC this reads.
+        # The old match_ncert + NCERT_MATCH_THRESHOLD_HI + `embedding` column path (OpenAI,
+        # text-embedding-3-small) is deliberately left completely intact, unused, as an instant
+        # rollback: revert this branch to call match_ncert with filter_language="hi" and
+        # NCERT_MATCH_THRESHOLD_HI again, no data migration needed either way.
+        embedding = _get_gemini_query_embedding(query)
+        response = await async_client.post(
+            f"{SUPABASE_URL}/rest/v1/rpc/match_ncert_hi_gemini",
+            headers=headers,
+            json={
+                "query_embedding": embedding,
+                "match_threshold": NCERT_MATCH_THRESHOLD_HI_GEMINI,
+                "match_count": limit
+            }
+        )
+    else:
+        # English path: byte-for-byte unchanged from before this cutover -- same get_embedding()
+        # call (OpenAI text-embedding-3-small, embedding_cache-backed), same match_ncert RPC,
+        # same NCERT_MATCH_THRESHOLD_EN, same filter_language param.
+        embedding = await get_embedding(query)
+        response = await async_client.post(
+            f"{SUPABASE_URL}/rest/v1/rpc/match_ncert",
+            headers=headers,
+            json={
+                "query_embedding": embedding,
+                "match_threshold": NCERT_MATCH_THRESHOLD_EN,
+                "match_count": limit,
+                "filter_language": language
+            }
+        )
     if response.status_code == 200:
         # chapter_name_en is what actually carries "Appendix"/etc for Hindi rows (chapter_name
         # itself is the real Hindi title, e.g. "परिशिष्ट", which would never match these English
