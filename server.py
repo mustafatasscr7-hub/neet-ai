@@ -1425,6 +1425,20 @@ NCERT_MATCH_THRESHOLD_EN = 0.5
 # sentence-aware chunks, not a fixed property of Hindi embeddings in general).
 NCERT_MATCH_THRESHOLD_HI = 0.40
 
+# SHADOW TRIAL ONLY -- not read by search_ncert() or any /chat call site yet. This is the
+# calibrated threshold for the parallel Hindi embedding space built by
+# add_ncert_content_gemini_embedding_shadow.sql + the embedding_gemini column (gemini-embedding-
+# 001, 3072 dims), queried via match_ncert_hi_gemini, not match_ncert. Calibrated the same way as
+# NCERT_MATCH_THRESHOLD_HI above: real correct-query-vs-real-chunk scores (10 pairs, covering the
+# 2 previously-failing SN1/SN2 and Markovnikov/peroxide topics plus 6 known-good regression
+# topics) vs real irrelevant cross-pairs (8 pairs, real queries against real but topically
+# unrelated chunks). Correct floor 0.6403, irrelevant ceiling 0.6065 -- a clean, non-overlapping
+# gap of 0.0339 (wider than NCERT_MATCH_THRESHOLD_HI's own calibration gap of 0.0129). 0.62 sits
+# in the middle of that gap. Cutover (pointing search_ncert()'s Hindi branch at
+# match_ncert_hi_gemini + this threshold, then eventually dropping the old `embedding` values for
+# Hindi rows) is a deliberate separate follow-up task, not done here.
+NCERT_MATCH_THRESHOLD_HI_GEMINI = 0.62
+
 async def search_ncert(query: str, limit: int = 3):
     embedding = await get_embedding(query)
     headers = {
