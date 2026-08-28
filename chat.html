@@ -547,8 +547,19 @@
     .message-bubble.ai code { background: #1a1a1a; padding: 2px 6px; border-radius: 4px; font-size: calc(var(--chat-font-size, 14px) - 1px); color: #4f8ef7; }
 
     /* Clickable (opens showMermaidModal at full natural size) -- cursor + hover border/expand-icon
-       give the same "this opens bigger" affordance the diagram image preview already has. */
-    .mermaid-diagram { position: relative; margin: 12px 0; padding: 16px; background: #111111; border: 1px solid #2a2a2a; border-radius: 10px; overflow-x: auto; text-align: center; cursor: pointer; transition: border-color 0.15s ease; }
+       give the same "this opens bigger" affordance the diagram image preview already has.
+
+       Split into an outer non-scrolling wrapper (.mermaid-diagram, holds the border/background/
+       expand-icon) and an inner .mermaid-diagram-scroll (holds the actual SVG, overflow-x:auto)
+       rather than putting overflow-x:auto directly on .mermaid-diagram -- the expand icon is a
+       position:absolute ::after on .mermaid-diagram, and an absolutely-positioned descendant of
+       a scrolling element scrolls along with that element's own content. With overflow-x:auto on
+       the SAME element as the icon, scrolling a wide flowchart horizontally dragged the icon out
+       of the top-right corner instead of leaving it pinned. Moving the scroll behavior one level
+       down fixes that: the icon's containing block (.mermaid-diagram) never scrolls, only its
+       inner content does. */
+    .mermaid-diagram { position: relative; margin: 12px 0; padding: 16px; background: #111111; border: 1px solid #2a2a2a; border-radius: 10px; text-align: center; cursor: pointer; transition: border-color 0.15s ease; }
+    .mermaid-diagram-scroll { overflow-x: auto; }
     .mermaid-diagram:hover { border-color: #4f8ef760; }
     .mermaid-diagram::after {
       content: '⛶'; position: absolute; top: 8px; right: 8px; width: 26px; height: 26px;
@@ -560,10 +571,11 @@
        2-3 node diagram to fill the whole bubble width, and since height scales to match the
        same aspect ratio, a narrow/tall diagram balloons into something enormous. Overriding to
        the SVG's own natural size, only capped back down by max-width if it's genuinely wider
-       than the bubble (a diagram with many parallel branches, for instance) -- overflow-x:auto
-       above lets a student scroll to see the rest at full legibility instead of everything
-       shrinking to fit, and the click-to-expand modal is the real fix for a many-branch diagram
-       like this needing more room than an inline chat bubble can give it either way. */
+       than the bubble (a diagram with many parallel branches, for instance) -- .mermaid-diagram-
+       scroll's overflow-x:auto above lets a student scroll to see the rest at full legibility
+       instead of everything shrinking to fit, and the click-to-expand modal is the real fix for
+       a many-branch diagram like this needing more room than an inline chat bubble can give it
+       either way. */
     .mermaid-diagram svg { width: auto; max-width: 100%; height: auto; }
     body.light-mode .mermaid-diagram { background: #f9f9fb !important; border-color: #e0e0e5 !important; }
     body.light-mode .mermaid-diagram::after { background: rgba(255,255,255,0.7) !important; color: #333 !important; }
@@ -2056,8 +2068,11 @@ let selectedImages = [];
           const { svg } = await mermaid.render(id, rawCode);
           const wrapper = document.createElement('div');
           wrapper.className = 'mermaid-diagram';
-          wrapper.innerHTML = svg;
-          sizeMermaidSvgToNatural(wrapper.querySelector('svg'));
+          const scrollEl = document.createElement('div');
+          scrollEl.className = 'mermaid-diagram-scroll';
+          scrollEl.innerHTML = svg;
+          wrapper.appendChild(scrollEl);
+          sizeMermaidSvgToNatural(scrollEl.querySelector('svg'));
           wrapper.onclick = () => showMermaidModal(svg);
           preEl.replaceWith(wrapper);
         } catch (e) {
