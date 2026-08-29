@@ -2645,7 +2645,7 @@ let selectedImages = [];
       }
     }
 
-    async function showPYQModal(questions) {
+    async function showPYQModal(questions, isFallback = false) {
       const existing = document.getElementById('pyq-modal');
       if (existing) existing.remove();
 
@@ -2668,15 +2668,29 @@ let selectedImages = [];
       let activeSubject = dominantSubject;
 
      const header = document.createElement('div');
-      header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;';
-      header.innerHTML = '<h3 style="margin:0;color:#a78bfa;">📋 Related Past Year Questions</h3>';
+      header.style.cssText = 'display:flex;flex-direction:column;gap:4px;margin-bottom:16px;';
+      // isFallback: the primary threshold search found nothing, this is the relaxed "related, not
+      // exact" pass instead (see PYQ_FALLBACK_THRESHOLD in server.py) -- distinct color/subtitle
+      // so a student isn't misled into thinking these directly answer their doubt.
+      const titleRow = document.createElement('div');
+      titleRow.style.cssText = 'display:flex;justify-content:space-between;align-items:center;';
+      titleRow.innerHTML = isFallback
+        ? `<h3 style="margin:0;color:#f59e0b;">📋 Related Questions</h3>`
+        : `<h3 style="margin:0;color:#a78bfa;">📋 Related Past Year Questions</h3>`;
+      header.appendChild(titleRow);
+      if (isFallback) {
+        const subtitle = document.createElement('div');
+        subtitle.style.cssText = 'font-size:12px;color:#888;';
+        subtitle.textContent = `No exact match for this doubt — here are related ${subjectName(dominantSubject) || dominantSubject} questions instead.`;
+        header.appendChild(subtitle);
+      }
 
       const closeBtn2 = document.createElement('button');
       closeBtn2.textContent = '✕';
       closeBtn2.className = 'pyq-modal-close';
       closeBtn2.style.cssText = 'background:none;border:none;color:#888;font-size:20px;cursor:pointer;';
       closeBtn2.onclick = () => modal.remove();
-      header.appendChild(closeBtn2);
+      titleRow.appendChild(closeBtn2);
       box.appendChild(header);
 
       // Subject tabs
@@ -3455,7 +3469,7 @@ let selectedImages = [];
               });
               const data = await res.json();
               if (data.pyqs && data.pyqs.length > 0) {
-                showPYQModal(data.pyqs);
+                showPYQModal(data.pyqs, data.related);
                 pyqBtn.innerHTML = '📋 Previous Year Questions';
               } else {
                 pyqBtn.innerHTML = '❌ No PYQs found';
@@ -3623,7 +3637,7 @@ function plainTextFromMarkdown(text) {
             });
             const data = await res.json();
             if (data.pyqs && data.pyqs.length > 0) {
-              showPYQModal(data.pyqs);
+              showPYQModal(data.pyqs, data.related);
               pyqBtn.innerHTML = '📋 Previous Year Questions';
             } else {
               pyqBtn.innerHTML = '❌ No PYQs found';
@@ -4146,7 +4160,7 @@ function plainTextFromMarkdown(text) {
         });
         const data = await res.json();
         if (data.pyqs && data.pyqs.length > 0) {
-          showPYQModal(data.pyqs);
+          showPYQModal(data.pyqs, data.related);
         } else {
           addMessageRow('ai', `No matching PYQs found for "${topic}".`);
         }
@@ -5336,7 +5350,7 @@ function plainTextFromMarkdown(text) {
             });
             const data = await res.json();
             if (data.pyqs && data.pyqs.length > 0) {
-              showPYQModal(data.pyqs);
+              showPYQModal(data.pyqs, data.related);
               pyqBtn.innerHTML = '📋 Previous Year Questions';
             } else {
               pyqBtn.innerHTML = '❌ No PYQs found';

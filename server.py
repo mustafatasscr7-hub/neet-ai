@@ -1610,20 +1610,46 @@ def _ncert_chapter_citation(subject: str, class_num, chapter_name: str, lookup_n
 # correct, unchanged from its original value.
 PYQ_MATCH_THRESHOLD = 0.4
 
+# Real calibration data (see PYQ_MATCH_THRESHOLD's own comment above, 2026-08-24): 4 genuinely
+# irrelevant queries topped out at 0.282 real similarity; real on-topic queries scored
+# 0.416-0.657. 0.30 sits comfortably above that irrelevant ceiling -- a "related" fallback result
+# is still real, honest topical relevance (not literally the bottom of the corpus), while being
+# low enough to actually catch a genuine near-miss. Measured real example that motivated this:
+# "what causes color blindness genetically" (a real NCERT genetics topic -- X-linked inheritance)
+# scored 0.394 -- correctly rejected by the strict 0.4 bar as not a precise-enough match, but its
+# real top results at a relaxed threshold (X-linked chromosome inheritance, pedigree probability,
+# genotype crosses) are genuinely topically coherent, not scattered noise -- confirmed embedding-
+# based ranking alone (no chapter filter needed) already clusters real PYQ content by topic.
+PYQ_FALLBACK_THRESHOLD = 0.30
+PYQ_FALLBACK_LIMIT = 5
+
 async def search_pyq(query: str, limit: int = 5):
     headers = {
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
         "Content-Type": "application/json"
     }
-    async def _search(embedding):
-        response = await async_client.post(
-            f"{SUPABASE_URL}/rest/v1/rpc/match_pyq",
-            headers=headers,
-            json={"query_embedding": embedding, "match_threshold": PYQ_MATCH_THRESHOLD, "match_count": limit}
-        )
-        return response.json() if response.status_code == 200 else []
-    return await _match_with_merge_fallback(query, get_embedding, _search)
+    async def _search_at(threshold, count):
+        async def _do(embedding):
+            response = await async_client.post(
+                f"{SUPABASE_URL}/rest/v1/rpc/match_pyq",
+                headers=headers,
+                json={"query_embedding": embedding, "match_threshold": threshold, "match_count": count}
+            )
+            return response.json() if response.status_code == 200 else []
+        return await _match_with_merge_fallback(query, get_embedding, _do)
+
+    results = await _search_at(PYQ_MATCH_THRESHOLD, limit)
+    if results:
+        return results, False
+
+    # No real match even after the typo/spacing merge-variant fallback inside _search_at -- try
+    # once more at the relaxed "related, not exact" threshold before giving up entirely. Returns
+    # (results, True) only when this relaxed pass actually found something; an empty result here
+    # means the corpus genuinely has nothing close, and the caller should show honest "no results"
+    # rather than being told a fallback ran and still return nothing.
+    fallback_results = await _search_at(PYQ_FALLBACK_THRESHOLD, PYQ_FALLBACK_LIMIT)
+    return fallback_results, bool(fallback_results)
 
 async def get_student_context(user_id: str) -> str:
     if not user_id:
@@ -2690,8 +2716,8 @@ async def report_diagram(req: ReportDiagramRequest, _: None = Depends(rate_limit
 
 @app.post("/pyq")
 async def get_pyq(message: Message, _: None = Depends(rate_limiter(15, 60))):
-    results = await search_pyq(message.text)
-    return {"pyqs": results}
+    results, related = await search_pyq(message.text)
+    return {"pyqs": results, "related": related}
 
 # Threshold is a similarity floor (1 - cosine distance), same convention as match_ncert's own
 # match_threshold. Configurable here -- no separate settings store in this project, every other
