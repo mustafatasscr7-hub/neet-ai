@@ -261,6 +261,23 @@
     /* Smooth fade-in on page load */
     body { animation: pageFadeIn 0.22s ease; }
     @keyframes pageFadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+    /* Text-selection popup on a question/option -- same visual language as chat.html's own
+       .selection-toolbar (dark chip, rounded, floating), but richer: an Explain button plus a
+       free-text ask row, since this page has no chat input of its own to fill directly. */
+    .pyq-selection-popup { position: fixed; display: none; flex-direction: column; gap: 6px; background: #1e1e1e; border: 1px solid #333; border-radius: 10px; padding: 8px; z-index: 10000; width: 260px; box-shadow: 0 8px 24px rgba(0,0,0,0.6); }
+    .pyq-selection-popup.visible { display: flex; }
+    .pyq-selection-explain-btn { background: #2a2a2a; border: none; color: #ececec; font-size: 13px; font-family: 'Inter', sans-serif; padding: 8px 10px; border-radius: 6px; cursor: pointer; text-align: left; transition: background 0.15s; }
+    .pyq-selection-explain-btn:hover { background: #333; }
+    .pyq-selection-ask-row { display: flex; gap: 6px; }
+    .pyq-selection-ask-input { flex: 1; min-width: 0; background: #111; border: 1px solid #2a2a2a; border-radius: 6px; padding: 7px 9px; color: #ececec; font-size: 12px; font-family: 'Inter', sans-serif; outline: none; }
+    .pyq-selection-ask-input:focus { border-color: #4f8ef7; }
+    .pyq-selection-ask-send { background: #4f8ef7; border: none; color: #fff; border-radius: 6px; width: 30px; flex-shrink: 0; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+    .pyq-selection-ask-send:hover { background: #3f7de6; }
+    body.light-mode .pyq-selection-popup { background: #ffffff !important; border-color: #e0e0e5 !important; box-shadow: 0 8px 24px rgba(0,0,0,0.12) !important; }
+    body.light-mode .pyq-selection-explain-btn { background: #f0f0f3 !important; color: #16161d !important; }
+    body.light-mode .pyq-selection-explain-btn:hover { background: #e4e4ea !important; }
+    body.light-mode .pyq-selection-ask-input { background: #f5f5f7 !important; border-color: #d5d5dd !important; color: #16161d !important; }
   </style>
 </head>
 <body>
@@ -1409,6 +1426,131 @@ ${q.diagram_url ? `<img class="q-diagram-img" src="${q.diagram_url}">` : ''}
     longest_streak: longest
   }).eq('user_id', userId);
 }
+
+  // ---------------- Text-selection popup: "Explain" or ask a custom question ----------------
+  // Not a reuse of chat.html's .selection-toolbar quote-on-select feature -- that mechanism is
+  // tied to chat.html's own DOM (only fires inside .message-bubble.ai) and, more fundamentally,
+  // lives in a completely different document/JS context (a separate HTML page). There's no chat
+  // input in THIS document to fill directly, so instead of filling an input this hands off to
+  // chat.html via a one-shot sessionStorage key + a real navigation, and chat.html auto-sends it
+  // on load through the exact same sendMessage() path a normally-typed doubt uses (see chat.html,
+  // right after its own auth/session check resolves).
+  //
+  // KaTeX renders both a visible .katex-html span and a hidden .katex-mathml span per formula --
+  // a raw DOM selection walks both and doubles every formula's text. Same fix chat.html's own
+  // plainTextFromSelectionRange uses: strip the hidden MathML copy from a cloned fragment of just
+  // the selected range before reading its text.
+  function plainTextFromSelectionRangePyq(range) {
+    const frag = range.cloneContents();
+    frag.querySelectorAll('.katex-mathml').forEach(el => el.remove());
+    return frag.textContent.trim();
+  }
+
+  const pyqSelectionPopup = document.createElement('div');
+  pyqSelectionPopup.className = 'pyq-selection-popup';
+  pyqSelectionPopup.innerHTML = `
+    <button class="pyq-selection-explain-btn" id="pyqSelectionExplainBtn" data-i18n="pyqbank.selectionExplain">💡 Explain</button>
+    <div class="pyq-selection-ask-row">
+      <input type="text" class="pyq-selection-ask-input" id="pyqSelectionAskInput" data-i18n-placeholder="pyqbank.selectionAskPlaceholder" placeholder="Ask about this..." />
+      <button class="pyq-selection-ask-send" id="pyqSelectionAskSend" aria-label="Send">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+      </button>
+    </div>
+  `;
+  document.body.appendChild(pyqSelectionPopup);
+  if (typeof applyTranslations === 'function') applyTranslations();
+
+  let pyqSelectedText = '';
+
+  function hidePyqSelectionPopup() {
+    pyqSelectionPopup.classList.remove('visible');
+    pyqSelectedText = '';
+  }
+
+  // Single reused popup element, repositioned/re-filled on every new selection rather than a
+  // fresh one created each time -- structurally impossible to stack two, satisfies "don't let it
+  // linger or stack multiple popups" without extra bookkeeping.
+  function showPyqSelectionPopupForRange(range, text) {
+    pyqSelectedText = text;
+    document.getElementById('pyqSelectionAskInput').value = '';
+    pyqSelectionPopup.classList.add('visible');
+    const popupRect = pyqSelectionPopup.getBoundingClientRect();
+    const rect = range.getBoundingClientRect();
+    let left = rect.left + rect.width / 2 - popupRect.width / 2;
+    left = Math.max(8, Math.min(left, window.innerWidth - popupRect.width - 8));
+    let top = rect.top - popupRect.height - 8;
+    if (top < 4) top = rect.bottom + 8; // not enough room above -- flip below the selection
+    pyqSelectionPopup.style.left = left + 'px';
+    pyqSelectionPopup.style.top = top + 'px';
+  }
+
+  function sendSelectionToChat(message) {
+    sessionStorage.setItem('pendingChatMessage', message);
+    window.location.href = './chat.html';
+  }
+
+  // Driven by selectionchange (debounced), not mouseup/touchend directly -- selectionchange
+  // fires for every input method (mouse drag, touch long-press + drag-handles, keyboard
+  // shift+arrow) uniformly, which matters specifically for mobile: adjusting the native
+  // selection handles after a long-press re-fires selectionchange on each adjustment but doesn't
+  // reliably re-fire touchend on the original element. The debounce just waits for the burst of
+  // change events during an active drag to go quiet before reading the final selection.
+  let pyqSelectionDebounceTimer = null;
+  function handlePyqSelectionSettled() {
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed || selection.rangeCount === 0 || !selection.toString().trim()) {
+      return; // deliberately not hiding here -- clearing the selection (e.g. programmatically,
+              // after Explain/Ask fires) re-enters this function too, and hiding unconditionally
+              // on every empty-selection tick would also close a popup an in-progress click on
+              // its own button hasn't finished handling yet
+    }
+    const range = selection.getRangeAt(0);
+    const container = range.commonAncestorContainer;
+    const containerEl = container.nodeType === 3 ? container.parentElement : container;
+    const scopedEl = containerEl && containerEl.closest ? containerEl.closest('.q-text, .q-option') : null;
+    if (!scopedEl) { hidePyqSelectionPopup(); return; }
+    const text = plainTextFromSelectionRangePyq(range);
+    if (!text) { hidePyqSelectionPopup(); return; }
+    showPyqSelectionPopupForRange(range, text);
+  }
+  document.addEventListener('selectionchange', function() {
+    clearTimeout(pyqSelectionDebounceTimer);
+    pyqSelectionDebounceTimer = setTimeout(handlePyqSelectionSettled, 250);
+  });
+
+  document.getElementById('pyqSelectionExplainBtn').addEventListener('click', function() {
+    if (!pyqSelectedText) return;
+    const text = pyqSelectedText;
+    window.getSelection().removeAllRanges();
+    hidePyqSelectionPopup();
+    sendSelectionToChat(`Explain: ${text}`);
+  });
+
+  function submitPyqSelectionAsk() {
+    const question = document.getElementById('pyqSelectionAskInput').value.trim();
+    if (!question || !pyqSelectedText) return;
+    const text = pyqSelectedText;
+    window.getSelection().removeAllRanges();
+    hidePyqSelectionPopup();
+    sendSelectionToChat(`${text} — ${question}`);
+  }
+  document.getElementById('pyqSelectionAskSend').addEventListener('click', submitPyqSelectionAsk);
+  document.getElementById('pyqSelectionAskInput').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') { e.preventDefault(); submitPyqSelectionAsk(); }
+    if (e.key === 'Escape') { hidePyqSelectionPopup(); }
+  });
+
+  // Dismiss on: click/tap elsewhere, scroll, or Escape -- covers every dismissal path the task
+  // asks for besides the two action buttons themselves (handled above).
+  document.addEventListener('mousedown', function(e) {
+    if (!pyqSelectionPopup.classList.contains('visible')) return;
+    if (pyqSelectionPopup.contains(e.target)) return;
+    hidePyqSelectionPopup();
+  });
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape' && pyqSelectionPopup.classList.contains('visible')) hidePyqSelectionPopup();
+  });
+  window.addEventListener('scroll', hidePyqSelectionPopup, true);
 
   </script>
 </body>

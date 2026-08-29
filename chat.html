@@ -5813,6 +5813,21 @@ function plainTextFromMarkdown(text) {
       // synchronous render at page load ran before this session check resolved, so it could
       // only ever have picked from generic/countdown variants.
       renderWelcomeGreeting();
+
+      // Cross-page handoff from pyqbank.html's text-selection popup (Explain / custom question
+      // about a selected question or option) -- see pyqbank.html's sendSelectionToChat for the
+      // writing side. sessionStorage rather than localStorage: this is a one-shot "did the
+      // student just arrive here from that popup" signal, not something that should persist or
+      // replay on a future visit -- cleared immediately after reading so a page refresh doesn't
+      // resend the same message. Placed after this same auth/session check resolves (both the
+      // logged-in and guest branches above already ran) so sendMessage() sees accurate
+      // login/budget state, exactly as if the student had typed and sent it themselves.
+      const pendingChatMessage = sessionStorage.getItem('pendingChatMessage');
+      if (pendingChatMessage) {
+        sessionStorage.removeItem('pendingChatMessage');
+        input.value = pendingChatMessage;
+        sendMessage();
+      }
     });
 
     input.addEventListener('input', function() {

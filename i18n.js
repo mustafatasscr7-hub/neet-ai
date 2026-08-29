@@ -1192,7 +1192,9 @@ const TRANSLATIONS = {
       failedSolution: 'Failed to generate solution.',
       pleaseLoginSave: 'Please log in to save questions.',
       failedSaveQuestion: 'Failed to save question.',
-      questionSaved: 'Question saved! ✅'
+      questionSaved: 'Question saved! ✅',
+      selectionExplain: '💡 Explain',
+      selectionAskPlaceholder: 'Ask about this...'
     },
     hi: {
       headerTitle: 'PYQ बैंक',
@@ -1220,7 +1222,9 @@ const TRANSLATIONS = {
       failedSolution: 'समाधान बनाने में विफल।',
       pleaseLoginSave: 'प्रश्न सहेजने के लिए कृपया लॉग इन करें।',
       failedSaveQuestion: 'प्रश्न सहेजने में विफल।',
-      questionSaved: 'प्रश्न सहेजा गया! ✅'
+      questionSaved: 'प्रश्न सहेजा गया! ✅',
+      selectionExplain: '💡 समझाएँ',
+      selectionAskPlaceholder: 'इसके बारे में पूछें...'
     }
   },
 
