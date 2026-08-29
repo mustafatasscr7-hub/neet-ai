@@ -1689,6 +1689,7 @@
           <button type="button" onclick="mergeWithNext('${b.id}')" title="Merge this block with the next one">Merge next</button>
           <button type="button" onclick="splitBlock('${b.id}')" title="Split into two separate questions">Split</button>
           <button type="button" onclick="insertBlockBelow('${b.id}')" title="Insert a new blank question directly after this one">+ Insert Below</button>
+          <button type="button" class="danger-link" onclick="clearAllOptions('${b.id}')" title="Empty all 4 option fields for this question -- question text, answer, and other fields are untouched">Clear All Options</button>
           <button type="button" class="danger-link" onclick="removeBlock('${b.id}')">Remove</button>
         </div>
       </div>
@@ -2219,6 +2220,27 @@
     updateSummaryBar();
     document.getElementById('summaryBar').style.display = blocks.length ? 'flex' : 'none';
     saveDraftNow(); // immediate, not debounced -- blocks.length===0 here means the draft should clear right away, not linger for 2.5s
+  }
+
+  // Confirms first, matching removeBlock/mergeWithNext above -- both already confirm() for a
+  // one-click action that destroys real content across multiple fields at once, which this is
+  // too (4 option fields, not a single field an accidental click just re-types). readBlockFromDom
+  // (used at actual save time) reads straight from these DOM elements, so clearing .value here is
+  // the only state that needs touching -- there's no separate in-memory copy of option text to
+  // keep in sync. autoResizeTextarea/updateMathPreview are called directly (not via a dispatched
+  // input event) since this is a programmatic change, not real typing -- oninput never fires on
+  // its own for a script-set .value.
+  function clearAllOptions(id) {
+    if (!confirm('Clear all 4 option fields for this question?')) return;
+    ['a', 'b', 'c', 'd'].forEach(opt => {
+      const fieldId = 'opt-' + opt + '-' + id;
+      const el = document.getElementById(fieldId);
+      if (!el) return;
+      el.value = '';
+      autoResizeTextarea(el);
+      updateMathPreview(fieldId);
+    });
+    saveDraftNow(); // immediate, same reasoning as removeBlock -- a deliberate one-shot action, not an in-progress typing session the debounce is meant to coalesce
   }
 
   function clearAllBlocks() {
