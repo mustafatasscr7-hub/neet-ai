@@ -1473,6 +1473,52 @@ def _get_gemini_query_embedding(text: str):
     resp = gemini_client.models.embed_content(model="gemini-embedding-001", contents=text)
     return resp.embeddings[0].values
 
+# General input-normalization fallback for embedding-based matching (diagram/PYQ/NCERT search) --
+# fixes a real, measured failure mode where a compound scientific term typed with an extra space
+# (e.g. "eu bacteria" instead of "eubacteria") scores far below match threshold even though the
+# correctly-spaced form matches cleanly. Confirmed via real testing that this is a genuine
+# embedding-score gap, not an exact-match gate blocking the embedding step first: "eubacteria"
+# scored 0.576 against the real Eubacteria diagram, "eu bacteria" scored only 0.389 against that
+# SAME stored embedding -- a single added space cost ~0.19 similarity, enough to cross a 0.5
+# threshold. Diagram matching is hit hardest because diagram reference embeddings are built from
+# very short text (often just a bare name) -- PYQ/NCERT embed full questions/paragraphs, so the
+# same kind of query perturbation is a much smaller relative change there (measured drop was
+# 5-15x smaller on real PYQ/NCERT rows for "photo synthesis"/"carbo hydrates" style variants),
+# which is why they mostly already clear threshold in testing -- this is free defense-in-depth for
+# those two, and the actual fix for diagram matching.
+#
+# Deliberately NOT a hardcoded term dictionary: generates candidate variants by merging exactly
+# one adjacent whitespace-separated word pair at a time (bounded: len(words)-1 candidates for an
+# N-word query), which is exactly the shape of "a compound word got typed as two words" without
+# assuming which word pair it is. Only fires as a fallback when the raw query's own top match
+# misses threshold -- zero extra embedding calls on the common case of already-correct spelling.
+def _generate_space_merge_variants(text: str) -> list:
+    words = text.split()
+    return [
+        " ".join(words[:i] + [words[i] + words[i + 1]] + words[i + 2:])
+        for i in range(len(words) - 1)
+    ]
+
+async def _match_with_merge_fallback(query: str, embed_fn, search_fn):
+    """embed_fn(text) -> embedding, sync or async (both handled via iscoroutine on the call
+    result). search_fn(embedding) -> awaitable returning a list of already-threshold-filtered
+    result rows. Tries the raw query first; only on an empty result does it retry each single-
+    adjacent-word-merge variant in turn, returning the first variant that produces a real match."""
+    async def _embed(text):
+        result = embed_fn(text)
+        return await result if asyncio.iscoroutine(result) else result
+
+    embedding = await _embed(query)
+    results = await search_fn(embedding)
+    if results:
+        return results
+    for variant in _generate_space_merge_variants(query):
+        v_embedding = await _embed(variant)
+        v_results = await search_fn(v_embedding)
+        if v_results:
+            return v_results
+    return results
+
 async def search_ncert(query: str, limit: int = 3):
     headers = {
         "apikey": SUPABASE_KEY,
@@ -1480,6 +1526,13 @@ async def search_ncert(query: str, limit: int = 3):
         "Content-Type": "application/json"
     }
     language = _detect_query_language(query)
+
+    def _filter_results(rows):
+        # chapter_name_en is what actually carries "Appendix"/etc for Hindi rows (chapter_name
+        # itself is the real Hindi title, e.g. "परिशिष्ट", which would never match these English
+        # labels) -- falls back to chapter_name for English rows, where chapter_name_en is null.
+        return [r for r in rows if (r.get("chapter_name_en") or r.get("chapter_name")) not in NCERT_NON_CHAPTER_LABELS]
+
     if language == "hi":
         # Gemini gemini-embedding-001 shadow trial, cut over live 2026-08-28 -- see
         # NCERT_MATCH_THRESHOLD_HI_GEMINI above for the calibration behind this threshold, and
@@ -1488,37 +1541,26 @@ async def search_ncert(query: str, limit: int = 3):
         # text-embedding-3-small) is deliberately left completely intact, unused, as an instant
         # rollback: revert this branch to call match_ncert with filter_language="hi" and
         # NCERT_MATCH_THRESHOLD_HI again, no data migration needed either way.
-        embedding = _get_gemini_query_embedding(query)
-        response = await async_client.post(
-            f"{SUPABASE_URL}/rest/v1/rpc/match_ncert_hi_gemini",
-            headers=headers,
-            json={
-                "query_embedding": embedding,
-                "match_threshold": NCERT_MATCH_THRESHOLD_HI_GEMINI,
-                "match_count": limit
-            }
-        )
+        async def _search(embedding):
+            response = await async_client.post(
+                f"{SUPABASE_URL}/rest/v1/rpc/match_ncert_hi_gemini",
+                headers=headers,
+                json={"query_embedding": embedding, "match_threshold": NCERT_MATCH_THRESHOLD_HI_GEMINI, "match_count": limit}
+            )
+            return _filter_results(response.json()) if response.status_code == 200 else []
+        return await _match_with_merge_fallback(query, _get_gemini_query_embedding, _search)
     else:
-        # English path: byte-for-byte unchanged from before this cutover -- same get_embedding()
-        # call (OpenAI text-embedding-3-small, embedding_cache-backed), same match_ncert RPC,
-        # same NCERT_MATCH_THRESHOLD_EN, same filter_language param.
-        embedding = await get_embedding(query)
-        response = await async_client.post(
-            f"{SUPABASE_URL}/rest/v1/rpc/match_ncert",
-            headers=headers,
-            json={
-                "query_embedding": embedding,
-                "match_threshold": NCERT_MATCH_THRESHOLD_EN,
-                "match_count": limit,
-                "filter_language": language
-            }
-        )
-    if response.status_code == 200:
-        # chapter_name_en is what actually carries "Appendix"/etc for Hindi rows (chapter_name
-        # itself is the real Hindi title, e.g. "परिशिष्ट", which would never match these English
-        # labels) -- falls back to chapter_name for English rows, where chapter_name_en is null.
-        return [r for r in response.json() if (r.get("chapter_name_en") or r.get("chapter_name")) not in NCERT_NON_CHAPTER_LABELS]
-    return []
+        # English path: same get_embedding() call (OpenAI text-embedding-3-small, embedding_cache-
+        # backed), same match_ncert RPC, same NCERT_MATCH_THRESHOLD_EN, same filter_language param
+        # -- now wrapped in the merge-variant fallback above instead of a bare single attempt.
+        async def _search(embedding):
+            response = await async_client.post(
+                f"{SUPABASE_URL}/rest/v1/rpc/match_ncert",
+                headers=headers,
+                json={"query_embedding": embedding, "match_threshold": NCERT_MATCH_THRESHOLD_EN, "match_count": limit, "filter_language": language}
+            )
+            return _filter_results(response.json()) if response.status_code == 200 else []
+        return await _match_with_merge_fallback(query, get_embedding, _search)
 
 def _ncert_chapter_citation(subject: str, class_num, chapter_name: str, lookup_name: str = None) -> str:
     """Builds an authoritative citation string like 'NCERT Class 12, Chapter 3 -- Current
@@ -1569,24 +1611,19 @@ def _ncert_chapter_citation(subject: str, class_num, chapter_name: str, lookup_n
 PYQ_MATCH_THRESHOLD = 0.4
 
 async def search_pyq(query: str, limit: int = 5):
-    embedding = await get_embedding(query)
     headers = {
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
         "Content-Type": "application/json"
     }
-    response = await async_client.post(
-        f"{SUPABASE_URL}/rest/v1/rpc/match_pyq",
-        headers=headers,
-        json={
-            "query_embedding": embedding,
-            "match_threshold": PYQ_MATCH_THRESHOLD,
-            "match_count": limit
-        }
-    )
-    if response.status_code == 200:
-        return response.json()
-    return []
+    async def _search(embedding):
+        response = await async_client.post(
+            f"{SUPABASE_URL}/rest/v1/rpc/match_pyq",
+            headers=headers,
+            json={"query_embedding": embedding, "match_threshold": PYQ_MATCH_THRESHOLD, "match_count": limit}
+        )
+        return response.json() if response.status_code == 200 else []
+    return await _match_with_merge_fallback(query, get_embedding, _search)
 
 async def get_student_context(user_id: str) -> str:
     if not user_id:
@@ -1701,13 +1738,36 @@ FALSE_POSITIVE_CLARIFY_WORDS = {
     "रिफ्लेक्स", "प्रतिवर्ती क्रिया", "प्रतिवर्ती", "प्रतिवर्त",
 }
 
+import difflib
+
+# Shared by _is_denylisted_clarify_doubt and _is_legitimate_topic_ambiguity below -- both compare
+# a single bare-word/short-phrase doubt against a small closed set, and both had the same real
+# gap: exact match only, so a genuine typo or an extra/missing internal space on an otherwise-
+# correct word (e.g. "resist ance", "resistence", "cyle" for "resistance"/"cycle") silently missed
+# even though the student clearly meant the listed word. Exact match stays the fast path; fuzzy
+# match is a fallback via difflib.SequenceMatcher (stdlib, no new dependency), whole-string ratio
+# against each set member (not per-token) since every entry here IS a single word/short phrase --
+# a high cutoff (0.84) catches a doubled/missing/swapped letter or one inserted space while still
+# rejecting a genuinely different word that happens to be similar length, which matters here more
+# than in a general search: this gates a security/reliability backstop, not a soft ranking, so a
+# false MATCH (treating an unrelated word as if it were "cycle") is a worse failure than a missed
+# fuzzy hit would be. Cutoff of 0.86 picked from real measured SequenceMatcher ratios, not a
+# guess: the lowest real typo/spacing variant tested ("cyle" vs "cycle") scored 0.889, the
+# highest real different-word false positive found ("resistant" vs "resistance", genuinely a
+# different word/meaning, not a typo) scored 0.842 -- 0.86 sits in the middle of that real gap.
+def _fuzzy_word_match(normalized: str, wordset: set, cutoff: float = 0.86) -> bool:
+    if normalized in wordset or normalized.lower() in wordset:
+        return True
+    return bool(difflib.get_close_matches(normalized.lower(), wordset, n=1, cutoff=cutoff))
+
 def _is_denylisted_clarify_doubt(text: str) -> bool:
-    """Exact match only, not substring -- Rule 11 itself only ever fires on a bare word/short
-    phrase doubt (its own full-sentence guard already handles longer doubts that merely mention
-    one of these words), so an exact match on the whole stripped doubt is enough and avoids ever
-    matching a denylisted word that's incidentally part of a real, different question."""
+    """Rule 11 itself only ever fires on a bare word/short phrase doubt (its own full-sentence
+    guard already handles longer doubts that merely mention one of these words), so matching on
+    the whole stripped doubt is enough and avoids ever matching a denylisted word that's
+    incidentally part of a real, different question. See _fuzzy_word_match for the exact-then-
+    fuzzy matching strategy."""
     normalized = text.strip()
-    return normalized.lower() in FALSE_POSITIVE_CLARIFY_WORDS or normalized in FALSE_POSITIVE_CLARIFY_WORDS
+    return _fuzzy_word_match(normalized, FALSE_POSITIVE_CLARIFY_WORDS)
 
 # The inverse of FALSE_POSITIVE_CLARIFY_WORDS above: rule 11's own CLOSED whitelist for
 # CLARIFY_TYPE: topic, mirrored here as a general server-side backstop rather than another
@@ -1730,11 +1790,11 @@ TOPIC_AMBIGUITY_WHITELIST = {
 }
 
 def _is_legitimate_topic_ambiguity(text: str) -> bool:
-    """Same exact-match philosophy as _is_denylisted_clarify_doubt above, for the same reason:
+    """Same matching strategy as _is_denylisted_clarify_doubt above, for the same reason:
     rule 11 only ever legitimately fires TOPIC AMBIGUITY for a bare word doubt that IS one of
-    these six terms, not a longer question that merely mentions one."""
+    these six terms, not a longer question that merely mentions one. See _fuzzy_word_match."""
     normalized = text.strip()
-    return normalized.lower() in TOPIC_AMBIGUITY_WHITELIST or normalized in TOPIC_AMBIGUITY_WHITELIST
+    return _fuzzy_word_match(normalized, TOPIC_AMBIGUITY_WHITELIST)
 
 # chat.html's streamAIResponse sends this exact string as `text` when an image doubt has no
 # real typed question (`text || 'Describe this image...'`) -- must stay in sync with that
@@ -2686,20 +2746,17 @@ async def diagram_match(req: DiagramMatchRequest, _: None = Depends(rate_limiter
             # Falls through to filter_chapter=None (search all reviewed diagrams) when
             # extraction/fuzzy-match fails or is ambiguous, per spec.
 
-        embedding = await get_embedding(req.text)
-        response = await async_client.post(
-            f"{SUPABASE_URL}/rest/v1/rpc/match_diagrams",
-            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"},
-            json={
-                "query_embedding": embedding,
-                "match_threshold": DIAGRAM_MATCH_THRESHOLD,
-                "match_count": 1,
-                "filter_chapter": chapter
-            }
-        )
-        if response.status_code != 200:
-            return {"matched": False}
-        rows = response.json()
+        async def _search(embedding):
+            response = await async_client.post(
+                f"{SUPABASE_URL}/rest/v1/rpc/match_diagrams",
+                headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"},
+                json={"query_embedding": embedding, "match_threshold": DIAGRAM_MATCH_THRESHOLD, "match_count": 1, "filter_chapter": chapter}
+            )
+            return response.json() if response.status_code == 200 else []
+        # Merge-variant fallback matters most here: diagram reference embeddings are built from
+        # very short text (often just a bare name), which measured as the most typo/spacing-
+        # fragile of the three matching systems this covers -- see _match_with_merge_fallback.
+        rows = await _match_with_merge_fallback(req.text, get_embedding, _search)
         if not rows:
             return {"matched": False}
         top = rows[0]
