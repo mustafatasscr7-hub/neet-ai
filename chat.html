@@ -3583,7 +3583,14 @@ function plainTextFromMarkdown(text) {
       if (isNaN(aiIndex) || aiIndex < 1) return;
       const userMsg = currentConversation[aiIndex - 1];
       if (!userMsg || userMsg.role !== 'user') return;
-      const questionText = userMsg.text;
+      // Same quote-wrapping as a normal/edited send -- otherwise regenerating an answer to a
+      // quoted question silently drops the quote as context too, the same gap editMessage had.
+      let questionText = userMsg.text;
+      const retryStreamOptions = { skipCache: true };
+      if (userMsg.quotedText) {
+        questionText = `Regarding this part: "${userMsg.quotedText}"\n\nStudent asks: ${userMsg.text}`;
+        retryStreamOptions.pyqSearchText = userMsg.text;
+      }
 
       // In-place regenerate, matching Claude.ai's retry pattern: the row/bubble stay exactly
       // where they are -- no DOM removal, no new row appended elsewhere. The previous
@@ -3600,7 +3607,8 @@ function plainTextFromMarkdown(text) {
       const bubble = row.querySelector('.message-bubble');
       bubble.classList.add('regenerating');
 
-      await streamAIResponse(questionText, { skipCache: true, retryTarget: { row, bubble, aiIndex } });
+      retryStreamOptions.retryTarget = { row, bubble, aiIndex };
+      await streamAIResponse(questionText, retryStreamOptions);
     }
 
     // Instant, no-network version flip -- both versions are already fully generated text/
@@ -3709,6 +3717,11 @@ function plainTextFromMarkdown(text) {
       const bubble = contentWrapper.querySelector('.message-bubble');
       const actions = contentWrapper.querySelector('.message-actions');
       const originalText = currentConversation[userIndex] ? currentConversation[userIndex].text : bubble.innerText;
+      // Carried over unchanged, not exposed for editing/removal here -- editing is about
+      // correcting the student's own follow-up wording, not the quoted source material they
+      // selected from an earlier AI answer, and the persisted quote block itself already has no
+      // interaction affordance anywhere else once sent (see addMessageRow's quotedText render).
+      const originalQuotedText = currentConversation[userIndex] ? currentConversation[userIndex].quotedText : undefined;
 
       const editWrap = document.createElement('div');
       editWrap.style.cssText = 'display:flex;flex-direction:column;align-items:flex-end;gap:8px;width:100%;';
@@ -3744,11 +3757,20 @@ function plainTextFromMarkdown(text) {
         currentConversation = currentConversation.slice(0, userIndex);
 
         const newIndex = currentConversation.length;
-        addMessageRow('user', newText, undefined, newIndex);
-        currentConversation.push({ role: 'user', text: newText });
+        const newMsgObj = originalQuotedText ? { role: 'user', text: newText, quotedText: originalQuotedText } : { role: 'user', text: newText };
+        addMessageRow('user', newText, undefined, newIndex, undefined, newMsgObj);
+        currentConversation.push(newMsgObj);
         if (currentConversation.length === 1) pendingSidebarSave = saveToSidebar(newText);
 
-        await streamAIResponse(newText, { skipCache: false });
+        // Same wrapping sendMessage() does for a normal quoted send -- otherwise the
+        // regenerated answer loses the quote as context too, not just its on-screen display.
+        let questionForModel = newText;
+        const streamOptions = { skipCache: false };
+        if (originalQuotedText) {
+          questionForModel = `Regarding this part: "${originalQuotedText}"\n\nStudent asks: ${newText}`;
+          streamOptions.pyqSearchText = newText;
+        }
+        await streamAIResponse(questionForModel, streamOptions);
       };
 
       controls.appendChild(cancelBtn);
