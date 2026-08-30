@@ -2882,9 +2882,20 @@ async def get_mock_test_questions():
             "apikey": SUPABASE_KEY,
             "Authorization": f"Bearer {SUPABASE_KEY}"
         }
-        bio = http_requests.get(f"{SUPABASE_URL}/rest/v1/pyq?subject=eq.Biology&select=*&limit=200", headers=headers).json()
-        phy = http_requests.get(f"{SUPABASE_URL}/rest/v1/pyq?subject=eq.Physics&select=*&limit=200", headers=headers).json()
-        che = http_requests.get(f"{SUPABASE_URL}/rest/v1/pyq?subject=eq.Chemistry&select=*&limit=200", headers=headers).json()
+        # select=* used to also pull each row's `embedding` vector (used only by match_pyq's
+        # server-side similarity search, never by the mock-test frontend) -- that alone made
+        # each of these 3 queries ~6x slower and ~30x heavier over the wire. Same explicit
+        # column list already used by /mock-tests/{id}/questions, confirmed sufficient since
+        # mocktest.html only ever reads these fields off a question object.
+        cols = "id,subject,chapter,year,question,option_a,option_b,option_c,option_d,correct_answer,difficulty,diagram_url,option_a_diagram_url,option_b_diagram_url,option_c_diagram_url,option_d_diagram_url"
+        # Also ran sequentially before (3 blocking sync `requests.get()` calls back-to-back,
+        # each stalling the event loop) -- now fired concurrently via the shared async client.
+        bio_resp, phy_resp, che_resp = await asyncio.gather(
+            async_client.get(f"{SUPABASE_URL}/rest/v1/pyq", headers=headers, params={"subject": "eq.Biology", "select": cols, "limit": 200}),
+            async_client.get(f"{SUPABASE_URL}/rest/v1/pyq", headers=headers, params={"subject": "eq.Physics", "select": cols, "limit": 200}),
+            async_client.get(f"{SUPABASE_URL}/rest/v1/pyq", headers=headers, params={"subject": "eq.Chemistry", "select": cols, "limit": 200}),
+        )
+        bio, phy, che = bio_resp.json(), phy_resp.json(), che_resp.json()
         bio_q = random.sample(bio, min(90, len(bio)))
         phy_q = random.sample(phy, min(45, len(phy)))
         che_q = random.sample(che, min(45, len(che)))
