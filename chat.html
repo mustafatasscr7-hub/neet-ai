@@ -406,6 +406,14 @@
     .history-list { display: flex; flex-direction: column; gap: 2px; overflow-y: auto; overflow-x: hidden; flex: 1; }
     .history-list::-webkit-scrollbar { width: 3px; }
     .history-list::-webkit-scrollbar-thumb { background: #2a2a2a; border-radius: 4px; }
+    /* Shown on #pinnedList only while a drag is actually in progress -- when nobody has any
+       chats pinned yet, #pinnedList's normal state is display:none with zero height (see
+       refreshPinnedSectionVisibility), which would leave no visible/droppable target to drag
+       into at all. Forced visible + given real height for the drag's duration so there's always
+       somewhere to drop a chat to pin it, then handed back to refreshPinnedSectionVisibility on
+       drop to correctly re-hide if it's still empty. */
+    .pinned-drop-target { display: flex !important; min-height: 40px; border: 1px dashed #333; border-radius: 8px; }
+    body.light-mode .pinned-drop-target { border-color: #d5d5dd !important; }
 
     .history-item { box-sizing: border-box; height: 38px; padding: 0 12px; border-radius: 8px; font-size: 13px; line-height: 1.4; color: #888; cursor: pointer; transition: background 0.15s, color 0.15s, transform 0.12s ease; border: 1px solid transparent; position: relative; display: flex; align-items: center; flex-shrink: 0; }
     .history-item:hover { background: #1a1a1a; color: #ccc; }
@@ -421,19 +429,19 @@
        leading icon before the title (that was this control's old shape, .pin-badge, retired in
        favor of this one so a pinned row shows exactly one pin indicator, not two). Fades in on
        row hover (opacity, not display:none/flex like .item-menu-btn below -- display can't
-       transition, and this one explicitly needs a smooth fade per spec) and stays fully visible,
-       filled-in, whenever the chat is actually pinned -- so "is this pinned" reads at a glance
-       without needing to hover at all. Click calls togglePinConversation() directly, the exact
-       same function the "..." menu's own Pin/Unpin option already calls, so both stay in sync
-       for free rather than needing separate state. */
+       transition, and this one explicitly needs a smooth fade per spec). Click calls
+       togglePinConversation() directly, the exact same function the "..." menu's own Pin/Unpin
+       option and drag-to-pin both already call, so all three stay in sync for free rather than
+       needing separate state. */
     .pin-hover-btn { display: flex; flex-shrink: 0; width: 24px; height: 24px; align-items: center; justify-content: center; border-radius: 5px; cursor: pointer; color: #666; margin-left: 4px; opacity: 0; pointer-events: none; transition: opacity 0.15s ease, background 0.15s, color 0.15s; }
     .pin-hover-btn svg { width: 13px; height: 13px; }
     .history-item:hover .pin-hover-btn { opacity: 1; pointer-events: auto; }
     .pin-hover-btn:hover { background: #2a2a2a; color: #ccc; }
-    /* Pinned = persistently visible + filled icon (fill follows currentColor, same outline SVG
-       as the "..." menu's own Pin option uses) -- the one visual cue for "this chat is pinned",
-       whether or not the row is currently hovered. */
-    .pin-hover-btn.pinned { opacity: 1; pointer-events: auto; color: #ececec; }
+    /* Pinned = filled icon (fill follows currentColor, same outline SVG the "..." menu's own Pin
+       option uses) once revealed -- but revealed the same hover-only way as an unpinned row, no
+       longer a persistent badge. "Is this pinned" is now communicated purely by which section
+       (Pinned vs Recent) the chat sits in, not by anything on the row itself. */
+    .pin-hover-btn.pinned { color: #ececec; }
     .pin-hover-btn.pinned svg { fill: currentColor; }
     /* Touch devices have no real hover state -- (hover: none) is the actual capability, more
        reliable than a screen-width guess, since a touch device can still have a wide screen.
@@ -4351,7 +4359,10 @@ function plainTextFromMarkdown(text) {
       document.getElementById('pinnedLabel').style.display = hasAny ? 'block' : 'none';
     }
 
-    async function togglePinConversation(id) {
+    // skipReposition: drag-to-pin already put the item exactly where the student dropped it
+    // (see makeHistoryListSortable) -- the default prepend-to-top-of-target-list behavior below
+    // is only right for a click/menu-triggered toggle, which has no drop position to preserve.
+    async function togglePinConversation(id, { skipReposition = false } = {}) {
       const item = document.getElementById('conv-' + id);
       if (!item) return;
       const conv = conversations.find(c => String(c.id) === String(id) || String(c.supabaseId) === String(id));
@@ -4359,10 +4370,12 @@ function plainTextFromMarkdown(text) {
       if (conv) conv.isPinned = newPinned;
 
       setPinBadge(item, newPinned);
-      if (newPinned) {
-        document.getElementById('pinnedList').prepend(item);
-      } else {
-        document.getElementById('historyList').prepend(item);
+      if (!skipReposition) {
+        if (newPinned) {
+          document.getElementById('pinnedList').prepend(item);
+        } else {
+          document.getElementById('historyList').prepend(item);
+        }
       }
       refreshPinnedSectionVisibility();
 
@@ -4552,20 +4565,42 @@ function plainTextFromMarkdown(text) {
     // (so a plain click still opens the chat -- pointerdown/pointerup firing close together
     // with no movement in between is a click, untouched by any of this), transform-based drag
     // follow, and a persisted order on drop.
-    function makeHistoryListSortable(container) {
+    // Two containers, not one: dragging within either list reorders (as before); dragging a chat
+    // ACROSS from one list to the other now also pins/unpins it via togglePinConversation() --
+    // the exact same function the hover icon and "..." menu already call, reused rather than a
+    // separate pin path (see its skipReposition option, added for exactly this: drag already put
+    // the item exactly where the student dropped it, so the toggle must not also reposition it).
+    function makeHistoryListSortable(pinnedContainer, historyContainer) {
       const DRAG_THRESHOLD = 5;
-      let draggedEl = null, startY = 0, dragging = false, pointerId = null;
+      const containers = [pinnedContainer, historyContainer];
+      let draggedEl = null, startY = 0, dragging = false, pointerId = null, sourceContainer = null;
 
-      container.addEventListener('pointerdown', function(e) {
+      function onPointerDown(e) {
         const item = e.target.closest('.history-item');
         if (!item || e.target.closest('.item-menu-btn') || e.target.closest('.pin-hover-btn')) return;
         draggedEl = item;
+        sourceContainer = item.parentElement;
         startY = e.clientY;
         dragging = false;
         pointerId = e.pointerId;
         document.addEventListener('pointermove', onPointerMove);
         document.addEventListener('pointerup', onPointerUp, { once: true });
-      });
+      }
+      pinnedContainer.addEventListener('pointerdown', onPointerDown);
+      historyContainer.addEventListener('pointerdown', onPointerDown);
+
+      // Which of the two lists the pointer is currently over, by Y position -- Pinned sits above
+      // Recent, so this is just "is clientY within this container's own rect". Falls back to
+      // draggedEl's current container when the pointer is over the gap between them (the
+      // section label, margins) so a fast drag passing through that gap doesn't flicker between
+      // lists before actually reaching one.
+      function containerAt(clientY) {
+        for (const c of containers) {
+          const rect = c.getBoundingClientRect();
+          if (clientY >= rect.top && clientY <= rect.bottom) return c;
+        }
+        return draggedEl.parentElement;
+      }
 
       function onPointerMove(e) {
         if (!draggedEl) return;
@@ -4575,45 +4610,64 @@ function plainTextFromMarkdown(text) {
           dragging = true;
           draggedEl.classList.add('dragging');
           draggedEl.setPointerCapture(pointerId);
+          // Pinned may currently be empty (display:none, zero height, see
+          // refreshPinnedSectionVisibility) -- force it visible with real height for the
+          // duration of the drag, or there'd be nowhere to actually drop a chat to pin it.
+          document.getElementById('pinnedLabel').style.display = 'block';
+          pinnedContainer.style.display = 'flex';
+          pinnedContainer.classList.add('pinned-drop-target');
         }
         draggedEl.style.transform = `translateY(${deltaY}px)`;
 
-        // FLIP (First-Last-Invert-Play): snapshot every sibling's position before any swap this
-        // event might cause. Without this, insertBefore() below just teleports a displaced
-        // sibling to its new spot with no animation -- the "snap" the item feels. Snapshotting
-        // once per event (not once per swap below) also means a fast drag that hops several
-        // positions in one event still animates as one smooth slide per sibling, not several
-        // jittery micro-snaps chained together.
+        // FLIP (First-Last-Invert-Play): snapshot every sibling's position (in BOTH containers --
+        // moving into the other list can shift its siblings too) before any change this event
+        // might cause. Without this, insertBefore()/appendChild() below just teleports a
+        // displaced sibling to its new spot with no animation -- the "snap" the item feels.
         const before = new Map();
-        for (const sib of container.children) {
-          if (sib !== draggedEl) before.set(sib, sib.getBoundingClientRect().top);
+        for (const c of containers) {
+          for (const sib of c.children) {
+            if (sib !== draggedEl) before.set(sib, sib.getBoundingClientRect().top);
+          }
         }
 
-        // Swap with whichever immediate sibling the pointer has crossed the vertical midpoint
-        // of. Loops until nothing more qualifies (not just one hop) -- a single move event can
-        // carry a large jump (a fast flick, or coarse-grained event sampling), and one hop per
-        // event would leave the dragged item lagging behind the cursor instead of landing where
-        // it's actually pointing. Bounded by list length; each iteration strictly moves
-        // draggedEl one position closer to stable, so this always terminates.
-        let moved = true;
-        while (moved) {
-          moved = false;
-          for (const sib of container.children) {
-            if (sib === draggedEl) continue;
+        const targetContainer = containerAt(e.clientY);
+        if (targetContainer !== draggedEl.parentElement) {
+          // Crossed into the other list -- relocate the node itself, landing before whichever
+          // sibling's midpoint the pointer is currently above (or at the end if past all of them).
+          let insertBefore = null;
+          for (const sib of targetContainer.children) {
             const rect = sib.getBoundingClientRect();
-            const midpoint = rect.top + rect.height / 2;
-            if (sib.previousElementSibling === draggedEl && e.clientY > midpoint) {
-              // dragging down: pointer has passed the next item's midpoint -- hop past it
-              container.insertBefore(draggedEl, sib.nextElementSibling);
-              startY = e.clientY - deltaY; // re-anchor so the transform stays continuous, no jump
-              moved = true;
-              break;
-            } else if (sib.nextElementSibling === draggedEl && e.clientY < midpoint) {
-              // dragging up: pointer has passed the previous item's midpoint -- hop before it
-              container.insertBefore(draggedEl, sib);
-              startY = e.clientY - deltaY;
-              moved = true;
-              break;
+            if (e.clientY < rect.top + rect.height / 2) { insertBefore = sib; break; }
+          }
+          targetContainer.insertBefore(draggedEl, insertBefore);
+          startY = e.clientY - deltaY; // re-anchor so the transform stays continuous, no jump
+        } else {
+          // Same container as before -- swap with whichever immediate sibling the pointer has
+          // crossed the vertical midpoint of. Loops until nothing more qualifies (not just one
+          // hop) -- a single move event can carry a large jump (a fast flick, or coarse-grained
+          // event sampling), and one hop per event would leave the dragged item lagging behind
+          // the cursor instead of landing where it's actually pointing. Bounded by list length;
+          // each iteration strictly moves draggedEl one position closer to stable, so this
+          // always terminates.
+          const container = draggedEl.parentElement;
+          let moved = true;
+          while (moved) {
+            moved = false;
+            for (const sib of container.children) {
+              if (sib === draggedEl) continue;
+              const rect = sib.getBoundingClientRect();
+              const midpoint = rect.top + rect.height / 2;
+              if (sib.previousElementSibling === draggedEl && e.clientY > midpoint) {
+                container.insertBefore(draggedEl, sib.nextElementSibling);
+                startY = e.clientY - deltaY;
+                moved = true;
+                break;
+              } else if (sib.nextElementSibling === draggedEl && e.clientY < midpoint) {
+                container.insertBefore(draggedEl, sib);
+                startY = e.clientY - deltaY;
+                moved = true;
+                break;
+              }
             }
           }
         }
@@ -4634,28 +4688,47 @@ function plainTextFromMarkdown(text) {
         }
       }
 
-      function onPointerUp() {
+      async function onPointerUp() {
         document.removeEventListener('pointermove', onPointerMove);
+        pinnedContainer.classList.remove('pinned-drop-target');
         if (dragging && draggedEl) {
           draggedEl.releasePointerCapture(pointerId);
           draggedEl.classList.remove('dragging');
           draggedEl.style.transform = '';
-          persistHistoryOrder();
+          const finalContainer = draggedEl.parentElement;
+          if (finalContainer !== sourceContainer) {
+            // Crossed sections -- pin state flips (Recent -> Pinned pins it, the reverse
+            // unpins), but the item is already exactly where the student dropped it, so the
+            // toggle must not also reposition it (its default click/menu behavior prepends to
+            // the top of the target list, which would discard the drop position).
+            await togglePinConversation(draggedEl.id.replace('conv-', ''), { skipReposition: true });
+          } else {
+            // Same section, just reordered -- no pin/unpin should ever fire here.
+            await persistSidebarOrder();
+          }
+          refreshPinnedSectionVisibility(); // correctly re-hides Pinned if it's still empty
         }
         draggedEl = null;
         dragging = false;
+        sourceContainer = null;
       }
     }
 
-    // Writes the Recent list's current DOM order back to chats.sort_order, and keeps the
-    // in-memory conversations array (read/written elsewhere by id -- rename, delete, etc.) in
-    // the same order for consistency.
-    async function persistHistoryOrder() {
-      const idsInOrder = [...document.getElementById('historyList').children].map(el => el.id.replace('conv-', ''));
+    // Writes BOTH lists' current combined DOM order back to chats.sort_order (Pinned items get
+    // the earlier indices, then Recent -- matching how they're loaded: one query ordered by
+    // sort_order, then split into the two lists by is_pinned), and keeps the in-memory
+    // conversations array (read/written elsewhere by id -- rename, delete, etc.) in the same
+    // order for consistency. togglePinConversation's own Supabase write already persists
+    // is_pinned separately -- this only ever needs to touch sort_order.
+    async function persistSidebarOrder() {
+      const idsInOrder = [
+        ...[...document.getElementById('pinnedList').children].map(el => el.id.replace('conv-', '')),
+        ...[...document.getElementById('historyList').children].map(el => el.id.replace('conv-', ''))
+      ];
       conversations.sort((a, b) => idsInOrder.indexOf(String(a.id)) - idsInOrder.indexOf(String(b.id)));
 
       const { data: { session } } = await client.auth.getSession();
-      if (!session) return; // guests never get a historyList populated in the first place
+      if (!session) return; // guests never get these lists populated in the first place
       try {
         await Promise.all(idsInOrder.map((id, index) =>
           client.from('chats').update({ sort_order: index }).eq('id', id).eq('user_id', session.user.id)
@@ -5955,7 +6028,7 @@ function plainTextFromMarkdown(text) {
             conversations.push({ id: chat.id, title: chat.title, messages: chat.messages, supabaseId: chat.id, sortOrder: chat.sort_order, isPinned: !!chat.is_pinned });
           });
           refreshPinnedSectionVisibility();
-          makeHistoryListSortable(document.getElementById('historyList'));
+          makeHistoryListSortable(document.getElementById('pinnedList'), document.getElementById('historyList'));
         }
       } else {
         document.getElementById('loginNudge').style.display = 'flex';
