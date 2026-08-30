@@ -415,6 +415,25 @@
     .pinned-drop-target { display: flex !important; min-height: 40px; border: 1px dashed #333; border-radius: 8px; }
     body.light-mode .pinned-drop-target { border-color: #d5d5dd !important; }
 
+    /* Floating "Release to pin/unpin/reorder" badge that follows the cursor during an active
+       drag -- purely reflective (see makeHistoryListSortable's updateDragTooltip), never
+       triggers anything itself; the real decision still happens in onPointerUp exactly as
+       before. pointer-events:none so it can never itself become a drop target or intercept the
+       drag it's reporting on. Colors follow this app's own existing semantic pairing rather than
+       inventing new ones: green already means a positive/added state elsewhere here (e.g.
+       .sessions-current-badge, .dn-save-btn.success), red already means removal/undo (Delete
+       Account, danger confirm-modals, .sessions-logout-btn) -- pin is additive, unpin is
+       subtractive, so reusing that same pairing reads as consistent with the rest of the app
+       rather than an arbitrary new color choice. Reordering within the same section (no pin
+       state change) gets a neutral badge instead of no badge at all -- constant feedback for the
+       whole drag reads as more deliberate/finished than feedback that only sometimes appears. */
+    .drag-pin-tooltip { position: fixed; z-index: 10001; pointer-events: none; padding: 5px 11px; border-radius: 999px; font-size: 12px; font-weight: 600; font-family: 'Inter', sans-serif; white-space: nowrap; opacity: 0; transform: translateY(4px) scale(0.96); transition: opacity 0.12s ease, transform 0.12s ease, background 0.15s ease; box-shadow: 0 4px 14px rgba(0,0,0,0.3); }
+    .drag-pin-tooltip.visible { opacity: 1; transform: translateY(0) scale(1); }
+    .drag-pin-tooltip.pin { background: #4ade80; color: #0d2e18; }
+    .drag-pin-tooltip.unpin { background: #ef4444; color: #fff; }
+    .drag-pin-tooltip.reorder { background: #2a2a2a; color: #ccc; border: 1px solid #3a3a3a; }
+    body.light-mode .drag-pin-tooltip.reorder { background: #e4e4ea !important; color: #333338 !important; border-color: #d5d5dd !important; }
+
     .history-item { box-sizing: border-box; height: 38px; padding: 0 12px; border-radius: 8px; font-size: 13px; line-height: 1.4; color: #888; cursor: pointer; transition: background 0.15s, color 0.15s, transform 0.12s ease; border: 1px solid transparent; position: relative; display: flex; align-items: center; flex-shrink: 0; }
     .history-item:hover { background: #1a1a1a; color: #ccc; }
     .history-item.active { background: #1a1a1a; color: #ececec; }
@@ -4589,6 +4608,39 @@ function plainTextFromMarkdown(text) {
       const containers = [pinnedContainer, historyContainer];
       let draggedEl = null, startY = 0, dragging = false, pointerId = null, sourceContainer = null;
 
+      // Single reused element (not created/destroyed per drag) -- there's only ever one active
+      // drag at a time, so this stays as one node in the DOM permanently, just toggled visible.
+      const dragTooltip = document.createElement('div');
+      dragTooltip.className = 'drag-pin-tooltip';
+      document.body.appendChild(dragTooltip);
+
+      // Purely reflects what onPointerUp would currently do -- never itself changes any state.
+      // "reorder" (same section, no pin change) gets a real neutral label rather than hiding the
+      // badge, matching this app's own "Pin chat"/"Unpin chat" menu labels convention of plain,
+      // non-i18n text for this specific feature area, not the site's broader i18n pattern -- see
+      // updatePinMenuLabel, which already does the same for the sibling "..." menu option.
+      function updateDragTooltip(clientX, clientY, targetContainer) {
+        let text, variant;
+        if (targetContainer === sourceContainer) {
+          text = 'Release to reorder';
+          variant = 'reorder';
+        } else if (targetContainer === pinnedContainer) {
+          text = 'Release to pin';
+          variant = 'pin';
+        } else {
+          text = 'Release to unpin';
+          variant = 'unpin';
+        }
+        dragTooltip.textContent = text;
+        dragTooltip.className = 'drag-pin-tooltip visible ' + variant;
+        dragTooltip.style.left = (clientX + 16) + 'px';
+        dragTooltip.style.top = (clientY - 10) + 'px';
+      }
+
+      function hideDragTooltip() {
+        dragTooltip.classList.remove('visible');
+      }
+
       function onPointerDown(e) {
         const item = e.target.closest('.history-item');
         if (!item || e.target.closest('.item-menu-btn') || e.target.closest('.pin-hover-btn')) return;
@@ -4645,6 +4697,7 @@ function plainTextFromMarkdown(text) {
         }
 
         const targetContainer = containerAt(e.clientY);
+        updateDragTooltip(e.clientX, e.clientY, targetContainer);
         if (targetContainer !== draggedEl.parentElement) {
           // Crossed into the other list -- relocate the node itself, landing before whichever
           // sibling's midpoint the pointer is currently above (or at the end if past all of them).
@@ -4705,6 +4758,7 @@ function plainTextFromMarkdown(text) {
       async function onPointerUp() {
         document.removeEventListener('pointermove', onPointerMove);
         pinnedContainer.classList.remove('pinned-drop-target');
+        hideDragTooltip();
         if (dragging && draggedEl) {
           draggedEl.releasePointerCapture(pointerId);
           draggedEl.classList.remove('dragging');
