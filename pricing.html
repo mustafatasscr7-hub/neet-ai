@@ -40,6 +40,21 @@
     .toggle-btn::after { content: ''; position: absolute; width: 16px; height: 16px; background: #fff; border-radius: 50%; top: 3px; left: 3px; transition: left 0.2s; }
     .toggle-btn.yearly::after { left: 21px; }
 
+    /* NEET-year selector -- only shown in Yearly mode (see toggleBilling). Picking a real year
+       recalculates Pro/Max's displayed price to the actual days remaining instead of the flat
+       365-day annual rate; the default "Flat annual pricing" option leaves everything exactly as
+       it was before this feature existed. */
+    .neet-year-wrap { display: none; align-items: center; justify-content: center; gap: 8px; margin: -34px auto 40px; }
+    .neet-year-wrap.visible { display: flex; }
+    .neet-year-label { font-size: 12px; color: var(--muted-2); }
+    .neet-year-select { background: var(--panel); border: 1px solid var(--border-2); color: var(--text); font-size: 12px; font-family: Inter, sans-serif; padding: 5px 10px; border-radius: 8px; cursor: pointer; outline: none; }
+    .neet-year-select:focus { border-color: var(--blue); }
+    /* Per-plan pricing breakdown line, shown only while a real NEET year (with a real exam_date)
+       is selected -- distinct from .plan-price-sub (which still shows "billed annually" etc.) so
+       both the normal subtitle and this extra context can coexist without one replacing the other. */
+    .neet-year-note { font-size: 11px; color: var(--blue); margin-top: 4px; min-height: 14px; line-height: 1.4; }
+    .neet-year-note.tbd { color: var(--muted-2); font-style: italic; }
+
     .plans { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-bottom: 40px; align-items: stretch; }
     .plan { background: var(--panel); border: 1px solid var(--border); border-radius: 20px; padding: 36px 32px; position: relative; display: flex; flex-direction: column; transition: transform 0.2s, border-color 0.2s; }
     .plan:hover { transform: translateY(-3px); }
@@ -116,6 +131,13 @@
       <span class="toggle-label" id="yearlyLabel" data-i18n="pricing.yearly">Yearly</span>
     </div>
 
+    <div class="neet-year-wrap" id="neetYearWrap">
+      <span class="neet-year-label" data-i18n="pricing.neetYearLabel">Preparing for:</span>
+      <select class="neet-year-select" id="neetYearSelect" onchange="onNeetYearChange()">
+        <option value="" data-i18n="pricing.neetYearFlatOption">Flat annual pricing</option>
+      </select>
+    </div>
+
     <div class="plans">
 
       <!-- FREE -->
@@ -164,6 +186,7 @@
           <span class="plan-price-unit" id="proPriceUnit" data-i18n="pricing.perMonth">/mo</span>
         </div>
         <div class="plan-price-sub plan-price-sub-dynamic" data-plan="pro" id="proPriceSub" data-i18n="pricing.billedMonthly">billed monthly · cancel anytime</div>
+        <div class="neet-year-note" id="proNeetYearNote"></div>
         <div class="save-badge" data-plan="pro" id="proSaveBadge" data-i18n="pricing.proSaveYearly">Save ₹789/year</div>
         <button class="plan-btn" id="proCtaBtn" onclick="alert(t('pricing','paymentsComingSoon'))" data-i18n="pricing.proCta">Upgrade to Pro</button>
         <div class="divider"></div>
@@ -202,6 +225,7 @@
           <span class="plan-price-unit" id="maxPriceUnit" data-i18n="pricing.perMonth">/mo</span>
         </div>
         <div class="plan-price-sub plan-price-sub-dynamic" data-plan="max" id="maxPriceSub" data-i18n="pricing.billedMonthly">billed monthly · cancel anytime</div>
+        <div class="neet-year-note" id="maxNeetYearNote"></div>
         <div class="save-badge" data-plan="max" id="maxSaveBadge" data-i18n="pricing.maxSaveYearly">Save ₹1,289/year</div>
         <button class="plan-btn" id="maxCtaBtn" onclick="alert(t('pricing','paymentsComingSoon'))" data-i18n="pricing.maxCta">Go Max</button>
         <div class="divider"></div>
@@ -230,22 +254,108 @@
     const client = createClient(SUPABASE_URL, SUPABASE_KEY)
 
     let isYearly = false;
+    const API_BASE = 'https://neet-ai-production.up.railway.app';
 
     const PLAN_PRICE = {
       pro: { monthly: '₹399', yearly: '₹3,999' },
       max: { monthly: '₹649', yearly: '₹6,499' }
     };
+    // Numeric base annual prices for real days-remaining math -- PLAN_PRICE above stays the
+    // display-formatted (comma'd, ₹-prefixed) string used for the flat/default case, this is the
+    // same locked ₹3,999/₹6,499 numbers just as plain integers.
+    const PLAN_PRICE_BASE_ANNUAL = { pro: 3999, max: 6499 };
+
+    // ---- NEET-year selection + date-based annual pricing (UI + calc only, no Razorpay yet) ----
+    // FLAGGING FOR APPROVAL, not silently decided -- both picked as reasonable defaults, easy to
+    // change in one place if Mustafa wants different numbers:
+    //   - Rounding to the nearest ₹50 (not ₹10): a 4-digit INR price rounded to ₹10 still reads
+    //     like arbitrary math ("₹2,147"); ₹50 lands on numbers that read like real, deliberately
+    //     set prices ("₹2,150"), closer to how the flat ₹3,999/₹6,499 prices themselves read.
+    //   - Minimum floor of 45 real days, even if the actual exam is sooner: applied to the DAYS
+    //     used in the calculation (not a separate flat rupee minimum) specifically so the
+    //     displayed price and the displayed "covers N days" caption always agree with each other
+    //     -- a flat rupee floor with the true (smaller) day count shown next to it would make the
+    //     two numbers visibly inconsistent. 45 days covers real onboarding/support overhead for a
+    //     new subscriber even if their exam is only weeks away; tune NEET_PRICING_MIN_DAYS below
+    //     if a different number is wanted.
+    const NEET_PRICING_ROUND_TO = 50;
+    const NEET_PRICING_MIN_DAYS = 45;
+
+    let neetExamYears = [];      // [{year, exam_date, days_remaining}], fetched from /neet-exam-dates
+    let selectedNeetYear = '';   // '' = flat annual pricing (default, existing behavior untouched)
+
+    function roundToNearest(value, step) {
+      return Math.round(value / step) * step;
+    }
+
+    // Returns null if this year isn't usable for date-based pricing yet (TBD or already past) --
+    // caller falls back to flat annual pricing and shows the honest "date coming soon" note.
+    function computeNeetYearPrice(basePriceAnnual, daysRemaining) {
+      if (daysRemaining == null) return null;
+      const daysUsed = Math.max(daysRemaining, NEET_PRICING_MIN_DAYS);
+      const rawPrice = (daysUsed / 365) * basePriceAnnual;
+      const price = roundToNearest(rawPrice, NEET_PRICING_ROUND_TO);
+      return { price, daysUsed, floored: daysUsed > daysRemaining };
+    }
+
+    async function fetchNeetExamDates() {
+      try {
+        const res = await fetch(`${API_BASE}/neet-exam-dates`);
+        const data = await res.json();
+        neetExamYears = data.years || [];
+      } catch (e) {
+        neetExamYears = []; // best-effort -- selector just falls back to "Flat annual pricing" only
+      }
+      const select = document.getElementById('neetYearSelect');
+      neetExamYears.forEach(y => {
+        const opt = document.createElement('option');
+        opt.value = String(y.year);
+        opt.textContent = `NEET ${y.year}` + (y.exam_date ? '' : ' (date TBD)');
+        select.appendChild(opt);
+      });
+    }
+
+    function onNeetYearChange() {
+      selectedNeetYear = document.getElementById('neetYearSelect').value;
+      updatePrices();
+    }
 
     function updatePrices() {
+      const yearInfo = selectedNeetYear ? neetExamYears.find(y => String(y.year) === selectedNeetYear) : null;
       ['pro', 'max'].forEach(plan => {
-        document.getElementById(plan + 'Price').textContent = localizeNum(PLAN_PRICE[plan][isYearly ? 'yearly' : 'monthly']);
-        document.getElementById(plan + 'PriceUnit').textContent = t('pricing', isYearly ? 'perYear' : 'perMonth');
-        document.getElementById(plan + 'PriceSub').textContent = t('pricing', isYearly ? 'billedAnnually' : 'billedMonthly');
-        document.getElementById(plan + 'SaveBadge').style.display = isYearly ? 'flex' : 'none';
+        const noteEl = document.getElementById(plan + 'NeetYearNote');
+        const calc = (isYearly && yearInfo) ? computeNeetYearPrice(PLAN_PRICE_BASE_ANNUAL[plan], yearInfo.days_remaining) : null;
+
+        if (calc) {
+          document.getElementById(plan + 'Price').textContent = localizeNum('₹' + calc.price.toLocaleString('en-IN'));
+          document.getElementById(plan + 'PriceUnit').textContent = t('pricing', 'perYear');
+          document.getElementById(plan + 'PriceSub').textContent = t('pricing', 'billedAnnually');
+          document.getElementById(plan + 'SaveBadge').style.display = 'none'; // "Save vs monthly" framing doesn't apply to a partial-year price
+          noteEl.className = 'neet-year-note';
+          const coversMsg = t('pricing', 'neetYearCovers')
+            .replace('{days}', localizeNum(calc.daysUsed))
+            .replace('{year}', localizeNum(yearInfo.year));
+          noteEl.textContent = coversMsg + (calc.floored ? ' ' + t('pricing', 'neetYearMinNote') : '');
+        } else {
+          document.getElementById(plan + 'Price').textContent = localizeNum(PLAN_PRICE[plan][isYearly ? 'yearly' : 'monthly']);
+          document.getElementById(plan + 'PriceUnit').textContent = t('pricing', isYearly ? 'perYear' : 'perMonth');
+          document.getElementById(plan + 'PriceSub').textContent = t('pricing', isYearly ? 'billedAnnually' : 'billedMonthly');
+          document.getElementById(plan + 'SaveBadge').style.display = isYearly ? 'flex' : 'none';
+          if (isYearly && yearInfo && yearInfo.days_remaining == null) {
+            // A real year IS selected but has no announced date yet -- honest fallback, not a
+            // silent revert: say so explicitly rather than just quietly showing the flat price.
+            noteEl.className = 'neet-year-note tbd';
+            noteEl.textContent = t('pricing', 'neetYearTbdNote');
+          } else {
+            noteEl.className = 'neet-year-note';
+            noteEl.textContent = '';
+          }
+        }
       });
     }
     document.addEventListener('langchange', updatePrices);
     updatePrices();
+    fetchNeetExamDates();
 
     function toggleBilling() {
       isYearly = !isYearly;
@@ -261,6 +371,14 @@
         toggle.classList.remove('yearly');
         monthlyLabel.classList.add('active');
         yearlyLabel.classList.remove('active');
+      }
+      // Year selector only makes sense in Yearly mode -- hidden (not just visually, reset back
+      // to "Flat annual pricing" too) the moment the student switches back to Monthly, so
+      // flipping to Yearly again later starts from the same default state every time.
+      document.getElementById('neetYearWrap').classList.toggle('visible', isYearly);
+      if (!isYearly) {
+        selectedNeetYear = '';
+        document.getElementById('neetYearSelect').value = '';
       }
       updatePrices();
     }

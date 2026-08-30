@@ -463,6 +463,10 @@ class ReportDiagramRequest(BaseModel):
     diagram_id: int
     user_id: str
     source: str  # 'chat' or 'library' -- the two places a standalone diagrams-table row is shown
+
+class SetNeetExamDateRequest(BaseModel):
+    year: int
+    exam_date: Optional[str] = None  # "YYYY-MM-DD", or None to reset a year back to TBD
     reason: str
     optional_note: str = ""
 
@@ -2718,6 +2722,53 @@ async def report_diagram(req: ReportDiagramRequest, _: None = Depends(rate_limit
 async def get_pyq(message: Message, _: None = Depends(rate_limiter(15, 60))):
     results, related = await search_pyq(message.text)
     return {"pyqs": results, "related": related}
+
+# Powers pricing.html's NEET-year selector (date-based annual pricing, pre-Razorpay -- see
+# create_neet_exam_dates_table.sql). Public/no-auth, same reasoning as /diagrams: this is
+# read-only catalog data every visitor (including guests) needs to see the pricing page at all.
+# days_remaining computed server-side against real IST "today" so every client agrees on the same
+# number regardless of its own clock/timezone; null for a TBD (exam_date is NULL) or already-past
+# year rather than a negative/nonsensical count -- the frontend is expected to treat null as "not
+# usable for date-based pricing yet" and fall back to flat annual pricing for that year.
+@app.get("/neet-exam-dates")
+async def get_neet_exam_dates(_: None = Depends(rate_limiter(30, 60))):
+    try:
+        response = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/neet_exam_dates",
+            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+            params={"select": "year,exam_date", "order": "year.asc"}
+        )
+        if response.status_code != 200:
+            return {"years": []}
+        today = date.fromisoformat(_ist_today())
+        years = []
+        for row in response.json():
+            exam_date = row.get("exam_date")
+            days_remaining = None
+            if exam_date:
+                delta = (date.fromisoformat(exam_date) - today).days
+                if delta >= 0:
+                    days_remaining = delta
+            years.append({"year": row["year"], "exam_date": exam_date, "days_remaining": days_remaining})
+        return {"years": years}
+    except Exception:
+        return {"years": []}
+
+@app.post("/admin/set-neet-exam-date")
+async def set_neet_exam_date(req: SetNeetExamDateRequest, _: None = Depends(verify_admin)):
+    if req.exam_date:
+        try:
+            date.fromisoformat(req.exam_date)
+        except ValueError:
+            return {"error": "exam_date must be an ISO date string (YYYY-MM-DD) or null"}
+    response = await async_client.post(
+        f"{SUPABASE_URL}/rest/v1/neet_exam_dates",
+        headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates"},
+        json={"year": req.year, "exam_date": req.exam_date, "updated_at": datetime.now(timezone.utc).isoformat()}
+    )
+    if response.status_code >= 300:
+        return {"error": response.text}
+    return {"success": True}
 
 # Threshold is a similarity floor (1 - cosine distance), same convention as match_ncert's own
 # match_threshold. Configurable here -- no separate settings store in this project, every other
