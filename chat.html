@@ -3449,7 +3449,12 @@ let selectedImages = [];
           insertAutoEmbedDiagram(bubble, bubble.firstChild, diagram);
         }
 
-        if (userQuestion) {
+        // metaHtml (NEET Importance/Chapter) is only ever present on a real academic answer --
+        // server.py's SYSTEM_PROMPT now skips both entirely for a conversational reply (see
+        // DOUBT_TYPE) -- reusing that same signal here means a greeting/small-talk reply never
+        // gets Diagram/PYQ buttons either, instead of just hiding metadata and leaving buttons
+        // that would still trigger a real (wasted) lookup on click.
+        if (userQuestion && metaHtml) {
           const actionsRow = document.createElement('div');
           actionsRow.className = 'answer-actions-row';
 
@@ -3643,7 +3648,10 @@ function plainTextFromMarkdown(text) {
         // Mirrors addMessageRow's ai-branch diagram/PYQ row exactly -- without this, a version
         // that wasn't auto-embedded (medium-confidence match, or VISUAL_INTENT: no) would silently
         // lose its "Show Diagram" button after switching to it, since bubble.innerHTML above just
-        // replaced everything including whatever button row the PREVIOUS version had.
+        // replaced everything including whatever button row the PREVIOUS version had. Same
+        // metaHtml gate as the other two render paths -- a version with no NEET Importance/
+        // Chapter line (a conversational reply) never gets Diagram/PYQ buttons either.
+        if (metaHtml) {
         const actionsRow = document.createElement('div');
         actionsRow.className = 'answer-actions-row';
         if (!v.diagram) {
@@ -3683,6 +3691,7 @@ function plainTextFromMarkdown(text) {
         };
         actionsRow.appendChild(pyqBtn);
         bubble.appendChild(actionsRow);
+        }
 
         bubble.style.opacity = '1';
       }, 120);
@@ -5370,6 +5379,14 @@ function plainTextFromMarkdown(text) {
         // was known -- nothing left to do here for that case. VISUAL_INTENT: no never touches
         // either variable, so the button logic below simply never applies to it, same as before.
 
+        // metaHtml (NEET Importance/Chapter) is only ever present on a real academic answer --
+        // server.py's SYSTEM_PROMPT now skips both entirely for a conversational reply (see
+        // DOUBT_TYPE), and VISUAL_INTENT/diagramPrefetch never even get set for one either (no
+        // VISUAL_INTENT line to trigger the prefetch above). Gating the whole button row on the
+        // same signal means a greeting/small-talk reply never gets Diagram/PYQ buttons, instead
+        // of just hiding metadata and leaving buttons that would still trigger a real (wasted)
+        // lookup on click.
+        if (metaHtml) {
         const actionsRow = document.createElement('div');
         actionsRow.className = 'answer-actions-row';
 
@@ -5412,6 +5429,7 @@ function plainTextFromMarkdown(text) {
         actionsRow.appendChild(pyqBtn);
 
         bubble.appendChild(actionsRow);
+        }
 
         // Fire-and-forget, deliberately not awaited -- must never delay the primary answer's
         // own finish (usage banner refresh, scroll settle, send button re-enable, etc.). Skipped
