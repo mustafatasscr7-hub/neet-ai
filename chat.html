@@ -58,6 +58,9 @@
     body.light-mode .history-item.active { background: #e4e4ea !important; color: #0d0d0d !important; }
     body.light-mode .item-menu-btn { color: #8a8a94 !important; }
     body.light-mode .item-menu-btn:hover { background: #d5d5dd !important; color: #222228 !important; }
+    body.light-mode .pin-hover-btn { color: #8a8a94 !important; }
+    body.light-mode .pin-hover-btn:hover { background: #d5d5dd !important; color: #222228 !important; }
+    body.light-mode .pin-hover-btn.pinned { color: #0d0d0d !important; }
     body.light-mode .item-menu { background: #ffffff !important; border-color: #e0e0e5 !important; box-shadow: 0 8px 24px rgba(0,0,0,0.12) !important; }
     body.light-mode .item-menu-option { color: #333338 !important; }
     body.light-mode .item-menu-option:hover { background: #f0f0f3 !important; }
@@ -387,10 +390,34 @@
        transform resets to '' on drop animates smoothly. */
     .history-item.dragging { transition: none; opacity: 0.85; box-shadow: 0 4px 14px rgba(0,0,0,0.35); background: #1a1a1a; z-index: 10; will-change: transform; }
     .history-item .item-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    /* Leading icon, not nested inside .item-title -- that span has overflow:hidden for its own
-       text-ellipsis, which would silently clip this if it were a child instead of a sibling. */
-    .pin-badge { flex-shrink: 0; width: 12px; height: 12px; margin-right: 6px; color: #666; display: flex; }
-    .history-item:hover .pin-badge, .history-item.active .pin-badge { color: #999; }
+
+    /* Claude.ai-style hover-to-pin icon -- right-aligned next to the "..." menu button, not a
+       leading icon before the title (that was this control's old shape, .pin-badge, retired in
+       favor of this one so a pinned row shows exactly one pin indicator, not two). Fades in on
+       row hover (opacity, not display:none/flex like .item-menu-btn below -- display can't
+       transition, and this one explicitly needs a smooth fade per spec) and stays fully visible,
+       filled-in, whenever the chat is actually pinned -- so "is this pinned" reads at a glance
+       without needing to hover at all. Click calls togglePinConversation() directly, the exact
+       same function the "..." menu's own Pin/Unpin option already calls, so both stay in sync
+       for free rather than needing separate state. */
+    .pin-hover-btn { display: flex; flex-shrink: 0; width: 24px; height: 24px; align-items: center; justify-content: center; border-radius: 5px; cursor: pointer; color: #666; margin-left: 4px; opacity: 0; pointer-events: none; transition: opacity 0.15s ease, background 0.15s, color 0.15s; }
+    .pin-hover-btn svg { width: 13px; height: 13px; }
+    .history-item:hover .pin-hover-btn { opacity: 1; pointer-events: auto; }
+    .pin-hover-btn:hover { background: #2a2a2a; color: #ccc; }
+    /* Pinned = persistently visible + filled icon (fill follows currentColor, same outline SVG
+       as the "..." menu's own Pin option uses) -- the one visual cue for "this chat is pinned",
+       whether or not the row is currently hovered. */
+    .pin-hover-btn.pinned { opacity: 1; pointer-events: auto; color: #ececec; }
+    .pin-hover-btn.pinned svg { fill: currentColor; }
+    /* Touch devices have no real hover state -- (hover: none) is the actual capability, more
+       reliable than a screen-width guess, since a touch device can still have a wide screen.
+       Relying on "tap triggers :hover" (what .item-menu-btn below still does) is inconsistent
+       across mobile browsers and risks the icon being invisible and unreachable except through
+       the "..." menu, so this one is just always shown here instead -- both the outline
+       (unpinned, tap to pin) and filled (pinned, tap to unpin) states. */
+    @media (hover: none) {
+      .pin-hover-btn { opacity: 1; pointer-events: auto; }
+    }
 
     .item-menu-btn { display: none; flex-shrink: 0; width: 24px; height: 24px; align-items: center; justify-content: center; border-radius: 5px; cursor: pointer; color: #666; margin-left: 4px; }
     .history-item:hover .item-menu-btn { display: flex; }
@@ -4278,18 +4305,14 @@ function plainTextFromMarkdown(text) {
       showWelcome();
     }
 
-    // Adds/removes the small leading pin icon on an existing .history-item without rebuilding
-    // the rest of it -- called both at initial render (createHistoryItem) and on every toggle.
+    // Updates the hover-to-pin icon's visual state on an existing .history-item -- called both
+    // at initial render (createHistoryItem) and on every toggle, so it's always in sync with
+    // whatever last changed the chat's pinned state (this icon or the "..." menu's own option).
     function setPinBadge(item, isPinned) {
-      const existing = item.querySelector('.pin-badge');
-      if (isPinned && !existing) {
-        const badge = document.createElement('span');
-        badge.className = 'pin-badge';
-        badge.innerHTML = PIN_ICON_SVG;
-        item.insertBefore(badge, item.firstChild);
-      } else if (!isPinned && existing) {
-        existing.remove();
-      }
+      const btn = item.querySelector('.pin-hover-btn');
+      if (!btn) return;
+      btn.classList.toggle('pinned', isPinned);
+      btn.title = isPinned ? 'Unpin' : 'Pin';
     }
 
     // Shows/hides the "Pinned" section label + list based on whether it currently holds any
@@ -4347,9 +4370,9 @@ function plainTextFromMarkdown(text) {
       menu.style.top = top + 'px';
     }
 
-    // Reused both for the "Pin chat"/"Unpin chat" menu option below and for the small pin-badge
-    // createHistoryItem() shows next to a pinned chat's title -- same icon everywhere "pinned"
-    // is communicated, not two different glyphs for the same meaning.
+    // Reused both for the "Pin chat"/"Unpin chat" menu option below and for the hover-to-pin
+    // icon createHistoryItem() adds to each row -- same icon everywhere "pinned" is
+    // communicated, not two different glyphs for the same meaning.
     const PIN_ICON_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/></svg>';
 
     // Shared by both the per-item sidebar menu and the chat-title header dropdown so their
@@ -4433,6 +4456,19 @@ function plainTextFromMarkdown(text) {
       titleSpan.className = 'item-title';
       titleSpan.textContent = title;
       item.appendChild(titleSpan);
+
+      // Sits before the "..." menu button in DOM order -- both right-aligned, so this renders
+      // immediately to its left, matching Claude.ai's own hover row (pin icon + overflow menu
+      // together, not one replacing the other). Calls togglePinConversation() directly, the exact
+      // same function the "..." menu's own Pin/Unpin option below already uses.
+      const pinBtn = document.createElement('div');
+      pinBtn.className = 'pin-hover-btn';
+      pinBtn.innerHTML = PIN_ICON_SVG;
+      pinBtn.addEventListener('click', async function(e) {
+        e.stopPropagation();
+        await togglePinConversation(id);
+      });
+      item.appendChild(pinBtn);
       setPinBadge(item, !!isPinned);
 
       const menuBtn = document.createElement('div');
@@ -4448,7 +4484,7 @@ function plainTextFromMarkdown(text) {
       document.body.appendChild(menu);
 
       item.addEventListener('click', function(e) {
-        if (e.target.closest('.item-menu-btn')) return;
+        if (e.target.closest('.item-menu-btn') || e.target.closest('.pin-hover-btn')) return;
         document.querySelectorAll('.history-item').forEach(i => i.classList.remove('active'));
         item.classList.add('active');
         onClickFn();
@@ -4496,7 +4532,7 @@ function plainTextFromMarkdown(text) {
 
       container.addEventListener('pointerdown', function(e) {
         const item = e.target.closest('.history-item');
-        if (!item || e.target.closest('.item-menu-btn')) return;
+        if (!item || e.target.closest('.item-menu-btn') || e.target.closest('.pin-hover-btn')) return;
         draggedEl = item;
         startY = e.clientY;
         dragging = false;
