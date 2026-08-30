@@ -317,6 +317,18 @@
     body.light-mode #settingsContent:hover::-webkit-scrollbar-thumb { background: #d5d5dd !important; }
     body.light-mode #settingsContent:hover { scrollbar-color: #d5d5dd transparent !important; }
 
+    /* Settings modal shell -- these three are real classes (not inline styles, see their own
+       definitions above), so the attribute-selector overrides just below this block can never
+       reach them: [style*="..."] only ever matches an element's own inline style="" attribute,
+       never a background/color that comes from a CSS class rule. Missing this is exactly why the
+       modal's outer shell used to stay dark in light mode while individually inline-styled rows
+       inside it (matched by the block below) correctly flipped light -- a jarring dark-shell/
+       light-content mismatch, and in the worst case dark text (from a matched inline color) on a
+       still-dark background, unreadable. */
+    body.light-mode .settings-modal-panel { background: #ffffff !important; border-color: #d5d5dd !important; }
+    body.light-mode .settings-sidebar { background: #f5f5f5 !important; border-right-color: #e5e5ea !important; }
+    body.light-mode .settings-sidebar-title { color: #9a9aa5 !important; }
+
     /* Settings modal — heavily inline-styled, matched by its literal style values */
     body.light-mode #settingsModal [style*="background:#1a1a1a"] { background: #ffffff !important; }
     body.light-mode #settingsModal [style*="background:#111"] { background: #f5f5f5 !important; }
