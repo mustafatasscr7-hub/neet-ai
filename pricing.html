@@ -33,12 +33,25 @@
     .page-title { font-size: 32px; font-weight: 700; letter-spacing: -0.015em; color: var(--text); text-align: center; margin-bottom: 12px; text-wrap: balance; }
     .page-subtitle { font-size: 15px; color: var(--muted); text-align: center; margin-bottom: 44px; }
 
-    .toggle-wrap { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 52px; }
-    .toggle-label { font-size: 13px; color: var(--muted-2); cursor: pointer; transition: color 0.2s; }
+    .toggle-wrap { display: flex; align-items: center; justify-content: center; gap: 12px; margin-bottom: 52px; }
+    /* Weight step is 500->600 rather than the old plain-400->600 jump -- the inactive label
+       still needs to read as "an option," not near-invisible next to the active one. */
+    .toggle-label { font-size: 13px; font-weight: 500; letter-spacing: 0.01em; color: var(--muted-2); cursor: pointer; transition: color 0.2s; }
     .toggle-label.active { color: var(--text); font-weight: 600; }
-    .toggle-btn { width: 40px; height: 22px; background: var(--blue); border-radius: 11px; cursor: pointer; position: relative; transition: background 0.2s; flex-shrink: 0; }
-    .toggle-btn::after { content: ''; position: absolute; width: 16px; height: 16px; background: #fff; border-radius: 50%; top: 3px; left: 3px; transition: left 0.2s; }
-    .toggle-btn.yearly::after { left: 21px; }
+    /* Muted glass track (a soft blue tint, not the old flat saturated fill) with an inset shadow
+       for a touch of real depth, rather than a flat color block -- same "quiet, not loud" accent
+       treatment as the chapter-pill/star-rating redesign. Track color is deliberately identical
+       in both Monthly/Yearly states (this is a 2-way selector, not an on/off switch, so there's
+       no "off" state to grey out) -- only the thumb position communicates the current selection,
+       same as before. */
+    .toggle-btn { width: 42px; height: 23px; border-radius: 12px; cursor: pointer; position: relative; flex-shrink: 0; background: linear-gradient(135deg, rgba(79,142,247,0.38), rgba(79,142,247,0.2)); box-shadow: inset 0 1px 3px rgba(0,0,0,0.2); transition: box-shadow 0.2s; }
+    .toggle-btn:hover { box-shadow: inset 0 1px 3px rgba(0,0,0,0.2), 0 0 0 3px rgba(79,142,247,0.12); }
+    /* Shadow (not just the white fill) is what actually keeps this visible against the track in
+       BOTH themes -- a plain white thumb would read fine in dark mode but risk washing out
+       against a pale track in light mode; the dark ring/drop-shadow defines its edge regardless
+       of exact track tone. */
+    .toggle-btn::after { content: ''; position: absolute; width: 17px; height: 17px; background: #fff; border-radius: 50%; top: 3px; left: 3px; box-shadow: 0 1px 3px rgba(0,0,0,0.35), 0 0 0 1px rgba(0,0,0,0.06); transition: left 0.25s cubic-bezier(0.4,0,0.2,1); }
+    .toggle-btn.yearly::after { left: 22px; }
 
     /* NEET-year selector -- only shown in Yearly mode (see toggleBilling). Picking a real year
        recalculates Pro/Max's displayed price to the actual days remaining instead of the flat
@@ -47,8 +60,31 @@
     .neet-year-wrap { display: none; align-items: center; justify-content: center; gap: 8px; margin: -34px auto 40px; }
     .neet-year-wrap.visible { display: flex; }
     .neet-year-label { font-size: 12px; color: var(--muted-2); }
-    .neet-year-select { background: var(--panel); border: 1px solid var(--border-2); color: var(--text); font-size: 12px; font-family: Inter, sans-serif; padding: 5px 10px; border-radius: 8px; cursor: pointer; outline: none; }
-    .neet-year-select:focus { border-color: var(--blue); }
+    /* appearance:none replaces the browser's own default arrow with a custom chevron (below) --
+       the old version used var(--panel) as its fill too, but that sits so close to the page's
+       own --bg that it read as barely-there, just an outline; --border-2 as the resting border
+       plus a slightly stronger hover/focus state gives it real, deliberate elevation instead.
+       Chevron color is a literal hex (data: URIs can't reference CSS custom properties) --
+       matched to --muted's real value in each theme via the light-mode override below, same
+       "don't let a light-mode variant go unconverted" care as the recent Settings fixes. */
+    .neet-year-select {
+      appearance: none; -webkit-appearance: none; -moz-appearance: none;
+      background: var(--panel) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23888888' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E") no-repeat right 10px center;
+      background-size: 12px;
+      border: 1px solid var(--border-2);
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 500;
+      font-family: Inter, sans-serif;
+      padding: 6px 30px 6px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    .neet-year-select:hover { border-color: var(--muted); }
+    .neet-year-select:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(79,142,247,0.15); }
+    body.light-mode .neet-year-select { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%236b6b7d' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E") !important; }
     /* Per-plan pricing breakdown line, shown only while a real NEET year (with a real exam_date)
        is selected -- distinct from .plan-price-sub (which still shows "billed annually" etc.) so
        both the normal subtitle and this extra context can coexist without one replacing the other. */
