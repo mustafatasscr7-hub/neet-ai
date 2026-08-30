@@ -654,6 +654,9 @@
     .quoted-context-box .quote-dismiss { position: absolute; top: 4px; right: 5px; background: transparent; border: none; color: #666; cursor: pointer; font-size: 12px; line-height: 1; padding: 2px; opacity: 0.7; }
     .quoted-context-box .quote-dismiss:hover { opacity: 1; color: #ccc; }
     body.light-mode .quoted-context-box { background: rgba(0,0,0,0.04) !important; color: #777 !important; }
+    /* Persisted copy shown above a sent message (see addMessageRow) -- no dismiss button, so
+       drop the right-padding that box normally reserves for it. */
+    .quoted-context-sent { padding: 8px 10px; }
     /* Clarifying-question UI (server.py SYSTEM_PROMPT rule 11) -- deliberately understated, not
        a primary-action pill: subtle border + near-transparent fill, matching the quote-box's
        neutral treatment above rather than the brand-blue tinted buttons used elsewhere, since
@@ -3494,6 +3497,22 @@ let selectedImages = [];
         contentWrapper.appendChild(bubble);
         contentWrapper.appendChild(buildActionsDiv('ai', timeStr, msgObj));
       } else {
+        // A quoted "Ask about this" selection used to vanish the moment the message sent --
+        // it only ever lived in the pre-send preview box (clearQuotedContext() wipes it right
+        // after streamAIResponse fires), so the permanent chat history showed just the
+        // student's own short follow-up with zero context about what it was even about. Persist
+        // it onto the message object (see sendMessage/loadConversation) and render it here as a
+        // small quoted block above the student's own text, same visual language as the
+        // pre-send preview (.quoted-context-box) minus its dismiss button.
+        if (msgObj && msgObj.quotedText) {
+          const quoteBox = document.createElement('div');
+          quoteBox.className = 'quoted-context-box quoted-context-sent';
+          const quoteTextEl = document.createElement('div');
+          quoteTextEl.className = 'quote-text';
+          quoteTextEl.textContent = msgObj.quotedText;
+          quoteBox.appendChild(quoteTextEl);
+          contentWrapper.appendChild(quoteBox);
+        }
         bubble.textContent = text;
         contentWrapper.appendChild(bubble);
         contentWrapper.appendChild(buildActionsDiv('user', timeStr));
@@ -4586,7 +4605,7 @@ function plainTextFromMarkdown(text) {
       chat.messages.forEach(function(msg, i) {
         if (msg.role === 'user') {
           lastUserText = msg.text;
-          addMessageRow(msg.role, msg.text, undefined, i);
+          addMessageRow(msg.role, msg.text, undefined, i, undefined, msg);
         } else if (msg.role === 'ai') {
           const bubble = addMessageRow('ai', msg.text, lastUserText, i, msg.diagram, msg);
         }
@@ -4606,7 +4625,7 @@ function plainTextFromMarkdown(text) {
       conv.messages.forEach(function(msg, i) {
         if (msg.role === 'user') {
           lastUserText = msg.text;
-          addMessageRow(msg.role, msg.text, undefined, i);
+          addMessageRow(msg.role, msg.text, undefined, i, undefined, msg);
         } else if (msg.role === 'ai') {
           addMessageRow('ai', msg.text, lastUserText, i, msg.diagram, msg);
         }
@@ -4928,6 +4947,7 @@ function plainTextFromMarkdown(text) {
       inputArea.style.display = 'block';
 
       const userIndex = currentConversation.length;
+      const userMsgObj = activeQuote ? { role: 'user', text: text, quotedText: activeQuote } : { role: 'user', text: text };
       if (selectedImages.length > 0) {
         const imgRow = document.createElement('div');
         imgRow.className = 'message-row user';
@@ -4937,12 +4957,12 @@ function plainTextFromMarkdown(text) {
         chatWindow.appendChild(imgRow);
         scrollBottom();
       } else {
-        addMessageRow('user', text, undefined, userIndex);
+        addMessageRow('user', text, undefined, userIndex, undefined, userMsgObj);
       }
       input.value = '';
       input.style.height = 'auto';
 
-      currentConversation.push({ role: 'user', text: text });
+      currentConversation.push(userMsgObj);
       if (currentConversation.length === 1) pendingSidebarSave = saveToSidebar(text);
 
       const imagesPayload = selectedImages.map(img => ({
