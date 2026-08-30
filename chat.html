@@ -351,6 +351,32 @@
     body.light-mode #settingsModal .settings-nav-item:hover { background: #f0f0f3 !important; }
     body.light-mode #settingsModal .settings-nav-item.active { color: #0d0d0d !important; background: #e4e4ea !important; }
 
+    /* Active Sessions table (Settings > Account) -- had NO light-mode coverage at all, not even
+       a partial attempt, unlike the rest of the modal. The header row's hardcoded dark
+       background + muted text happened to stay readable by coincidence even unconverted; the
+       device rows have no background of their own (inherit the now-correctly-white
+       .settings-modal-panel from the earlier fix) but their bright #ececec text was never given
+       a light-appropriate color, which is what actually produced near-white-on-white text.
+       Same color mapping already established elsewhere in this file for these exact source
+       colors (border #1e1e1e -> #e5e5ea, bg #111 -> #f5f5f5, text #ececec -> #16161d). The
+       green "Current" badge and red logout button are left as-is -- both already read fine on a
+       light background unchanged. */
+    body.light-mode .sessions-table { border-color: #e5e5ea !important; }
+    body.light-mode .sessions-row.sessions-head { background: #f5f5f5 !important; color: #55555f !important; }
+    body.light-mode .sessions-row:not(.sessions-head) { color: #16161d !important; }
+    body.light-mode .sessions-row:not(.sessions-head) + .sessions-row:not(.sessions-head) { border-top-color: #e5e5ea !important; }
+    body.light-mode .sessions-cell.muted { color: #9a9aa5 !important; }
+
+    /* Usage tab (Settings > Usage) -- same gap as Active Sessions above: no light-mode coverage
+       at all for any of its classes, found during the exhaustive pass this task asked for.
+       Same established color mapping again -- nothing new invented. */
+    body.light-mode .usage-section { border-bottom-color: #e5e5ea !important; }
+    body.light-mode .usage-section-title { color: #16161d !important; }
+    body.light-mode .usage-section-title .usage-section-title-sub { color: #7a7a85 !important; }
+    body.light-mode .usage-section-sub { color: #55555f !important; }
+    body.light-mode .usage-bar-track { background: #e5e5ea !important; }
+    body.light-mode .usage-plan-badge { background: #e4e4ea !important; color: #7a7a85 !important; }
+
   .sidebar { width: 260px; background: #111111; display: flex; flex-direction: column; padding: 12px 8px; gap: 4px; border-right: 1px solid #1e1e1e; flex-shrink: 0; transition: width 0.2s; overflow: hidden; }
 .sidebar.collapsed { width: 56px; }
     .sidebar.collapsed .new-chat-btn { justify-content: center; padding: 10px 0; width: 100%; }
@@ -6041,11 +6067,22 @@ function openSettings() {
     }
 
     async function showSettingsSection(section, clickedEl) {
+      // .active also needs to actually MOVE with the real selection -- it used to just sit
+      // wherever the initial static HTML put it (General) forever, since only inline styles were
+      // being toggled here. That made body.light-mode's existing .settings-nav-item.active rule
+      // (color/background, already correct) permanently unreachable for any other tab: clicking
+      // Account set inline styles that a light-mode !important override could partially fight
+      // (text color) but never fully reach (background, since no CSS rule targeted the real
+      // active element at all) -- dark background + near-invisible dark-on-dark text. Toggling
+      // the class alongside the inline styles (kept for dark mode, unchanged) is enough on its
+      // own; no new colors needed; the existing override just starts actually applying.
       document.querySelectorAll('.settings-nav-item').forEach(el => {
+        el.classList.remove('active');
         el.style.background = 'transparent';
         el.style.color = '#666';
       });
       if (clickedEl) {
+        clickedEl.classList.add('active');
         clickedEl.style.background = '#2a2a2a';
         clickedEl.style.color = '#ececec';
       }
