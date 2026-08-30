@@ -228,6 +228,7 @@
   <div id="blocksContainer"></div>
 </div>
 
+<script src="./confirm-modal.js"></script>
 <script>
   const API_BASE = 'https://neet-ai-production.up.railway.app';
   let adminKey = sessionStorage.getItem('admin_key') || '';
@@ -330,7 +331,7 @@
 
   // ---------------- Destination toggle ----------------
 
-  function selectDestination(dest) {
+  async function selectDestination(dest) {
     if (dest === destination) return;
     // A block's savedRowId is an id in whichever table it was last saved to -- pyq and
     // mock_test_questions are different tables with overlapping id spaces, so carrying a
@@ -339,7 +340,7 @@
     // old destination are untouched in the DB either way -- this only forgets the local link to
     // them, so editing one of those questions again here creates a new row instead of updating.
     const alreadySavedCount = blocks.filter(b => b.savedRowId).length;
-    if (alreadySavedCount > 0 && !confirm(`${alreadySavedCount} question(s) here are already saved. Switching destination won't touch what's already in the database, but if you edit and re-save one of them now, it'll be saved as a NEW question instead of updating the old one. Continue?`)) {
+    if (alreadySavedCount > 0 && !(await showConfirmModal(`${alreadySavedCount} question(s) here are already saved. Switching destination won't touch what's already in the database, but if you edit and re-save one of them now, it'll be saved as a NEW question instead of updating the old one. Continue?`, { confirmLabel: 'Continue' }))) {
       return;
     }
     destination = dest;
@@ -935,8 +936,8 @@
     });
   }
 
-  function removeBlock(id) {
-    if (!confirm('Remove this question block?')) return;
+  async function removeBlock(id) {
+    if (!(await showConfirmModal('Remove this question block?', { confirmLabel: 'Remove', danger: true }))) return;
     const idx = findBlockIndex(id);
     if (idx === -1) return;
     blocks.splice(idx, 1);
@@ -945,13 +946,13 @@
     document.getElementById('summaryBar').style.display = blocks.length ? 'flex' : 'none';
   }
 
-  function clearAllBlocks() {
+  async function clearAllBlocks() {
     if (blocks.length === 0) return;
     const unsavedCount = blocks.filter(b => !b.saved).length;
     const msg = unsavedCount > 0
       ? `Clear all ${blocks.length} question block(s)? ${unsavedCount} of them are not saved yet and will be lost.`
       : `Clear all ${blocks.length} question block(s)?`;
-    if (!confirm(msg)) return;
+    if (!(await showConfirmModal(msg, { confirmLabel: 'Clear All', danger: true }))) return;
     blocks = [];
     renderAllBlocks();
     updateSummaryBar();
@@ -1219,7 +1220,7 @@
 
   async function publishMockTest() {
     if (!currentMockTestId) return;
-    if (!confirm('Publish this test? It will immediately become visible to students in the mock test picker.')) return;
+    if (!(await showConfirmModal('Publish this test? It will immediately become visible to students in the mock test picker.', { confirmLabel: 'Publish' }))) return;
     try {
       const res = await fetch(`${API_BASE}/admin/mock-test-publish`, {
         method: 'POST',

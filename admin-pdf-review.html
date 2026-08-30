@@ -252,6 +252,7 @@
   <div id="blocksContainer"></div>
 </div>
 
+<script src="./confirm-modal.js"></script>
 <script>
   const API_BASE = 'https://neet-ai-production.up.railway.app';
   let adminKey = sessionStorage.getItem('admin_key') || '';
@@ -1536,7 +1537,7 @@
       } else {
         msg = `This file is already marked "${prev.status}" from ${new Date(prev.upload_date).toLocaleDateString()} — reprocess anyway?`;
       }
-      return confirm(msg);
+      return await showConfirmModal(msg, { confirmLabel: 'Reprocess' });
     } catch (e) {
       return true;
     }
@@ -2125,10 +2126,10 @@
     runDuplicateCheck(id);
   }
 
-  function mergeWithNext(id) {
+  async function mergeWithNext(id) {
     const idx = findBlockIndex(id);
     if (idx === -1 || idx === blocks.length - 1) return;
-    if (!confirm('Merge this question with the next one? The next block will be removed.')) return;
+    if (!(await showConfirmModal('Merge this question with the next one? The next block will be removed.', { confirmLabel: 'Merge' }))) return;
     const a = Object.assign(blocks[idx], readBlockFromDom(blocks[idx].id));
     const b = Object.assign(blocks[idx + 1], readBlockFromDom(blocks[idx + 1].id));
     const preferNonEmpty = (x, y) => (x === '' || x == null) ? y : x;
@@ -2211,8 +2212,8 @@
     }
   }
 
-  function removeBlock(id) {
-    if (!confirm('Remove this question block?')) return;
+  async function removeBlock(id) {
+    if (!(await showConfirmModal('Remove this question block?', { confirmLabel: 'Remove', danger: true }))) return;
     const idx = findBlockIndex(id);
     if (idx === -1) return;
     blocks.splice(idx, 1);
@@ -2230,8 +2231,8 @@
   // keep in sync. autoResizeTextarea/updateMathPreview are called directly (not via a dispatched
   // input event) since this is a programmatic change, not real typing -- oninput never fires on
   // its own for a script-set .value.
-  function clearAllOptions(id) {
-    if (!confirm('Clear all 4 option fields for this question?')) return;
+  async function clearAllOptions(id) {
+    if (!(await showConfirmModal('Clear all 4 option fields for this question?', { confirmLabel: 'Clear Options', danger: true }))) return;
     ['a', 'b', 'c', 'd'].forEach(opt => {
       const fieldId = 'opt-' + opt + '-' + id;
       const el = document.getElementById(fieldId);
@@ -2243,13 +2244,13 @@
     saveDraftNow(); // immediate, same reasoning as removeBlock -- a deliberate one-shot action, not an in-progress typing session the debounce is meant to coalesce
   }
 
-  function clearAllBlocks() {
+  async function clearAllBlocks() {
     if (blocks.length === 0) return;
     const unsavedCount = blocks.filter(b => !b.saved).length;
     const msg = unsavedCount > 0
       ? `Clear all ${blocks.length} question block(s)? ${unsavedCount} of them are not saved yet and will be lost.`
       : `Clear all ${blocks.length} question block(s)?`;
-    if (!confirm(msg)) return;
+    if (!(await showConfirmModal(msg, { confirmLabel: 'Clear All', danger: true }))) return;
     blocks = [];
     renderAllBlocks();
     updateSummaryBar();

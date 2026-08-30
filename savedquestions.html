@@ -190,6 +190,7 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="./theme.js"></script>
   <script src="./i18n.js"></script>
+  <script src="./confirm-modal.js"></script>
   <script>
     const SUPABASE_URL = 'https://hvhnfttrfouajlyhvunq.supabase.co';
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh2aG5mdHRyZm91YWpseWh2dW5xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg5NDI1NTIsImV4cCI6MjA5NDUxODU1Mn0.8RaSu5yiTpQCEUGKrFO2y6oiRXSqdBehIz933j9Z7WA';
@@ -696,7 +697,7 @@
     }
 
     async function deleteQuestion(id) {
-      if (!confirm(t('savedquestions','confirmRemove'))) return;
+      if (!(await showConfirmModal(t('savedquestions','confirmRemove'), { confirmLabel: t('savedquestions','remove'), danger: true }))) return;
       const { error } = await client.from('saved_questions').delete().eq('id', id);
       if (error) { alert(t('savedquestions','failedRemove')); return; }
       allQuestions = allQuestions.filter(q => q.id !== id);

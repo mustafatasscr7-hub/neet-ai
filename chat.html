@@ -1013,6 +1013,7 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="./theme.js"></script>
   <script src="./i18n.js"></script>
+  <script src="./confirm-modal.js"></script>
   <script>
     const SUPABASE_URL = 'https://hvhnfttrfouajlyhvunq.supabase.co'
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh2aG5mdHRyZm91YWpseWh2dW5xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg5NDI1NTIsImV4cCI6MjA5NDUxODU1Mn0.8RaSu5yiTpQCEUGKrFO2y6oiRXSqdBehIz933j9Z7WA'
@@ -6441,7 +6442,7 @@ function openSettings() {
     }
 
     async function deleteAccount() {
-      if (!confirm('Are you sure? This will permanently delete your account and all data.')) return;
+      if (!(await showConfirmModal('Are you sure? This will permanently delete your account and all data.', { confirmLabel: 'Delete Account', danger: true }))) return;
       alert('Account deletion coming soon. Contact support for now.');
     }
 

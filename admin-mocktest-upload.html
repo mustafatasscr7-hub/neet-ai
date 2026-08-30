@@ -206,6 +206,7 @@
   <div id="blocksContainer"></div>
 </div>
 
+<script src="./confirm-modal.js"></script>
 <script>
   const API_BASE = 'https://neet-ai-production.up.railway.app';
   let adminKey = sessionStorage.getItem('admin_key') || '';
@@ -492,7 +493,7 @@
       } else {
         msg = `A test from this file is already marked "${prev.status}" from ${new Date(prev.created_at).toLocaleDateString()} — process again anyway?`;
       }
-      return confirm(msg);
+      return await showConfirmModal(msg, { confirmLabel: 'Process Again' });
     } catch (e) {
       return true;
     }
@@ -1009,10 +1010,10 @@
     }
   }
 
-  function mergeWithNext(id) {
+  async function mergeWithNext(id) {
     const idx = findBlockIndex(id);
     if (idx === -1 || idx === blocks.length - 1) return;
-    if (!confirm('Merge this question with the next one? The next block will be removed.')) return;
+    if (!(await showConfirmModal('Merge this question with the next one? The next block will be removed.', { confirmLabel: 'Merge' }))) return;
     const a = Object.assign(blocks[idx], readBlockFromDom(blocks[idx].id));
     const b = Object.assign(blocks[idx + 1], readBlockFromDom(blocks[idx + 1].id));
     const preferNonEmpty = (x, y) => (x === '' || x == null) ? y : x;
@@ -1054,8 +1055,8 @@
     updateSummaryBar();
   }
 
-  function removeBlock(id) {
-    if (!confirm('Remove this question block?')) return;
+  async function removeBlock(id) {
+    if (!(await showConfirmModal('Remove this question block?', { confirmLabel: 'Remove', danger: true }))) return;
     const idx = findBlockIndex(id);
     if (idx === -1) return;
     blocks.splice(idx, 1);
@@ -1064,13 +1065,13 @@
     document.getElementById('summaryBar').style.display = blocks.length ? 'flex' : 'none';
   }
 
-  function clearAllBlocks() {
+  async function clearAllBlocks() {
     if (blocks.length === 0) return;
     const unsavedCount = blocks.filter(b => !b.saved).length;
     const msg = unsavedCount > 0
       ? `Clear all ${blocks.length} question block(s)? ${unsavedCount} of them are not saved yet and will be lost.`
       : `Clear all ${blocks.length} question block(s)?`;
-    if (!confirm(msg)) return;
+    if (!(await showConfirmModal(msg, { confirmLabel: 'Clear All', danger: true }))) return;
     blocks = [];
     renderAllBlocks();
     updateSummaryBar();
@@ -1203,7 +1204,7 @@
 
   async function publishMockTest() {
     if (!currentMockTestId) { alert('Scan and save a test first.'); return; }
-    if (!confirm('Publish this test? It will immediately become visible to students in the mock test picker.')) return;
+    if (!(await showConfirmModal('Publish this test? It will immediately become visible to students in the mock test picker.', { confirmLabel: 'Publish' }))) return;
     try {
       const res = await fetch(`${API_BASE}/admin/mock-test-publish`, {
         method: 'POST',

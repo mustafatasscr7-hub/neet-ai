@@ -295,6 +295,7 @@
     </div>
   </div>
 
+  <script src="./confirm-modal.js"></script>
   <script>
     const API_BASE = 'https://neet-ai-production.up.railway.app';
     let adminKey = sessionStorage.getItem('admin_key') || '';
@@ -889,7 +890,7 @@
     async function bulkApproveSelected() {
       const ids = currentRows.map(r => r.id).filter(id => selectedIds.has(id));
       if (ids.length === 0) return;
-      if (!confirm(`Mark ${ids.length} question${ids.length === 1 ? '' : 's'} as reviewed?`)) return;
+      if (!(await showConfirmModal(`Mark ${ids.length} question${ids.length === 1 ? '' : 's'} as reviewed?`, { confirmLabel: 'Mark Reviewed' }))) return;
       const btn = document.getElementById('bulkApproveBtn');
       const originalLabel = btn.textContent;
       btn.disabled = true;
@@ -917,7 +918,7 @@
       // there and clicking this silently deleted nothing. currentModeRowIds() fixes that.
       const ids = currentModeRowIds().filter(id => selectedIds.has(id));
       if (ids.length === 0) return;
-      if (!confirm(`Permanently delete ${ids.length} question${ids.length === 1 ? '' : 's'} from Supabase? (Ctrl+Z to undo right after)`)) return;
+      if (!(await showConfirmModal(`Permanently delete ${ids.length} question${ids.length === 1 ? '' : 's'} from Supabase? (Ctrl+Z to undo right after)`, { confirmLabel: 'Delete', danger: true }))) return;
       const btn = document.getElementById('bulkDeleteBtn');
       const originalLabel = btn.textContent;
       btn.disabled = true;
@@ -1784,7 +1785,7 @@
     }
 
     async function deleteDiagramReview(id) {
-      if (!confirm('Delete this diagram? This removes both the image file and the record.')) return;
+      if (!(await showConfirmModal('Delete this diagram? This removes both the image file and the record.', { confirmLabel: 'Delete', danger: true }))) return;
       try {
         const res = await fetch(`${API_BASE}/admin/diagram-delete/${id}`, { method: 'DELETE', headers: authHeaders() });
         if (res.status === 401) return logout();
@@ -2155,7 +2156,7 @@
     });
 
     async function deleteBothInPair(idA, idB, btnEl) {
-      if (!confirm('Permanently delete BOTH of these questions from Supabase? (Ctrl+Z to undo right after)')) return;
+      if (!(await showConfirmModal('Permanently delete BOTH of these questions from Supabase? (Ctrl+Z to undo right after)', { confirmLabel: 'Delete Both', danger: true }))) return;
       const originalLabel = btnEl ? btnEl.textContent : null;
       if (btnEl) { btnEl.disabled = true; btnEl.textContent = 'Deleting...'; }
       const [resultA, resultB] = await Promise.all([deleteOneQuietly(idA), deleteOneQuietly(idB)]);
@@ -2180,7 +2181,7 @@
     }
 
     async function deleteQuestion(id, btnEl) {
-      if (!confirm('Permanently delete this question from Supabase? (Ctrl+Z to undo right after)')) return;
+      if (!(await showConfirmModal('Permanently delete this question from Supabase? (Ctrl+Z to undo right after)', { confirmLabel: 'Delete', danger: true }))) return;
       const originalLabel = btnEl ? btnEl.textContent : null;
       if (btnEl) { btnEl.disabled = true; btnEl.textContent = 'Deleting...'; }
       const result = await deleteOneQuietly(id);
