@@ -162,7 +162,9 @@
     <div style="display:flex;gap:10px;">
       <button class="lang-toggle" onclick="toggleLang()" style="background:transparent;border:1px solid #2a2a2a;color:#888;padding:8px 14px;border-radius:8px;cursor:pointer;font-size:13px;font-family:Inter,sans-serif;">हिं</button>
      <button class="btn btn-outline" onclick="window.location.href='./mocktest.html'" data-i18n="personalisedTest.takeAnotherTest">Take Another Test</button>
+      <!-- HIDDEN 2026-08-30: Scoreboard parked for later re-enable, code untouched. Uncomment to restore.
       <button class="btn btn-outline" onclick="window.location.href='./scoreboard.html'" data-i18n="mockresults.scoreboardBtn">📊 Scoreboard</button>
+      -->
       <button class="btn btn-outline" onclick="generateScorecard()" data-i18n="mockresults.shareScorecard">📤 Share Scorecard</button>
     </div>
   </div>
@@ -173,9 +175,11 @@
       <div class="score-value" id="scoreValue">0</div>
       <div class="score-total" data-i18n="mockresults.outOf720">out of 720
       </div>
+      <!-- HIDDEN 2026-08-30: Rank Predictor parked for later re-enable, code untouched. Uncomment to restore (the null-safe `if (rankBtn)` guard below already handles this element being absent).
       <div style="text-align:center;margin:16px 0;">
         <a id="rankPredictorBtn" href="./rank-predictor.html" style="display:inline-block;padding:10px 24px;background:linear-gradient(135deg,#7c5cff,#4f8ef7);color:#fff;border-radius:8px;font-size:13px;font-weight:600;text-decoration:none;font-family:Inter,sans-serif;" data-i18n="mockresults.predictRank">🎯 Predict My NEET Rank →</a>
       </div>
+      -->
       <div class="score-stats">
         <div class="stat-box">
           <div class="stat-box-value" style="color:#4ade80;" id="correctCount">0</div>
