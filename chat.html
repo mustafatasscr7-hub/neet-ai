@@ -5434,7 +5434,10 @@ function plainTextFromMarkdown(text) {
         // Fire-and-forget, deliberately not awaited -- must never delay the primary answer's
         // own finish (usage banner refresh, scroll settle, send button re-enable, etc.). Skipped
         // for image/PDF doubts since those never go through the shared cache this reuses anyway.
-        if (!(options.images && options.images.length) && !options.pdf) {
+        // Same metaHtml gate as the Diagram/PYQ button row above -- a conversational reply (no
+        // NEET Importance/Chapter line) was never a real doubt with an "alternate method" to
+        // begin with, so this used to burn a real LLM call on every "hello".
+        if (metaHtml && !(options.images && options.images.length) && !options.pdf) {
           ensureAlternateMethod(questionText, fullText, getLang()).then(altText => {
             if (altText) appendAlternateMethodToggle(bubble, altText);
           });

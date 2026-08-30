@@ -1655,7 +1655,37 @@ PYQ_MATCH_THRESHOLD = 0.4
 PYQ_FALLBACK_THRESHOLD = 0.30
 PYQ_FALLBACK_LIMIT = 5
 
+# Real calibration data (2026-08-30): the 4 irrelevant queries PYQ_MATCH_THRESHOLD's own comment
+# above tested (capital of France, baking a cake, movie recommendations, weather) topped out at
+# 0.282 as expected -- but "who won the cricket world cup in 2011" scored ABOVE the primary 0.4
+# threshold, matching "The UN Conference of Parties on climate change in the year 2011 was held
+# in :" (a mistagged Physics-table row that's really general-knowledge current-affairs content,
+# not real Physics) purely off the shared "in 2011" year token and question phrasing. Separately,
+# "what is the capital of India" also weakly matched via the relaxed fallback pass against loosely
+# India-themed Biology PYQs (National Aquatic Animal, Bt crops) that aren't actually relevant to
+# what was asked. Both are the same underlying pattern -- general-knowledge/current-affairs
+# queries embedding close to unrelated PYQ rows -- not one bad chunk worth hunting down
+# individually (fixing just the UN-conference row wouldn't have caught "capital of India" too).
+# Same technique as FALSE_POSITIVE_CLARIFY_WORDS elsewhere in this file (rule 11's false-positive
+# guard): a small, evidence-based keyword denylist,
+# checked before the embedding search ever runs. Kept deliberately small/conservative -- every
+# term here has zero real NEET-syllabus overlap; this is not a general-purpose off-topic
+# classifier and never grows into an allowlist of "real" NEET terms (which would risk rejecting a
+# genuine doubt that just doesn't happen to use textbook vocabulary).
+OFF_TOPIC_PYQ_TERMS = {
+    "cricket", "football", "ipl", "olympics", "world cup",
+    "prime minister", "president", "chief minister", "election",
+    "movie", "bollywood", "actor", "actress", "celebrity",
+    "capital of",
+}
+
+def _is_off_topic_pyq_query(text: str) -> bool:
+    normalized = text.strip().lower()
+    return any(term in normalized for term in OFF_TOPIC_PYQ_TERMS)
+
 async def search_pyq(query: str, limit: int = 5):
+    if _is_off_topic_pyq_query(query):
+        return [], False
     headers = {
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
