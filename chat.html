@@ -772,27 +772,17 @@
     .answer-actions-row { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; }
     /* NEET Importance + Chapter metadata row -- extracted from the raw "NEET Importance: N/5"
        and "Chapter: ..." lines DeepSeek outputs and re-rendered here as compact styled elements
-       instead of the raw text, decoupling generation from presentation.
-       Redesigned toward the app's own quiet-label language (.sidebar-label,
-       .usage-plan-badge, .quoted-context-box) instead of the previous two loud, competing
-       badge shapes -- a saturated blue pill next to 5 repeated bold gold ★ glyphs read as a
-       sticker/game-achievement, not a citation. Now both pieces share one muted, monochrome
-       treatment (no color used to distinguish them, only the single small star icon carries any
-       hue at all, and even that's desaturated from the old #b8963f gold), separated by a thin
-       divider rather than sitting as two shapes touching. Rating is still "N/5" text (the model
-       only ever outputs a whole 1-5 integer, see extractAnswerMeta -- a decimal-look "5.0" would
-       overstate the real precision), just paired with one small filled SVG star instead of 5
-       repeated unicode glyphs, which also reads closer to the app's existing inline-icon
-       language than a row of text glyphs did. */
+       instead of the raw text, decoupling generation from presentation. Real ★ glyphs (not the
+       ⭐ emoji) since only a real glyph's color is overridable via CSS -- an emoji always renders
+       in its platform's fixed color regardless of any `color` set on it. */
     .answer-meta-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
-    .answer-meta-divider { width: 1px; height: 11px; background: rgba(255,255,255,0.1); flex-shrink: 0; }
-    .answer-rating { display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px; font-weight: 500; letter-spacing: 0.01em; color: #8a8a94; }
-    .answer-rating-star { width: 11px; height: 11px; color: #a6874a; flex-shrink: 0; }
-    .answer-chapter-pill { display: inline-block; padding: 2px 9px; border-radius: 6px; font-size: 10.5px; font-weight: 500; letter-spacing: 0.01em; background: rgba(255,255,255,0.05); color: #9a9aa5; border: 1px solid rgba(255,255,255,0.08); }
-    body.light-mode .answer-meta-divider { background: rgba(0,0,0,0.12) !important; }
-    body.light-mode .answer-rating { color: #6b6b76 !important; }
-    body.light-mode .answer-rating-star { color: #9c7a26 !important; }
-    body.light-mode .answer-chapter-pill { background: rgba(0,0,0,0.035) !important; color: #6b6b76 !important; border-color: rgba(0,0,0,0.08) !important; }
+    .answer-stars { font-size: 14px; letter-spacing: 1px; color: #b8963f; }
+    .answer-stars .star-empty { color: #45403a; }
+    .answer-rating-num { font-size: 10.5px; color: #666; }
+    .answer-chapter-pill { display: inline-block; padding: 1.5px 7px; border-radius: 999px; font-size: 10.5px; font-weight: 500; background: rgba(79,142,247,0.14); color: rgb(79,142,247); border: 1px solid rgba(79,142,247,0.3); }
+    body.light-mode .answer-stars { color: #9c7a26 !important; }
+    body.light-mode .answer-stars .star-empty { color: #d8d2c4 !important; }
+    body.light-mode .answer-rating-num { color: #7a7a85 !important; }
     /* Soft tinted fill + matching text, no outline border -- same minimal button language used
        across pyqbank.html's sol-btn family and mocktest.html's choose-test cards. */
     .pyq-btn { margin: 0; background: #4f8ef71c; border: none; color: #4f8ef7; padding: 8px 16px; border-radius: 9px; cursor: pointer; font-size: 12px; font-weight: 600; font-family: 'Inter', sans-serif; transition: filter 0.15s ease, transform 0.1s ease; }
@@ -1787,13 +1777,12 @@ let selectedImages = [];
         .replace(/📚?\s*\**\s*Chapter:\**\s*\[?[^\n\]]+\]?\s*\n*/i, '')
         .replace(/^\s+/, '');
 
-      let ratingHtml = '';
+      let starsHtml = '';
       if (ratingMatch) {
-        // Value/clamping unchanged from before -- only the markup changed, from 5 repeated ★
-        // glyphs (filled + greyed-out empty ones) to one small filled icon next to the plain
-        // "N/5" text, see this block's own CSS comment for why.
         const rating = Math.max(1, Math.min(5, parseInt(ratingMatch[1], 10)));
-        ratingHtml = `<span class="answer-rating"><svg class="answer-rating-star" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.5l2.9 6.6 7.1.6-5.4 4.6 1.6 7-6.2-3.8-6.2 3.8 1.6-7-5.4-4.6 7.1-.6z"/></svg>${rating}/5</span>`;
+        const filled = '★'.repeat(rating);
+        const empty = '<span class="star-empty">' + '★'.repeat(5 - rating) + '</span>';
+        starsHtml = `<span class="answer-stars">${filled}${empty}</span><span class="answer-rating-num">${rating}/5</span>`;
       }
 
       let chapterHtml = '';
@@ -1809,10 +1798,7 @@ let selectedImages = [];
         if (chapter) chapterHtml = `<span class="answer-chapter-pill">${renderInlineMathText(chapter)}</span>`;
       }
 
-      // Divider only when both pieces are actually present -- a bare line next to nothing
-      // (a chapter-only or rating-only answer, both real cases) would look like a stray mark.
-      const dividerHtml = (chapterHtml && ratingHtml) ? '<span class="answer-meta-divider"></span>' : '';
-      const metaHtml = (ratingHtml || chapterHtml) ? `<div class="answer-meta-row">${chapterHtml}${dividerHtml}${ratingHtml}</div>` : '';
+      const metaHtml = (starsHtml || chapterHtml) ? `<div class="answer-meta-row">${chapterHtml}${starsHtml}</div>` : '';
       return { cleanText, metaHtml };
     }
 
