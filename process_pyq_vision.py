@@ -248,6 +248,13 @@ def _block_text_from_dict(block):
     line_texts = [_reconstruct_line_text(line) for line in block.get("lines", [])]
     return "\n".join(t for t in line_texts if t)
 
+# A raster image narrower or shorter than this many pixels is near-certainly a repeated fill-
+# tile (table/answer-box shading), not real diagram content -- confirmed on a real PDF
+# (AIPMT_2015.pdf) where a 2x2px image was placed 9 times on one page, each placement previously
+# counted as its own diagram. Every genuine diagram/graph checked during the DocLayout-YOLO
+# benchmark was at least ~90px on its short side.
+_MIN_DIAGRAM_DIM = 20
+
 def extract_pages_text_and_diagrams(pdf_bytes):
     """Free/local, no API call: raw text per page (PyMuPDF), with a marker inserted at the
     actual on-page position of each real (non-watermark) image, so the extraction model can attribute
@@ -259,9 +266,25 @@ def extract_pages_text_and_diagrams(pdf_bytes):
     watermark/logo/letterhead, not a real per-question diagram - confirmed empirically on
     real PYQ PDFs, where the branding image on every page would otherwise flag every question.
     get_image_rects() (not the richer get_text("dict") image blocks, whose position/identity
-    fields turned out unreliable on real files) gives the real display bbox for a confirmed xref."""
+    fields turned out unreliable on real files) gives the real display bbox for a confirmed xref.
+
+    Two additional passes on top of the original raster/xref detection above, added after a
+    DocLayout-YOLO benchmark against real PDFs (2026-09-02):
+
+    1. Tiny fill-tile images (see _MIN_DIAGRAM_DIM) are excluded, and a real image is only ever
+       counted ONCE per page regardless of how many times it's placed -- multiple placements of
+       the SAME xref is the repeated-shading pattern, not multiple distinct diagrams.
+    2. A DocLayout-YOLO pass (see _detect_vector_diagrams_yolo) runs after the raster pass, to
+       catch diagrams drawn with native PDF vector primitives (lines/circles/curves) -- these
+       have no embedded image at all, so the xref-based pass above is structurally blind to them.
+       Confirmed live: a real coaching-material PDF had 494 vector drawing objects (the actual
+       geometry diagrams) vs. only 38 raster images (mostly a per-page logo). This pass is
+       strictly additive (only adds markers for regions the raster pass didn't already find) and
+       never fatal to the scan -- any failure (model unavailable, inference error) just falls
+       back to raster-only detection, exactly as before this existed."""
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    page_xrefs = [set(img[0] for img in page.get_images(full=True)) for page in doc]
+    page_images_meta = [page.get_images(full=True) for page in doc]
+    page_xrefs = [set(img[0] for img in imgs) for imgs in page_images_meta]
 
     xref_page_count = {}
     for xrefs in page_xrefs:
@@ -269,9 +292,17 @@ def extract_pages_text_and_diagrams(pdf_bytes):
             xref_page_count[xref] = xref_page_count.get(xref, 0) + 1
     template_xrefs = {xref for xref, count in xref_page_count.items() if count > 1}
 
-    pages = []
+    xref_dims = {}  # xref -> (width, height), from get_images(full=True)'s own metadata
+    for imgs in page_images_meta:
+        for img in imgs:
+            xref_dims[img[0]] = (img[2], img[3])
+
+    pages_meta = []
     for i, page in enumerate(doc):
-        real_diagram_xrefs = page_xrefs[i] - template_xrefs
+        real_diagram_xrefs = {
+            xref for xref in (page_xrefs[i] - template_xrefs)
+            if min(xref_dims.get(xref, (0, 0))) >= _MIN_DIAGRAM_DIM
+        }
         mid_x = page.rect.width / 2
         text_entries = []  # (x0, y0, text)
         for block in page.get_text("dict")["blocks"]:
@@ -289,10 +320,33 @@ def extract_pages_text_and_diagrams(pdf_bytes):
         content_start_y = min(question_start_ys) if question_start_ys else 0
 
         entries = list(text_entries)  # (x0, y0, text) - text blocks and diagram markers
+        raster_rects = []  # kept per-page so the YOLO pass below can avoid double-flagging these
         for xref in real_diagram_xrefs:
-            for rect in page.get_image_rects(xref):
-                if rect.y0 >= content_start_y:
-                    entries.append((rect.x0, rect.y0, DIAGRAM_MARKER))
+            rects = [r for r in page.get_image_rects(xref) if r.y0 >= content_start_y]
+            if not rects:
+                continue
+            entries.append((rects[0].x0, rects[0].y0, DIAGRAM_MARKER))
+            raster_rects.extend(rects)
+
+        pages_meta.append({
+            "entries": entries,
+            "mid_x": mid_x,
+            "content_start_y": content_start_y,
+            "raster_rects": raster_rects,
+        })
+
+    try:
+        yolo_markers = _detect_vector_diagrams_yolo(doc, pages_meta)
+    except Exception as e:
+        print(f"    DocLayout-YOLO diagram detection unavailable, using raster-only detection: {e}")
+        yolo_markers = {}
+    for i, markers in yolo_markers.items():
+        pages_meta[i]["entries"].extend(markers)
+
+    pages = []
+    for pm in pages_meta:
+        entries = pm["entries"]
+        mid_x = pm["mid_x"]
         # Sort by COLUMN first (left-of-midpoint vs right-of-midpoint), then by y0 within that
         # column -- not by y0 alone. A real 2-column exam-paper layout (official NEET papers,
         # confirmed live on QP_2024/QP_2025: right column's first block sits at the same y0 as
@@ -308,6 +362,98 @@ def extract_pages_text_and_diagrams(pdf_bytes):
         pages.append({"text": "\n".join(content for _, _, content in entries)})
     doc.close()
     return pages
+
+_YOLO_REPO_ID = "juliozhao/DocLayout-YOLO-DocStructBench"
+_YOLO_FILENAME = "doclayout_yolo_docstructbench_imgsz1024.pt"
+_YOLO_DPI = 150
+_YOLO_IMGSZ = 1024
+_YOLO_CONF = 0.35
+_YOLO_FIGURE_CLASS = 3  # DocStructBench class labels: 0 title, 1 plain text, 2 abandon, 3 figure, ...
+# Fraction of the smaller box's area that must overlap an existing raster-detected rect for a
+# YOLO figure box to be considered "already flagged" and skipped (avoids double-counting one
+# diagram that happens to ALSO be embedded as a raster image).
+_YOLO_OVERLAP_THRESHOLD = 0.3
+_yolo_model_cache = {}
+
+def _get_yolo_model():
+    """Lazily downloads (first call only, cached by huggingface_hub on disk) and loads the
+    DocLayout-YOLO model. Imports torch/doclayout_yolo inside this function, not at module level,
+    so the rest of this module (used by several other endpoints) still works even in an
+    environment where this optional, heavy dependency isn't installed or fails to load."""
+    if "model" not in _yolo_model_cache:
+        from doclayout_yolo import YOLOv10
+        from huggingface_hub import hf_hub_download
+        model_path = hf_hub_download(repo_id=_YOLO_REPO_ID, filename=_YOLO_FILENAME)
+        _yolo_model_cache["model"] = YOLOv10(model_path)
+    return _yolo_model_cache["model"]
+
+def _box_already_covered(box, existing_rects):
+    box_area = max(box.get_area(), 1e-6)
+    for r in existing_rects:
+        inter = box & r
+        if inter.is_empty:
+            continue
+        if inter.get_area() / min(box_area, max(r.get_area(), 1e-6)) >= _YOLO_OVERLAP_THRESHOLD:
+            return True
+    return False
+
+def _detect_vector_diagrams_yolo(doc, pages_meta):
+    """See extract_pages_text_and_diagrams's docstring for why this exists. Page rendering (fitz
+    calls) happens sequentially -- PyMuPDF is not safe for concurrent access to the same Document
+    object across threads.
+
+    Inference is ALSO sequential, deliberately, not parallelized like the Gemini calls in
+    scan_pdf_bytes: a ThreadPoolExecutor calling model.predict() concurrently from multiple
+    threads on this one shared model instance was tried first and silently corrupted results --
+    confirmed live on a real 19-page file, where concurrent calls (max_workers=4) returned ZERO
+    figure detections on every page, while the identical sequential calls correctly found 16. A
+    genuine batched call (model.predict(list_of_images), one call for the whole page list) was
+    also tried as a safe alternative -- it IS correct (same 16), but measured slower on this CPU
+    (3.9s/page) than plain sequential single-image calls (1.9s/page), so there's no real
+    parallelism win available here worth the complexity; sequential is both correct and faster."""
+    from PIL import Image
+    import numpy as np
+
+    model = _get_yolo_model()  # raises if unavailable -- caller catches and no-ops
+
+    page_arrays = []
+    for page in doc:
+        pix = page.get_pixmap(dpi=_YOLO_DPI)
+        img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+        page_arrays.append(np.array(img))
+    scale = 72.0 / _YOLO_DPI  # pixel coords (at _YOLO_DPI) -> PDF point coords
+
+    out = {}
+    for i, arr in enumerate(page_arrays):
+        try:
+            results = model.predict(arr, imgsz=_YOLO_IMGSZ, conf=_YOLO_CONF, verbose=False)
+            boxes = results[0].boxes
+            pm = pages_meta[i]
+            markers = []
+            for cls, xyxy in zip(boxes.cls.tolist(), boxes.xyxy.tolist()):
+                if int(cls) != _YOLO_FIGURE_CLASS:
+                    continue
+                x0, y0, x1, y1 = (v * scale for v in xyxy)
+                # No content_start_y (header/banner) exclusion here, unlike the raster pass just
+                # above -- that heuristic (first question-number marker on the page) turned out
+                # fragile on coaching-material PDFs with bare-digit question numbering and dotted
+                # answer-option numbering ("1." for an option, not "1." for the question), which
+                # can push it far down the page and wrongly exclude real early-page diagrams
+                # (confirmed live: page 1 of a real file computed content_start_y=563pt on an
+                # ~800pt-tall page). Not needed here anyway: DocStructBench's own trained classes
+                # already separate a logo/header from a real figure (confirmed live on the same
+                # file -- the per-page logo is consistently classified 'abandon' or 'title', never
+                # 'figure', at conf 0.7-0.9), so this pass can trust the model's own classification
+                # instead of re-deriving "is this in the header" from the page's text layout.
+                box = fitz.Rect(x0, y0, x1, y1)
+                if _box_already_covered(box, pm["raster_rects"]):
+                    continue  # already flagged via the raster pass -- don't double-count
+                markers.append((x0, y0, DIAGRAM_MARKER))
+            if markers:
+                out[i] = markers
+        except Exception as e:
+            print(f"    DocLayout-YOLO failed on page {i + 1}, skipping for this page: {e}")
+    return out
 
 _KNOWN_LATEX_COMMANDS = {
     "text", "mathrm", "mathbf", "mathit", "overline", "underline", "hat", "vec", "dot", "ddot",
