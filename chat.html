@@ -557,7 +557,15 @@
     .profile-plan { font-size: 11px; color: #444; margin-top: 1px; }
     .profile-more { width: 14px; height: 14px; flex-shrink: 0; }
 
-    .profile-menu { position: absolute; bottom: 60px; left: 8px; right: 8px; background: #1e1e1e; border: 1px solid #2a2a2a; border-radius: 10px; padding: 6px; z-index: 100; box-shadow: 0 -4px 20px rgba(0,0,0,0.4); }
+    /* position:fixed + JS-computed left/bottom (positionProfileMenu), NOT position:absolute
+       relative to .sidebar-bottom -- .sidebar has overflow:hidden (for the collapsed icon-rail
+       state), which silently squeezed this into an ~23px sliver when the sidebar is collapsed
+       (56px wide, left:8px/right:8px leaves almost nothing), clipping every item's label down to
+       just its icon. Same root cause -- and same document.body-appended/fixed-position fix -- as
+       this menu's OWN Language/Learn More flyout already uses (see openProfileSubmenu's comment);
+       that fix just never got applied to this outer menu too. Fixed width instead of left+right
+       now that there's no reliable "sidebar width" to stretch between. */
+    .profile-menu { position: fixed; width: 228px; background: #1e1e1e; border: 1px solid #2a2a2a; border-radius: 10px; padding: 6px; z-index: 100; box-shadow: 0 -4px 20px rgba(0,0,0,0.4); }
     .profile-menu-email { padding: 7px 12px 9px; font-size: 12px; color: #666; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .profile-menu-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 7px; font-size: 13px; color: #ccc; cursor: pointer; transition: background 0.15s; }
     .profile-menu-item:hover { background: #2a2a2a; }
@@ -989,7 +997,7 @@
         <div class="profile-menu-item logout" id="logoutBtn"><span class="item-menu-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></span><span data-i18n="chat.logout">Log out</span></div>
       </div>
 
-      <div class="profile-btn" id="profileSection" style="display:none" onclick="event.stopPropagation(); const m=document.getElementById('profileMenu'); m.style.display=(m.style.display==='none'||m.style.display==='')?'block':'none';">
+      <div class="profile-btn" id="profileSection" style="display:none" onclick="event.stopPropagation(); const m=document.getElementById('profileMenu'); const willOpen=(m.style.display==='none'||m.style.display===''); if (willOpen) positionProfileMenu(); m.style.display=willOpen?'block':'none';">
         <div class="profile-avatar">S</div>
         <div class="profile-info">
           <div class="profile-name">Student</div>
@@ -4600,6 +4608,23 @@ function plainTextFromMarkdown(text) {
       top = Math.max(8, top);
       menu.style.left = left + 'px';
       menu.style.top = top + 'px';
+    }
+
+    // Positions #profileMenu (position:fixed, see its CSS comment for why) directly above its
+    // trigger button, viewport-clamped so it can't run off the left/right edge. Unlike
+    // positionItemMenu above, this doesn't need the menu's own rendered width/height first --
+    // width is fixed in CSS, and anchoring via `bottom` (not `top`) means the box grows upward
+    // from a known point regardless of how tall its content is, so this can run BEFORE the menu
+    // is shown, not just after.
+    function positionProfileMenu() {
+      const menu = document.getElementById('profileMenu');
+      const anchorRect = document.getElementById('profileSection').getBoundingClientRect();
+      const menuWidth = 228; // matches .profile-menu's CSS width
+      let left = Math.min(anchorRect.left, window.innerWidth - menuWidth - 8);
+      left = Math.max(8, left);
+      const bottom = Math.max(8, window.innerHeight - anchorRect.top + 8);
+      menu.style.left = left + 'px';
+      menu.style.bottom = bottom + 'px';
     }
 
     // Reused both for the "Pin chat"/"Unpin chat" menu option below and for the hover-to-pin
