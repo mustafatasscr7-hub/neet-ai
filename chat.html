@@ -4382,14 +4382,54 @@ function plainTextFromMarkdown(text) {
       btn.title = isPinned ? 'Unpin' : 'Pin';
     }
 
+    // FLIP (First-Last-Invert-Play) helpers, shared by makeHistoryListSortable's own per-move
+    // sibling shift AND refreshPinnedSectionVisibility below -- one established technique, not a
+    // separate one-off per call site. snapshotTops captures the "First" position of every child
+    // across the given containers (before whatever layout-affecting change is about to happen);
+    // flipPlay does "Invert, Play" against whatever those same elements' positions turn out to be
+    // afterward -- inverts each displaced element back to where it visually was (transition
+    // off), forces a synchronous reflow so that jump actually commits, then releases it back to
+    // its real position with the element's own CSS transition doing the animating. Elements that
+    // didn't actually move are skipped (delta === 0), so calling this liberally/redundantly is
+    // harmless, not just for genuine drag-reorder hops.
+    function snapshotTops(containersToSnapshot, exclude) {
+      const map = new Map();
+      for (const c of containersToSnapshot) {
+        for (const sib of c.children) {
+          if (sib !== exclude) map.set(sib, sib.getBoundingClientRect().top);
+        }
+      }
+      return map;
+    }
+    function flipPlay(before) {
+      for (const [sib, oldTop] of before) {
+        const newTop = sib.getBoundingClientRect().top;
+        const delta = oldTop - newTop;
+        if (delta === 0) continue;
+        sib.style.transition = 'none';
+        sib.style.transform = `translateY(${delta}px)`;
+        sib.getBoundingClientRect(); // forces layout so the inverted position above actually commits
+        sib.style.transition = '';
+        sib.style.transform = '';
+      }
+    }
+
     // Shows/hides the "Pinned" section label + list based on whether it currently holds any
     // items -- an empty pinned section with just a floating heading and nothing under it would
     // look broken, so both are kept in sync rather than only ever set once at page load.
+    // #pinnedList appearing/disappearing pushes #historyList's own items down/up by its height --
+    // that shift used to happen as a plain, un-transitioned display toggle (a real, instant jump
+    // whenever this fires mid-drag: dragging a chat out of an otherwise-empty Pinned section back
+    // into Recent hides Pinned again right as the drag ends, snapping every Recent row back up).
+    // FLIP-covering it here fixes that at the one place this exact transition actually happens,
+    // for every caller (drag-driven or a plain click-to-pin), not just the drag path.
     function refreshPinnedSectionVisibility() {
       const list = document.getElementById('pinnedList');
       const hasAny = list.children.length > 0;
+      const before = snapshotTops([document.getElementById('historyList')], null);
       list.style.display = hasAny ? 'flex' : 'none';
       document.getElementById('pinnedLabel').style.display = hasAny ? 'block' : 'none';
+      flipPlay(before);
     }
 
     // skipReposition: drag-to-pin already put the item exactly where the student dropped it
@@ -4679,9 +4719,15 @@ function plainTextFromMarkdown(text) {
           // Pinned may currently be empty (display:none, zero height, see
           // refreshPinnedSectionVisibility) -- force it visible with real height for the
           // duration of the drag, or there'd be nowhere to actually drop a chat to pin it.
+          // That reveal pushes every #historyList row down by however tall Pinned's forced
+          // min-height + label now are -- FLIP-cover that specific shift too (snapshot right
+          // before, play right after), or it happens as a real instant jump on literally every
+          // drag start where Pinned began empty, before the per-move FLIP below even runs once.
+          const beforeReveal = snapshotTops([historyContainer], draggedEl);
           document.getElementById('pinnedLabel').style.display = 'block';
           pinnedContainer.style.display = 'flex';
           pinnedContainer.classList.add('pinned-drop-target');
+          flipPlay(beforeReveal);
         }
         draggedEl.style.transform = `translateY(${deltaY}px)`;
 
@@ -4689,12 +4735,7 @@ function plainTextFromMarkdown(text) {
         // moving into the other list can shift its siblings too) before any change this event
         // might cause. Without this, insertBefore()/appendChild() below just teleports a
         // displaced sibling to its new spot with no animation -- the "snap" the item feels.
-        const before = new Map();
-        for (const c of containers) {
-          for (const sib of c.children) {
-            if (sib !== draggedEl) before.set(sib, sib.getBoundingClientRect().top);
-          }
-        }
+        const before = snapshotTops(containers, draggedEl);
 
         const targetContainer = containerAt(e.clientY);
         updateDragTooltip(e.clientX, e.clientY, targetContainer);
@@ -4739,20 +4780,10 @@ function plainTextFromMarkdown(text) {
           }
         }
 
-        // Play: for every sibling whose position actually changed this event, invert it back to
-        // where it visually was (transition off), force the browser to commit that instantly,
-        // then hand it back to the normal CSS transition (transform 0.12s ease) targeting its
-        // real new position -- it slides from old spot to new instead of snapping there.
-        for (const [sib, oldTop] of before) {
-          const newTop = sib.getBoundingClientRect().top;
-          const delta = oldTop - newTop;
-          if (delta === 0) continue;
-          sib.style.transition = 'none';
-          sib.style.transform = `translateY(${delta}px)`;
-          sib.getBoundingClientRect(); // forces layout so the inverted position above actually commits
-          sib.style.transition = '';
-          sib.style.transform = '';
-        }
+        // Play: hand every displaced sibling back to its real new position, animated (see
+        // flipPlay above -- same shared helper the drag-start Pinned reveal just above, and
+        // refreshPinnedSectionVisibility, both also use).
+        flipPlay(before);
       }
 
       async function onPointerUp() {
