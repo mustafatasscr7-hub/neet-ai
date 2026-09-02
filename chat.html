@@ -28,7 +28,7 @@
        user-select:none that a native <button> has, so clicking their text was dropping a text
        caret into them instead of just registering the click. Disabled site-wide above, then
        re-enabled here for actual content a student would want to select/copy. */
-    .message-bubble, .alt-method-content, .pyq-item, .quoted-context-box, input, textarea {
+    .message-bubble, .alt-method-content, .pyq-item, .quoted-context-box, input, textarea, .pyq-q-text, .pyq-opt {
       user-select: text; -webkit-user-select: text;
     }
     body.light-mode { background: #f5f5f5 !important; color: #0d0d0d !important; }
@@ -70,6 +70,10 @@
     body.light-mode .selection-toolbar-btn { color: #333338 !important; }
     body.light-mode .selection-toolbar-btn:hover { background: #f0f0f3 !important; color: #0d0d0d !important; }
     body.light-mode .selection-toolbar-divider { background: #e5e5ea !important; }
+    body.light-mode .pyq-modal-selection-popup { background: #ffffff !important; border-color: #e0e0e5 !important; box-shadow: 0 8px 24px rgba(0,0,0,0.12) !important; }
+    body.light-mode .pyq-modal-selection-explain-btn { background: #f0f0f3 !important; color: #16161d !important; }
+    body.light-mode .pyq-modal-selection-explain-btn:hover { background: #e4e4ea !important; }
+    body.light-mode .pyq-modal-selection-ask-input { background: #f5f5f7 !important; border-color: #d5d5dd !important; color: #16161d !important; }
 
     body.light-mode .nav-item { color: #55555f !important; }
     body.light-mode .nav-item:hover { background: #e4e4ea !important; color: #222228 !important; }
@@ -497,6 +501,21 @@
     .selection-toolbar-btn { background: transparent; border: none; color: #ccc; font-size: 13px; font-family: 'Inter', sans-serif; padding: 6px 10px; border-radius: 6px; cursor: pointer; white-space: nowrap; transition: background 0.15s; }
     .selection-toolbar-btn:hover { background: #2a2a2a; color: #fff; }
     .selection-toolbar-divider { width: 1px; height: 16px; background: #333; flex-shrink: 0; }
+
+    /* Text-selection popup for PYQ questions shown inline in chat (the "Related Past Year
+       Questions" modal) -- same visual language/behavior as pyqbank.html's own
+       .pyq-selection-popup (Explain button + free-type question), just renamed to avoid any
+       confusion with this file's own .selection-toolbar, which is a different, AI-bubble-only
+       mechanism (see the JS block that builds this popup for why they don't reuse one element). */
+    .pyq-modal-selection-popup { position: fixed; display: none; flex-direction: column; gap: 6px; background: #1e1e1e; border: 1px solid #333; border-radius: 10px; padding: 8px; z-index: 10000; width: 260px; box-shadow: 0 8px 24px rgba(0,0,0,0.6); }
+    .pyq-modal-selection-popup.visible { display: flex; }
+    .pyq-modal-selection-explain-btn { background: #2a2a2a; border: none; color: #ececec; font-size: 13px; font-family: 'Inter', sans-serif; padding: 8px 10px; border-radius: 6px; cursor: pointer; text-align: left; transition: background 0.15s; }
+    .pyq-modal-selection-explain-btn:hover { background: #333; }
+    .pyq-modal-selection-ask-row { display: flex; gap: 6px; }
+    .pyq-modal-selection-ask-input { flex: 1; min-width: 0; background: #111; border: 1px solid #2a2a2a; border-radius: 6px; padding: 7px 9px; color: #ececec; font-size: 12px; font-family: 'Inter', sans-serif; outline: none; }
+    .pyq-modal-selection-ask-input:focus { border-color: #4f8ef7; }
+    .pyq-modal-selection-ask-send { background: #4f8ef7; border: none; color: #fff; border-radius: 6px; width: 30px; flex-shrink: 0; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+    .pyq-modal-selection-ask-send:hover { background: #3f7de6; }
 
     /* Slash-command menu -- same visual language as .selection-toolbar above (dark chip,
        fixed positioning, computed on demand), anchored above whichever input triggered it. */
@@ -4020,6 +4039,121 @@ function plainTextFromMarkdown(text) {
       selection.removeAllRanges();
       hideSelectionToolbar();
     });
+
+    // ---------------- Text-selection popup for PYQ questions inside the in-chat "Related Past
+    // Year Questions" modal (#pyq-modal, built by showPYQModal) ----------------
+    // Separate popup/DOM area from .message-bubble.ai on purpose: the mouseup listener above
+    // that drives .selection-toolbar only ever fires for a selection whose ancestor is
+    // .message-bubble.ai (see its `if (!aiBubble) { hideSelectionToolbar(); return; }` guard just
+    // above), so a selection inside #pyq-modal's question cards never reaches it -- these two
+    // mechanisms are structurally independent and can't fire on the same selection.
+    //
+    // Same UI/behavior as pyqbank.html's own .pyq-selection-popup (Explain button + free-type
+    // question), but simpler where it can be: pyqbank.html is a different page with no chat
+    // input of its own, so it hands off via a one-shot sessionStorage key + a real navigation to
+    // chat.html. This is already chat.html, so both actions just fill `input.value` and call the
+    // real sendMessage() directly -- no handoff mechanism needed.
+    const pyqModalSelectionPopup = document.createElement('div');
+    pyqModalSelectionPopup.className = 'pyq-modal-selection-popup';
+    pyqModalSelectionPopup.innerHTML = `
+      <button class="pyq-modal-selection-explain-btn" id="pyqModalSelectionExplainBtn">${t('pyqbank', 'selectionExplain')}</button>
+      <div class="pyq-modal-selection-ask-row">
+        <input type="text" class="pyq-modal-selection-ask-input" id="pyqModalSelectionAskInput" placeholder="${t('pyqbank', 'selectionAskPlaceholder')}" />
+        <button class="pyq-modal-selection-ask-send" id="pyqModalSelectionAskSend" aria-label="Send">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+        </button>
+      </div>
+    `;
+    document.body.appendChild(pyqModalSelectionPopup);
+
+    // Same reasoning as .selection-toolbar's own mousedown guard above: without this, mousedown
+    // (which fires before mouseup/selectionchange) collapses the selection before its text can
+    // be read, closing the popup on the very click meant to use it.
+    pyqModalSelectionPopup.addEventListener('mousedown', function(e) { e.preventDefault(); });
+
+    let pyqModalSelectedText = '';
+
+    function hidePyqModalSelectionPopup() {
+      pyqModalSelectionPopup.classList.remove('visible');
+      pyqModalSelectedText = '';
+    }
+
+    function showPyqModalSelectionPopupForRange(range, text) {
+      pyqModalSelectedText = text;
+      document.getElementById('pyqModalSelectionAskInput').value = '';
+      pyqModalSelectionPopup.classList.add('visible');
+      const popupRect = pyqModalSelectionPopup.getBoundingClientRect();
+      const rect = range.getBoundingClientRect();
+      let left = rect.left + rect.width / 2 - popupRect.width / 2;
+      left = Math.max(8, Math.min(left, window.innerWidth - popupRect.width - 8));
+      let top = rect.top - popupRect.height - 8;
+      if (top < 4) top = rect.bottom + 8; // not enough room above -- flip below the selection
+      pyqModalSelectionPopup.style.left = left + 'px';
+      pyqModalSelectionPopup.style.top = top + 'px';
+    }
+
+    // Driven by selectionchange (debounced), not mouseup -- same reasoning as pyqbank.html's
+    // handlePyqSelectionSettled: selectionchange fires uniformly for mouse drag, touch
+    // long-press + drag-handles, and keyboard shift+arrow, which matters specifically for
+    // adjusting the native selection handles on mobile (that doesn't reliably re-fire touchend).
+    let pyqModalSelectionDebounceTimer = null;
+    function handlePyqModalSelectionSettled() {
+      const selection = window.getSelection();
+      if (!selection || selection.isCollapsed || selection.rangeCount === 0 || !selection.toString().trim()) {
+        return; // deliberately not hiding here -- see pyqbank.html's identical comment: clearing
+                // the selection programmatically (e.g. after Explain/Ask fires) re-enters this
+                // too, and hiding unconditionally would also close a popup an in-progress click
+                // on its own button hasn't finished handling yet.
+      }
+      const range = selection.getRangeAt(0);
+      const container = range.commonAncestorContainer;
+      const containerEl = container.nodeType === 3 ? container.parentElement : container;
+      const scopedEl = containerEl && containerEl.closest ? containerEl.closest('.pyq-q-text, .pyq-opt') : null;
+      if (!scopedEl) { hidePyqModalSelectionPopup(); return; }
+      const text = plainTextFromSelectionRange(range); // shared with .selection-toolbar -- same KaTeX-mathml strip fix
+      if (!text) { hidePyqModalSelectionPopup(); return; }
+      showPyqModalSelectionPopupForRange(range, text);
+    }
+    document.addEventListener('selectionchange', function() {
+      clearTimeout(pyqModalSelectionDebounceTimer);
+      pyqModalSelectionDebounceTimer = setTimeout(handlePyqModalSelectionSettled, 250);
+    });
+
+    async function sendPyqModalSelection(message) {
+      window.getSelection().removeAllRanges();
+      hidePyqModalSelectionPopup();
+      const pyqModal = document.getElementById('pyq-modal');
+      if (pyqModal) pyqModal.remove(); // close the PYQ modal so the sent doubt/answer is visible
+      input.value = message;
+      await sendMessage();
+    }
+
+    document.getElementById('pyqModalSelectionExplainBtn').addEventListener('click', function() {
+      if (!pyqModalSelectedText) return;
+      sendPyqModalSelection(`Explain: ${pyqModalSelectedText}`);
+    });
+
+    function submitPyqModalSelectionAsk() {
+      const question = document.getElementById('pyqModalSelectionAskInput').value.trim();
+      if (!question || !pyqModalSelectedText) return;
+      sendPyqModalSelection(`${pyqModalSelectedText} — ${question}`);
+    }
+    document.getElementById('pyqModalSelectionAskSend').addEventListener('click', submitPyqModalSelectionAsk);
+    document.getElementById('pyqModalSelectionAskInput').addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') { e.preventDefault(); submitPyqModalSelectionAsk(); }
+      if (e.key === 'Escape') { hidePyqModalSelectionPopup(); }
+    });
+
+    // Dismiss on click/tap elsewhere, scroll, or Escape -- same set pyqbank.html's version covers.
+    document.addEventListener('mousedown', function(e) {
+      if (!pyqModalSelectionPopup.classList.contains('visible')) return;
+      if (pyqModalSelectionPopup.contains(e.target)) return;
+      hidePyqModalSelectionPopup();
+    });
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape' && pyqModalSelectionPopup.classList.contains('visible')) hidePyqModalSelectionPopup();
+    });
+    window.addEventListener('scroll', hidePyqModalSelectionPopup, true);
 
     // ---------------- Slash-command menu ----------------
     // One shared menu for both entry points (#welcomeInput on the empty-chat screen and the
