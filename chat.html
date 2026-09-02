@@ -4670,10 +4670,9 @@ function plainTextFromMarkdown(text) {
       document.getElementById('headerBrand').style.display = 'none';
       const btn = document.getElementById('chatTitleBtn');
       btn.style.display = 'flex';
-      // Same fallback as createHistoryItem's .item-title (including the .trim() -- a
-      // whitespace-only title is truthy and needs the same catch), same real cause -- otherwise
-      // opening that exact chat leaves the header's own title button visually blank too.
-      document.getElementById('chatTitleText').textContent = (title && title.trim()) || 'Untitled chat';
+      // Shared fallback with createHistoryItem's .item-title -- see displayableTitle's own
+      // comment for why this needs to catch more than just empty/whitespace.
+      document.getElementById('chatTitleText').textContent = displayableTitle(title);
     }
 
     function resetHeaderTitle() {
@@ -4723,6 +4722,28 @@ function plainTextFromMarkdown(text) {
       positionItemMenu(menu, this.getBoundingClientRect(), { belowInsteadOfRight: true });
     });
 
+    // Shared by createHistoryItem and updateHeaderTitle. Two rounds of this bug already shipped
+    // and STILL didn't fix it live: first `title || 'Untitled chat'` (only catches actually
+    // empty/null), then adding .trim() (catches whitespace-only, but .trim() only strips the
+    // ECMAScript "WhiteSpace"/"LineTerminator" set -- it does NOT strip zero-width Unicode
+    // characters like U+200B zero-width space, U+FEFF BOM/zero-width no-break space, or the
+    // U+200C/200D joiners). Any of those renders as real, non-empty, TRUTHY text that is still
+    // completely invisible on screen -- exactly reproducing "the row shows nothing, not even
+    // after the trim fix" as reported live, twice, after each of the first two fixes.  This strips
+    // that whole class of invisible-but-technically-present characters before checking, not just
+    // one specific one, so a title that turns out to be some OTHER invisible character doesn't
+    // require a third round of this same bug.
+    function displayableTitle(title) {
+      // Strips \s (standard whitespace) plus a block of zero-width/invisible Unicode characters
+      // that .trim() does NOT strip on its own: U+200B-200F (zero-width space, ZWNJ, ZWJ, LRM,
+      // RLM), U+2028-202F (line/paragraph separators + directional-formatting/narrow-no-break-
+      // space characters), and U+FEFF (zero-width no-break space / BOM). Written as \u escapes,
+      // not literal characters, so this stays readable and can't be silently mangled by an
+      // editor or encoding round-trip.
+      const stripped = (title || '').replace(/[\s\u200B-\u200F\u2028-\u202F\uFEFF]/g, '');
+      return stripped ? title.trim() : 'Untitled chat';
+    }
+
     function createHistoryItem(id, title, onClickFn, isPinned) {
       const item = document.createElement('div');
       item.className = 'history-item';
@@ -4730,13 +4751,10 @@ function plainTextFromMarkdown(text) {
 
       const titleSpan = document.createElement('span');
       titleSpan.className = 'item-title';
-      // Falls back for a genuinely empty/null/whitespace-only title (e.g. an older chat saved
-      // before title generation, or a saved title that came back blank) -- confirmed live this
-      // isn't just the empty-string case: a title that's present but only whitespace is truthy
-      // (`title || ...` alone doesn't catch it) and renders as a real row with literally nothing
-      // visible in it -- no text, and no icon either on a non-touch device, since the hover-to-pin
-      // icon only appears on :hover there. .trim() catches both cases in one check.
-      titleSpan.textContent = (title && title.trim()) || 'Untitled chat';
+      // See displayableTitle's own comment -- an empty/whitespace/invisible-Unicode title
+      // otherwise renders a real row with nothing visible in it at all (no text, and no icon
+      // either on a non-touch device, since the hover-to-pin icon only appears on :hover there).
+      titleSpan.textContent = displayableTitle(title);
       item.appendChild(titleSpan);
 
       // Sits before the "..." menu button in DOM order -- both right-aligned, so this renders
