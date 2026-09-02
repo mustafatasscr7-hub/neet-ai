@@ -4852,7 +4852,17 @@ function plainTextFromMarkdown(text) {
         dragging = false;
         pointerId = e.pointerId;
         document.addEventListener('pointermove', onPointerMove);
+        // pointercancel too, not just pointerup -- confirmed live as a real, pre-existing bug:
+        // if the browser cancels the gesture instead of completing it (common on touch devices,
+        // where an OS/browser gesture like scroll-disambiguation can cancel mid-drag) and only
+        // pointerup was ever listened for, the drag never cleans up at all -- Pinned stays forced
+        // visible (both list and label) with zero real items in it, and the dragged item stays
+        // stuck mid-transform with 'dragging' still applied. Reuses onPointerUp itself rather
+        // than a separate revert-to-original-position handler: whatever reorder state the drag
+        // was in gets committed exactly like a normal drop, which is a safe, simple choice given
+        // cancellation happens almost immediately after the drag threshold in practice.
         document.addEventListener('pointerup', onPointerUp, { once: true });
+        document.addEventListener('pointercancel', onPointerUp, { once: true });
       }
       pinnedContainer.addEventListener('pointerdown', onPointerDown);
       historyContainer.addEventListener('pointerdown', onPointerDown);
@@ -4964,6 +4974,11 @@ function plainTextFromMarkdown(text) {
 
       async function onPointerUp() {
         document.removeEventListener('pointermove', onPointerMove);
+        // Whichever of these fired, remove the other's still-armed { once: true } listener too --
+        // otherwise a pointerup that follows a pointercancel (or vice versa, however unlikely)
+        // would run this whole function a second time on a now-null draggedEl.
+        document.removeEventListener('pointerup', onPointerUp);
+        document.removeEventListener('pointercancel', onPointerUp);
         pinnedContainer.classList.remove('pinned-drop-target');
         sidebarEl.classList.remove('dragging-active');
         hideDragTooltip();
