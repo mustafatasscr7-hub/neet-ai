@@ -1484,6 +1484,9 @@ function toggleSearchChats() {
    function toggleSidebar() {
       const sidebar = document.querySelector('.sidebar');
       sidebar.classList.toggle('collapsed');
+      // Re-sync pinnedList/pinnedLabel's inline display with the new collapsed state --
+      // see refreshPinnedSectionVisibility for why that inline style has to track it.
+      if (typeof refreshPinnedSectionVisibility === 'function') refreshPinnedSectionVisibility();
     }
 function togglePlusMenu() {
       const menu = document.getElementById('plusMenu');
@@ -4570,9 +4573,19 @@ function plainTextFromMarkdown(text) {
     function refreshPinnedSectionVisibility() {
       const list = document.getElementById('pinnedList');
       const hasAny = list.children.length > 0;
+      // pinnedList/pinnedLabel share the .history-list/.sidebar-label classes that
+      // ".sidebar.collapsed" hides via CSS -- but setting display inline below (as this
+      // function always has) outranks that stylesheet rule, so a collapsed 56px icon-rail
+      // sidebar with pinned chats used to keep pinnedList forced to display:flex and get
+      // its full-text rows crushed into ~39px of width instead of actually hiding, unlike
+      // historyList (which has no inline override and hides correctly). Folding the
+      // collapsed check in here keeps pinnedList's inline style consistent with what the
+      // CSS rule already does for everything else in a collapsed sidebar.
+      const collapsed = document.querySelector('.sidebar').classList.contains('collapsed');
+      const show = hasAny && !collapsed;
       const before = snapshotTops([document.getElementById('historyList')], null);
-      list.style.display = hasAny ? 'flex' : 'none';
-      document.getElementById('pinnedLabel').style.display = hasAny ? 'block' : 'none';
+      list.style.display = show ? 'flex' : 'none';
+      document.getElementById('pinnedLabel').style.display = show ? 'block' : 'none';
       flipPlay(before);
     }
 
