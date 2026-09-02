@@ -410,6 +410,16 @@
     .history-list { display: flex; flex-direction: column; gap: 2px; overflow-y: auto; overflow-x: hidden; flex: 1; }
     .history-list::-webkit-scrollbar { width: 3px; }
     .history-list::-webkit-scrollbar-thumb { background: #2a2a2a; border-radius: 4px; }
+    /* Real root cause behind BOTH the "cursor lag" and "renders behind Recent header" drag bugs
+       (confirmed live: the dragged item's own translateY tracks the cursor correctly on every
+       single pointermove, no lag at the style level -- but the instant that transform pushes it
+       outside #historyList/#pinnedList's own box, overflow-y:auto here clips it away entirely,
+       which reads as "stuck"/"lagging" since the student can no longer see it moving, and as
+       "behind the header" right at the boundary where a thin sliver is still technically inside
+       the box. .sidebar.dragging-active suspends that clipping for the exact duration of an
+       active drag (see makeHistoryListSortable) -- nothing else needs it, a student isn't also
+       trying to use the scrollbar mid-drag. */
+    .sidebar.dragging-active .history-list { overflow: visible; }
     /* Shown on #pinnedList only while a drag is actually in progress -- when nobody has any
        chats pinned yet, #pinnedList's normal state is display:none with zero height (see
        refreshPinnedSectionVisibility), which would leave no visible/droppable target to drag
@@ -445,7 +455,13 @@
        the base transition above would otherwise fight/lag behind the pointer instead of
        tracking it 1:1. Re-enabled the instant this class comes off, so the final snap when
        transform resets to '' on drop animates smoothly. */
-    .history-item.dragging { transition: none; opacity: 0.85; box-shadow: 0 4px 14px rgba(0,0,0,0.35); background: #1a1a1a; z-index: 10; will-change: transform; }
+    /* z-index bumped from 10 -> 1000: the real bug (rendering behind "Recent"/"Pinned") was
+       .history-list's own overflow-y:auto CLIPPING the item once dragged outside its box, which
+       no z-index value can fix (see .sidebar.dragging-active above, the actual fix) -- but a
+       plain sibling with no z-index at all (.sidebar-label, .sidebar-bottom) would still be able
+       to out-stack a z-index:10 element in the rare case both happen to be genuinely visible at
+       the same point, so this is raised too, well above anything else local to the sidebar. */
+    .history-item.dragging { transition: none; opacity: 0.85; box-shadow: 0 4px 14px rgba(0,0,0,0.35); background: #1a1a1a; z-index: 1000; will-change: transform; }
     .history-item .item-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
     /* Claude.ai-style hover-to-pin icon -- right-aligned next to the "..." menu button, not a
@@ -4791,7 +4807,8 @@ function plainTextFromMarkdown(text) {
     function makeHistoryListSortable(pinnedContainer, historyContainer) {
       const DRAG_THRESHOLD = 5;
       const containers = [pinnedContainer, historyContainer];
-      let draggedEl = null, startY = 0, dragging = false, pointerId = null, sourceContainer = null;
+      const sidebarEl = document.querySelector('.sidebar');
+      let draggedEl = null, startY = 0, dragging = false, pointerId = null, sourceContainer = null, grabOffsetY = 0;
 
       // Single reused element (not created/destroyed per drag) -- there's only ever one active
       // drag at a time, so this stays as one node in the DOM permanently, just toggled visible.
@@ -4855,12 +4872,16 @@ function plainTextFromMarkdown(text) {
 
       function onPointerMove(e) {
         if (!draggedEl) return;
-        const deltaY = e.clientY - startY;
         if (!dragging) {
-          if (Math.abs(deltaY) < DRAG_THRESHOLD) return;
+          if (Math.abs(e.clientY - startY) < DRAG_THRESHOLD) return;
           dragging = true;
           draggedEl.classList.add('dragging');
+          sidebarEl.classList.add('dragging-active');
           draggedEl.setPointerCapture(pointerId);
+          // Fixed for the whole drag: where within the item the student actually grabbed it, so
+          // the item tracks the cursor at that same relative point rather than snapping its top
+          // edge to the cursor.
+          grabOffsetY = e.clientY - draggedEl.getBoundingClientRect().top;
           // Pinned may currently be empty (display:none, zero height, see
           // refreshPinnedSectionVisibility) -- force it visible with real height for the
           // duration of the drag, or there'd be nowhere to actually drop a chat to pin it.
@@ -4874,7 +4895,6 @@ function plainTextFromMarkdown(text) {
           pinnedContainer.classList.add('pinned-drop-target');
           flipPlay(beforeReveal);
         }
-        draggedEl.style.transform = `translateY(${deltaY}px)`;
 
         // FLIP (First-Last-Invert-Play): snapshot every sibling's position (in BOTH containers --
         // moving into the other list can shift its siblings too) before any change this event
@@ -4893,7 +4913,6 @@ function plainTextFromMarkdown(text) {
             if (e.clientY < rect.top + rect.height / 2) { insertBefore = sib; break; }
           }
           targetContainer.insertBefore(draggedEl, insertBefore);
-          startY = e.clientY - deltaY; // re-anchor so the transform stays continuous, no jump
         } else {
           // Same container as before -- swap with whichever immediate sibling the pointer has
           // crossed the vertical midpoint of. Loops until nothing more qualifies (not just one
@@ -4912,12 +4931,10 @@ function plainTextFromMarkdown(text) {
               const midpoint = rect.top + rect.height / 2;
               if (sib.previousElementSibling === draggedEl && e.clientY > midpoint) {
                 container.insertBefore(draggedEl, sib.nextElementSibling);
-                startY = e.clientY - deltaY;
                 moved = true;
                 break;
               } else if (sib.nextElementSibling === draggedEl && e.clientY < midpoint) {
                 container.insertBefore(draggedEl, sib);
-                startY = e.clientY - deltaY;
                 moved = true;
                 break;
               }
@@ -4929,11 +4946,26 @@ function plainTextFromMarkdown(text) {
         // flipPlay above -- same shared helper the drag-start Pinned reveal just above, and
         // refreshPinnedSectionVisibility, both also use).
         flipPlay(before);
+
+        // Position draggedEl itself LAST, using its NATURAL (untransformed) position measured
+        // fresh after any reordering above, not a running deltaY relative to a remembered
+        // anchor. The old delta-based approach computed the transform BEFORE insertBefore, then
+        // never revisited it -- so a same-event reorder (moving draggedEl to a new DOM slot with
+        // a different natural top) left the transform stale relative to its new slot, producing a
+        // real visible jump on every swap (confirmed live: a steady 15px/step cursor move
+        // produced 55-95px jumps in the item's rendered position exactly on swap events). This
+        // sidesteps that entirely -- transform:none, measure, compute exactly what's needed to
+        // land under the cursor at the original grab point, apply -- so it's correct regardless
+        // of how many times or where insertBefore just moved it.
+        draggedEl.style.transform = 'none';
+        const naturalTop = draggedEl.getBoundingClientRect().top;
+        draggedEl.style.transform = `translateY(${e.clientY - grabOffsetY - naturalTop}px)`;
       }
 
       async function onPointerUp() {
         document.removeEventListener('pointermove', onPointerMove);
         pinnedContainer.classList.remove('pinned-drop-target');
+        sidebarEl.classList.remove('dragging-active');
         hideDragTooltip();
         if (dragging && draggedEl) {
           draggedEl.releasePointerCapture(pointerId);
