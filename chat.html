@@ -4670,7 +4670,10 @@ function plainTextFromMarkdown(text) {
       document.getElementById('headerBrand').style.display = 'none';
       const btn = document.getElementById('chatTitleBtn');
       btn.style.display = 'flex';
-      document.getElementById('chatTitleText').textContent = title;
+      // Same fallback as createHistoryItem's .item-title, same real cause (a chat with a
+      // genuinely empty/null title) -- otherwise opening that exact chat leaves the header's own
+      // title button visually blank too.
+      document.getElementById('chatTitleText').textContent = title || 'Untitled chat';
     }
 
     function resetHeaderTitle() {
@@ -4727,7 +4730,11 @@ function plainTextFromMarkdown(text) {
 
       const titleSpan = document.createElement('span');
       titleSpan.className = 'item-title';
-      titleSpan.textContent = title;
+      // Falls back for a genuinely empty/null title (e.g. an older chat saved before title
+      // generation, or a saved title that came back blank) -- an empty .item-title with the
+      // hover-to-pin icon (always visible on touch, see `@media (hover: none)` above) rendered a
+      // real pinned/recent row as a bare floating pin icon with no text at all, confirmed live.
+      titleSpan.textContent = title || 'Untitled chat';
       item.appendChild(titleSpan);
 
       // Sits before the "..." menu button in DOM order -- both right-aligned, so this renders
