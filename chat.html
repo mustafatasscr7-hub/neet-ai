@@ -6058,6 +6058,35 @@ function plainTextFromMarkdown(text) {
             if (i % 50 === 0) await new Promise(r => setTimeout(r, 1));
           }
         }
+        // Stream ended while still buffered, waiting for a newline that's never coming and never
+        // reached the 64-char cap either -- happens when the model's ENTIRE response is short
+        // with no trailing newline at all. Confirmed live: server.py's own matching fix (the
+        // rule-11 checkpoint buffer there has the identical "only flushes on a newline" shape)
+        // was needed because Qwen sometimes returns just "DOUBT_TYPE: conversational" and stops
+        // generating right there -- server.py now flushes that as one final chunk instead of
+        // silently dropping it, but this loop's own per-character buffer had the exact same gap:
+        // without this, that flushed fragment would sit in visualIntentBuffer forever, never
+        // added to fullText, and the student would still see a genuinely empty bubble even
+        // though the server sent real content. Runs the same three first-line checks the
+        // per-character loop above does, no newline required, so a legitimate marker still gets
+        // stripped instead of leaking as raw text -- the exact bug DOUBT_TYPE handling exists to
+        // prevent in the first place.
+        if (!visualIntentResolved && visualIntentBuffer) {
+          visualIntentResolved = true;
+          const trimmed = visualIntentBuffer.trim();
+          const m = trimmed.match(/^VISUAL_INTENT:\s*(yes|no)$/i);
+          const amb = trimmed.match(/^AMBIGUOUS:\s*(yes|no)$/i);
+          const conv = trimmed.match(/^DOUBT_TYPE:\s*conversational$/i);
+          if (amb && amb[1].toLowerCase() === 'yes') {
+            isClarification = true; // nothing follows it -- parseClarification below fails safe on an empty body
+          } else if (m) {
+            visualIntent = m[1].toLowerCase();
+          } else if (conv) {
+            // whole buffer WAS just the marker -- nothing left to add
+          } else {
+            fullText += visualIntentBuffer;
+          }
+        }
         removeTypingRow(); // safety net -- covers a done-with-no-value edge case (empty response)
         ensureAiRow();
 
@@ -6096,6 +6125,18 @@ function plainTextFromMarkdown(text) {
           refreshUsageBanner();
         } else {
 
+        // Backstop for the rare case where the model's entire completion was just a stripped
+        // marker line with nothing else at all (confirmed live: Qwen returning only
+        // "DOUBT_TYPE: conversational" and stopping generation right there, for an unusual/
+        // off-topic input) -- fullText ends up genuinely empty after all the stripping above,
+        // which would otherwise render as a silent, blank bubble despite the request having
+        // technically succeeded. Replacing fullText itself (not just what's shown this one time)
+        // means the fallback is also what gets saved to currentConversation/Supabase, so a
+        // reload shows the same honest fallback instead of blank again -- consistent with every
+        // other render path rather than a render-time-only patch.
+        if (!fullText.trim()) {
+          fullText = t('chat', 'emptyReplyFallback');
+        }
         const { cleanText: cleanFullText, metaHtml, chapterText } = extractAnswerMeta(fullText);
         textArea.innerHTML = metaHtml + parseWithMath(cleanFullText);
         await renderMermaidBlocksIn(textArea);

@@ -2366,6 +2366,21 @@ IMPORTANT -- BE CONCISE:
                         billing_context["bill"] = False
                     yield pending
                     pending = ""
+            # Stream ended while still buffered (checkpoint 0 waiting for a newline that never
+            # came, or checkpoint 1 similarly on the second line) -- confirmed live: a short
+            # conversational reply whose ENTIRE completion is under 64 chars with no newline at
+            # all (e.g. Qwen returning just "DOUBT_TYPE: conversational" and nothing else, no
+            # trailing newline, generation just stopping there) left `pending` sitting unflushed
+            # forever, since the checkpoint-0/1 blocks only ever yield from inside the loop. The
+            # student got a real 200 OK with a completely empty body -- this flushes whatever
+            # survived instead of silently discarding it. Not reachable when override_needed is
+            # true (that path already `break`s with intentionally-discarded pending content, by
+            # design -- a fresh override attempt follows below).
+            if not override_needed and pending:
+                if billing_context["bill"] and full_answer.strip().startswith("AMBIGUOUS: yes"):
+                    billing_context["bill"] = False
+                yield pending
+                pending = ""
             if override_needed:
                 # The discarded attempt's own tiny (two-line) token cost still gets logged by
                 # _stream_qwen/_stream_deepseek's own finally block when the `break` above closes
