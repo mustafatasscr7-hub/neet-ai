@@ -6726,10 +6726,26 @@ function openSettings() {
                 <button id="displayNameSaveBtn" class="dn-save-btn" onclick="saveDisplayName()" style="padding:8px 16px;border-radius:999px;background:linear-gradient(135deg,#4f8ef7,#7c3aed);border:none;color:white;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;flex-shrink:0;">Save</button>
               </div>
             </div>
+            ${(() => {
+              // Real email, not the sidebar's .profile-plan text -- that element was the wrong
+              // source entirely (it shows the plan name, and gets overwritten with streak text
+              // once loaded, so it was never reliably "plan" text either). #profileMenuEmail is
+              // set from the real session the same way .profile-name is, right at page load (see
+              // client.auth.getSession().then(...)), so it's read the same synchronous way
+              // Display Name's row above already reads .profile-name.
+              const email = document.getElementById('profileMenuEmail')?.textContent || '';
+              const isMax = userPlan === 'max';
+              const planLabel = !isLoggedIn ? '' : isMax ? t('chat', 'maxPlan') : isPro() ? t('chat', 'proPlan') : t('chat', 'free');
+              return `
             <div class="account-row">
               <div class="account-row-label" data-i18n="chat.email">Email</div>
-              <div class="account-pill-value">${document.querySelector('.profile-plan')?.textContent || 'Not logged in'}</div>
-            </div>
+              <div style="display:flex;align-items:center;gap:8px;min-width:0;">
+                ${email ? `<span class="account-pill-value" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(email)}">${escapeHtml(email)}</span>` : ''}
+                ${planLabel ? `<span class="account-pill-value" style="flex-shrink:0;">${escapeHtml(planLabel)}</span>` : ''}
+                ${(!email && !planLabel) ? `<span class="account-pill-value">Not logged in</span>` : ''}
+              </div>
+            </div>`;
+            })()}
             <div class="account-row">
               <div class="account-row-label" data-i18n="chat.password">Password</div>
               <button onclick="resetPassword()" class="account-pill-btn" data-i18n="chat.sendResetEmail">Send Reset Email</button>
