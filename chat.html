@@ -384,8 +384,24 @@
     body.light-mode .usage-bar-track { background: #e5e5ea !important; }
     body.light-mode .usage-plan-badge { background: #e4e4ea !important; color: #7a7a85 !important; }
 
-  .sidebar { width: 260px; background: #111111; display: flex; flex-direction: column; padding: 12px 8px; gap: 4px; border-right: 1px solid #1e1e1e; flex-shrink: 0; transition: width 0.2s; overflow: hidden; }
+  .sidebar { position: relative; width: 260px; background: #111111; display: flex; flex-direction: column; padding: 12px 8px; gap: 4px; border-right: 1px solid #1e1e1e; flex-shrink: 0; transition: width 0.2s; overflow: hidden; }
 .sidebar.collapsed { width: 56px; }
+    /* Suspends the collapse/expand width transition while a drag-resize is actually in progress --
+       without this, every pointermove's width write fights a 0.2s transition and the sidebar
+       visibly lags a step behind the cursor instead of tracking it in real time. */
+    .sidebar.resizing { transition: none; }
+    /* Thin invisible hit-area just inside the sidebar's own right border -- sits fully within the
+       box (not straddling the border) because .sidebar has overflow:hidden (needed so the
+       collapsed icon rail actually clips instead of scrolling), which silently clips anything
+       positioned outside its own edge and would otherwise shrink this to an unreliable sliver of
+       its real width. Only tints on hover/active -- stays invisible otherwise, same restraint as
+       Claude.ai's own edge. Not shown at all while collapsed (56px icon rail has nothing
+       meaningful to resize down from) or on a touch device (no persistent hover to discover it
+       exists, and no real screen-width benefit to a narrower rail on a small viewport). */
+    .sidebar-resize-handle { position: absolute; top: 0; right: 0; width: 6px; height: 100%; cursor: col-resize; z-index: 20; background: transparent; touch-action: none; }
+    .sidebar-resize-handle:hover, .sidebar-resize-handle.active { background: rgba(124,58,237,0.4); }
+    .sidebar.collapsed .sidebar-resize-handle { display: none; }
+    @media (hover: none) { .sidebar-resize-handle { display: none; } }
     .sidebar.collapsed .new-chat-btn { justify-content: center; padding: 10px 0; width: 100%; }
     .sidebar.collapsed .new-chat-btn span:not(.icon) { display: none; }
     .sidebar.collapsed .nav-item { justify-content: center; padding: 10px 0; }
@@ -937,6 +953,7 @@
 <body>
 
   <div class="sidebar">
+<div class="sidebar-resize-handle" id="sidebarResizeHandle"></div>
 <div class="logo" style="justify-content:space-between;">
       <div class="logo-icon">
         <img src="assets/logo.svg" alt="NEET-AI" width="24" height="24" />
@@ -1480,13 +1497,80 @@ function toggleSearchChats() {
       }
     }
 
+   // Resize and collapse are two independent mechanisms, same as most sidebar implementations
+    // (VSCode, Slack) -- dragging to a narrow width never auto-collapses into the icon rail, and
+    // collapsing doesn't forget the width you'd resized to. The only coupling between them is
+    // this: an inline `sidebar.style.width` (set below by the drag handler, and read back on
+    // every page load) outranks the ".sidebar.collapsed { width: 56px }" stylesheet rule the same
+    // way pinnedList's inline display style used to outrank ".sidebar.collapsed .history-list"
+    // (see refreshPinnedSectionVisibility) -- so toggling collapsed has to clear that inline width
+    // going in, and restore it coming back out, or collapsing would leave the icon rail stuck at
+    // whatever custom width was last dragged to instead of actually shrinking to 56px.
+    const SIDEBAR_MIN_WIDTH = 200;
+    const SIDEBAR_MAX_WIDTH = 400;
+    const SIDEBAR_DEFAULT_WIDTH = 260;
+    function getSavedSidebarWidth() {
+      const saved = parseInt(localStorage.getItem('sidebarWidth'), 10);
+      return (saved >= SIDEBAR_MIN_WIDTH && saved <= SIDEBAR_MAX_WIDTH) ? saved : SIDEBAR_DEFAULT_WIDTH;
+    }
+
    function toggleSidebar() {
       const sidebar = document.querySelector('.sidebar');
+      const collapsing = !sidebar.classList.contains('collapsed');
       sidebar.classList.toggle('collapsed');
+      sidebar.style.width = collapsing ? '' : (getSavedSidebarWidth() + 'px');
       // Re-sync pinnedList/pinnedLabel's inline display with the new collapsed state --
       // see refreshPinnedSectionVisibility for why that inline style has to track it.
       if (typeof refreshPinnedSectionVisibility === 'function') refreshPinnedSectionVisibility();
     }
+
+    (function initSidebarWidth() {
+      document.querySelector('.sidebar').style.width = getSavedSidebarWidth() + 'px';
+    })();
+
+    (function setupSidebarResize() {
+      const handle = document.getElementById('sidebarResizeHandle');
+      const sidebar = document.querySelector('.sidebar');
+      let startX = 0;
+      let startWidth = 0;
+      let dragging = false;
+
+      // Plain fixed-anchor delta math (start position + total movement so far), not the
+      // fragile running-delta/reanchor scheme the chat-row drag-to-pin work had to move away
+      // from -- that one broke because reordering mid-drag invalidated the anchor; nothing here
+      // ever reparents or reorders anything, so there's no anchor to go stale. Applied straight
+      // to sidebar.style.width on every single pointermove, no throttling, so it tracks the
+      // cursor exactly.
+      function onPointerMove(e) {
+        if (!dragging) return;
+        const next = Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, startWidth + (e.clientX - startX)));
+        sidebar.style.width = next + 'px';
+      }
+      function endDrag(e) {
+        if (!dragging) return;
+        dragging = false;
+        sidebar.classList.remove('resizing');
+        handle.classList.remove('active');
+        handle.removeEventListener('pointermove', onPointerMove);
+        handle.removeEventListener('pointerup', endDrag);
+        handle.removeEventListener('pointercancel', endDrag);
+        try { handle.releasePointerCapture(e.pointerId); } catch (err) {}
+        localStorage.setItem('sidebarWidth', parseInt(sidebar.style.width, 10));
+      }
+      handle.addEventListener('pointerdown', function(e) {
+        if (sidebar.classList.contains('collapsed')) return; // nothing to resize -- toggleSidebar owns width while collapsed
+        dragging = true;
+        startX = e.clientX;
+        startWidth = sidebar.getBoundingClientRect().width;
+        sidebar.classList.add('resizing');
+        handle.classList.add('active');
+        handle.setPointerCapture(e.pointerId);
+        handle.addEventListener('pointermove', onPointerMove);
+        handle.addEventListener('pointerup', endDrag);
+        handle.addEventListener('pointercancel', endDrag);
+        e.preventDefault(); // matches the pinned-popup/slash-menu mousedown guards -- keep this from stealing focus or starting a text selection
+      });
+    })();
 function togglePlusMenu() {
       const menu = document.getElementById('plusMenu');
       menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
