@@ -5713,6 +5713,10 @@ function plainTextFromMarkdown(text) {
       // still searches on the actual topic rather than the wrapper instruction around it.
       const pyqSearchText = options.pyqSearchText || questionText;
       const retryTarget = options.retryTarget || null;
+      // Declared up here (not down where it's first used inside the try block below) so the
+      // catch block at the bottom of this function can reach it too, for the same reason the
+      // !response.ok branch needs it -- see the addMessageRow(..., aiIndex) comment down there.
+      const aiIndex = retryTarget ? retryTarget.aiIndex : currentConversation.length;
       isStreaming = true;
       document.getElementById('sendIcon').style.display = 'none';
       document.getElementById('stopIcon').style.display = 'block';
@@ -5794,10 +5798,17 @@ function plainTextFromMarkdown(text) {
 
         if (!response.ok) {
           removeTypingRow();
+          // addMessageRow's 4th arg (msgIndex) is what buildActionsDiv's Retry button reads via
+          // row.dataset.msgIndex -- omitting it (as these three calls used to) leaves the button
+          // fully rendered but permanently dead: retryMessage() reads NaN from the unset dataset,
+          // fails its `isNaN(aiIndex)` guard, and returns before ever calling streamAIResponse, so
+          // clicking Retry on any failed answer fired no request at all, no console error either.
+          // aiIndex is already the right value here regardless of retryTarget -- it's exactly
+          // where this failed attempt's answer would have landed.
           if (response.status === 402) {
             await refreshUsageBanner(); // updates userPlan too, so the check below reflects the real plan
             const msgKey = !session ? 'guestLimitReachedMessage' : (userPlan === 'pro' ? 'proLimitReachedMessage' : 'limitReachedMessage');
-            addMessageRow('ai', t('chat', msgKey));
+            addMessageRow('ai', t('chat', msgKey), undefined, aiIndex);
           } else if (response.status === 413) {
             let detail = {};
             try { detail = (await response.json()).detail || {}; } catch (e) {}
@@ -5807,9 +5818,9 @@ function plainTextFromMarkdown(text) {
             if (detail.next_tier) {
               msg += ' ' + t('chat', 'pdfLimitUpgrade').replace('{tier}', detail.next_tier);
             }
-            addMessageRow('ai', msg);
+            addMessageRow('ai', msg, undefined, aiIndex);
           } else {
-            addMessageRow('ai', 'Something went wrong. Please try again.');
+            addMessageRow('ai', 'Something went wrong. Please try again.', undefined, aiIndex);
           }
           isStreaming = false;
           streamController = null;
@@ -5820,7 +5831,6 @@ function plainTextFromMarkdown(text) {
           return;
         }
 
-        const aiIndex = retryTarget ? retryTarget.aiIndex : currentConversation.length;
         // Not created/cleared until the first real chunk arrives (see ensureAiRow below) --
         // for a brand-new message this puts the avatar row on screen before its bubble has any
         // text; for a retry it means the dimmed previous answer stays fully intact on screen
@@ -6099,11 +6109,24 @@ function plainTextFromMarkdown(text) {
           // separate currentConversation entry (which is what used to make retry look like a
           // stacked duplicate instead of a version of the original answer).
           aiMsg = currentConversation[aiIndex];
-          ensureVersions(aiMsg);
-          aiMsg.versions.push(newVersion);
-          aiMsg.activeVersionIndex = aiMsg.versions.length - 1;
-          aiMsg.text = newVersion.text;
-          aiMsg.diagram = newVersion.diagram;
+          if (aiMsg) {
+            ensureVersions(aiMsg);
+            aiMsg.versions.push(newVersion);
+            aiMsg.activeVersionIndex = aiMsg.versions.length - 1;
+            aiMsg.text = newVersion.text;
+            aiMsg.diagram = newVersion.diagram;
+          } else {
+            // currentConversation[aiIndex] was never actually written -- happens when retrying a
+            // response that failed/errored before it got recorded (its row still exists and is
+            // now retriable, see the addMessageRow(..., aiIndex) fix above, but there's no real
+            // prior version to append to). ensureVersions(undefined) used to throw here, silently
+            // swallowed by this function's own catch block, which then appended a second, stale
+            // "Something went wrong" row right underneath the answer that had just rendered
+            // successfully. Starting fresh as the first version is exactly what the non-retry
+            // branch below already does for a brand-new message -- there's nothing to version.
+            aiMsg = { role: 'ai', text: newVersion.text, diagram: newVersion.diagram, versions: [newVersion], activeVersionIndex: 0 };
+            currentConversation[aiIndex] = aiMsg;
+          }
           // The existing actions row (copy/retry/share/version-nav) already lives in
           // .message-content from this row's original generation -- replace it in place with
           // one reflecting the new version count instead of appending a second row alongside it.
@@ -6138,7 +6161,7 @@ function plainTextFromMarkdown(text) {
       } catch (error) {
         removeTypingRow();
         if (error.name !== 'AbortError') {
-          addMessageRow('ai', 'Something went wrong. Please try again.');
+          addMessageRow('ai', 'Something went wrong. Please try again.', undefined, aiIndex);
         }
       }
 
