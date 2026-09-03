@@ -1813,6 +1813,12 @@ let selectedImages = [];
 
     function extractAnswerMeta(text) {
       if (!text) return { cleanText: text, metaHtml: '' };
+      // Second line of defense for the same "DOUBT_TYPE: conversational" first-line marker the
+      // streaming loop above now strips at the source -- catches any message saved to history
+      // before that fix existed (or any other path that hands raw text straight here without
+      // going through that loop), since every render path (reload, version-switch, retry) funnels
+      // through this one function.
+      text = text.replace(/^\s*DOUBT_TYPE:\s*conversational\s*\n+/i, '');
       const ratingMatch = text.match(/NEET Importance:\s*\[?(\d)\]?\s*\/\s*5/i);
       const chapterMatch = text.match(/📚?\s*\**\s*Chapter:\**\s*\[?([^\n\]]+)\]?/i);
       if (!ratingMatch && !chapterMatch) return { cleanText: text, metaHtml: '' };
@@ -5761,12 +5767,22 @@ function plainTextFromMarkdown(text) {
                 const rest = visualIntentBuffer.slice(nlIdx + 1);
                 const m = firstLine.match(/^\s*VISUAL_INTENT:\s*(yes|no)\s*$/i);
                 const amb = firstLine.match(/^\s*AMBIGUOUS:\s*(yes|no)\s*$/i);
+                // DOUBT_TYPE: conversational is a third, mutually-exclusive first-line marker
+                // (server.py SYSTEM_PROMPT, conversational-classification gate) -- same shape as
+                // VISUAL_INTENT/AMBIGUOUS but no downstream signal to set from it (no diagram
+                // prefetch, no clarification parsing), just strip the marker line itself. Missing
+                // this case here was the actual bug: it fell through to the plain "not our line"
+                // else branch below, which flushes the buffered text (marker line included)
+                // straight into fullText -- exactly the leaked "DOUBT_TYPE: conversational" text.
+                const conv = firstLine.match(/^\s*DOUBT_TYPE:\s*conversational\s*$/i);
                 visualIntentResolved = true;
                 if (amb && amb[1].toLowerCase() === 'yes') {
                   isClarification = true;
                   fullText += rest; // CLARIFY_TYPE/QUESTION/OPTION lines -- parsed after the loop, never rendered live
                 } else if (m) {
                   visualIntent = m[1].toLowerCase();
+                  fullText += rest;
+                } else if (conv) {
                   fullText += rest;
                 } else {
                   fullText += visualIntentBuffer; // not our line -- flush unchanged, keep default 'no'
