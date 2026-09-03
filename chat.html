@@ -199,6 +199,31 @@
     .dn-save-btn.error { background: #ef4444 !important; }
     .dn-save-btn:disabled { cursor: default; }
 
+    /* Account tab > Profile section row pattern: plain label on the left, a rounded "pill"
+       value/input/button on the right, thin divider, generous vertical breathing room -- matches
+       the reference layout (Claude's own Profile settings) rather than the boxier default-input
+       look the rest of Settings still uses elsewhere. Scoped to just this section on purpose
+       (class name, not a global input override) so Personalize/Language/Plan/Privacy rows
+       elsewhere in Settings are untouched. */
+    .account-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 20px 0; border-bottom: 1px solid rgba(255,255,255,0.07); }
+    .account-row:last-child { border-bottom: none; }
+    .account-row-label { font-size: 14px; color: #ececec; font-weight: 400; }
+    .account-row-sub { font-size: 12px; color: #6b6b76; margin-top: 3px; }
+    .account-pill-input { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); border-radius: 999px; padding: 8px 16px; color: #ececec; font-size: 13px; font-family: 'Inter', sans-serif; outline: none; transition: border-color 0.15s ease, background 0.15s ease; }
+    .account-pill-input:focus { border-color: #7c3aed; background: rgba(255,255,255,0.06); }
+    .account-pill-value { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 999px; padding: 8px 16px; color: #9a9aa5; font-size: 13px; font-family: 'Inter', sans-serif; }
+    .account-pill-btn { background: transparent; border: 1px solid rgba(255,255,255,0.14); border-radius: 999px; padding: 8px 18px; color: #ccc; cursor: pointer; font-size: 12.5px; font-family: 'Inter', sans-serif; transition: background 0.15s ease, border-color 0.15s ease; }
+    .account-pill-btn:hover { background: rgba(255,255,255,0.07); border-color: rgba(255,255,255,0.24); }
+    .account-row-avatar { width: 44px; height: 44px; border-radius: 50%; background: linear-gradient(135deg, #4f8ef7, #7c3aed); display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: 700; color: #fff; flex-shrink: 0; }
+    body.light-mode .account-row { border-bottom-color: rgba(0,0,0,0.08) !important; }
+    body.light-mode .account-row-label { color: #16161d !important; }
+    body.light-mode .account-row-sub { color: #8a8a94 !important; }
+    body.light-mode .account-pill-input { background: #f5f5f7 !important; border-color: #d5d5dd !important; color: #16161d !important; }
+    body.light-mode .account-pill-input:focus { border-color: #7c3aed !important; }
+    body.light-mode .account-pill-value { background: #f5f5f7 !important; border-color: #e0e0e5 !important; color: #6b6b76 !important; }
+    body.light-mode .account-pill-btn { border-color: #d5d5dd !important; color: #3a3a42 !important; }
+    body.light-mode .account-pill-btn:hover { background: #ececf0 !important; }
+
     /* Active Sessions table (Settings > Account). Single shared grid template for the header and
        every data row keeps columns aligned without duplicating the widths in two places. Column
        mins were sized to fit the settings content area's real width (880px modal - 200px sidebar
@@ -6671,29 +6696,33 @@ function openSettings() {
           <h2 style="font-size:18px;font-weight:700;color:#fff;margin-bottom:24px;" data-i18n="chat.settingsAccount">Account</h2>
           <div style="margin-bottom:40px;">
             <h3 style="font-size:13px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:16px;" data-i18n="chat.profile">Profile</h3>
-            <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid #1e1e1e;">
-              <div style="font-size:14px;color:#ececec;" data-i18n="chat.displayName">Display Name</div>
+            <div class="account-row">
+              <div class="account-row-label" data-i18n="chat.avatar">Avatar</div>
+              <div class="account-row-avatar">${(document.querySelector('.profile-avatar')?.textContent || '?').trim()}</div>
+            </div>
+            <div class="account-row">
+              <div class="account-row-label" data-i18n="chat.displayName">Display Name</div>
               <div id="displayNameInputGroup" style="display:flex;gap:8px;align-items:center;">
-                <input id="displayNameInput" type="text" value="${document.querySelector('.profile-name')?.textContent || ''}" oninput="onDisplayNameInput()" style="background:#0d0d0d;border:1px solid #2a2a2a;border-radius:8px;padding:6px 12px;color:#ececec;font-size:13px;font-family:Inter,sans-serif;outline:none;" />
-                <button id="displayNameSaveBtn" class="dn-save-btn" onclick="saveDisplayName()" style="padding:6px 14px;border-radius:8px;background:#4f8ef7;border:none;color:white;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;flex-shrink:0;">Save</button>
+                <input id="displayNameInput" type="text" class="account-pill-input" value="${document.querySelector('.profile-name')?.textContent || ''}" oninput="onDisplayNameInput()" />
+                <button id="displayNameSaveBtn" class="dn-save-btn" onclick="saveDisplayName()" style="padding:8px 16px;border-radius:999px;background:linear-gradient(135deg,#4f8ef7,#7c3aed);border:none;color:white;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;flex-shrink:0;">Save</button>
               </div>
             </div>
-            <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid #1e1e1e;">
-              <div style="font-size:14px;color:#ececec;" data-i18n="chat.email">Email</div>
-              <div style="font-size:13px;color:#555;">${document.querySelector('.profile-plan')?.textContent || 'Not logged in'}</div>
+            <div class="account-row">
+              <div class="account-row-label" data-i18n="chat.email">Email</div>
+              <div class="account-pill-value">${document.querySelector('.profile-plan')?.textContent || 'Not logged in'}</div>
             </div>
-            <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid #1e1e1e;">
-              <div style="font-size:14px;color:#ececec;" data-i18n="chat.password">Password</div>
-              <button onclick="resetPassword()" style="padding:6px 14px;border-radius:8px;border:1px solid #2a2a2a;background:transparent;color:#888;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;" data-i18n="chat.sendResetEmail">Send Reset Email</button>
+            <div class="account-row">
+              <div class="account-row-label" data-i18n="chat.password">Password</div>
+              <button onclick="resetPassword()" class="account-pill-btn" data-i18n="chat.sendResetEmail">Send Reset Email</button>
             </div>
-            <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid #1e1e1e;">
+            <div class="account-row">
               <div>
-                <div style="font-size:14px;color:#ececec;margin-bottom:2px;" data-i18n="chat.phoneNumber">Phone Number</div>
-                <div style="font-size:12px;color:#555;" id="phoneLinkStatus">…</div>
+                <div class="account-row-label" data-i18n="chat.phoneNumber">Phone Number</div>
+                <div class="account-row-sub" id="phoneLinkStatus">…</div>
               </div>
               <div id="phoneLinkAction"></div>
             </div>
-            <div id="phoneLinkPanel" style="display:none;padding:12px 0;border-bottom:1px solid #1e1e1e;"></div>
+            <div id="phoneLinkPanel" style="display:none;padding:12px 0;border-bottom:1px solid rgba(255,255,255,0.07);"></div>
           </div>
 
           <div style="margin-bottom:32px;">
@@ -7050,7 +7079,7 @@ function openSettings() {
         actionEl.innerHTML = '';
       } else {
         statusEl.textContent = t('chat', 'phoneNotLinked');
-        actionEl.innerHTML = `<button onclick="showPhoneLinkPanel()" style="padding:6px 14px;border-radius:8px;border:1px solid #2a2a2a;background:transparent;color:#888;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;" data-i18n="chat.linkPhone">Link phone number</button>`;
+        actionEl.innerHTML = `<button onclick="showPhoneLinkPanel()" class="account-pill-btn" data-i18n="chat.linkPhone">Link phone number</button>`;
         applyTranslations();
       }
     }
