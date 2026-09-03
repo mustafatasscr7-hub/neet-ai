@@ -3087,24 +3087,37 @@ async def get_pyq_chapters(subject: str):
             "apikey": SUPABASE_KEY,
             "Authorization": f"Bearer {SUPABASE_KEY}"
         }
-        response = http_requests.get(
-            f"{SUPABASE_URL}/rest/v1/pyq",
-            headers=headers,
-            params={
-                "subject": f"eq.{subject}",
-                "is_active": "eq.true",
-                "chapter": "not.is.null",
-                "select": "chapter",
-                "limit": 2000
-            }
-        )
-        rows = response.json()
+        # A fixed "limit": 2000 here used to silently truncate and undercount once a subject grew
+        # past it -- confirmed for real: Biology sits at 2087 active rows and Chemistry at 3385
+        # (Physics, at 512, never showed the bug), so the old single-request version was quietly
+        # dropping the last 87 Biology rows and over 1300 Chemistry rows from every chapter's
+        # count. Paginated via the Range header instead so this counts the whole table regardless
+        # of how large any subject grows.
         counts = {}
-        for r in rows:
-            ch = r.get("chapter")
-            if ch and ch.strip():
-                ch = ch.strip()
-                counts[ch] = counts.get(ch, 0) + 1
+        page_size = 1000
+        offset = 0
+        while True:
+            response = http_requests.get(
+                f"{SUPABASE_URL}/rest/v1/pyq",
+                headers={**headers, "Range": f"{offset}-{offset + page_size - 1}"},
+                params={
+                    "subject": f"eq.{subject}",
+                    "is_active": "eq.true",
+                    "chapter": "not.is.null",
+                    "select": "chapter"
+                }
+            )
+            rows = response.json()
+            if not isinstance(rows, list) or not rows:
+                break
+            for r in rows:
+                ch = r.get("chapter")
+                if ch and ch.strip():
+                    ch = ch.strip()
+                    counts[ch] = counts.get(ch, 0) + 1
+            if len(rows) < page_size:
+                break
+            offset += page_size
         chapters = [{"name": ch, "count": counts[ch]} for ch in sorted(counts.keys())]
         return {"chapters": chapters}
     except Exception as e:
