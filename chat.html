@@ -3157,14 +3157,17 @@ let selectedImages = [];
                 if (res.status === 402) {
                   clearInterval(thinkingInterval);
                   const guest = !session;
-                  // Pro can now hit a real 402 too (previously only free/guest could) -- "You've
-                  // used all your free doubts" would be wrong/confusing for someone already
-                  // paying, so it gets its own message + an Upgrade-to-Max CTA instead.
+                  // Pro/Max can now both hit a real 402 too (previously only free/guest could) --
+                  // "You've used all your free doubts" would be wrong/confusing for someone
+                  // already paying, so each gets its own message. Max has no CTA at all (top
+                  // tier, nowhere to send an "Upgrade" click); Pro still gets Upgrade-to-Max.
                   const pro = !guest && userPlan === 'pro';
+                  const max = !guest && userPlan === 'max';
                   const link = guest ? './login.html' : './pricing.html';
-                  const msgKey = guest ? 'guestLimitReachedMessage' : (pro ? 'proLimitReachedMessage' : 'limitReachedMessage');
+                  const msgKey = guest ? 'guestLimitReachedMessage' : (pro ? 'proLimitReachedMessage' : (max ? 'maxLimitReachedMessage' : 'limitReachedMessage'));
                   const ctaKey = guest ? 'login' : (pro ? 'upgradeToMax' : 'upgradeToPro');
-                  solDiv.innerHTML = `<span style="color:#ef4444;">${t('chat', msgKey)} <a href="${link}">${t('chat', ctaKey)}</a></span>`;
+                  const ctaHtml = max ? '' : ` <a href="${link}">${t('chat', ctaKey)}</a>`;
+                  solDiv.innerHTML = `<span style="color:#ef4444;">${t('chat', msgKey)}${ctaHtml}</span>`;
                   solBtn.textContent = '💡 Show Solution';
                   solBtn.disabled = false;
                   refreshUsageBanner();
@@ -5429,15 +5432,23 @@ function plainTextFromMarkdown(text) {
 
       // Blocked. Free/guest: a fixed 24h cooldown from whenever the budget was actually crossed
       // (not a countdown to IST midnight -- that meant the wait could be anywhere from 1 minute
-      // to ~24h depending on what time of day the limit was hit). Pro: a real countdown to the
-      // actual next IST midnight, which is genuinely when Pro's cap resets -- see
-      // _check_pro_daily_limit server-side.
+      // to ~24h depending on what time of day the limit was hit). Pro/Max: a real countdown to
+      // the actual next IST midnight, which is genuinely when their cap resets -- see
+      // _check_plan_daily_limit server-side.
       if (cooldownDeadlineMs !== null) {
         const remainingMs = Math.max(0, cooldownDeadlineMs - Date.now());
         const countdown = t('chat', 'resetsIn').replace('{time}', formatCountdown(remainingMs));
         limitText.textContent = t('chat', tier === 'guest' ? 'guestLimitReached' : 'dailyLimitReached') + ' — ' + countdown;
-        limitBtn.textContent = t('chat', tier === 'guest' ? 'login' : (tier === 'pro' ? 'upgradeToMax' : 'upgradeToPro'));
-        limitBtn.onclick = function() { window.location.href = tier === 'guest' ? './login.html' : './pricing.html'; };
+        // Max is the top tier -- there's nowhere to send an "Upgrade" click, so the CTA is hidden
+        // entirely rather than showing a nonsense "Upgrade to Pro" (a downgrade) or relabeling it
+        // to something that still has no real destination.
+        if (tier === 'max') {
+          limitBtn.style.display = 'none';
+        } else {
+          limitBtn.style.display = '';
+          limitBtn.textContent = t('chat', tier === 'guest' ? 'login' : (tier === 'pro' ? 'upgradeToMax' : 'upgradeToPro'));
+          limitBtn.onclick = function() { window.location.href = tier === 'guest' ? './login.html' : './pricing.html'; };
+        }
         limitEl.style.display = 'flex';
         warningEl.style.display = 'none';
         setSendEnabled(false);
@@ -5521,23 +5532,20 @@ function plainTextFromMarkdown(text) {
       const { data: planRow } = await client.from('user_plan').select('plan').eq('user_id', session.user.id).single();
       userPlan = (planRow && planRow.plan) || 'free';
       applyProUIState();
-      if (userPlan === 'max') {
-        // Genuinely unlimited from the student's POV -- Max's real safety-net ceiling is a
-        // silent backend-only concept (see server.py's check_max_usage_tier) and this file has
-        // no knowledge of that number at all, deliberately.
-        warningEl.style.display = 'none';
-        limitEl.style.display = 'none';
-        setSendEnabled(true);
-        return;
-      }
-      if (userPlan === 'pro') {
-        // Real, enforced, midnight-IST-anchored cap -- reuses /usage/summary (already backs the
-        // Usage tab) rather than duplicating the free-tier's client-side rolling-cooldown math,
-        // since Pro's reset is a plain "next real midnight", already computed server-side there.
+      if (userPlan === 'pro' || userPlan === 'max') {
+        // Real, enforced, midnight-IST-anchored cap for both -- reuses /usage/summary (already
+        // backs the Usage tab) rather than duplicating the free-tier's client-side rolling-
+        // cooldown math, since the reset is a plain "next real midnight", already computed
+        // server-side there. Max got this same treatment as of 2026-09-03 -- previously it never
+        // even reached the network call, always showing unlimited unconditionally. Max's OWN
+        // remaining silent concept is the breakeven backstop (see server.py's
+        // check_max_usage_tier), a smaller, backend-only number this file still has no knowledge
+        // of, deliberately -- distinct from MAX_DAILY_TOKEN_CAP, which /usage/summary now reports
+        // like any other plan's budget.
         try {
           const res = await fetch(`${API_BASE}/usage/summary?user_id=${session.user.id}`);
           const data = await res.json();
-          applyUsageDisplay(data.today.tokens_used, data.today.budget, 'pro', data.today.blocked ? data.today.reset_in_seconds : null);
+          applyUsageDisplay(data.today.tokens_used, data.today.budget, userPlan, data.today.blocked ? data.today.reset_in_seconds : null);
         } catch (e) {
           warningEl.style.display = 'none'; limitEl.style.display = 'none'; setSendEnabled(true);
         }
@@ -5807,7 +5815,7 @@ function plainTextFromMarkdown(text) {
           // where this failed attempt's answer would have landed.
           if (response.status === 402) {
             await refreshUsageBanner(); // updates userPlan too, so the check below reflects the real plan
-            const msgKey = !session ? 'guestLimitReachedMessage' : (userPlan === 'pro' ? 'proLimitReachedMessage' : 'limitReachedMessage');
+            const msgKey = !session ? 'guestLimitReachedMessage' : (userPlan === 'pro' ? 'proLimitReachedMessage' : (userPlan === 'max' ? 'maxLimitReachedMessage' : 'limitReachedMessage'));
             addMessageRow('ai', t('chat', msgKey), undefined, aiIndex);
           } else if (response.status === 413) {
             let detail = {};

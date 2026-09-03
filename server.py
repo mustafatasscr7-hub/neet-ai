@@ -793,16 +793,23 @@ DAILY_TOKEN_BUDGET_FREE = 50000  # ~9 doubts/day -- re-recalibrated 2026-08-16. 
 COOLDOWN_HOURS = 24  # how long a block lasts once the budget is actually crossed
 
 # Pro: a real, ENFORCED, user-visible daily ceiling -- unlike Free's rolling 24h-from-crossing
-# cooldown above, this resets at true IST midnight (see _check_pro_daily_limit), and the
-# countdown shown to the student must be accurate to that real reset moment. Max: genuinely
-# unlimited from the student's perspective -- these two numbers are a silent backend safety net
-# only and must NEVER appear in any user-facing text, error, or UI. Soft zone logs the account
-# for manual review with no other effect; past breakeven, remaining calls that day silently route
-# to the cheapest available model (see check_max_usage_tier) instead of being blocked. All three
+# cooldown above, this resets at true IST midnight (see _check_plan_daily_limit), and the
+# countdown shown to the student must be accurate to that real reset moment. Max: as of
+# 2026-09-03, ALSO a real, enforced, visible daily ceiling -- previously this same 2.1M number
+# (then named MAX_SOFT_ZONE_THRESHOLD) was silent, logging the account for manual review with no
+# other effect on the student. Now it blocks new requests exactly like Pro's cap does. Both
 # numbers locked in 2026-08-27 from real per-call cost data in provider_usage_log + a 40% target
 # margin.
 DAILY_TOKEN_LIMIT_PRO = 950_000
-MAX_SOFT_ZONE_THRESHOLD = 2_100_000
+MAX_DAILY_TOKEN_CAP = 2_100_000
+# Backstop only, past the now-visible MAX_DAILY_TOKEN_CAP above -- silent, never surfaced to the
+# student in any form (see check_max_usage_tier). A single very large call (e.g. a big PDF/image
+# doubt) can still push a student from just under the visible cap to past this number within ONE
+# request, since the visible cap above is only checked at the START of a request, not mid-call --
+# the request that does that gets silently routed onto the cheapest available model instead of
+# whatever the normal peak/off-peak DeepSeek routing would have used. Every request AFTER that one
+# is already blocked outright by MAX_DAILY_TOKEN_CAP, so this only ever matters for that single
+# overshooting call.
 MAX_BREAKEVEN_THRESHOLD = 2_670_000  # past this, the student costs more than they pay
 
 def _ist_today() -> str:
@@ -1193,8 +1200,8 @@ async def _check_rolling_cooldown(table: str, id_field: str, id_value: str, budg
         return COOLDOWN_HOURS * 3600
     return None
 
-async def _check_pro_daily_limit(user_id: str):
-    """Pro-specific: a real, midnight-IST-anchored daily cap, unlike Free's rolling
+async def _check_plan_daily_limit(user_id: str, budget: int):
+    """Pro/Max shared: a real, midnight-IST-anchored daily cap, unlike Free's rolling
     24h-from-crossing cooldown above. usage_log is already keyed by IST calendar day (see
     _ist_today), so this is a direct read against today's row -- no separate cooldown-state
     (limit_reached_at) tracking needed the way Free's rolling window requires, since a fresh
@@ -1206,7 +1213,7 @@ async def _check_pro_daily_limit(user_id: str):
     )
     rows = resp.json()
     tokens_used = rows[0]["tokens_used"] if rows else 0
-    if tokens_used >= DAILY_TOKEN_LIMIT_PRO:
+    if tokens_used >= budget:
         raise HTTPException(status_code=402, detail={
             "message": "Daily limit reached",
             "retry_after_seconds": _seconds_until_ist_midnight(),
@@ -1214,10 +1221,10 @@ async def _check_pro_daily_limit(user_id: str):
         })
 
 async def _log_max_usage_alert(user_id: str, tokens_used: int, tier: str, action_taken: str):
-    """Admin-visible audit trail for Max's silent soft-zone/breakeven handling -- never surfaced
-    to the student. Idempotent per (user_id, usage_date, tier) via a unique index +
-    ignore-duplicates, so repeated calls while a user sits in the same tier the same day don't
-    spam the table -- one row per tier crossed per day."""
+    """Admin-visible audit trail for Max's silent breakeven handling -- never surfaced to the
+    student. Idempotent per (user_id, usage_date, tier) via a unique index + ignore-duplicates, so
+    repeated calls while a user sits in the same tier the same day don't spam the table -- one row
+    per tier crossed per day."""
     try:
         await async_client.post(
             f"{SUPABASE_URL}/rest/v1/max_usage_alerts",
@@ -1228,14 +1235,20 @@ async def _log_max_usage_alert(user_id: str, tokens_used: int, tier: str, action
         print(f"MAX USAGE ALERT LOG FAILED: {e}", flush=True)
 
 async def check_max_usage_tier(user_id: str) -> "str | None":
-    """Max plan only (returns None immediately for any other plan) -- silent, two-tier usage
-    escalation. NEVER blocks, NEVER shown to the student in any form. Soft zone
-    (MAX_SOFT_ZONE_THRESHOLD-MAX_BREAKEVEN_THRESHOLD tokens today): logs for manual admin review,
-    no other effect. Past breakeven: also logs, and the caller (stream_response's text branch)
-    uses the "breakeven" return value to force the rest of today's text-doubt calls onto
-    Qwen-Flash -- cheap, flat-rate, no peak surcharge -- instead of the normal peak/off-peak
-    DeepSeek routing. Image/PDF doubts are never affected: Gemini is the only vision-capable
-    model available, so there is no cheaper substitute to downgrade to."""
+    """Max plan only (returns None immediately for any other plan) -- silent breakeven backstop.
+    NEVER blocks, NEVER shown to the student in any form. This used to be a two-tier escalation
+    (a "soft zone" starting at the same number that's now MAX_DAILY_TOKEN_CAP, logged for manual
+    review with no other effect), but since 2026-09-03 that number is enforce_daily_budget's real,
+    visible, ENFORCED cap -- a request can no longer legitimately reach this function with today's
+    usage already in that old soft-zone window, since it would already have been blocked before
+    ever getting here. Only the breakeven check below still matters, and only for the single call
+    that pushes a student from just under the visible cap to past breakeven within one request
+    (see MAX_BREAKEVEN_THRESHOLD's own comment) -- the caller (stream_response's text branch) uses
+    this "breakeven" return value to force that request (and, redundantly but harmlessly, the rest
+    of today's text-doubt calls, though there shouldn't be any more once blocked) onto Qwen-Flash
+    -- cheap, flat-rate, no peak surcharge -- instead of the normal peak/off-peak DeepSeek routing.
+    Image/PDF doubts are never affected: Gemini is the only vision-capable model available, so
+    there is no cheaper substitute to downgrade to."""
     plan = await get_user_plan(user_id)
     if plan != "max":
         return None
@@ -1249,19 +1262,20 @@ async def check_max_usage_tier(user_id: str) -> "str | None":
     if tokens_used >= MAX_BREAKEVEN_THRESHOLD:
         await _log_max_usage_alert(user_id, tokens_used, "breakeven", "downgraded_to_cheapest_model")
         return "breakeven"
-    if tokens_used >= MAX_SOFT_ZONE_THRESHOLD:
-        await _log_max_usage_alert(user_id, tokens_used, "soft_zone", "logged_for_review")
-        return "soft_zone"
     return None
 
 async def enforce_daily_budget(user_id: str, ip: str = ""):
     if user_id:
         plan = await get_user_plan(user_id)
         if plan == "pro":
-            await _check_pro_daily_limit(user_id)
+            await _check_plan_daily_limit(user_id, DAILY_TOKEN_LIMIT_PRO)
             return
         if plan == "max":
-            return  # never blocked -- see check_max_usage_tier for Max's silent handling
+            # As of 2026-09-03, a real visible cap too -- see MAX_DAILY_TOKEN_CAP's own comment.
+            # check_max_usage_tier's breakeven backstop still applies independently of this, for
+            # the single-large-call overshoot case its own docstring explains.
+            await _check_plan_daily_limit(user_id, MAX_DAILY_TOKEN_CAP)
+            return
         remaining = await _check_rolling_cooldown("usage_log", "user_id", user_id, DAILY_TOKEN_BUDGET_FREE)
         if remaining is not None:
             raise HTTPException(status_code=402, detail={"message": "Daily limit reached", "retry_after_seconds": remaining})
@@ -2662,20 +2676,22 @@ async def usage_summary(user_id: str):
         raise HTTPException(status_code=400, detail="user_id is required")
     try:
         plan = await get_user_plan(user_id)
-        # Only Max is actually unlimited in the UI sense -- Pro now gets a real, visible budget
-        # (DAILY_TOKEN_LIMIT_PRO). Max's own ceiling is a silent backend-only safety net (see
-        # check_max_usage_tier) and must never surface here as a number, hence still "unlimited".
-        unlimited = plan == "max"
-        budget_for_plan = DAILY_TOKEN_LIMIT_PRO if plan == "pro" else DAILY_TOKEN_BUDGET_FREE
+        # Nobody is "unlimited" in the UI sense anymore -- Pro has always had a real, visible
+        # budget (DAILY_TOKEN_LIMIT_PRO), and as of 2026-09-03 Max does too (MAX_DAILY_TOKEN_CAP).
+        # Max's OWN remaining silent concept is the breakeven backstop (see check_max_usage_tier),
+        # which still must never surface here as a number -- but that's a different, smaller,
+        # backend-only number than the visible cap this endpoint now reports.
+        budget_for_plan = DAILY_TOKEN_LIMIT_PRO if plan == "pro" else (MAX_DAILY_TOKEN_CAP if plan == "max" else DAILY_TOKEN_BUDGET_FREE)
 
         today, yesterday, rows_by_date = await _fetch_usage_rows("usage_log", "user_id", user_id)
         today_row = rows_by_date.get(today)
         tokens_used = today_row["tokens_used"] if today_row else 0
 
-        # Free's rolling 24h-from-crossing cooldown only ever applies to Free -- Pro's block (see
-        # _check_pro_daily_limit) never sets limit_reached_at at all, it's a pure midnight-IST
-        # reset, and checking this for Pro/Max risks picking up a stale limit_reached_at from
-        # before a same-day plan upgrade. Skipped entirely for anything but free.
+        # Free's rolling 24h-from-crossing cooldown only ever applies to Free -- Pro/Max's block
+        # (see _check_plan_daily_limit) never sets limit_reached_at at all, it's a pure
+        # midnight-IST reset, and checking this for Pro/Max risks picking up a stale
+        # limit_reached_at from before a same-day plan upgrade. Skipped entirely for anything but
+        # free.
         cooldown_remaining = _active_cooldown_seconds(today, yesterday, rows_by_date) if plan == "free" else None
         if cooldown_remaining is not None:
             reset_in_seconds = cooldown_remaining
@@ -2687,9 +2703,9 @@ async def usage_summary(user_id: str):
             next_ist_midnight = datetime.combine(now_ist.date() + timedelta(days=1), datetime.min.time(), tzinfo=IST)
             reset_in_seconds = int((next_ist_midnight - now_ist).total_seconds())
 
-        percent_used = None if unlimited else round(min(100, tokens_used / budget_for_plan * 100), 1)
-        budget = None if unlimited else budget_for_plan
-        blocked = (not unlimited) and tokens_used >= budget_for_plan
+        percent_used = round(min(100, tokens_used / budget_for_plan * 100), 1)
+        budget = budget_for_plan
+        blocked = tokens_used >= budget_for_plan
 
         window_start_iso = (datetime.now(timezone.utc) - timedelta(days=USAGE_PROVIDER_BREAKDOWN_DAYS)).isoformat()
         resp = await async_client.get(
@@ -2718,19 +2734,19 @@ async def usage_summary(user_id: str):
                     "select": "tokens_used"}
         )
         weekly_tokens_used = sum(r["tokens_used"] for r in week_resp.json()) if week_resp.status_code == 200 else 0
-        weekly_budget = None if unlimited else budget_for_plan * 7
-        weekly_percent_used = None if unlimited else round(min(100, weekly_tokens_used / weekly_budget * 100), 1)
+        weekly_budget = budget_for_plan * 7
+        weekly_percent_used = round(min(100, weekly_tokens_used / weekly_budget * 100), 1)
 
         return {
             "plan": plan,
             "today": {
                 "tokens_used": tokens_used, "budget": budget, "percent_used": percent_used,
-                "doubts_today": doubts_today, "reset_in_seconds": max(0, reset_in_seconds), "unlimited": unlimited,
+                "doubts_today": doubts_today, "reset_in_seconds": max(0, reset_in_seconds), "unlimited": False,
                 "blocked": blocked
             },
             "weekly": {
                 "tokens_used": weekly_tokens_used, "budget": weekly_budget, "percent_used": weekly_percent_used,
-                "total_doubts": weekly_doubts, "unlimited": unlimited
+                "total_doubts": weekly_doubts, "unlimited": False
             }
         }
     except Exception as e:
