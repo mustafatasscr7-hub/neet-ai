@@ -3720,16 +3720,22 @@ let selectedImages = [];
 
       if (role === 'ai') {
         const { cleanText, metaHtml, chapterText } = extractAnswerMeta(text);
-        bubble.innerHTML = metaHtml + parseWithMath(cleanText);
+        // Wrapped in the same .bubble-text container the live streaming path uses (previously
+        // this wrote metaHtml+content straight into `bubble` with no wrapper) -- purely
+        // structural, no visual difference on its own since nothing currently scopes CSS to
+        // .bubble-text specifically, but keeping every render path's DOM shape identical means a
+        // future rule that DOES target .bubble-text (or a future diff-based partial re-render)
+        // can't silently apply to only some of fresh/retry/reload/version-switch and not others.
+        bubble.innerHTML = '<div class="bubble-text">' + metaHtml + parseWithMath(cleanText) + '</div>';
         renderMermaidBlocksIn(bubble);
 
         // Restores a diagram that was auto-embedded live, saved onto the message (see
         // streamAIResponse's currentConversation.push) -- reused verbatim rather than a
         // reload-specific variant, so a restored diagram looks and behaves identically to a live
-        // one (click-to-enlarge, same card styling). bubble.innerHTML above already set this
-        // bubble's text in one shot (not streamed), so bubble.firstChild is simply whatever
-        // element that produced -- no separate text container needed the way the live loop's
-        // .bubble-text is, since nothing re-renders this bubble afterward.
+        // one (click-to-enlarge, same card styling). bubble.firstChild is now the .bubble-text
+        // wrapper set above, so this inserts the diagram as a sibling before it -- same
+        // insertBefore semantics the live loop's own insertAutoEmbedDiagram(bubble, textArea, ...)
+        // call already uses.
         if (diagram) {
           insertAutoEmbedDiagram(bubble, bubble.firstChild, diagram);
         }
@@ -3926,7 +3932,9 @@ function plainTextFromMarkdown(text) {
       bubble.style.opacity = '0';
       setTimeout(() => {
         const { cleanText, metaHtml, chapterText } = extractAnswerMeta(v.text);
-        bubble.innerHTML = metaHtml + parseWithMath(cleanText);
+        // Same .bubble-text wrapper as every other render path now uses -- see addMessageRow's
+        // identical change for the full reasoning.
+        bubble.innerHTML = '<div class="bubble-text">' + metaHtml + parseWithMath(cleanText) + '</div>';
         renderMermaidBlocksIn(bubble);
         if (v.diagram) insertAutoEmbedDiagram(bubble, bubble.firstChild, v.diagram);
 
