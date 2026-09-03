@@ -451,6 +451,15 @@
 
     .sidebar-label { font-size: 12px; font-weight: 600; color: #666; padding: 10px 12px 6px; flex-shrink: 0; }
 
+    /* Pro's 80%-of-daily-cap pre-warning banner -- neutral gray pill CTA (matches the reference
+       spec's "NOT the purple gradient Upgrade-to-Max style"), distinct from #limitBanner's actual
+       hard-stop CTA at 100%. */
+    .pro-usage-warning-btn:hover { background: #333 !important; border-color: #4a4a4a !important; }
+    body.light-mode #proUsageWarningBanner { background: #f5f5f7 !important; border-color: #e0e0e5 !important; }
+    body.light-mode #proUsageWarningText { color: #33333d !important; }
+    body.light-mode .pro-usage-warning-btn { background: #ececf0 !important; border-color: #d5d5dd !important; color: #16161d !important; }
+    body.light-mode .pro-usage-warning-btn:hover { background: #e0e0e6 !important; }
+
     /* Single continuous scroll area covering BOTH Pinned and Recent (matches Claude.ai's own
        sidebar -- one scrollbar for the whole list, not one per section). #pinnedList/#historyList
        used to each carry their own overflow-y:auto + flex:1, which split the sidebar's remaining
@@ -1174,6 +1183,18 @@
 <div class="input-wrapper">
        <div id="usageWarning" style="display:none;padding:6px;margin-bottom:6px;font-size:11px;color:#888;text-align:center;">
           <span data-i18n="chat.doubtsLeftWarning">Doubts left today</span>
+        </div>
+       <div id="proUsageWarningBanner" style="display:none;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;margin-bottom:6px;border-radius:8px;background:#1a1a1a;border:1px solid #2a2a2a;">
+          <div style="display:flex;align-items:center;gap:8px;min-width:0;">
+            <span style="flex-shrink:0;color:#888;font-size:13px;">ⓘ</span>
+            <span id="proUsageWarningText" style="font-size:12px;color:#ccc;min-width:0;"></span>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
+            <button class="pro-usage-warning-btn" onclick="window.location.href='./pricing.html'" style="background:#2a2a2a;border:1px solid #3a3a3a;color:#ececec;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;font-family:Inter,sans-serif;white-space:nowrap;" data-i18n="chat.getMoreUsage">Get more usage</button>
+            <button onclick="dismissProUsageWarning()" title="Dismiss" style="background:transparent;border:none;color:#666;cursor:pointer;padding:4px;display:flex;align-items:center;flex-shrink:0;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
         </div>
        <div id="limitBanner" style="display:none;border-bottom:1px solid #1e1e1e;padding:10px 6px;margin-bottom:6px;align-items:center;justify-content:space-between;gap:12px;">
           <span id="limitBannerText" style="font-size:12px;color:#666;" data-i18n="chat.dailyLimitReached">⚡ Daily limit reached — resets at midnight</span>
@@ -5529,9 +5550,24 @@ function plainTextFromMarkdown(text) {
       if (upgradePlanItem) upgradePlanItem.style.display = isMax ? 'none' : 'flex';
     }
 
+    // In-memory only, deliberately not localStorage/sessionStorage -- "dismissible per session"
+    // per spec means it stays hidden for the rest of THIS page load once closed, but must come
+    // back on the next real page load (a fresh reload re-runs this whole script from scratch,
+    // naturally resetting it to false) if usage is still 80%+ and under the 100% hard cap.
+    let proUsageWarningDismissed = false;
+    function dismissProUsageWarning() {
+      proUsageWarningDismissed = true;
+      document.getElementById('proUsageWarningBanner').style.display = 'none';
+    }
+
     async function refreshUsageBanner() {
       const warningEl = document.getElementById('usageWarning');
       const limitEl = document.getElementById('limitBanner');
+      const proWarningEl = document.getElementById('proUsageWarningBanner');
+      // Reset here, unconditionally, rather than in just the pro branch below -- covers every
+      // other return path (guest, free, Max) so a stale banner can't survive a plan/account
+      // change mid-session instead of only ever being explicitly re-shown.
+      proWarningEl.style.display = 'none';
       const { data: { session } } = await client.auth.getSession();
 
       if (!session) {
@@ -5566,6 +5602,16 @@ function plainTextFromMarkdown(text) {
           const res = await fetch(`${API_BASE}/usage/summary?user_id=${session.user.id}`);
           const data = await res.json();
           applyUsageDisplay(data.today.tokens_used, data.today.budget, userPlan, data.today.blocked ? data.today.reset_in_seconds : null);
+          // Pro-only pre-warning at 80%+, strictly separate from #limitBanner's 100% hard stop
+          // above (applyUsageDisplay already handles that one via data.today.blocked) -- Max is
+          // deliberately excluded, same "feels unlimited" reasoning as the rest of this branch.
+          // !data.today.blocked keeps this from ever showing alongside the hard-limit banner once
+          // 100% is actually reached, even for the one tick where both could otherwise be true.
+          if (userPlan === 'pro' && !data.today.blocked && data.today.percent_used >= 80 && !proUsageWarningDismissed) {
+            document.getElementById('proUsageWarningText').textContent =
+              t('chat', 'proUsageWarning').replace('{n}', localizeNum(Math.round(data.today.percent_used)));
+            proWarningEl.style.display = 'flex';
+          }
         } catch (e) {
           warningEl.style.display = 'none'; limitEl.style.display = 'none'; setSendEnabled(true);
         }
