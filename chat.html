@@ -449,7 +449,7 @@
     .new-chat-btn:hover { background: #1a1a1a; }
     .new-chat-btn .icon { font-size: 15px; color: #4f8ef7; width: 16px; display: inline-flex; justify-content: center; }
 
-    .sidebar-label { font-size: 12px; font-weight: 600; color: #666; padding: 10px 12px 6px; }
+    .sidebar-label { font-size: 12px; font-weight: 600; color: #666; padding: 10px 12px 6px; flex-shrink: 0; }
 
     /* Single continuous scroll area covering BOTH Pinned and Recent (matches Claude.ai's own
        sidebar -- one scrollbar for the whole list, not one per section). #pinnedList/#historyList
@@ -463,7 +463,19 @@
     .sidebar-scroll-area { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
     .sidebar-scroll-area::-webkit-scrollbar { width: 3px; }
     .sidebar-scroll-area::-webkit-scrollbar-thumb { background: #2a2a2a; border-radius: 4px; }
-    .history-list { display: flex; flex-direction: column; gap: 2px; }
+    /* flex-shrink:0 is load-bearing, not decorative: #pinnedList/#historyList are themselves flex
+       ITEMS of .sidebar-scroll-area above, and a flex item's default flex-shrink:1 means the
+       browser will happily compress it BELOW its own content's natural height rather than let the
+       scroll area's overflow-y:auto grow to fit everything -- confirmed live as the real cause of
+       a drag-to-unpin visual bug: dragging force-reveals/grows Pinned (see the drag-start reveal
+       in makeHistoryListSortable), and once Pinned+Recent's combined natural height exceeded the
+       sidebar's visible space, #pinnedList's own box got shrunk to ~40px while its 3 real pinned
+       rows kept PAINTING at their full natural size beyond that shrunk box (children aren't
+       clipped by a parent with no overflow set) -- so the "Recent" label, laid out immediately
+       after #pinnedList's own (wrongly shrunk) box, rendered overlapping/ghosting behind those
+       still-visible overflowing pinned rows and the drag tooltip sitting near them. Same fix
+       applied to .sidebar-label above for the same reason -- it's a sibling flex item too. */
+    .history-list { display: flex; flex-direction: column; gap: 2px; flex-shrink: 0; }
     /* Real root cause behind BOTH the "cursor lag" and "renders behind Recent header" drag bugs
        (confirmed live: the dragged item's own translateY tracks the cursor correctly on every
        single pointermove, no lag at the style level -- but the instant that transform pushes it
