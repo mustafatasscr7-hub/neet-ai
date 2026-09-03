@@ -1946,6 +1946,7 @@ let selectedImages = [];
       }
 
       let chapterHtml = '';
+      let chapterText = '';
       if (chapterMatch) {
         // Same "text after the last dash separator" convention server.py's
         // extract_chapter_candidate() already uses for diagram matching, so the pill shows just
@@ -1955,11 +1956,29 @@ let selectedImages = [];
         for (const sep of ['—', '–', ' - ']) {
           if (chapter.includes(sep)) { chapter = chapter.split(sep).pop().trim(); break; }
         }
+        // A real NCERT chapter name (from NEET_SYLLABUS) is always short -- but the model doesn't
+        // always follow the "omit this line entirely if no chapter was retrieved" instruction and
+        // sometimes writes a fallback sentence instead ("Not available — answering from general
+        // knowledge, not a specific retrieved NCERT chapter."), which the regex above still
+        // technically matches as a "Chapter:" line. Length-gating here keeps that prose out of
+        // chapterText (used to sharpen the PYQ search query below) without needing to maintain a
+        // denylist of fallback phrasings -- any real chapter name comfortably clears this.
+        if (chapter && chapter.length <= 60) chapterText = chapter;
         if (chapter) chapterHtml = `<span class="answer-chapter-pill">${renderInlineMathText(chapter)}</span>`;
       }
 
       const metaHtml = (starsHtml || chapterHtml) ? `<div class="answer-meta-row">${chapterHtml}${starsHtml}</div>` : '';
-      return { cleanText, metaHtml };
+      return { cleanText, metaHtml, chapterText };
+    }
+
+    // Sharpens the "Previous Year Questions" button's search query with the answer's own chapter
+    // name when available, on top of the student's raw doubt text -- confirmed via a real
+    // 6-doubt/2-query comparison against search_pyq() that this measurably helps on short,
+    // cross-subject-ambiguous doubts (e.g. "derive the equation for kinetic energy" alone pulled
+    // in unrelated Arrhenius-equation chemistry results on the word "energy"; adding "— Work,
+    // Energy and Power" dropped them) and is neutral-to-marginally-better everywhere else tested.
+    function buildPyqSearchQuery(searchText, chapterText) {
+      return chapterText ? `${searchText} — ${chapterText}` : searchText;
     }
 
     // Parses the CLARIFY_TYPE/QUESTION/OPTION lines that follow an AMBIGUOUS: yes first line
@@ -3686,7 +3705,7 @@ let selectedImages = [];
       const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
       if (role === 'ai') {
-        const { cleanText, metaHtml } = extractAnswerMeta(text);
+        const { cleanText, metaHtml, chapterText } = extractAnswerMeta(text);
         bubble.innerHTML = metaHtml + parseWithMath(cleanText);
         renderMermaidBlocksIn(bubble);
 
@@ -3728,7 +3747,7 @@ let selectedImages = [];
               const res = await fetch(`${API_BASE}/pyq`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ text: userQuestion })
+                body: JSON.stringify({ text: buildPyqSearchQuery(userQuestion, chapterText) })
               });
               const data = await res.json();
               if (data.pyqs && data.pyqs.length > 0) {
@@ -3892,7 +3911,7 @@ function plainTextFromMarkdown(text) {
       bubble.style.transition = 'opacity 0.12s ease';
       bubble.style.opacity = '0';
       setTimeout(() => {
-        const { cleanText, metaHtml } = extractAnswerMeta(v.text);
+        const { cleanText, metaHtml, chapterText } = extractAnswerMeta(v.text);
         bubble.innerHTML = metaHtml + parseWithMath(cleanText);
         renderMermaidBlocksIn(bubble);
         if (v.diagram) insertAutoEmbedDiagram(bubble, bubble.firstChild, v.diagram);
@@ -3923,7 +3942,7 @@ function plainTextFromMarkdown(text) {
             const res = await fetch(`${API_BASE}/pyq`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ text: pyqSearchText })
+              body: JSON.stringify({ text: buildPyqSearchQuery(pyqSearchText, chapterText) })
             });
             const data = await res.json();
             if (data.pyqs && data.pyqs.length > 0) {
@@ -5982,7 +6001,7 @@ function plainTextFromMarkdown(text) {
           refreshUsageBanner();
         } else {
 
-        const { cleanText: cleanFullText, metaHtml } = extractAnswerMeta(fullText);
+        const { cleanText: cleanFullText, metaHtml, chapterText } = extractAnswerMeta(fullText);
         textArea.innerHTML = metaHtml + parseWithMath(cleanFullText);
         await renderMermaidBlocksIn(textArea);
 
@@ -6020,7 +6039,7 @@ function plainTextFromMarkdown(text) {
             const res = await fetch(`${API_BASE}/pyq`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ text: pyqSearchText })
+              body: JSON.stringify({ text: buildPyqSearchQuery(pyqSearchText, chapterText) })
             });
             const data = await res.json();
             if (data.pyqs && data.pyqs.length > 0) {
