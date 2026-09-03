@@ -555,6 +555,11 @@
        the same point, so this is raised too, well above anything else local to the sidebar. */
     .history-item.dragging { transition: none; opacity: 0.85; box-shadow: 0 4px 14px rgba(0,0,0,0.35); background: #1a1a1a; z-index: 1000; will-change: transform; }
     .history-item .item-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    /* Inline rename input, swapped in for .item-title in place (see startInlineRename) --
+       font: inherit picks up the row's real computed size/weight (bold-for-pinned included, see
+       #pinnedList .history-item above) rather than hardcoding a value that could drift from
+       .history-item's own CSS. */
+    .item-title-edit-input { flex: 1; min-width: 0; font: inherit; color: inherit; background: transparent; border: none; outline: none; padding: 0; margin: 0; }
 
     /* Claude.ai-style hover-to-pin icon -- right-aligned next to the "..." menu button, not a
        leading icon before the title (that was this control's old shape, .pin-badge, retired in
@@ -4689,11 +4694,10 @@ function plainTextFromMarkdown(text) {
       }
     }
 
-    // Shared by both the per-item sidebar menu and the chat-title dropdown in the header, so
-    // renaming/deleting/pinning stays in sync regardless of which one triggered it.
-    async function renameConversationById(id, oldTitle) {
-      const newName = prompt('Enter new name:', oldTitle);
-      if (!newName) return;
+    // Shared persistence step, used by both the header dropdown's prompt()-based rename below and
+    // the sidebar row's inline rename (startInlineRename) -- keeps conversations/sidebar
+    // title/header title/Supabase all in sync regardless of which UI triggered the rename.
+    async function applyRename(id, newName) {
       const conv = conversations.find(c => c.id === id || c.supabaseId === id);
       if (conv) conv.title = newName;
       const sidebarTitle = document.querySelector('#conv-' + id + ' .item-title');
@@ -4706,6 +4710,60 @@ function plainTextFromMarkdown(text) {
           await client.from('chats').update({ title: newName }).eq('id', supabaseId).eq('user_id', session.user.id);
         }
       }
+    }
+
+    // Header title dropdown's own rename entry point -- out of scope for the inline-edit
+    // treatment (that's specifically the sidebar row's "..." menu, see startInlineRename), left
+    // as the native prompt() it always was.
+    async function renameConversationById(id, oldTitle) {
+      const newName = prompt('Enter new name:', oldTitle);
+      if (!newName) return;
+      await applyRename(id, newName);
+    }
+
+    // Sidebar row's own inline rename -- swaps .item-title for a same-styled <input> in place
+    // (font: inherit picks up the row's real computed size/weight, bold-for-pinned included,
+    // rather than hardcoding a value here that could drift from .history-item's own CSS).
+    // Enter/blur saves, Escape reverts without persisting -- no popup at all, matching the
+    // styled-modal treatment already given to confirm/alert elsewhere this session.
+    function startInlineRename(titleSpan, id) {
+      const oldTitle = titleSpan.textContent;
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'item-title-edit-input';
+      input.value = oldTitle;
+      titleSpan.replaceWith(input);
+      input.focus();
+      input.select();
+
+      let settled = false;
+      async function finish(save) {
+        if (settled) return;
+        settled = true;
+        input.removeEventListener('blur', onBlur);
+        const newName = save ? input.value.trim() : '';
+        // Put titleSpan back BEFORE persisting -- applyRename looks it up fresh via
+        // document.querySelector('#conv-' + id + ' .item-title'), which only finds it once it's
+        // actually back in the DOM.
+        input.replaceWith(titleSpan);
+        if (save && newName && newName !== oldTitle) {
+          await applyRename(id, newName);
+        } else {
+          titleSpan.textContent = oldTitle;
+        }
+      }
+      function onKeydown(e) {
+        if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+        else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+      }
+      function onBlur() { finish(true); } // clicking outside saves, per spec
+      input.addEventListener('keydown', onKeydown);
+      input.addEventListener('blur', onBlur);
+      // Stops the row's own click handler (navigates to the chat) and the drag-start listener
+      // from ever seeing this click/mousedown at all -- cleaner than teaching those handlers a
+      // new element to ignore.
+      input.addEventListener('click', e => e.stopPropagation());
+      input.addEventListener('mousedown', e => e.stopPropagation());
     }
 
     // Looks up the display name BEFORE anything is touched (the actual deletion below removes
@@ -5033,7 +5091,7 @@ function plainTextFromMarkdown(text) {
           if (action === 'delete') {
             await deleteConversationById(id);
           } else if (action === 'rename') {
-            await renameConversationById(id, titleSpan.textContent);
+            startInlineRename(titleSpan, id);
           } else if (action === 'pin') {
             await togglePinConversation(id);
           } else if (action === 'share') {
@@ -5099,7 +5157,7 @@ function plainTextFromMarkdown(text) {
 
       function onPointerDown(e) {
         const item = e.target.closest('.history-item');
-        if (!item || e.target.closest('.item-menu-btn') || e.target.closest('.pin-hover-btn')) return;
+        if (!item || e.target.closest('.item-menu-btn') || e.target.closest('.pin-hover-btn') || e.target.closest('.item-title-edit-input')) return;
         draggedEl = item;
         sourceContainer = item.parentElement;
         startY = e.clientY;
