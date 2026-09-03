@@ -170,14 +170,14 @@
 
   <div class="container">
     <div class="page-title" data-i18n="savedquestions.pageTitle">Saved Questions</div>
-    <div class="page-subtitle" data-i18n="savedquestions.pageSubtitle">Questions you bookmarked from PYQ Bank and Mock Tests</div>
+    <div class="page-subtitle" data-i18n="savedquestions.pageSubtitle">Questions you bookmarked from Question Bank and Mock Tests</div>
 
     <div class="filter-tabs">
       <button class="filter-tab active" onclick="filterBy('all', this)" data-i18n="savedquestions.all">All</button>
       <button class="filter-tab" onclick="filterBy('Biology', this)">🔬 <span data-i18n="common.biology">Biology</span></button>
       <button class="filter-tab" onclick="filterBy('Physics', this)">⚡ <span data-i18n="common.physics">Physics</span></button>
       <button class="filter-tab" onclick="filterBy('Chemistry', this)">⚗️ <span data-i18n="common.chemistry">Chemistry</span></button>
-      <button class="filter-tab" onclick="filterBy('PYQ Bank', this)" data-i18n="savedquestions.fromPyqBank">📚 From PYQ Bank</button>
+      <button class="filter-tab" onclick="filterBy('PYQ Bank', this)" data-i18n="savedquestions.fromPyqBank">📚 From Question Bank</button>
       <button class="filter-tab" onclick="filterBy('Mock Test', this)" data-i18n="savedquestions.fromMockTest">📝 From Mock Test</button>
       <button class="filter-tab" onclick="filterBy('Mistake Journal', this)" data-i18n="savedquestions.mistakeJournal">🚨 Mistake Journal</button>
     </div>
@@ -669,7 +669,7 @@
               <span class="q-year">${localizeNum(q.year || '')}</span>
               <span>${subjectName(q.subject) || ''}</span>
               ${q.chapter ? `<span>${chapterName(q.chapter)}</span>` : ''}
-              <span class="q-source">📌 ${q.source || 'PYQ Bank'}</span>
+              <span class="q-source">📌 ${q.source === 'PYQ Bank' || !q.source ? 'Question Bank' : q.source}</span>
               <span class="q-saved-at">🕐 ${formatDate(q.saved_at)}</span>
               ${q.question_id ? metaActionsHtml(q.difficulty, q.question_id) : ''}
             </div>
