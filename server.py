@@ -70,12 +70,19 @@ openai_client = openai.OpenAI(api_key=OPENAI_KEY)
 # vision support isn't reliable (confirmed via live testing -- it silently hallucinates on images
 # instead of erroring), so it's never used for image-attached questions.
 deepseek_client = anthropic.Anthropic(api_key=DEEPSEEK_KEY, base_url="https://api.deepseek.com/anthropic")
+# Async twin used only by the streaming path (_stream_deepseek) -- the sync client above stays
+# for the non-streaming .messages.create() call sites (title generation, etc.), which are short
+# single-shot calls where blocking the event loop briefly isn't the concurrency-killer that a
+# whole streamed answer held open on a sync client is.
+deepseek_async_client = anthropic.AsyncAnthropic(api_key=DEEPSEEK_KEY, base_url="https://api.deepseek.com/anthropic")
 # Peak-hour fallback for text doubt-answering only (never images/PDFs) -- confirmed via a live
 # 45-question test to be equivalent to DeepSeek on accuracy/reliability, used during DeepSeek's
 # own peak-pricing windows (see _is_deepseek_peak_hour) to avoid the peak surcharge. Same
 # OpenAI-compatible endpoint pattern already verified live in that test. See
 # _stream_with_peak_fallback below for the actual routing/failover logic.
 qwen_client = openai.OpenAI(api_key=QWEN_API_KEY, base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1")
+# Async twin used only by the streaming path (_stream_qwen) -- see deepseek_async_client comment.
+qwen_async_client = openai.AsyncOpenAI(api_key=QWEN_API_KEY, base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1")
 # Image-attached doubts (/chat) run on Gemini 3.5 Flash-Lite, swapped from Claude Sonnet after
 # 4 rounds of live comparison testing: 95-100% accuracy on handwritten doubts, NCERT diagrams,
 # organic mechanisms and IUPAC-adjacent naming, both on clean crops and camera-photo-style
@@ -1975,7 +1982,7 @@ async def _stream_qwen(system: str, messages: list, user_id: str, ip: str, endpo
     unaffected -- real tokens were genuinely spent either way, this only controls the
     user-facing quota deduction. None (the default, used by every caller that doesn't pass one,
     e.g. /solve) means "always bill", matching the pre-existing behavior."""
-    qwen_stream = qwen_client.chat.completions.create(
+    qwen_stream = await qwen_async_client.chat.completions.create(
         model="qwen-flash",
         max_tokens=1024,
         stream=True,
@@ -1984,7 +1991,7 @@ async def _stream_qwen(system: str, messages: list, user_id: str, ip: str, endpo
     )
     input_tokens = output_tokens = 0
     try:
-        for chunk in qwen_stream:
+        async for chunk in qwen_stream:
             if chunk.choices and chunk.choices[0].delta.content:
                 yield chunk.choices[0].delta.content
             if chunk.usage:
@@ -2011,7 +2018,7 @@ async def _stream_deepseek(system: str, messages: list, user_id: str, ip: str, i
     unavailable -- is_peak is only for the usage-log tag, so peak-window fallback traffic still
     shows up as such in the logs even though DeepSeek ended up serving it. See _stream_qwen's
     docstring for what billing_context does."""
-    with deepseek_client.messages.stream(
+    async with deepseek_async_client.messages.stream(
         model="deepseek-v4-flash",
         max_tokens=1024,
         thinking={"type": "disabled"},
@@ -2019,11 +2026,12 @@ async def _stream_deepseek(system: str, messages: list, user_id: str, ip: str, i
         messages=messages
     ) as stream:
         try:
-            for text_chunk in stream.text_stream:
+            async for text_chunk in stream.text_stream:
                 yield text_chunk
         finally:
             try:
-                usage = stream.get_final_message().usage
+                final_message = await stream.get_final_message()
+                usage = final_message.usage
                 # cache_creation_input_tokens (writing a fresh cache entry) is billed at the same
                 # rate as a cache miss, not a discount -- only cache_read_input_tokens (an actual
                 # hit against an already-cached system prompt) gets the cheaper rate.
@@ -2211,7 +2219,7 @@ IMPORTANT -- BE CONCISE:
                 )
                 for img in images
             ]
-            gemini_stream = gemini_client.models.generate_content_stream(
+            gemini_stream = await gemini_client.aio.models.generate_content_stream(
                 model=selected_model,
                 contents=image_parts + [user_message],
                 config=genai_types.GenerateContentConfig(
@@ -2222,7 +2230,7 @@ IMPORTANT -- BE CONCISE:
             full_answer = ""
             last_usage = None
             try:
-                for chunk in gemini_stream:
+                async for chunk in gemini_stream:
                     if chunk.text:
                         full_answer += chunk.text
                         yield chunk.text
@@ -2253,7 +2261,7 @@ IMPORTANT -- BE CONCISE:
             print(f"MODEL SELECTED: {selected_model}", flush=True)
             sys.stdout.flush()
             pdf_part = genai_types.Part.from_bytes(data=base64.b64decode(pdf), mime_type="application/pdf")
-            gemini_stream = gemini_client.models.generate_content_stream(
+            gemini_stream = await gemini_client.aio.models.generate_content_stream(
                 model=selected_model,
                 contents=[pdf_part, user_message],
                 config=genai_types.GenerateContentConfig(
@@ -2264,7 +2272,7 @@ IMPORTANT -- BE CONCISE:
             full_answer = ""
             last_usage = None
             try:
-                for chunk in gemini_stream:
+                async for chunk in gemini_stream:
                     if chunk.text:
                         full_answer += chunk.text
                         yield chunk.text
