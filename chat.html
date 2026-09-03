@@ -454,11 +454,11 @@
     /* Pro's 80%-of-daily-cap pre-warning banner -- neutral gray pill CTA (matches the reference
        spec's "NOT the purple gradient Upgrade-to-Max style"), distinct from #limitBanner's actual
        hard-stop CTA at 100%. */
-    .pro-usage-warning-btn:hover { background: #333 !important; border-color: #4a4a4a !important; }
+    .pro-usage-warning-btn:hover { background: #47474a !important; }
     body.light-mode #proUsageWarningBanner { background: #f5f5f7 !important; border-color: #e0e0e5 !important; }
-    body.light-mode #proUsageWarningText { color: #33333d !important; }
-    body.light-mode .pro-usage-warning-btn { background: #ececf0 !important; border-color: #d5d5dd !important; color: #16161d !important; }
-    body.light-mode .pro-usage-warning-btn:hover { background: #e0e0e6 !important; }
+    body.light-mode #proUsageWarningText { color: #16161d !important; }
+    body.light-mode .pro-usage-warning-btn { background: #e4e4ea !important; color: #16161d !important; }
+    body.light-mode .pro-usage-warning-btn:hover { background: #d8d8de !important; }
 
     /* Single continuous scroll area covering BOTH Pinned and Recent (matches Claude.ai's own
        sidebar -- one scrollbar for the whole list, not one per section). #pinnedList/#historyList
@@ -1184,15 +1184,15 @@
        <div id="usageWarning" style="display:none;padding:6px;margin-bottom:6px;font-size:11px;color:#888;text-align:center;">
           <span data-i18n="chat.doubtsLeftWarning">Doubts left today</span>
         </div>
-       <div id="proUsageWarningBanner" style="display:none;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;margin-bottom:6px;border-radius:8px;background:#1a1a1a;border:1px solid #2a2a2a;">
-          <div style="display:flex;align-items:center;gap:8px;min-width:0;">
-            <span style="flex-shrink:0;color:#888;font-size:13px;">ⓘ</span>
-            <span id="proUsageWarningText" style="font-size:12px;color:#ccc;min-width:0;"></span>
+       <div id="proUsageWarningBanner" style="display:none;align-items:center;justify-content:space-between;gap:10px;padding:12px 16px;margin-bottom:8px;border-radius:14px;background:#1c1c1e;border:1px solid #2e2e30;">
+          <div style="display:flex;align-items:center;gap:10px;min-width:0;">
+            <span style="flex-shrink:0;color:#9a9a9e;font-size:15px;">ⓘ</span>
+            <span id="proUsageWarningText" style="font-size:13px;color:#ececec;min-width:0;"></span>
           </div>
-          <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
-            <button class="pro-usage-warning-btn" onclick="window.location.href='./pricing.html'" style="background:#2a2a2a;border:1px solid #3a3a3a;color:#ececec;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;font-family:Inter,sans-serif;white-space:nowrap;" data-i18n="chat.getMoreUsage">Get more usage</button>
-            <button onclick="dismissProUsageWarning()" title="Dismiss" style="background:transparent;border:none;color:#666;cursor:pointer;padding:4px;display:flex;align-items:center;flex-shrink:0;">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          <div style="display:flex;align-items:center;gap:10px;flex-shrink:0;">
+            <button class="pro-usage-warning-btn" onclick="window.location.href='./pricing.html'" style="background:#3a3a3d;border:none;color:#ececec;padding:7px 14px;border-radius:999px;cursor:pointer;font-size:12px;font-weight:600;font-family:Inter,sans-serif;white-space:nowrap;" data-i18n="chat.getMoreUsage">Get more usage</button>
+            <button onclick="dismissProUsageWarning()" title="Dismiss" style="background:transparent;border:none;color:#8a8a8e;cursor:pointer;padding:4px;display:flex;align-items:center;flex-shrink:0;">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
             </button>
           </div>
         </div>
