@@ -2503,31 +2503,76 @@ async def chat(message: Message, request: Request, _: None = Depends(rate_limite
         media_type="text/plain"
     )
 
+_TITLE_MARKDOWN_RE = re.compile(r'[*_`#>~\[\]]+')
+_TITLE_WHITESPACE_RE = re.compile(r'\s+')
+# Catches the model slipping into "replying to the student" instead of "labeling the topic" --
+# e.g. "I'm ready to help! Please share the NEET question you'd..." (a real observed case, cut off
+# mid-sentence by max_tokens). A markdown-strip/length-cap backstop alone can't catch this since
+# the text itself isn't malformed, just the wrong genre -- same "instruction alone isn't reliable,
+# add a code-level guard" lesson as Rule 11's FALSE_POSITIVE_CLARIFY_WORDS denylist. English-only
+# (no Hindi equivalent list); a Hindi title that slips this way still gets caught by the length cap.
+_TITLE_REPLY_PATTERN_RE = re.compile(
+    r"^(i'?m|i can|i'?ll|i will|sure|okay|ok|certainly|of course|please|let me|here'?s|happy to|glad to|no problem|you'?re welcome)\b",
+    re.IGNORECASE
+)
+
+# Backstop for /title, same reasoning as Rule 11's FALSE_POSITIVE_CLARIFY_WORDS denylist guard
+# elsewhere in this file: a closed prompt constraint (below) cuts how often the model drifts into
+# replying/quoting instead of labeling, but doesn't cut it to zero, so this strips whatever
+# markdown survives, catches reply-shaped output, and hard-caps length regardless of what the
+# model actually returned -- guaranteed short and clean even on a prompt-adherence miss.
+def _clean_title(raw: str, fallback: str = "New Chat") -> str:
+    cleaned = _TITLE_MARKDOWN_RE.sub('', raw or '')
+    cleaned = _TITLE_WHITESPACE_RE.sub(' ', cleaned).strip()
+    if _TITLE_REPLY_PATTERN_RE.match(cleaned) or cleaned.endswith(('!', '?')):
+        return fallback
+    words = cleaned.split(' ')
+    if len(words) > 4:
+        cleaned = ' '.join(words[:4])
+    if len(cleaned) > 40:  # backstop for pasted no-space text / dense scripts word-splitting doesn't catch
+        cleaned = cleaned[:40].rstrip()
+    return cleaned or fallback
+
 @app.post("/title")
 async def generate_title(message: Message, request: Request, _: None = Depends(rate_limiter(15, 60))):
     ip = _client_ip(request)
     await enforce_daily_budget(message.user_id, ip)
     client = deepseek_client
+    fallback_title = "New Chat" if message.language != "hi" else "नई चैट"
     title_lang = "entirely in Hindi (Devanagari script) — every word in Hindi, no English words mixed in" if message.language == "hi" else "in English"
     response = client.messages.create(
         model="deepseek-v4-flash",
         max_tokens=15,
         thinking={"type": "disabled"},
         system=(
-            f"Generate a short 3-5 word title {title_lang} summarizing the TOPIC of this message, "
-            "the way a chat app names a conversation in its sidebar. The message is the first thing "
-            "a student sent -- it may be a NEET question, but it may just as easily be a greeting, "
-            "small talk, or something unrelated to NEET.\n\n"
-            "Always output a short topic label. NEVER reply to, answer, or continue the message "
-            "itself -- you are naming the conversation, not participating in it.\n"
-            "Examples: \"hi\" -> Greeting. \"what's your name\" -> Asking My Name. \"explain "
-            "photosynthesis\" -> Photosynthesis Explanation.\n\n"
-            "Return ONLY the title. No punctuation. No extra words. No markdown."
+            f"Generate a short chat-sidebar title {title_lang} for this conversation, based ONLY on "
+            "the student's message below -- the way a chat app names a conversation, never based on "
+            "how you personally would respond to it. You are a labeler, not a participant in this "
+            "conversation.\n\n"
+            "STRICT rules, all mandatory, no exceptions:\n"
+            "1. Exactly 2-4 words. Never more, no matter how long or detailed the message is -- "
+            "summarize down to the core topic. Do NOT quote, copy, or extract phrases verbatim from "
+            "the message, even if it already contains short phrases that look title-sized.\n"
+            "2. Plain text only: no markdown symbols (*, _, `, #, >, ~, [, ]), no punctuation, no "
+            "emoji, no quotation marks.\n"
+            "3. Never write a sentence, never address the student, never reply to, answer, "
+            "continue, or acknowledge the message -- e.g. never output anything starting with or "
+            "resembling \"I can help\", \"Please share\", \"Sure,\", or similar. If you notice "
+            "yourself about to respond to the student rather than label the topic, stop and produce "
+            f"a topic label instead.\n"
+            f"4. If the message is a greeting, thanks, small talk, or has no identifiable academic "
+            f"topic, output EXACTLY: {fallback_title}\n\n"
+            "Examples: \"hi\" -> " + fallback_title + ". \"thanks!\" -> " + fallback_title + ". "
+            "\"what's your name\" -> Asking My Name. \"explain photosynthesis\" -> Photosynthesis "
+            "Explanation. A long pasted MCQ about a block sliding down a ramp with 4 options -> "
+            "Kinetic Energy Calculation.\n\n"
+            "Return ONLY the title text. Nothing else -- no preamble, no explanation, no quotes "
+            "around it."
         ),
         messages=[{"role": "user", "content": message.text}]
     )
     await log_token_usage(message.user_id, response.usage.input_tokens + response.usage.output_tokens, ip)
-    return {"title": response.content[0].text}
+    return {"title": _clean_title(response.content[0].text, fallback_title)}
 
 # Backs chat.html's "/summarize" command -- same lightweight, no-NCERT-search, low-max_tokens
 # shape as /title above (a small transform of already-known text, not a fresh doubt-answering
