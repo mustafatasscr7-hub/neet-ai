@@ -472,25 +472,13 @@
        togglePinConversation() directly, the exact same function the "..." menu's own Pin/Unpin
        option and drag-to-pin both already call, so all three stay in sync for free rather than
        needing separate state. */
-    .pin-hover-btn { display: flex; flex-shrink: 0; width: 24px; height: 24px; align-items: center; justify-content: center; border-radius: 5px; cursor: pointer; color: #666; margin-left: 4px; opacity: 0; pointer-events: none; transition: opacity 0.15s ease, background 0.15s, color 0.15s; }
+    /* Kept in the DOM (setPinBadge and a few click-target checks still reference it) but always
+       hidden -- user didn't want a pin icon on the row at all. Pin/Unpin stays fully available
+       via the "..." menu's own option, which already calls the same togglePinConversation(). */
+    .pin-hover-btn { display: none; flex-shrink: 0; width: 24px; height: 24px; align-items: center; justify-content: center; border-radius: 5px; cursor: pointer; color: #666; margin-left: 4px; opacity: 0; pointer-events: none; }
     .pin-hover-btn svg { width: 13px; height: 13px; }
-    .history-item:hover .pin-hover-btn { opacity: 1; pointer-events: auto; }
-    .pin-hover-btn:hover { background: #2a2a2a; color: #ccc; }
-    /* Pinned = filled icon (fill follows currentColor, same outline SVG the "..." menu's own Pin
-       option uses) once revealed -- but revealed the same hover-only way as an unpinned row, no
-       longer a persistent badge. "Is this pinned" is now communicated purely by which section
-       (Pinned vs Recent) the chat sits in, not by anything on the row itself. */
     .pin-hover-btn.pinned { color: #ececec; }
     .pin-hover-btn.pinned svg { fill: currentColor; }
-    /* Touch devices have no real hover state -- (hover: none) is the actual capability, more
-       reliable than a screen-width guess, since a touch device can still have a wide screen.
-       Relying on "tap triggers :hover" (what .item-menu-btn below still does) is inconsistent
-       across mobile browsers and risks the icon being invisible and unreachable except through
-       the "..." menu, so this one is just always shown here instead -- both the outline
-       (unpinned, tap to pin) and filled (pinned, tap to unpin) states. */
-    @media (hover: none) {
-      .pin-hover-btn { opacity: 1; pointer-events: auto; }
-    }
 
     .item-menu-btn { display: none; flex-shrink: 0; width: 24px; height: 24px; align-items: center; justify-content: center; border-radius: 5px; cursor: pointer; color: #666; margin-left: 4px; }
     .history-item:hover .item-menu-btn { display: flex; }
