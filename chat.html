@@ -451,19 +451,30 @@
 
     .sidebar-label { font-size: 12px; font-weight: 600; color: #666; padding: 10px 12px 6px; }
 
-    .history-list { display: flex; flex-direction: column; gap: 2px; overflow-y: auto; overflow-x: hidden; flex: 1; }
-    .history-list::-webkit-scrollbar { width: 3px; }
-    .history-list::-webkit-scrollbar-thumb { background: #2a2a2a; border-radius: 4px; }
+    /* Single continuous scroll area covering BOTH Pinned and Recent (matches Claude.ai's own
+       sidebar -- one scrollbar for the whole list, not one per section). #pinnedList/#historyList
+       used to each carry their own overflow-y:auto + flex:1, which split the sidebar's remaining
+       height between two independently-scrolling boxes instead of one shared one; the split is
+       real natural flex behavior (two flex:1 siblings each claim a share of the parent's space),
+       not something either list opted into a bug for -- this wrapper is what actually fixes it.
+       min-height:0 is required here, not optional: without it a flex:1 child with overflow:auto
+       just grows past its intended box instead of clipping/scrolling (the standard flexbox
+       min-content-size gotcha). */
+    .sidebar-scroll-area { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+    .sidebar-scroll-area::-webkit-scrollbar { width: 3px; }
+    .sidebar-scroll-area::-webkit-scrollbar-thumb { background: #2a2a2a; border-radius: 4px; }
+    .history-list { display: flex; flex-direction: column; gap: 2px; }
     /* Real root cause behind BOTH the "cursor lag" and "renders behind Recent header" drag bugs
        (confirmed live: the dragged item's own translateY tracks the cursor correctly on every
        single pointermove, no lag at the style level -- but the instant that transform pushes it
-       outside #historyList/#pinnedList's own box, overflow-y:auto here clips it away entirely,
-       which reads as "stuck"/"lagging" since the student can no longer see it moving, and as
-       "behind the header" right at the boundary where a thin sliver is still technically inside
-       the box. .sidebar.dragging-active suspends that clipping for the exact duration of an
-       active drag (see makeHistoryListSortable) -- nothing else needs it, a student isn't also
-       trying to use the scrollbar mid-drag. */
-    .sidebar.dragging-active .history-list { overflow: visible; }
+       outside the scroll area's own box, overflow-y:auto here clips it away entirely, which reads
+       as "stuck"/"lagging" since the student can no longer see it moving, and as "behind the
+       header" right at the boundary where a thin sliver is still technically inside the box.
+       .sidebar.dragging-active suspends that clipping for the exact duration of an active drag
+       (see makeHistoryListSortable) -- nothing else needs it, a student isn't also trying to use
+       the scrollbar mid-drag. Targets .sidebar-scroll-area now (the single shared scroller) rather
+       than each .history-list individually, since that's where the clipping actually happens now. */
+    .sidebar.dragging-active .sidebar-scroll-area { overflow: visible; }
     /* Shown on #pinnedList only while a drag is actually in progress -- when nobody has any
        chats pinned yet, #pinnedList's normal state is display:none with zero height (see
        refreshPinnedSectionVisibility), which would leave no visible/droppable target to drag
@@ -500,7 +511,7 @@
        tracking it 1:1. Re-enabled the instant this class comes off, so the final snap when
        transform resets to '' on drop animates smoothly. */
     /* z-index bumped from 10 -> 1000: the real bug (rendering behind "Recent"/"Pinned") was
-       .history-list's own overflow-y:auto CLIPPING the item once dragged outside its box, which
+       the scroll area's own overflow-y:auto CLIPPING the item once dragged outside its box, which
        no z-index value can fix (see .sidebar.dragging-active above, the actual fix) -- but a
        plain sibling with no z-index at all (.sidebar-label, .sidebar-bottom) would still be able
        to out-stack a z-index:10 element in the rare case both happen to be genuinely visible at
@@ -1029,10 +1040,12 @@
       -->
     </div>
     <div class="sidebar-divider"></div>
-    <div class="sidebar-label" id="pinnedLabel" style="display:none;" data-i18n="chat.pinned">Pinned</div>
-    <div class="history-list" id="pinnedList" style="display:none;flex:0 0 auto;"></div>
-    <div class="sidebar-label" data-i18n="chat.recent">Recent</div>
-    <div class="history-list" id="historyList"></div>
+    <div class="sidebar-scroll-area">
+      <div class="sidebar-label" id="pinnedLabel" style="display:none;" data-i18n="chat.pinned">Pinned</div>
+      <div class="history-list" id="pinnedList" style="display:none;"></div>
+      <div class="sidebar-label" data-i18n="chat.recent">Recent</div>
+      <div class="history-list" id="historyList"></div>
+    </div>
 
     <div class="sidebar-bottom">
       <div class="profile-menu" id="profileMenu" style="display:none">
