@@ -70,10 +70,13 @@
     body.light-mode .selection-toolbar-btn { color: #333338 !important; }
     body.light-mode .selection-toolbar-btn:hover { background: #f0f0f3 !important; color: #0d0d0d !important; }
     body.light-mode .selection-toolbar-divider { background: #e5e5ea !important; }
-    body.light-mode .pyq-modal-selection-popup { background: #ffffff !important; border-color: #e0e0e5 !important; box-shadow: 0 8px 24px rgba(0,0,0,0.12) !important; }
-    body.light-mode .pyq-modal-selection-explain-btn { background: #f0f0f3 !important; color: #16161d !important; }
-    body.light-mode .pyq-modal-selection-explain-btn:hover { background: #e4e4ea !important; }
-    body.light-mode .pyq-modal-selection-ask-input { background: #f5f5f7 !important; border-color: #d5d5dd !important; color: #16161d !important; }
+    body.light-mode .pyq-modal-selection-popup { background: #ffffff !important; border-color: rgba(124,58,237,0.18) !important; box-shadow: 0 10px 30px rgba(0,0,0,0.10), 0 4px 16px rgba(124,58,237,0.08) !important; }
+    body.light-mode .pyq-modal-selection-popup:focus-within { border-color: #7c3aed !important; box-shadow: 0 10px 30px rgba(0,0,0,0.10), 0 0 0 3px rgba(124,58,237,0.14) !important; }
+    body.light-mode .pmsp-explain-btn { background: #a78bfa1a !important; color: #7c3aed !important; }
+    body.light-mode .pmsp-explain-btn:hover { background: #a78bfa33 !important; }
+    body.light-mode .pmsp-divider { background: rgba(0,0,0,0.08) !important; }
+    body.light-mode .pmsp-input { color: #16161d !important; }
+    body.light-mode .pmsp-input::placeholder { color: #9a9aa5 !important; }
 
     body.light-mode .nav-item { color: #55555f !important; }
     body.light-mode .nav-item:hover { background: #e4e4ea !important; color: #222228 !important; }
@@ -511,15 +514,23 @@
        .pyq-selection-popup (Explain button + free-type question), just renamed to avoid any
        confusion with this file's own .selection-toolbar, which is a different, AI-bubble-only
        mechanism (see the JS block that builds this popup for why they don't reuse one element). */
-    .pyq-modal-selection-popup { position: fixed; display: none; flex-direction: column; gap: 6px; background: #1e1e1e; border: 1px solid #333; border-radius: 10px; padding: 8px; z-index: 10000; width: 260px; box-shadow: 0 8px 24px rgba(0,0,0,0.6); }
+    /* Single-row pill: icon-only Explain + inline input + gradient send button, one floating
+       card instead of two stacked boxes. Purple-tinted border/glow (accent already used for
+       "Related Past Year Questions" and the Upgrade gradient) reads as a premium tooltip rather
+       than a flat utility box; :focus-within lights up the whole pill when the input is active,
+       not just the input itself. */
+    .pyq-modal-selection-popup { position: fixed; display: none; align-items: center; gap: 4px; background: #1c1c1f; border: 1px solid rgba(167,139,250,0.25); border-radius: 999px; padding: 5px; z-index: 10000; width: 290px; max-width: calc(100vw - 16px); box-shadow: 0 10px 30px rgba(0,0,0,0.45), 0 4px 16px rgba(124,58,237,0.12); transition: box-shadow 0.15s ease, border-color 0.15s ease; }
     .pyq-modal-selection-popup.visible { display: flex; }
-    .pyq-modal-selection-explain-btn { background: #2a2a2a; border: none; color: #ececec; font-size: 13px; font-family: 'Inter', sans-serif; padding: 8px 10px; border-radius: 6px; cursor: pointer; text-align: left; transition: background 0.15s; }
-    .pyq-modal-selection-explain-btn:hover { background: #333; }
-    .pyq-modal-selection-ask-row { display: flex; gap: 6px; }
-    .pyq-modal-selection-ask-input { flex: 1; min-width: 0; background: #111; border: 1px solid #2a2a2a; border-radius: 6px; padding: 7px 9px; color: #ececec; font-size: 12px; font-family: 'Inter', sans-serif; outline: none; }
-    .pyq-modal-selection-ask-input:focus { border-color: #4f8ef7; }
-    .pyq-modal-selection-ask-send { background: #4f8ef7; border: none; color: #fff; border-radius: 6px; width: 30px; flex-shrink: 0; cursor: pointer; display: flex; align-items: center; justify-content: center; }
-    .pyq-modal-selection-ask-send:hover { background: #3f7de6; }
+    .pyq-modal-selection-popup:focus-within { border-color: #7c3aed; box-shadow: 0 10px 30px rgba(0,0,0,0.45), 0 0 0 3px rgba(124,58,237,0.18), 0 4px 16px rgba(124,58,237,0.18); }
+    .pmsp-explain-btn { flex-shrink: 0; width: 30px; height: 30px; border-radius: 50%; background: rgba(167,139,250,0.14); border: none; color: #a78bfa; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: background 0.15s, color 0.15s; }
+    .pmsp-explain-btn:hover { background: rgba(167,139,250,0.24); color: #c4b1fb; }
+    .pmsp-explain-btn svg { width: 15px; height: 15px; }
+    .pmsp-divider { width: 1px; height: 18px; background: rgba(255,255,255,0.08); flex-shrink: 0; }
+    .pmsp-input { flex: 1; min-width: 0; background: transparent; border: none; outline: none; color: #ececec; font-size: 12.5px; font-family: 'Inter', sans-serif; padding: 6px 4px; }
+    .pmsp-input::placeholder { color: #71717a; }
+    .pmsp-send-btn { flex-shrink: 0; width: 28px; height: 28px; border-radius: 50%; background: linear-gradient(135deg, #4f8ef7, #7c3aed); border: none; color: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: opacity 0.15s, transform 0.1s; }
+    .pmsp-send-btn:hover { opacity: 0.88; }
+    .pmsp-send-btn:active { transform: scale(0.92); }
 
     /* Slash-command menu -- same visual language as .selection-toolbar above (dark chip,
        fixed positioning, computed on demand), anchored above whichever input triggered it. */
@@ -4071,20 +4082,30 @@ function plainTextFromMarkdown(text) {
     const pyqModalSelectionPopup = document.createElement('div');
     pyqModalSelectionPopup.className = 'pyq-modal-selection-popup';
     pyqModalSelectionPopup.innerHTML = `
-      <button class="pyq-modal-selection-explain-btn" id="pyqModalSelectionExplainBtn">${t('pyqbank', 'selectionExplain')}</button>
-      <div class="pyq-modal-selection-ask-row">
-        <input type="text" class="pyq-modal-selection-ask-input" id="pyqModalSelectionAskInput" placeholder="${t('pyqbank', 'selectionAskPlaceholder')}" />
-        <button class="pyq-modal-selection-ask-send" id="pyqModalSelectionAskSend" aria-label="Send">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
-        </button>
-      </div>
+      <button class="pmsp-explain-btn" id="pyqModalSelectionExplainBtn" title="${t('pyqbank', 'selectionExplain')}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7c.5.4.9 1.1.9 1.8v.5h6.2v-.5c0-.7.4-1.4.9-1.8A7 7 0 0 0 12 2z"/></svg>
+      </button>
+      <div class="pmsp-divider"></div>
+      <input type="text" class="pmsp-input" id="pyqModalSelectionAskInput" placeholder="${t('pyqbank', 'selectionAskPlaceholder')}" />
+      <button class="pmsp-send-btn" id="pyqModalSelectionAskSend" aria-label="Send">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+      </button>
     `;
     document.body.appendChild(pyqModalSelectionPopup);
 
     // Same reasoning as .selection-toolbar's own mousedown guard above: without this, mousedown
     // (which fires before mouseup/selectionchange) collapses the selection before its text can
-    // be read, closing the popup on the very click meant to use it.
-    pyqModalSelectionPopup.addEventListener('mousedown', function(e) { e.preventDefault(); });
+    // be read, closing the popup on the very click meant to use it. BUT this used to blanket the
+    // whole popup, including the input -- preventDefault on an input's own mousedown blocks the
+    // browser's default focus-on-click, so the input could never actually receive focus and
+    // typing silently did nothing. pyqModalSelectedText is already captured into the closure
+    // variable below the moment the popup opens (see showPyqModalSelectionPopupForRange), so
+    // letting the input's own mousedown through -- which lets the underlying page selection
+    // collapse when you click into it -- costs nothing: nothing here re-reads the live selection.
+    pyqModalSelectionPopup.addEventListener('mousedown', function(e) {
+      if (e.target.closest('.pmsp-input')) return;
+      e.preventDefault();
+    });
 
     let pyqModalSelectedText = '';
 
