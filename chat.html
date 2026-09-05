@@ -6499,6 +6499,11 @@ function plainTextFromMarkdown(text) {
 
     let deviceHeartbeatInterval = null;
     let deviceWarningCountdownInterval = null;
+    // In-memory only, like proUsageWarningDismissed above -- dismissing hides the notice for the
+    // rest of THIS page load, but never cancels the actual grace period counting down server-side
+    // (there's no "cancel" mechanism at all -- see /session/heartbeat's own docstring). A fresh
+    // reload re-shows it if the session is still at risk when the next heartbeat lands.
+    let deviceWarningDismissed = false;
     // 45s: frequent enough that a kicked device finds out within about one polling cycle (the
     // grace period itself is minutes long, so this doesn't need to be near-real-time), rare
     // enough not to be a meaningful load/cost concern against a lightweight table lookup.
@@ -6512,7 +6517,7 @@ function plainTextFromMarkdown(text) {
           body: JSON.stringify({ user_id: userId, device_id: getDeviceId(), device_label: getDeviceLabel(), is_login: !!isLogin })
         });
         const data = await res.json();
-        if (data.status === 'warning') showDeviceWarningBanner(data.grace_period_ends_at);
+        if (data.status === 'warning') { if (!deviceWarningDismissed) showDeviceWarningBanner(data.grace_period_ends_at); }
         else if (data.status === 'kicked') showDeviceKickedModal();
         else hideDeviceWarningBanner();
       } catch (e) {
@@ -6527,29 +6532,43 @@ function plainTextFromMarkdown(text) {
       deviceHeartbeatInterval = setInterval(() => sendDeviceHeartbeat(userId, false), DEVICE_HEARTBEAT_INTERVAL_MS);
     }
 
+    function dismissDeviceWarningBanner() {
+      deviceWarningDismissed = true;
+      hideDeviceWarningBanner();
+    }
+
+    // Shown on the OLD/at-risk device once ITS OWN heartbeat poll reports "warning" (see
+    // /session/heartbeat -- this used to be sent to the NEW device that triggered the grace
+    // period instead, which is why this device never showed anything at all: its own polls only
+    // ever got back "ok" or, once the deadline had already lapsed, "kicked", with no warning in
+    // between).
     function showDeviceWarningBanner(graceEndsAtIso) {
       let banner = document.getElementById('deviceWarningBanner');
       if (!banner) {
         banner = document.createElement('div');
         banner.id = 'deviceWarningBanner';
         banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:900;background:#7c3f0d;color:#ffd9a8;padding:10px 16px;font-size:13px;text-align:center;display:flex;align-items:center;justify-content:center;gap:10px;box-shadow:0 2px 8px rgba(0,0,0,0.3);';
+        banner.innerHTML = '<span id="deviceWarningBannerText"></span>' +
+          '<button type="button" id="deviceWarningBannerDismiss" onclick="dismissDeviceWarningBanner()" style="background:transparent;border:none;color:#ffd9a8;font-size:16px;line-height:1;cursor:pointer;padding:0 2px;opacity:0.8;flex-shrink:0;" title="Dismiss" aria-label="Dismiss">✕</button>';
         document.body.appendChild(banner);
       }
       banner.style.display = 'flex';
+      const textEl = document.getElementById('deviceWarningBannerText');
 
       const deadline = new Date(graceEndsAtIso).getTime();
       if (deviceWarningCountdownInterval) clearInterval(deviceWarningCountdownInterval);
       function tick() {
         const remainingMs = deadline - Date.now();
         if (remainingMs <= 0) {
-          banner.textContent = "⚠️ You're logged in on another device. The other session is being logged out now.";
+          textEl.textContent = t('chat', 'deviceWarningExpired');
           clearInterval(deviceWarningCountdownInterval);
           deviceWarningCountdownInterval = null;
           return;
         }
         const mins = Math.floor(remainingMs / 60000);
         const secs = Math.floor((remainingMs % 60000) / 1000);
-        banner.textContent = `⚠️ You're logged in on another device. To keep using this account here, the other session will be logged out in ${mins}:${String(secs).padStart(2, '0')}.`;
+        const timeStr = localizeNum(mins + ':' + String(secs).padStart(2, '0'));
+        textEl.textContent = t('chat', 'deviceWarningBanner').replace('{time}', timeStr);
       }
       tick();
       deviceWarningCountdownInterval = setInterval(tick, 1000);

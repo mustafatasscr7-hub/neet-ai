@@ -983,9 +983,10 @@ async def session_heartbeat(req: SessionHeartbeatRequest, request: Request):
 
     Warning-then-kick, never an instant kick: a login that would exceed the plan's device limit
     doesn't block itself or immediately kick anything -- it starts a grace period against the
-    OLDEST other active session and tells the NEW device to show a countdown. Only once that
-    grace period actually lapses does the old session get marked kicked, discovered on its own
-    next heartbeat (or proactively by _expire_due_grace_periods if a third check-in lands first).
+    OLDEST other active session, discovered (and shown as a countdown) by THAT session on its own
+    next heartbeat poll, never by the new device that triggered it. Only once that grace period
+    actually lapses does the old session get marked kicked, again discovered on its own next
+    heartbeat (or proactively by _expire_due_grace_periods if a third check-in lands first).
     Fails open throughout: any lookup/write error here returns "ok" rather than blocking a real
     login over this table's own availability."""
     if not req.user_id or not req.device_id:
@@ -1013,12 +1014,20 @@ async def session_heartbeat(req: SessionHeartbeatRequest, request: Request):
             return {"status": "kicked"}
 
         if existing and not existing.get("kicked_at"):
-            # Ordinary heartbeat: same device, still in good standing.
+            # Ordinary heartbeat: same device, still in good standing -- UNLESS this is the
+            # session a grace period was started against (set below, by a DIFFERENT device's
+            # login exceeding the plan's limit), in which case this poll is exactly how this
+            # device is supposed to find out it's the one at risk. This used to return "ok"
+            # unconditionally regardless of kick_grace_deadline -- the device being kicked never
+            # saw a warning at all, it just silently flipped straight to "kicked" once the
+            # deadline lapsed with zero advance notice.
             await async_client.patch(
                 f"{SUPABASE_URL}/rest/v1/active_sessions", headers=ADMIN_HEADERS,
                 params={"id": f"eq.{existing['id']}"},
                 json={"last_active_at": now.isoformat(), "device_label": req.device_label or existing.get("device_label")}
             )
+            if existing.get("kick_grace_deadline"):
+                return {"status": "warning", "grace_period_ends_at": existing["kick_grace_deadline"], "plan": plan, "device_limit": limit}
             return {"status": "ok"}
 
         if existing and existing.get("kicked_at") and req.is_login:
@@ -1060,16 +1069,19 @@ async def session_heartbeat(req: SessionHeartbeatRequest, request: Request):
 
         active_others.sort(key=lambda r: r["created_at"])
         oldest = active_others[0]
-        if oldest.get("kick_grace_deadline"):
-            deadline = oldest["kick_grace_deadline"]
-        else:
+        if not oldest.get("kick_grace_deadline"):
             deadline = (now + timedelta(minutes=DEVICE_SESSION_GRACE_PERIOD_MINUTES)).isoformat()
             await async_client.patch(
                 f"{SUPABASE_URL}/rest/v1/active_sessions", headers=ADMIN_HEADERS,
                 params={"id": f"eq.{oldest['id']}"},
                 json={"kick_grace_deadline": deadline}
             )
-        return {"status": "warning", "grace_period_ends_at": deadline, "plan": plan, "device_limit": limit}
+        # This request is from the NEW device that just logged in -- it isn't the one at risk,
+        # so it never sees "warning" itself (that used to be the actual bug: this response goes
+        # to whoever is CALLING right now, which is the new device, not oldest/old device this
+        # grace period was just started against). The old device finds out via its own next
+        # heartbeat poll instead, through the "ordinary heartbeat" branch above.
+        return {"status": "ok"}
     except Exception as e:
         print(f"SESSION HEARTBEAT ERROR (failing open): {e}", flush=True)
         return {"status": "ok"}
