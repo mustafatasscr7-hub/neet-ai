@@ -316,6 +316,114 @@
     let currentMockTestId = null; // id of the official test being taken, or null for random/personalised mode
     const ORIGINAL_START_SCREEN_HTML = document.getElementById('startScreen').innerHTML;
 
+    // ---------------- In-progress local persistence (crash/refresh/close recovery) ----------------
+    // Local-only by design (matches the rest of the app's "no realtime/cross-device sync"
+    // architecture -- see the multi-device sync audit) -- this exists purely so a tab crash,
+    // accidental refresh, or closed tab doesn't silently lose an entire attempt's worth of
+    // answers. Keyed by identity (real user_id, or the literal 'guest' for an unauthenticated
+    // attempt) + mockTestId (or 'random' for the practice/random-question flow), so a resumed
+    // attempt is unambiguous and never mixes up two different unfinished tests.
+    let currentMockProgressKey = null; // set once a test actually starts (fresh or resumed); saveMockProgress() is a no-op until then
+    let mockTestEndTimestamp = null; // absolute wall-clock deadline, not a relative countdown -- see saveMockProgress
+
+    async function getMockTestIdentity() {
+      try {
+        const { data: { session } } = await client.auth.getSession();
+        return session ? session.user.id : 'guest';
+      } catch (e) {
+        return 'guest';
+      }
+    }
+
+    function mockProgressKey(identity, mockTestId) {
+      return `mocktest_progress_${identity}_${mockTestId || 'random'}`;
+    }
+
+    // Called from renderQuestion() -- the one function every answer/clear/mark/navigate action
+    // already funnels through -- so every state-changing action persists without needing a
+    // separate save call at each individual call site. Storing the full `questions` snapshot
+    // (not just answers-by-index) means resuming never needs to re-fetch or re-validate against
+    // the server -- the exact question set the student was looking at is restored verbatim,
+    // sidestepping the "random mode re-fetch could return different questions" problem entirely.
+    function saveMockProgress() {
+      if (!currentMockProgressKey || !questions.length) return;
+      try {
+        localStorage.setItem(currentMockProgressKey, JSON.stringify({
+          mockTestId: currentMockTestId,
+          questions, answers, marked, currentIndex,
+          endTimestamp: mockTestEndTimestamp,
+          startTime,
+          savedAt: Date.now()
+        }));
+      } catch (e) {
+        // Storage full/unavailable (private browsing, quota) -- progress just won't survive a
+        // refresh this time; never block the actual test-taking flow over this.
+      }
+    }
+
+    function clearMockProgress() {
+      if (currentMockProgressKey) localStorage.removeItem(currentMockProgressKey);
+      currentMockProgressKey = null;
+    }
+
+    function resumeMockTestFromStorage(key, data) {
+      currentMockProgressKey = key;
+      currentMockTestId = data.mockTestId;
+      questions = data.questions;
+      answers = data.answers || {};
+      marked = data.marked || {};
+      startTime = data.startTime || Date.now();
+      mockTestEndTimestamp = data.endTimestamp;
+      totalSeconds = Math.max(0, Math.round((mockTestEndTimestamp - Date.now()) / 1000));
+      document.getElementById('startScreen').style.display = 'none';
+      if (totalSeconds <= 0) {
+        // Time was already up while the tab was closed/refreshed -- submit exactly as the
+        // running timer's own totalSeconds<=0 branch would have, not a silent full-marks-lost
+        // dead end.
+        submitTest();
+        return;
+      }
+      renderQuestion(Math.min(data.currentIndex || 0, questions.length - 1));
+      renderGrid();
+      startTimer();
+    }
+
+    // Runs once at page load, before the student has clicked anything -- offers to resume the
+    // most recently saved unfinished attempt for this identity, if one exists. Deliberately a
+    // resume-OR-discard choice (never a silent auto-resume): the student might genuinely want to
+    // abandon an old attempt and start clean, and silently dropping them back into a stale test
+    // with no way out would be worse than asking.
+    async function checkForResumableMockTest() {
+      const identity = await getMockTestIdentity();
+      const prefix = `mocktest_progress_${identity}_`;
+      let foundKey = null, foundData = null;
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (!k || !k.startsWith(prefix)) continue;
+        try {
+          const parsed = JSON.parse(localStorage.getItem(k));
+          if (parsed && Array.isArray(parsed.questions) && parsed.questions.length && (!foundData || parsed.savedAt > foundData.savedAt)) {
+            foundKey = k;
+            foundData = parsed;
+          }
+        } catch (e) {
+          localStorage.removeItem(k); // corrupted entry -- don't let it block future checks forever
+        }
+      }
+      if (!foundKey) return;
+
+      const answeredCount = Object.keys(foundData.answers || {}).length;
+      const resume = await showConfirmModal(
+        t('mocktest', 'resumePrompt').replace('{answered}', localizeNum(answeredCount)).replace('{total}', localizeNum(foundData.questions.length)),
+        { confirmLabel: t('mocktest', 'resumeTest'), cancelLabel: t('mocktest', 'startFresh') }
+      );
+      if (resume) {
+        resumeMockTestFromStorage(foundKey, foundData);
+      } else {
+        localStorage.removeItem(foundKey);
+      }
+    }
+
     function escapeHtmlMock(str) {
       const div = document.createElement('div');
       div.textContent = str == null ? '' : String(str);
@@ -364,6 +472,15 @@
         if (data.error) throw new Error(data.error);
         questions = data.questions;
         await ensureDifficulties(questions, mockTestId ? 'mock_test_questions' : 'pyq');
+        // A genuinely fresh start -- clear any stale saved progress for this exact identity+test
+        // combo first (e.g. a much older abandoned attempt the resume prompt was never shown
+        // for, or already declined), then set up tracking so renderQuestion(0) below persists
+        // this fresh attempt's own initial state.
+        const identity = await getMockTestIdentity();
+        currentMockProgressKey = mockProgressKey(identity, mockTestId);
+        localStorage.removeItem(currentMockProgressKey);
+        startTime = Date.now();
+        mockTestEndTimestamp = Date.now() + totalSeconds * 1000;
         renderQuestion(0);
         renderGrid();
         startTimer();
@@ -822,6 +939,7 @@ function formatQuestionTextInner(text) {
       `;
       renderGrid();
       updateStats();
+      saveMockProgress();
     }
 
     function selectAnswer(opt) {
@@ -939,7 +1057,11 @@ async function saveQuestionFromMock(index) {
     // same function before that file existed.
 
     function confirmExit() {
-      showConfirmModal('Are you sure you want to exit? Your progress will be lost.', function() {
+      // No longer destructive -- saveMockProgress() already persisted every answer as it was
+      // made, so this only stops the timer/navigates away, it doesn't clear anything. Wording
+      // updated to match: the old "your progress will be lost" copy became actively wrong once
+      // resuming was possible.
+      showConfirmModal(t('mocktest', 'exitConfirmMessage'), function() {
         clearInterval(timerInterval);
         window.location.href = './chat.html';
       }, 'Exit');
@@ -952,6 +1074,7 @@ async function saveQuestionFromMock(index) {
 
     async function submitTest() {
       clearInterval(timerInterval);
+      clearMockProgress(); // real submission -- the saved in-progress snapshot must not resurface for a future attempt
       const timeTaken = Math.floor((Date.now() - startTime) / 1000);
 
       let correct = 0, wrong = 0, skipped = 0;
@@ -1095,6 +1218,12 @@ async function saveQuestionFromMock(index) {
         }, 400);
       });
     }
+
+    // Runs once, immediately on page load (before the student has clicked "Full Mock Test" or
+    // anything else) -- offers to resume a prior unfinished attempt if one was left behind by a
+    // crash, refresh, or closed tab. See checkForResumableMockTest's own comment for why this is
+    // a resume-or-discard choice rather than a silent auto-resume.
+    checkForResumableMockTest();
   </script>
 </body>
 </html>

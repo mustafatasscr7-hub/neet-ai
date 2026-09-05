@@ -765,7 +765,11 @@ const TRANSLATIONS = {
       saved: '✅ Saved',
       prev: '← Prev',
       next: 'Next →',
-      questionOf: 'Question {i} of {n}'
+      questionOf: 'Question {i} of {n}',
+      exitConfirmMessage: 'Are you sure you want to exit? You can resume this test later from where you left off.',
+      resumePrompt: 'You have an unfinished mock test ({answered}/{total} answered). Resume where you left off?',
+      resumeTest: 'Resume',
+      startFresh: 'Start Fresh'
     },
     hi: {
       chooseTest: 'अपना टेस्ट चुनें',
@@ -792,7 +796,11 @@ const TRANSLATIONS = {
       saved: '✅ सहेजा गया',
       prev: '← पिछला',
       next: 'अगला →',
-      questionOf: 'प्रश्न {i}, कुल {n} में से'
+      questionOf: 'प्रश्न {i}, कुल {n} में से',
+      exitConfirmMessage: 'क्या आप वाकई बाहर निकलना चाहते हैं? आप बाद में इस टेस्ट को वहीं से जारी रख सकते हैं जहाँ आपने छोड़ा था।',
+      resumePrompt: 'आपका एक अधूरा मॉक टेस्ट है ({answered}/{total} उत्तरित)। जहाँ से छोड़ा था वहीं से जारी रखें?',
+      resumeTest: 'जारी रखें',
+      startFresh: 'नए सिरे से शुरू करें'
     }
   },
 
