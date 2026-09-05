@@ -2091,6 +2091,176 @@ async def _stream_with_peak_fallback(system: str, messages: list, user_id: str, 
     async for chunk in _stream_deepseek(system, messages, user_id, ip, False, endpoint, billing_context):
         yield chunk
 
+# ---------- Second-pass verification for Qwen's "borrowed value" insufficient-data trap ----------
+# Live-tested failure: given a problem describing two comparable objects (e.g. two towers) where
+# only ONE object's value is stated (e.g. tower A's height), Qwen reliably (0/5 baseline trials)
+# fabricates a numeric answer by silently reusing that value for the OTHER object instead of
+# recognizing the data is incomplete. A same-mechanism-as-before fix (a named worked example in
+# SYSTEM_PROMPT) was tried first and failed completely (0/5, then 0/5 again after strengthening) --
+# the model would even correctly articulate the exact flaw mid-answer ("unless tower B is also
+# 45m tall... otherwise unsolvable") and then override its own correct diagnosis to force a number
+# anyway. This second-pass mechanism fixed it (~87.5% across 8 tower trials, 3/3 and 3/3 on two
+# unrelated unnamed multi-object problems, 0 false positives on a legitimate-shared-value case)
+# by moving the unreliable part (aggregating "is this valid" from a wall of reasoning) out of the
+# LLM and into code, and by using a deterministic template for the correction instead of a 3rd LLM
+# call (which also reproduced the original fabrication 4/5 times even when told exactly what was
+# wrong) -- same "server-side guard beats another prompt layer" lesson as the rule-11 fix above.
+_MULTI_OBJECT_NOUNS = ["tower", "vehicle", "car", "container", "spring", "block", "particle", "body",
+                       "ball", "stone", "tank", "wire", "resistor", "capacitor", "solution", "sample",
+                       "building", "ship", "train", "pipe", "rod", "sphere", "charge", "object", "cart",
+                       "trolley", "plane", "boat", "pendulum", "beaker", "flask", "cylinder", "disc",
+                       "disk", "wheel", "ladder", "pole", "pillar", "column", "box", "jar", "lens",
+                       "mirror", "slit", "cell", "battery", "mass", "force", "bullet", "bob", "wedge",
+                       "incline", "plank"]
+_MULTI_OBJECT_AGGREGATE_RE = re.compile(
+    r"\b(two|three|four|both)\s+(" + "|".join(_MULTI_OBJECT_NOUNS) + r")s?\b", re.IGNORECASE
+)
+
+def _is_multi_object_numerical(text: str) -> bool:
+    """Cheap, no-LLM-call gate for the narrow second-pass verification path below -- questions
+    describing 2+ comparable objects/entities (two towers, two vehicles, two containers, etc.),
+    the shape of problem where the borrowed-value trap above was observed. Deliberately NOT also
+    gated on "does this look numerical" -- an earlier version tried that (requiring a literal
+    "Final Answer:" line) and it silently let a real fabrication through, since the model doesn't
+    reliably use that exact literal format even when it did fabricate a number (seen live: the
+    wrong result stated only inside a "Key Points:" bullet). A missed fabrication is worse than an
+    occasional wasted verification call on a genuinely conceptual multi-object question."""
+    if _MULTI_OBJECT_AGGREGATE_RE.search(text):
+        return True
+    lowered = text.lower()
+    for noun in _MULTI_OBJECT_NOUNS:
+        if len(re.findall(rf"\b{noun}s?\b", lowered)) >= 2:
+            return True
+    return False
+
+_VERIFY_GIVEN_VALUES_SYSTEM = """You are a strict fact-checker reviewing a physics/math SOLUTION against the
+ORIGINAL PROBLEM it claims to solve.
+
+The problem involves two or more comparable objects/entities (e.g. two towers, two vehicles, two
+resistors). Carefully check the solution's reasoning for any place where a numeric value, time, or
+property that was only stated in the problem for ONE object is then used for a DIFFERENT object --
+whether written as an explicit "Given" or introduced silently through a reasoning step (e.g. "this
+time is also used by the second ball", "since both start together they must land together", "the
+same value applies to..."). This kind of borrowing is invalid UNLESS the original problem explicitly
+states that the two objects share that value (e.g. "both springs have the same constant" or "the two
+containers are identical").
+
+Go through the solution step by step and identify every value used in the final calculation. For
+each one, state which specific object it is attributed to, and whether the ORIGINAL PROBLEM
+explicitly gives that value for THAT SPECIFIC object (not a different, similar object, and not
+inferred from a shared start time/instant alone).
+
+Respond in EXACTLY this format and nothing else:
+<value> -- <object it's used for>: STATED IN PROBLEM
+or
+<value> -- <object it's used for>: NOT STATED FOR THIS OBJECT (<short reason>)
+...one line per value used in the calculation...
+VERDICT: VALID
+or
+VERDICT: INVALID
+MISSING_QUANTITY: <if INVALID, a short, plain, student-facing phrase under 10 words naming the ONE
+key missing quantity that makes the problem unsolvable, e.g. "the height of tower B" or "the
+resistance of R2". If VALID, write "N/A".>
+
+Be strict about cross-object borrowing -- it is the single most common way these solutions go
+wrong. But if the problem explicitly states both objects are IDENTICAL or gives the same property
+for both directly (e.g. "each spring has constant 200 N/m"), that value legitimately applies to
+both and counts as STATED for both.
+
+MECHANICAL RULE FOR THE VERDICT LINE, not a judgment call: if you wrote "NOT STATED FOR THIS
+OBJECT" on ANY line above, the verdict MUST be INVALID -- full stop, no exceptions, even if the
+missing value seems "logically inferable," "physically valid," "reasonable to assume," or a "valid
+shared value" given the scenario. There is no such thing as a value that is simultaneously "not
+stated for this object" and still a valid basis for a VALID verdict -- if you catch yourself
+writing a justification for why an unstated value should still count (e.g. "but this is valid
+because...", "however, since..."), that justification itself means you have already made the
+forbidden assumption, and the correct move is to change that line's reasoning until it genuinely
+has a basis in the problem text, not to excuse it into a VALID verdict. Only write VERDICT: VALID
+when EVERY single line above says STATED IN PROBLEM."""
+
+async def _verify_given_values(problem_text: str, solution_text: str, user_id: str, ip: str, billing_context: dict = None):
+    """Runs the check above via a second Qwen call and returns (is_valid, raw_response). The
+    verdict is computed HERE in code, not read from the model's own "VERDICT:" line -- live
+    testing found the model reliably IDENTIFIES a borrowed value per-line ("NOT STATED FOR THIS
+    OBJECT") but unreliably AGGREGATES that into VERDICT: INVALID, instead rationalizing past its
+    own finding and writing VALID anyway. Triggering on EITHER signal (a per-line flag, or the
+    model's own INVALID verdict) catches both the "said VALID despite flagging a line" case seen
+    repeatedly in testing and the rarer reverse case (INVALID written without a matching per-line
+    flag)."""
+    user_msg = f"ORIGINAL PROBLEM:\n{problem_text}\n\nPROPOSED SOLUTION:\n{solution_text}"
+    messages = [{"role": "user", "content": user_msg}]
+    chunks = []
+    async for c in _stream_qwen(_VERIFY_GIVEN_VALUES_SYSTEM, messages, user_id, ip, "/chat-verify", billing_context):
+        chunks.append(c)
+    full = "".join(chunks)
+    upper = full.upper()
+    is_valid = "NOT STATED" not in upper and "VERDICT: INVALID" not in upper
+    return is_valid, full
+
+_MISSING_QUANTITY_RE = re.compile(r"MISSING_QUANTITY:\s*(.+)", re.IGNORECASE)
+
+def _extract_missing_quantity(verify_raw: str):
+    m = _MISSING_QUANTITY_RE.search(verify_raw)
+    if not m:
+        return None
+    q = m.group(1).strip().strip('"').rstrip(".")
+    return q if q and q.upper() != "N/A" else None
+
+def _build_insufficient_data_answer(missing_quantity):
+    # Deterministic template, not a 3rd LLM call -- testing showed the model rewrites the exact
+    # same fabricated answer even when explicitly told what's wrong (4/5 trials), so correctness
+    # here comes from code, not from asking the model to try again.
+    mq = missing_quantity or "a required value"
+    return f"""VISUAL_INTENT: no
+
+NEET Importance: 3/5
+
+Answer:
+- This problem cannot be solved with the information given.
+- The value needed here — {mq} — is never stated in the problem.
+- If {mq} were given, the rest of the calculation could be completed normally.
+
+Final Answer: Cannot be determined — {mq} is missing from the problem."""
+
+SIMULATED_STREAM_MARKER = "SIMULATED_STREAM: yes\n"
+
+async def _stream_qwen_verified(system: str, messages: list, problem_text: str, user_id: str, ip: str, endpoint: str, billing_context: dict = None):
+    """Used only when the caller has already decided (a) this request is being routed to Qwen and
+    (b) the question matches _is_multi_object_numerical -- see the trigger condition in
+    stream_response's text branch. Buffers Qwen's full first answer (no live token streaming is
+    possible here -- nothing can be shown until verification decides what the real final answer
+    is), runs _verify_given_values against it, and yields the original answer unchanged if valid,
+    or a deterministic "cannot be determined" answer naming the missing quantity if not.
+
+    Yields SIMULATED_STREAM_MARKER as its own first chunk once Qwen's first pass succeeds, BEFORE
+    verification -- never sent if Qwen fails outright (falls back to plain, normal DeepSeek
+    streaming instead, exactly like _stream_with_peak_fallback's own failover), since the caller
+    (chat.html) uses this marker to keep its existing thinking indicator up through the
+    verification step, then replay the final answer through its normal per-character render path
+    at a synthetic pace so it looks identical to real streaming. stream_response strips this
+    marker out BEFORE feeding the rest into the rule-11 AMBIGUOUS/CLARIFY_TYPE buffering state
+    machine -- that logic inspects the stream's very first line, and must never mistake this
+    marker for (or let it displace) the real first content line."""
+    is_peak = _is_deepseek_peak_hour()
+    try:
+        chunks = []
+        async for c in _stream_qwen(system, messages, user_id, ip, endpoint, billing_context):
+            chunks.append(c)
+        first_answer = "".join(chunks)
+    except Exception as e:
+        print(f"QWEN UNAVAILABLE BEFORE VERIFICATION, FALLING BACK TO DEEPSEEK: {e}", flush=True)
+        async for chunk in _stream_deepseek(system, messages, user_id, ip, is_peak, endpoint, billing_context):
+            yield chunk
+        return
+
+    yield SIMULATED_STREAM_MARKER
+    is_valid, verify_raw = await _verify_given_values(problem_text, first_answer, user_id, ip, billing_context)
+    if is_valid:
+        yield first_answer
+        return
+    missing_quantity = _extract_missing_quantity(verify_raw)
+    yield _build_insufficient_data_answer(missing_quantity)
+
 async def stream_response(text: str, history: list = [], images: list = [], pdf: str = None, answer_style: str = "detailed", student_name: str = "", language: str = "en", user_id: str = "", personalize: bool = True, skip_cache: bool = False, ip: str = ""):
     images = (images or [])[:3]
     import hashlib
@@ -2327,10 +2497,46 @@ IMPORTANT -- BE CONCISE:
             # (FALSE_POSITIVE_CLARIFY_WORDS) are still discarded unconditionally regardless of
             # type, exactly as before. Invalid -> break with nothing ever yielded, not even the
             # first line -- a bad clarify attempt must never reach the student at all.
+            # Route through the second-pass verification wrapper only when this request is
+            # already going to Qwen AND the question matches the narrow multi-object-numerical
+            # heuristic (see _stream_qwen_verified above) -- every other text doubt is completely
+            # unaffected and streams exactly as before.
+            use_qwen_for_this_request = is_peak or force_qwen
+            multi_object_numerical = use_qwen_for_this_request and _is_multi_object_numerical(text)
+            if multi_object_numerical:
+                stream_source = _stream_qwen_verified(full_system, messages, text, user_id, ip, "/chat", billing_context)
+            else:
+                stream_source = _stream_with_peak_fallback(full_system, messages, user_id, ip, "/chat", billing_context, force_qwen)
+
+            # Peel off a leading SIMULATED_STREAM_MARKER chunk (only ever yielded by
+            # _stream_qwen_verified) BEFORE it reaches the rule-11 AMBIGUOUS/CLARIFY_TYPE
+            # buffering state machine below -- that logic inspects the stream's very first line to
+            # decide whether this is a clarifying-question response, and must never mistake this
+            # marker line for (or let it displace) the real first content line, or the
+            # anti-hallucination denylist/whitelist checks on a genuine AMBIGUOUS response would
+            # be silently skipped for every verified answer.
+            stream_iter = stream_source.__aiter__()
+            try:
+                peeked_chunk = await stream_iter.__anext__()
+            except StopAsyncIteration:
+                peeked_chunk = None
+            if peeked_chunk == SIMULATED_STREAM_MARKER:
+                yield peeked_chunk
+                try:
+                    peeked_chunk = await stream_iter.__anext__()
+                except StopAsyncIteration:
+                    peeked_chunk = None
+
+            async def _rest_of_stream():
+                if peeked_chunk is not None:
+                    yield peeked_chunk
+                async for c in stream_iter:
+                    yield c
+
             pending = ""
             checkpoint = 0
             override_needed = False
-            async for text_chunk in _stream_with_peak_fallback(full_system, messages, user_id, ip, "/chat", billing_context, force_qwen):
+            async for text_chunk in _rest_of_stream():
                 full_answer += text_chunk
 
                 if checkpoint == 2:

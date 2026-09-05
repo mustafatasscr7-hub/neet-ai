@@ -578,7 +578,8 @@ const TRANSLATIONS = {
       thinkingPhrase2: 'Checking NCERT...',
       thinkingPhrase3: 'Solving...',
       thinkingPhrase4: 'Working it out...',
-      thinkingPhrase5: 'Analyzing...'
+      thinkingPhrase5: 'Analyzing...',
+      thinkingPhraseVerifying: 'Double-checking the numbers...'
     },
     hi: {
       newChat: 'नई चैट',
@@ -733,7 +734,8 @@ const TRANSLATIONS = {
       thinkingPhrase2: 'NCERT जाँच रहा हूँ...',
       thinkingPhrase3: 'हल निकाल रहा हूँ...',
       thinkingPhrase4: 'समाधान तैयार कर रहा हूँ...',
-      thinkingPhrase5: 'विश्लेषण कर रहा हूँ...'
+      thinkingPhrase5: 'विश्लेषण कर रहा हूँ...',
+      thinkingPhraseVerifying: 'संख्याओं की दोबारा जाँच कर रहा हूँ...'
     }
   },
 

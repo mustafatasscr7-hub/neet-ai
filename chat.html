@@ -6019,6 +6019,73 @@ function plainTextFromMarkdown(text) {
         let lastRenderTime = 0;
         const RENDER_THROTTLE_MS = 100;
 
+        // server.py's second-pass verification (a narrow fix for a Qwen failure on multi-object
+        // numerical problems -- see _stream_qwen_verified there) can't stream token-by-token: the
+        // full answer is generated AND checked server-side before anything is sent, so it arrives
+        // as one already-complete block instead of a natural trickle. It's flagged by a leading
+        // "SIMULATED_STREAM: yes\n" marker line, peeked for here (at the byte level, before
+        // anything touches the VISUAL_INTENT/AMBIGUOUS detection below) so a normal response's own
+        // leading marker line is never disturbed when this one isn't present. When it IS present,
+        // the (already fully backend-buffered) rest of the response is drained immediately, then
+        // replayed back through the exact same per-character loop below via nextChunk() at a
+        // synthetic pace -- so it looks identical to real streaming instead of appearing all at
+        // once. Keeps the existing thinking indicator up (with a swapped phrase) through this
+        // drain instead of removing it early, since the real answer text hasn't arrived yet.
+        const SIMULATED_STREAM_MARKER = 'SIMULATED_STREAM: yes\n';
+        const SIMULATED_TYPE_CHUNK_CHARS = 3;
+        const SIMULATED_TYPE_DELAY_MS = 12; // ~250 chars/sec -- tuned to match real streaming pace
+        let primedValue = null; // Uint8Array already read during the peek, fed as the first real chunk when this ISN'T a simulated stream
+        let simulatedTextRemaining = null; // full answer text (string), consumed in small paced pieces once set
+        {
+          let peekBytes = new Uint8Array(0);
+          while (peekBytes.length < 64) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            const combined = new Uint8Array(peekBytes.length + value.length);
+            combined.set(peekBytes, 0);
+            combined.set(value, peekBytes.length);
+            peekBytes = combined;
+            if (new TextDecoder().decode(peekBytes).indexOf('\n') !== -1) break;
+          }
+          const peekText = new TextDecoder().decode(peekBytes);
+          const nlIdx = peekText.indexOf('\n');
+          if (nlIdx !== -1 && peekText.slice(0, nlIdx + 1) === SIMULATED_STREAM_MARKER) {
+            if (typingRow) {
+              // Stop the generic phrase-cycling interval first -- it fires every 2s regardless
+              // and would otherwise stomp this custom text right back to a generic phrase on its
+              // next tick (confirmed live: "Double-checking the numbers..." appeared, then
+              // reverted to "Thinking..." ~600ms later without this).
+              clearInterval(typingRow._thinkingInterval);
+              const thinkingTextEl = typingRow.querySelector('.thinking-text');
+              if (thinkingTextEl) thinkingTextEl.textContent = t('chat', 'thinkingPhraseVerifying');
+            }
+            let rest = peekText.slice(nlIdx + 1);
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              rest += decoder.decode(value, { stream: true });
+            }
+            simulatedTextRemaining = rest;
+          } else {
+            primedValue = peekBytes; // not our marker -- feed these exact bytes into the main loop unchanged
+          }
+        }
+        async function nextChunk() {
+          if (simulatedTextRemaining !== null) {
+            if (simulatedTextRemaining.length === 0) return { done: true, value: undefined, preDecoded: true };
+            await new Promise(r => setTimeout(r, SIMULATED_TYPE_DELAY_MS));
+            const piece = simulatedTextRemaining.slice(0, SIMULATED_TYPE_CHUNK_CHARS);
+            simulatedTextRemaining = simulatedTextRemaining.slice(SIMULATED_TYPE_CHUNK_CHARS);
+            return { done: false, value: piece, preDecoded: true };
+          }
+          if (primedValue !== null) {
+            const v = primedValue;
+            primedValue = null;
+            return { done: false, value: v, preDecoded: false };
+          }
+          return await reader.read();
+        }
+
         // VISUAL_INTENT: [yes/no] is a hidden backend-only signal the model puts as the literal
         // first line (server.py SYSTEM_PROMPT rule 10) -- must never reach the screen, not even
         // for a flash mid-stream, so it's stripped here at the source (before it ever joins
@@ -6044,16 +6111,17 @@ function plainTextFromMarkdown(text) {
 
         while (true) {
           if (streamController && streamController.signal.aborted) break;
-          const { done, value } = await reader.read();
+          const { done, value, preDecoded } = await nextChunk();
           if (done) break;
           // Swap the thinking indicator out the instant real content starts arriving --
-          // everything before this point (NCERT search, model routing, first token) is exactly
-          // the gap this indicator exists to cover.
+          // everything before this point (NCERT search, model routing, first token -- or for a
+          // simulated stream, also the full generation + verification wait, per the block above)
+          // is exactly the gap this indicator exists to cover.
           if (value && value.length > 0) {
             removeTypingRow();
             ensureAiRow();
           }
-          const chunk = decoder.decode(value);
+          const chunk = preDecoded ? value : decoder.decode(value);
           for (let i = 0; i < chunk.length; i++) {
             if (streamController && streamController.signal.aborted) break;
             if (!visualIntentResolved) {
