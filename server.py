@@ -1969,7 +1969,7 @@ async def log_provider_usage(provider: str, peak_window: bool, input_tokens: int
     except Exception:
         pass
 
-async def _stream_qwen(system: str, messages: list, user_id: str, ip: str, endpoint: str, billing_context: dict = None):
+async def _stream_qwen(system: str, messages: list, user_id: str, ip: str, endpoint: str, billing_context: dict = None, max_tokens: int = 1024):
     """Yields text chunks from Qwen-Flash and logs real usage. Any failure -- at connection time
     or partway through the stream -- propagates to the caller as-is; _stream_with_peak_fallback
     is the one that decides whether that's safe to retry on DeepSeek (only if nothing was
@@ -1981,10 +1981,15 @@ async def _stream_qwen(system: str, messages: list, user_id: str, ip: str, endpo
     response, not a real answer. Provider cost logging (log_provider_usage) is deliberately
     unaffected -- real tokens were genuinely spent either way, this only controls the
     user-facing quota deduction. None (the default, used by every caller that doesn't pass one,
-    e.g. /solve) means "always bill", matching the pre-existing behavior."""
+    e.g. /solve) means "always bill", matching the pre-existing behavior.
+
+    max_tokens defaults to 1024 (the historical value for every real-answer caller) -- only
+    _verify_given_values overrides this, to a much smaller cap, since a runaway verification
+    response (observed live: some trials rambled to 600-1000+ output tokens re-litigating their
+    own answer) is pure wasted latency, not a longer/better answer."""
     qwen_stream = await qwen_async_client.chat.completions.create(
         model="qwen-flash",
-        max_tokens=1024,
+        max_tokens=max_tokens,
         stream=True,
         stream_options={"include_usage": True},
         messages=[{"role": "system", "content": system}] + messages
@@ -2133,64 +2138,44 @@ def _is_multi_object_numerical(text: str) -> bool:
             return True
     return False
 
-_VERIFY_GIVEN_VALUES_SYSTEM = """You are a strict fact-checker reviewing a physics/math SOLUTION against the
-ORIGINAL PROBLEM it claims to solve.
+_VERIFY_GIVEN_VALUES_SYSTEM = """Fact-check this SOLUTION against the ORIGINAL PROBLEM. The problem describes
+2+ comparable objects (e.g. two towers). Check whether each value used in the calculation was
+LITERALLY stated in the problem FOR THE SPECIFIC object it's used for -- not borrowed from a
+different object, and not inferred just because they share a start time/instant. Exception: if the
+problem explicitly says the objects are identical or gives the same property to both, that value is
+valid for both.
 
-The problem involves two or more comparable objects/entities (e.g. two towers, two vehicles, two
-resistors). Carefully check the solution's reasoning for any place where a numeric value, time, or
-property that was only stated in the problem for ONE object is then used for a DIFFERENT object --
-whether written as an explicit "Given" or introduced silently through a reasoning step (e.g. "this
-time is also used by the second ball", "since both start together they must land together", "the
-same value applies to..."). This kind of borrowing is invalid UNLESS the original problem explicitly
-states that the two objects share that value (e.g. "both springs have the same constant" or "the two
-containers are identical").
+Output ONLY this exact format, nothing else -- no discussion, no "wait", no rechecking, no second
+draft of the table:
+<value> -- <object>: STATED
+<value> -- <object>: NOT STATED (<reason, under 6 words>)
+...one line per value...
+VERDICT: VALID or VERDICT: INVALID
+MISSING_QUANTITY: <if INVALID, name the ONE missing quantity in under 8 words. If VALID, write N/A.>
 
-Go through the solution step by step and identify every value used in the final calculation. For
-each one, state which specific object it is attributed to, and whether the ORIGINAL PROBLEM
-explicitly gives that value for THAT SPECIFIC object (not a different, similar object, and not
-inferred from a shared start time/instant alone).
+MECHANICAL RULE: if ANY line says NOT STATED, the verdict MUST be INVALID -- no exceptions, even if
+the value seems physically reasonable or logically inferable."""
 
-Respond in EXACTLY this format and nothing else:
-<value> -- <object it's used for>: STATED IN PROBLEM
-or
-<value> -- <object it's used for>: NOT STATED FOR THIS OBJECT (<short reason>)
-...one line per value used in the calculation...
-VERDICT: VALID
-or
-VERDICT: INVALID
-MISSING_QUANTITY: <if INVALID, a short, plain, student-facing phrase under 10 words naming the ONE
-key missing quantity that makes the problem unsolvable, e.g. "the height of tower B" or "the
-resistance of R2". If VALID, write "N/A".>
-
-Be strict about cross-object borrowing -- it is the single most common way these solutions go
-wrong. But if the problem explicitly states both objects are IDENTICAL or gives the same property
-for both directly (e.g. "each spring has constant 200 N/m"), that value legitimately applies to
-both and counts as STATED for both.
-
-MECHANICAL RULE FOR THE VERDICT LINE, not a judgment call: if you wrote "NOT STATED FOR THIS
-OBJECT" on ANY line above, the verdict MUST be INVALID -- full stop, no exceptions, even if the
-missing value seems "logically inferable," "physically valid," "reasonable to assume," or a "valid
-shared value" given the scenario. There is no such thing as a value that is simultaneously "not
-stated for this object" and still a valid basis for a VALID verdict -- if you catch yourself
-writing a justification for why an unstated value should still count (e.g. "but this is valid
-because...", "however, since..."), that justification itself means you have already made the
-forbidden assumption, and the correct move is to change that line's reasoning until it genuinely
-has a basis in the problem text, not to excuse it into a VALID verdict. Only write VERDICT: VALID
-when EVERY single line above says STATED IN PROBLEM."""
+# Cap chosen from a live 14-trial controlled comparison against the original, longer prompt (no
+# cap, same 1024 default as a real answer): 14/14 correct on both, but this trimmed prompt + cap
+# cut average verification latency from 1.98s to 1.08s and worst-case from 6.30s (one trial hit
+# the old 1024-token ceiling re-litigating its own answer with "wait, let me recheck") down to
+# 2.17s, with zero accuracy difference -- the largest real response seen under the new prompt was
+# ~430 chars (~110 tokens), comfortably under this cap with no truncation risk.
+_VERIFY_GIVEN_VALUES_MAX_TOKENS = 300
 
 async def _verify_given_values(problem_text: str, solution_text: str, user_id: str, ip: str, billing_context: dict = None):
     """Runs the check above via a second Qwen call and returns (is_valid, raw_response). The
     verdict is computed HERE in code, not read from the model's own "VERDICT:" line -- live
-    testing found the model reliably IDENTIFIES a borrowed value per-line ("NOT STATED FOR THIS
-    OBJECT") but unreliably AGGREGATES that into VERDICT: INVALID, instead rationalizing past its
-    own finding and writing VALID anyway. Triggering on EITHER signal (a per-line flag, or the
-    model's own INVALID verdict) catches both the "said VALID despite flagging a line" case seen
-    repeatedly in testing and the rarer reverse case (INVALID written without a matching per-line
-    flag)."""
+    testing found the model reliably IDENTIFIES a borrowed value per-line ("NOT STATED") but
+    unreliably AGGREGATES that into VERDICT: INVALID, instead rationalizing past its own finding
+    and writing VALID anyway. Triggering on EITHER signal (a per-line flag, or the model's own
+    INVALID verdict) catches both the "said VALID despite flagging a line" case seen repeatedly in
+    testing and the rarer reverse case (INVALID written without a matching per-line flag)."""
     user_msg = f"ORIGINAL PROBLEM:\n{problem_text}\n\nPROPOSED SOLUTION:\n{solution_text}"
     messages = [{"role": "user", "content": user_msg}]
     chunks = []
-    async for c in _stream_qwen(_VERIFY_GIVEN_VALUES_SYSTEM, messages, user_id, ip, "/chat-verify", billing_context):
+    async for c in _stream_qwen(_VERIFY_GIVEN_VALUES_SYSTEM, messages, user_id, ip, "/chat-verify", billing_context, max_tokens=_VERIFY_GIVEN_VALUES_MAX_TOKENS):
         chunks.append(c)
     full = "".join(chunks)
     upper = full.upper()
