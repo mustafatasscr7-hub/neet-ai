@@ -37,8 +37,24 @@
     body.light-mode .header { background: #ffffff !important; border-color: #e0e0e0 !important; }
     body.light-mode .chat-window { background: #f5f5f5 !important; }
     body.light-mode .chat-window::-webkit-scrollbar-thumb { background: #d0d0d5 !important; }
+    /* .sidebar-scroll-area's own thumb (line ~490) never got this same override -- the sidebar
+       kept its dark #2a2a2a scrollbar thumb even in light mode, visibly heavy against the now-
+       light sidebar background above. Same value as the chat window's own thumb for consistency. */
+    body.light-mode .sidebar-scroll-area::-webkit-scrollbar-thumb { background: #d0d0d5 !important; }
     body.light-mode .input-area { background: #f5f5f5 !important; }
     body.light-mode .input-wrapper { background: #ffffff !important; border-color: #e0e0e0 !important; }
+    /* Sidebar "Search chats" box -- entirely inline-styled, never got a light-mode pass, so it
+       stayed a dark #1a1a1a box inside the now-light sidebar. Same colors as the established
+       .account-pill-input light-mode treatment for a text input elsewhere in this file. */
+    body.light-mode #searchChatsInput { background: #f5f5f7 !important; border-color: #d5d5dd !important; color: #16161d !important; }
+    body.light-mode #searchChatsInput::placeholder { color: #9a9aa5 !important; }
+    /* "+" attachment menu (#plusMenu) -- also entirely inline-styled, never got a light-mode
+       pass, so it stayed a dark #1e1e1e popup. Its item rows set their own hover background via
+       inline onmouseover/onmouseout JS (not a CSS :hover rule) -- an !important author rule still
+       beats a plain (non-important) inline style, so this reaches it correctly. */
+    body.light-mode #plusMenu { background: #ffffff !important; border-color: #e0e0e5 !important; box-shadow: 0 8px 24px rgba(0,0,0,0.12) !important; }
+    body.light-mode #plusMenu > div { color: #333338 !important; }
+    body.light-mode #plusMenu > div:hover { background: #f0f0f3 !important; }
     body.light-mode .message-bubble.user { background: #e8e8f0 !important; border-color: #d0d0e0 !important; color: #0d0d0d !important; }
     body.light-mode .message-bubble.ai { color: #1a1a1a !important; }
     body.light-mode .message-bubble.ai h1, body.light-mode .message-bubble.ai h2, body.light-mode .message-bubble.ai h3 { color: #0d0d0d !important; }
@@ -72,6 +88,15 @@
     body.light-mode .delete-confirm-message { color: #55555f !important; }
     body.light-mode .delete-confirm-strong { color: #16161d !important; }
     body.light-mode .delete-confirm-cancel-btn { border-color: #d5d5dd !important; color: #55555f !important; }
+
+    /* Device-kicked modal (showDeviceKickedModal) -- same "hand-built, entirely inline-styled,
+       never got a light-mode pass" gap as the delete-confirm dialog above, same fix pattern. */
+    .device-kicked-box { background: #1e1e2e; color: #fff; }
+    .device-kicked-title { color: #fff; }
+    .device-kicked-message { color: #aaa; }
+    body.light-mode .device-kicked-box { background: #ffffff !important; box-shadow: 0 20px 60px rgba(0,0,0,0.15) !important; }
+    body.light-mode .device-kicked-title { color: #16161d !important; }
+    body.light-mode .device-kicked-message { color: #55555f !important; }
     body.light-mode .item-menu-btn { color: #8a8a94 !important; }
     body.light-mode .item-menu-btn:hover { background: #d5d5dd !important; color: #222228 !important; }
     body.light-mode .pin-hover-btn { color: #8a8a94 !important; }
@@ -596,6 +621,15 @@
     .chat-title-btn:hover { background: #1a1a1a; }
     body.light-mode .chat-title-btn { color: #0d0d0d !important; }
     body.light-mode .chat-title-btn:hover { background: #e4e4ea !important; }
+
+    /* NEET-exam-date countdown tooltip (#countdownTooltip, header) is built entirely with inline
+       styles (background:#111, white day/hour/min numbers) and never had a light-mode
+       counterpart -- it stayed a solid dark card even on an otherwise light page. Only the
+       genuinely broken pieces need overriding: the tooltip's own background/shadow, and the
+       #fff-colored numbers that would otherwise vanish against a white card. The blue accents,
+       gray sub-labels, and muted date line already read fine on either background as-is. */
+    body.light-mode #countdownTooltip { background: #ffffff !important; box-shadow: 0 8px 24px rgba(0,0,0,0.15) !important; }
+    body.light-mode #ttDays, body.light-mode #ttHours, body.light-mode #ttMins { color: #0d0d0d !important; }
 
     .selection-toolbar { position: fixed; display: none; align-items: center; gap: 2px; background: #1e1e1e; border: 1px solid #333; border-radius: 8px; padding: 4px; z-index: 10000; box-shadow: 0 8px 24px rgba(0,0,0,0.6); }
     .selection-toolbar.visible { display: flex; }
@@ -6537,10 +6571,10 @@ function plainTextFromMarkdown(text) {
       modal.id = 'deviceKickedModal';
       modal.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:2000;display:flex;align-items:center;justify-content:center;';
       modal.innerHTML = `
-        <div style="background:#1e1e2e;border-radius:12px;padding:32px;max-width:400px;width:90%;color:#fff;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,0.5);">
+        <div class="device-kicked-box" style="border-radius:12px;padding:32px;max-width:400px;width:90%;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,0.5);">
           <div style="font-size:32px;margin-bottom:12px;">🔒</div>
-          <h3 style="margin:0 0 10px;color:#fff;font-size:18px;">Logged out</h3>
-          <p style="color:#aaa;font-size:14px;line-height:1.6;margin-bottom:20px;">You've been logged out because this account was accessed from another device.</p>
+          <h3 class="device-kicked-title" style="margin:0 0 10px;font-size:18px;">Logged out</h3>
+          <p class="device-kicked-message" style="font-size:14px;line-height:1.6;margin-bottom:20px;">You've been logged out because this account was accessed from another device.</p>
           <button id="deviceKickedLoginBtn" style="background:linear-gradient(135deg,#4f8ef7,#7c3aed);border:none;color:white;padding:10px 24px;border-radius:8px;cursor:pointer;font-size:14px;font-weight:600;font-family:'Inter',sans-serif;">Log In Again</button>
         </div>
       `;

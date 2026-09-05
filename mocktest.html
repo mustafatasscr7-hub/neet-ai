@@ -158,6 +158,11 @@
     body.light-mode #startScreen p[style*="color:#555"] { color: #7a7a85 !important; }
     body.light-mode #startScreen p[style*="color:#333"] { color: #9a9aa5 !important; }
     body.light-mode #startScreen div[style*="background:#1a1a1a"] { background: #e3e3ea !important; }
+    /* "Pick a Mock Test" official-test buttons (showMockTestPicker) -- a <button>, not a <div>,
+       and a different dark shade (#151515) than the rule above covers, so it slipped through
+       unstyled and stayed a solid dark box against the now-light start screen. */
+    body.light-mode #startScreen button[style*="background:#151515"] { background: #ffffff !important; border-color: #d5d5dd !important; color: #16161d !important; }
+    body.light-mode #startScreen button[style*="background:#151515"] div[style*="color:#888"] { color: #7a7a85 !important; }
 
     body.light-mode .timer { background: #4f8ef714 !important; border-color: #4f8ef740 !important; }
     body.light-mode .timer.warning { background: #f9731614 !important; border-color: #f9731640 !important; }

@@ -200,6 +200,12 @@
 
     body.light-mode .test-card-wrap { background: #ffffff !important; border-color: #e5e5ea !important; box-shadow: 0 1px 3px rgba(0,0,0,0.04) !important; }
     body.light-mode .test-card-wrap:hover { border-color: #d5d5dd !important; }
+    /* .test-card itself still paints its own dark #111116 background (base rule above) even
+       when nested inside the now-white .test-card-wrap -- the wrapper override alone doesn't
+       reach it, leaving each row a solid dark box against the light page. Transparent lets the
+       wrapper's own light background show through, matching how .test-card-wrap .test-card
+       already zeroes out border/radius/cursor for this same nested case. */
+    body.light-mode .test-card-wrap .test-card { background: transparent !important; }
     body.light-mode .test-number { background: #eeeef1 !important; color: #55555f !important; }
     body.light-mode .test-date { color: #9a9aa5 !important; }
     body.light-mode .test-score .out-of { color: #9a9aa5 !important; }
