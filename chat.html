@@ -6658,6 +6658,60 @@ function plainTextFromMarkdown(text) {
       return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
     }
 
+    // ---------- Referral program (Settings > Account) ----------
+    // One GET already returns the code, this account's own referred-status, and bonus balance
+    // together, so there's no separate /referral/my-code round trip needed here.
+    async function renderReferralSection() {
+      const container = document.getElementById('referralContainer');
+      if (!container) return;
+      const { data: { session } } = await client.auth.getSession();
+      if (!session) return;
+      try {
+        const res = await fetch(`${API_BASE}/referral/status?user_id=${encodeURIComponent(session.user.id)}`);
+        const data = await res.json();
+        if (document.getElementById('referralContainer') !== container) return; // settings tab changed mid-fetch
+        if (data.error) throw new Error(data.error);
+
+        const link = `${window.location.origin}/login.html?ref=${data.code}`;
+        container.innerHTML = `
+          <div class="account-row">
+            <div>
+              <div class="account-row-label" data-i18n="chat.referralLink">Your referral link</div>
+              <div class="account-row-sub" data-i18n="chat.referralLinkDesc">Both of you get 50,000 bonus tokens once they subscribe to Pro or Max</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px;">
+              <span class="account-pill-value" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(link)}">${escapeHtml(link)}</span>
+              <button class="account-pill-btn" onclick="copyReferralLink(this, '${link}')" data-i18n="chat.copy">Copy</button>
+            </div>
+          </div>
+          <div class="account-row">
+            <div class="account-row-label" data-i18n="chat.bonusTokenBalance">Bonus token balance</div>
+            <span class="account-pill-value">${data.bonus_balance.toLocaleString()}</span>
+          </div>
+          <div class="account-row">
+            <div class="account-row-label" data-i18n="chat.referralsCompleted">Successful referrals</div>
+            <span class="account-pill-value">${data.referrals_completed}${data.referrals_pending ? ` (+${data.referrals_pending} pending)` : ''}</span>
+          </div>
+          ${data.was_referred ? `
+          <div class="account-row">
+            <div class="account-row-label" data-i18n="chat.youWereReferred">You were referred</div>
+            <span class="account-pill-value">${data.referred_status === 'completed' ? '✓ Reward granted' : 'Pending your first subscription'}</span>
+          </div>
+          ` : ''}
+        `;
+      } catch (e) {
+        container.innerHTML = `<div style="font-size:13px;color:#555;padding:16px 0;">Couldn't load referral info.</div>`;
+      }
+    }
+
+    function copyReferralLink(btn, link) {
+      navigator.clipboard.writeText(link).then(() => {
+        const original = btn.textContent;
+        btn.textContent = 'Copied!';
+        setTimeout(() => { btn.textContent = original; }, 1500);
+      });
+    }
+
     async function renderActiveSessions() {
       const container = document.getElementById('activeSessionsContainer');
       if (!container) return;
@@ -7106,6 +7160,13 @@ function openSettings() {
           </div>
 
           <div style="margin-bottom:32px;">
+            <h3 style="font-size:13px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:16px;" data-i18n="chat.referrals">Referrals</h3>
+            <div id="referralContainer">
+              <div style="font-size:13px;color:#555;padding:16px 0;">Loading…</div>
+            </div>
+          </div>
+
+          <div style="margin-bottom:32px;">
             <h3 style="font-size:13px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:16px;" data-i18n="chat.activeSessions">Active Sessions</h3>
             <div id="activeSessionsContainer">
               <div style="font-size:13px;color:#555;padding:16px 0;">Loading…</div>
@@ -7116,6 +7177,7 @@ function openSettings() {
         renderPhoneLinkStatus();
         initDisplayNameSaveState();
         renderActiveSessions();
+        renderReferralSection();
       } else if (section === 'plan') {
         const pro = isPro();
         const isMax = userPlan === 'max';

@@ -269,6 +269,7 @@
 
       <input type="email" class="input-field" id="emailInput" placeholder="Email address" data-i18n-placeholder="login.emailPlaceholder" />
       <input type="password" class="input-field" id="passwordInput" placeholder="Password" data-i18n-placeholder="login.passwordPlaceholder" />
+      <input type="text" class="input-field" id="referralCodeInput" placeholder="Referral code (optional)" data-i18n-placeholder="login.referralCodePlaceholder" style="display:none;" />
 
       <button class="submit-btn" id="submitBtn">Sign In</button>
 
@@ -330,7 +331,11 @@
     const { createClient } = supabase
     const client = createClient(SUPABASE_URL, SUPABASE_KEY)
 
-    let isSignUp = false
+    // A referral LINK (?ref=CODE) pre-fills the code and assumes the visitor wants to sign up,
+    // not sign in -- almost nobody clicks a referral link intending to log into an existing
+    // account. Still fully editable/enterable by hand either way.
+    const urlReferralCode = new URLSearchParams(window.location.search).get('ref') || ''
+    let isSignUp = !!urlReferralCode
 
     // Check if already logged in
     client.auth.getSession().then(({ data: { session } }) => {
@@ -343,8 +348,14 @@
       document.getElementById('submitBtn').textContent = isSignUp ? t('login','signUp') : t('login','signIn')
       document.getElementById('toggleLink').textContent = isSignUp ? t('login','signIn') : t('login','signUp')
       document.getElementById('toggleTextLabel').textContent = isSignUp ? t('login','haveAccount') : t('login','noAccount')
+      // Referral code only makes sense on signup -- entering one at login time would do nothing
+      // (an existing account is either already tied to a referral or never will be, see
+      // referral_register's one-time-only enforcement), so hide the field the rest of the time
+      // rather than let it sit there implying it does something on the sign-in path.
+      document.getElementById('referralCodeInput').style.display = isSignUp ? 'block' : 'none'
     }
     updateFormText()
+    if (urlReferralCode) document.getElementById('referralCodeInput').value = urlReferralCode
     document.addEventListener('langchange', updateFormText)
 
     // Toggle Sign In / Sign Up
@@ -371,9 +382,25 @@
       if (!email || !password) { showError(t('login','enterEmailPassword')); return }
 
       if (isSignUp) {
-        const { error } = await client.auth.signUp({ email, password })
-        if (error) { showError(error.message) }
-        else { showSuccess(t('login','accountCreated')) }
+        const { data, error } = await client.auth.signUp({ email, password })
+        if (error) {
+          showError(error.message)
+        } else {
+          const referralCode = document.getElementById('referralCodeInput').value.trim()
+          // Best-effort: the account is already created at this point regardless of whether
+          // this succeeds, so a bad/reused code should never block or scare the new user --
+          // just don't grant a reward that was never earned. Errors are swallowed silently.
+          if (referralCode && data.user) {
+            try {
+              await fetch(`${AUTH_API_BASE}/referral/register`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ referred_id: data.user.id, referral_code: referralCode })
+              })
+            } catch (e) { console.warn('Referral registration failed:', e) }
+          }
+          showSuccess(t('login','accountCreated'))
+        }
       } else {
         const { error } = await client.auth.signInWithPassword({ email, password })
         if (error) { showError(t('login','invalidCredentials')) }

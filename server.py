@@ -548,7 +548,11 @@ class ClassifyDifficultyRequest(BaseModel):
 
 class SetUserPlanRequest(BaseModel):
     user_id: str
-    plan: str  # "free" or "pro"
+    plan: str  # "free", "pro", or "max"
+
+class RegisterReferralRequest(BaseModel):
+    referred_id: str
+    referral_code: str
 
 class ScanPdfRequest(BaseModel):
     subject: str
@@ -860,9 +864,7 @@ async def get_user_plan(user_id: str) -> str:
     except Exception:
         return "free"
 
-# PDF-attachment size/page limits per tier. Only "free" and "pro" are actually reachable today --
-# admin_set_user_plan() (see below) only accepts those two values, so "max" is here for when a
-# real Max plan value can actually be assigned, not because any user can be "max" yet.
+# PDF-attachment size/page limits per tier.
 PDF_LIMITS = {
     "free": {"max_mb": 3, "max_pages": 5},
     "pro": {"max_mb": 10, "max_pages": 20},
@@ -1330,6 +1332,55 @@ async def log_token_usage(user_id: str, tokens: int, ip: str = ""):
             )
     except Exception:
         pass  # never let logging failure break a response the student already received
+
+# ---------------- Referral program ----------------
+# A student's referral code is just their own user_id with hyphens stripped (32 hex chars) --
+# no lookup table needed to go from code -> user_id, since it's the UUID with formatting
+# removed. Every registered student already has one automatically, including everyone who
+# signed up before this feature existed -- nothing to backfill, nothing to generate/store.
+def _referral_code_for_user(user_id: str) -> str:
+    return user_id.replace("-", "")
+
+def _user_id_from_referral_code(code: str):
+    hex_code = (code or "").strip().replace("-", "").lower()
+    if len(hex_code) != 32 or not all(c in "0123456789abcdef" for c in hex_code):
+        return None
+    return f"{hex_code[0:8]}-{hex_code[8:12]}-{hex_code[12:16]}-{hex_code[16:20]}-{hex_code[20:32]}"
+
+REFERRAL_BONUS_TOKENS = 50000
+
+async def _credit_bonus_tokens(user_id: str, amount: int):
+    try:
+        await async_client.post(
+            f"{SUPABASE_URL}/rest/v1/rpc/increment_bonus_tokens", headers=ADMIN_HEADERS,
+            json={"p_user_id": user_id, "p_amount": amount}
+        )
+    except Exception:
+        pass
+
+async def log_token_usage_with_bonus(user_id: str, tokens: int, ip: str = ""):
+    """Same contract as log_token_usage, except a logged-in student's referral bonus balance is
+    drawn down FIRST, and only the overflow beyond that balance is charged to the normal daily
+    plan allowance. Used only by the text-doubt billing paths (_stream_qwen/_stream_deepseek,
+    covering /chat's text branch and /solve) -- the image/PDF branches in stream_response call
+    log_token_usage directly and never reach this function, so a bonus can never be spent on an
+    image/PDF doubt by construction, not by an extra flag someone has to remember to check."""
+    if tokens <= 0 or not user_id:
+        await log_token_usage(user_id, tokens, ip)
+        return
+    bonus_used = 0
+    try:
+        resp = await async_client.post(
+            f"{SUPABASE_URL}/rest/v1/rpc/decrement_bonus_tokens", headers=ADMIN_HEADERS,
+            json={"p_user_id": user_id, "p_amount": tokens}
+        )
+        if resp.status_code < 400:
+            bonus_used = resp.json() or 0
+    except Exception:
+        bonus_used = 0
+    remaining = tokens - bonus_used
+    if remaining > 0:
+        await log_token_usage(user_id, remaining, ip)
 
 import hashlib
 
@@ -2026,7 +2077,7 @@ async def _stream_qwen(system: str, messages: list, user_id: str, ip: str, endpo
                 pass
             if billing_context is None or billing_context.get("bill", True):
                 try:
-                    await log_token_usage(user_id, input_tokens + output_tokens, ip)
+                    await log_token_usage_with_bonus(user_id, input_tokens + output_tokens, ip)
                 except Exception:
                     pass
 
@@ -2060,7 +2111,7 @@ async def _stream_deepseek(system: str, messages: list, user_id: str, ip: str, i
                 except Exception:
                     pass
                 if billing_context is None or billing_context.get("bill", True):
-                    await log_token_usage(user_id, usage.input_tokens + usage.output_tokens, ip)
+                    await log_token_usage_with_bonus(user_id, usage.input_tokens + usage.output_tokens, ip)
             except Exception:
                 pass
 
@@ -3487,21 +3538,152 @@ def _admin_count(params):
 async def admin_verify(_: None = Depends(verify_admin)):
     return {"ok": True}
 
+# Called only from admin_set_user_plan below, only on a student's genuine first-ever transition
+# into a paid plan. Looks for a pending referral where this student is the referred party, and
+# if found, credits both sides with the flat bonus and marks the referral completed. Returns a
+# small dict describing what happened, or None if there was nothing to reward (the common case --
+# most paid transitions won't have a pending referral at all).
+async def _try_credit_referral_reward(referred_id: str):
+    try:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/referrals", headers=ADMIN_HEADERS,
+            params={"referred_id": f"eq.{referred_id}", "status": "eq.pending", "select": "*", "limit": 1}
+        )
+        rows = resp.json() if resp.status_code == 200 else []
+        if not rows:
+            return None
+        referral = rows[0]
+        referrer_id = referral["referrer_id"]
+        now_iso = datetime.now(timezone.utc).isoformat()
+        # No real payment/order id exists yet (see the comment above admin_set_user_plan) -- this
+        # is a synthetic placeholder in the same shape a real Razorpay payment_id would eventually
+        # fill this column with.
+        purchase_id = f"admin-{referred_id}-{int(datetime.now(timezone.utc).timestamp())}"
+
+        await _credit_bonus_tokens(referrer_id, REFERRAL_BONUS_TOKENS)
+        await _credit_bonus_tokens(referred_id, REFERRAL_BONUS_TOKENS)
+
+        await async_client.patch(
+            f"{SUPABASE_URL}/rest/v1/referrals", headers=ADMIN_HEADERS,
+            params={"id": f"eq.{referral['id']}"},
+            json={"status": "completed", "reward_granted_at": now_iso, "subscription_purchase_id": purchase_id}
+        )
+        return {"referrer_id": referrer_id, "referred_id": referred_id, "bonus_each": REFERRAL_BONUS_TOKENS}
+    except Exception as e:
+        print(f"REFERRAL REWARD CREDIT ERROR: {e}", flush=True)
+        return None
+
 # Manual stand-in for what a Razorpay success webhook will do automatically later: flip
-# `plan` to "pro" on payment, back to "free" on cancellation/expiry. For now, set by hand.
+# `plan` to "pro"/"max" on payment, back to "free" on cancellation/expiry. For now, set by hand.
+# Also the one place a referral reward can fire -- see the first_paid_at handling below -- so
+# whatever eventually replaces this with a real webhook inherits referral crediting for free as
+# long as it flows through this same function.
 @app.post("/admin/set-user-plan")
 async def admin_set_user_plan(req: SetUserPlanRequest, _: None = Depends(verify_admin)):
-    if req.plan not in ("free", "pro"):
-        return {"error": "plan must be 'free' or 'pro'"}
+    if req.plan not in ("free", "pro", "max"):
+        return {"error": "plan must be 'free', 'pro', or 'max'"}
     try:
-        resp = http_requests.post(
+        existing_resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/user_plan", headers=ADMIN_HEADERS,
+            params={"user_id": f"eq.{req.user_id}", "select": "plan,first_paid_at", "limit": 1}
+        )
+        existing_rows = existing_resp.json() if existing_resp.status_code == 200 else []
+        existing = existing_rows[0] if existing_rows else None
+        was_paid_before = bool(existing and existing.get("plan") in ("pro", "max"))
+        already_had_first_paid_at = bool(existing and existing.get("first_paid_at"))
+        # The ONLY condition that counts as a genuine first purchase: moving INTO a paid plan
+        # from a non-paid state, AND this account has never been marked paid before. A student
+        # set pro -> free -> pro again must not re-trigger a reward or re-set this timestamp --
+        # first_paid_at is written exactly once per account, ever.
+        is_first_paid_transition = req.plan in ("pro", "max") and not was_paid_before and not already_had_first_paid_at
+
+        patch_body = {"user_id": req.user_id, "plan": req.plan, "updated_at": datetime.now(timezone.utc).isoformat()}
+        if is_first_paid_transition:
+            patch_body["first_paid_at"] = datetime.now(timezone.utc).isoformat()
+
+        resp = await async_client.post(
             f"{SUPABASE_URL}/rest/v1/user_plan",
             headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates"},
-            json={"user_id": req.user_id, "plan": req.plan, "updated_at": datetime.now(timezone.utc).isoformat()}
+            json=patch_body
         )
         if resp.status_code >= 400:
             return {"error": resp.text}
+
+        result = {"success": True}
+        if is_first_paid_transition:
+            referral_reward = await _try_credit_referral_reward(req.user_id)
+            if referral_reward:
+                result["referral_reward"] = referral_reward
+        return result
+    except Exception as e:
+        return {"error": str(e)}
+
+# ---------------- Referral program: student-facing endpoints ----------------
+@app.get("/referral/my-code")
+async def referral_my_code(user_id: str):
+    if not user_id:
+        return {"error": "user_id required"}
+    return {"code": _referral_code_for_user(user_id)}
+
+@app.post("/referral/register")
+async def referral_register(req: RegisterReferralRequest):
+    referrer_id = _user_id_from_referral_code(req.referral_code)
+    if not referrer_id:
+        return {"error": "Invalid referral code"}
+    if referrer_id == req.referred_id:
+        return {"error": "You can't refer yourself"}
+    try:
+        # referred_id is UNIQUE at the database level (see the migration) -- this insert is the
+        # real enforcement that a student can only ever be tied to one referral code, ever. A
+        # second attempt, even with a different code, always fails here with a conflict; it
+        # never silently overwrites the first one.
+        resp = await async_client.post(
+            f"{SUPABASE_URL}/rest/v1/referrals",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
+            json={"referrer_id": referrer_id, "referred_id": req.referred_id, "referral_code": req.referral_code}
+        )
+        if resp.status_code == 409:
+            return {"error": "This account has already used a referral code"}
+        if resp.status_code >= 400:
+            return {"error": resp.text}
         return {"success": True}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/referral/status")
+async def referral_status(user_id: str):
+    if not user_id:
+        return {"error": "user_id required"}
+    try:
+        referred_by_resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/referrals", headers=ADMIN_HEADERS,
+            params={"referred_id": f"eq.{user_id}", "select": "status,referrer_id", "limit": 1}
+        )
+        referred_by_rows = referred_by_resp.json() if referred_by_resp.status_code == 200 else []
+
+        as_referrer_resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/referrals", headers=ADMIN_HEADERS,
+            params={"referrer_id": f"eq.{user_id}", "select": "status"}
+        )
+        as_referrer_rows = as_referrer_resp.json() if as_referrer_resp.status_code == 200 else []
+        completed_referrals = sum(1 for r in as_referrer_rows if r["status"] == "completed")
+        pending_referrals = sum(1 for r in as_referrer_rows if r["status"] == "pending")
+
+        bonus_resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/bonus_tokens", headers=ADMIN_HEADERS,
+            params={"user_id": f"eq.{user_id}", "select": "balance", "limit": 1}
+        )
+        bonus_rows = bonus_resp.json() if bonus_resp.status_code == 200 else []
+        bonus_balance = bonus_rows[0]["balance"] if bonus_rows else 0
+
+        return {
+            "code": _referral_code_for_user(user_id),
+            "was_referred": bool(referred_by_rows),
+            "referred_status": referred_by_rows[0]["status"] if referred_by_rows else None,
+            "referrals_completed": completed_referrals,
+            "referrals_pending": pending_referrals,
+            "bonus_balance": bonus_balance,
+        }
     except Exception as e:
         return {"error": str(e)}
 
