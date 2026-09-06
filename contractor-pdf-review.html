@@ -1,0 +1,2484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<meta name="robots" content="noindex, nofollow"/>
+<title>PDF Review Tool</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mathlive@0.110.0/mathlive.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Inter', sans-serif; background: #0d0d0d; color: #ececec; min-height: 100vh; }
+
+  /* Password gate (same pattern as admin-dashboard.html) */
+  #gateOverlay { position: fixed; inset: 0; background: #0d0d0d; display: flex; align-items: center; justify-content: center; z-index: 999; }
+  .gate-box { background: #111; border: 1px solid #2a2a2a; border-radius: 14px; padding: 32px; width: 100%; max-width: 340px; text-align: center; }
+  .gate-box h1 { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
+  .gate-box p { font-size: 12px; color: #666; margin-bottom: 20px; }
+  .gate-box input { width: 100%; background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 8px; padding: 10px 14px; color: #ececec; font-size: 14px; font-family: 'Inter', sans-serif; outline: none; margin-bottom: 12px; }
+  .gate-box input:focus { border-color: #4f8ef7; }
+  .gate-box button { width: 100%; background: #4f8ef7; border: none; border-radius: 8px; padding: 10px; color: white; font-size: 13px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
+  .gate-box button:hover { background: #3b7de8; }
+  .gate-error { font-size: 12px; color: #ef4444; margin-top: 10px; min-height: 14px; }
+
+  #dashboard { display: none; max-width: 900px; margin: 0 auto; padding: 24px; }
+  .db-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+  .db-header h1 { font-size: 18px; font-weight: 700; }
+  .db-header h1 span { color: #4f8ef7; }
+  .logout-btn { background: transparent; border: 1px solid #2a2a2a; color: #888; padding: 6px 14px; border-radius: 8px; font-size: 12px; cursor: pointer; font-family: 'Inter', sans-serif; }
+  .logout-btn:hover { color: #ccc; border-color: #3a3a3a; }
+
+  .panel { background: #111; border: 1px solid #1e1e1e; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  .panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: #888; margin-bottom: 12px; }
+
+  .subject-picker { display: flex; gap: 10px; margin-bottom: 14px; }
+  .subject-btn { flex: 1; background: #0d0d0d; border: 1px solid #2a2a2a; color: #ccc; padding: 12px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; text-align: center; }
+  .subject-btn:hover { border-color: #4f8ef750; }
+  .subject-btn.active { border-color: #4f8ef7; background: #4f8ef712; color: #4f8ef7; }
+
+  /* Separate class from .subject-btn (not just a style choice) -- selectSubject() re-queries
+     every .subject-btn on the page to toggle its own active state, and a shared class would
+     have made it silently clear the mode-tab's active highlight every time the subject changes. */
+  .mode-tabs { display: flex; gap: 10px; margin-bottom: 18px; }
+  .mode-btn { flex: 1; background: #0d0d0d; border: 1px solid #2a2a2a; color: #ccc; padding: 10px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; text-align: center; }
+  .mode-btn:hover { border-color: #4f8ef750; }
+  .mode-btn.active { border-color: #4f8ef7; background: #4f8ef712; color: #4f8ef7; }
+
+  .upload-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .upload-row input[type="file"] { flex: 1; min-width: 200px; font-size: 12px; color: #888; }
+  .scan-btn { background: #4f8ef7; border: none; border-radius: 8px; padding: 10px 20px; color: white; font-size: 13px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
+  .scan-btn:hover:not(:disabled) { background: #3b7de8; }
+  .scan-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  #scanStatus { font-size: 12px; color: #4f8ef7; margin-top: 10px; display: none; }
+
+  #summaryBar { display: none; align-items: center; gap: 16px; flex-wrap: wrap; background: #111; border: 1px solid #1e1e1e; border-radius: 10px; padding: 14px 16px; margin-bottom: 16px; }
+  .bottom-save-bar { display: flex; justify-content: flex-end; margin-top: 20px; padding-top: 16px; border-top: 1px solid #1e1e1e; }
+  #summaryBar .stat { font-size: 12px; color: #aaa; }
+  #summaryBar .stat b { color: #ececec; font-size: 14px; }
+  #summaryBar .spacer { flex: 1; }
+  .action-btn { background: #1a1a1a; border: 1px solid #2a2a2a; color: #ececec; padding: 8px 14px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
+  .action-btn:hover { border-color: #4f8ef7; color: #4f8ef7; }
+  .action-btn.primary { background: #4f8ef7; border-color: #4f8ef7; color: white; }
+  .action-btn.primary:hover { background: #3b7de8; }
+  .action-btn.danger:hover { border-color: #ef4444; color: #ef4444; }
+
+  .q-block { background: #111; border: 1px solid #1e1e1e; border-radius: 10px; padding: 16px; margin-bottom: 14px; }
+  .q-block.is-saved { opacity: 0.55; }
+  .q-block-header { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+  .q-number { font-size: 13px; font-weight: 700; color: #4f8ef7; }
+  .q-diagram-badge { font-size: 11px; background: #f9731620; color: #f97316; padding: 2px 8px; border-radius: 20px; font-weight: 600; }
+  .q-saved-badge { font-size: 11px; background: #4ade8020; color: #4ade80; padding: 2px 8px; border-radius: 20px; font-weight: 600; }
+  /* Paste-mode parse confidence -- only "fallback" gets a loud warning color since that's the
+     tier that needs real scrutiny; "delimiter" is informational (unusual but reliable format). */
+  .q-confidence-badge { font-size: 11px; padding: 2px 8px; border-radius: 20px; font-weight: 600; }
+  .q-confidence-badge.fallback { background: #f9731620; color: #f97316; }
+  .q-confidence-badge.delimiter { background: #4f8ef720; color: #4f8ef7; }
+  .q-block-actions { margin-left: auto; display: flex; gap: 6px; }
+  .q-block-actions button { background: transparent; border: 1px solid #2a2a2a; color: #888; padding: 5px 10px; border-radius: 6px; font-size: 11px; cursor: pointer; font-family: 'Inter', sans-serif; }
+  .q-block-actions button:hover { border-color: #4f8ef7; color: #4f8ef7; }
+  .q-block-actions button.danger-link:hover { border-color: #ef4444; color: #ef4444; }
+
+  .q-field { margin-bottom: 10px; }
+  .q-field label { display: block; font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 5px; }
+  .q-field-label-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 5px; }
+  .q-field-label-row label { margin-bottom: 0; }
+  .formula-btn { background: transparent; border: 1px solid #2a2a2a; color: #888; padding: 2px 8px; border-radius: 5px; font-size: 10px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; white-space: nowrap; }
+  .formula-btn:hover { border-color: #4f8ef7; color: #4f8ef7; }
+  .math-preview { margin-top: 6px; padding: 8px 10px; background: #0d0d0d; border: 1px dashed #2a2a2a; border-radius: 6px; font-size: 13px; color: #ececec; overflow-x: auto; display: none; }
+  .math-preview .katex-display { margin: 4px 0; }
+  .q-field textarea, .q-field input[type="text"], .q-field input[type="number"], .q-field select {
+    width: 100%; background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 6px; padding: 8px 10px;
+    color: #ececec; font-size: 13px; font-family: 'Inter', sans-serif; outline: none; resize: vertical;
+  }
+  /* Auto-resized via JS (autoResizeTextarea) to fit content, so no internal scrollbar fighting
+     the height calculation -- overflow stays hidden and height is set directly in style. */
+  .q-field textarea { overflow: hidden; }
+  .q-field textarea:focus, .q-field input:focus, .q-field select:focus { border-color: #4f8ef7; }
+  /* Shaded distinctly so Option D -- the last of the 4 option boxes -- is easy to spot at a
+     glance instead of blending in with A/B/C, which are otherwise visually identical. */
+  .q-field-last-option textarea { background: #141a26; border-color: #2a3a5c; }
+  .q-field-last-option textarea:focus { border-color: #4f8ef7; }
+  .q-options-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .q-meta-grid { display: grid; grid-template-columns: 90px 90px 90px 1fr; gap: 10px; align-items: start; }
+  .q-meta-grid .checkbox-field { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; margin-top: 2px; }
+  .q-meta-grid .checkbox-field label { margin: 0; text-transform: none; font-size: 12px; color: #ccc; }
+  .q-suggestion-hint { font-size: 11px; color: #666; margin-top: 4px; }
+  .q-suggestion-hint.confident { color: #4ade80; }
+
+  .q-diagram-slot { margin-top: 10px; padding: 10px; border: 1px dashed #2a2a2a; border-radius: 8px; }
+  .q-diagram-slot img { max-width: 160px; max-height: 160px; border-radius: 6px; margin-top: 8px; display: block; }
+  .q-diagram-slot .diag-status { font-size: 11px; color: #666; margin-top: 6px; }
+  .diag-paste-zone { border: 1px dashed #333; border-radius: 6px; padding: 6px 8px; }
+  .diag-paste-zone:focus { outline: none; border-color: #4f8ef7; }
+  .diag-paste-hint { font-size: 10px; color: #555; margin-top: 4px; }
+
+  .q-dup-warning { font-size: 12px; margin-top: 10px; padding: 8px 10px; border-radius: 6px; display: none; }
+  .q-dup-warning.warn { display: block; background: #f9731620; color: #f97316; }
+  .q-dup-warning.block { display: block; background: #ef444420; color: #ef4444; }
+
+  .q-block-footer { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
+  .save-btn { background: #4f8ef7; border: none; border-radius: 6px; padding: 8px 18px; color: white; font-size: 12px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
+  .save-btn:hover:not(:disabled) { background: #3b7de8; }
+  .save-btn.confirm-again { background: #f97316; }
+  .save-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .q-source-page { font-size: 11px; color: #555; }
+
+  .empty-hint { text-align: center; padding: 40px; color: #555; font-size: 13px; }
+
+  /* Formula editor modal (MathLive) - one shared instance, opened by any field's "Formula" button */
+  #formulaModalOverlay { display: none; position: fixed; inset: 0; background: #000000a0; z-index: 950; align-items: center; justify-content: center; }
+  .formula-modal-box { background: #111; border: 1px solid #2a2a2a; border-radius: 14px; padding: 24px; width: 100%; max-width: 480px; }
+  .formula-modal-box h2 { font-size: 14px; }
+  .formula-modal-hint { font-size: 11px; color: #666; margin-top: 10px; }
+  #formulaMathfieldHost { background: #fff; border-radius: 8px; padding: 10px; }
+  #formulaMathfield { width: 100%; min-height: 44px; font-size: 20px; }
+  /* MathLive's on-screen keyboard defaults to z-index 105, well below our modal overlay's 950
+     -- it was rendering visible-but-unclickable (buried under the overlay's own click layer)
+     until this was raised above it. */
+  :root { --keyboard-zindex: 960; }
+</style>
+</head>
+<body>
+
+<div id="gateOverlay">
+  <div class="gate-box">
+    <h1>PDF Review</h1>
+    <p>Internal tool — enter admin password</p>
+    <input type="password" id="gatePassword" placeholder="Password" autocomplete="off"/>
+    <button onclick="verifyPassword()">Enter</button>
+    <div class="gate-error" id="gateError"></div>
+  </div>
+</div>
+
+<div id="dashboard">
+  <div class="db-header">
+    <h1>PDF Review Tool</h1>
+    <div style="display:flex;gap:8px;">
+      <button class="logout-btn" onclick="openPdfHistory()">Processed PDFs</button>
+      <button class="logout-btn" onclick="logout()">Log out</button>
+    </div>
+  </div>
+
+  <div id="draftBanner" style="display:none;align-items:center;gap:14px;flex-wrap:wrap;background:#4f8ef715;border:1px solid #4f8ef750;border-radius:10px;padding:12px 14px;margin-bottom:16px;font-size:12px;color:#ececec;">
+    <span id="draftBannerText" style="flex:1;"></span>
+    <button type="button" class="action-btn primary" onclick="resumeDraft()">Resume</button>
+    <button type="button" class="action-btn danger" onclick="discardDraft()">Discard</button>
+  </div>
+
+  <div id="formulaModalOverlay">
+    <div class="formula-modal-box">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+        <h2>Insert Formula</h2>
+        <button type="button" class="action-btn" onclick="closeFormulaEditor()">Cancel</button>
+      </div>
+      <div id="formulaMathfieldHost">
+        <math-field id="formulaMathfield"></math-field>
+      </div>
+      <div class="formula-modal-hint">Build your formula visually — fractions, superscripts, subscripts, brackets, etc. It's inserted as <code>$$...$$</code> at your cursor, into the field you opened this from.</div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px;">
+        <button type="button" class="action-btn primary" onclick="confirmFormulaInsert()">Insert</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="pdfHistoryOverlay" style="display:none;position:fixed;inset:0;background:#000000a0;z-index:900;align-items:center;justify-content:center;">
+    <div style="background:#111;border:1px solid #2a2a2a;border-radius:14px;padding:24px;width:100%;max-width:560px;max-height:80vh;overflow-y:auto;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+        <h2 style="font-size:15px;">Processed PDFs</h2>
+        <button type="button" class="action-btn" onclick="closePdfHistory()">Close</button>
+      </div>
+      <div id="pdfHistoryList" style="font-size:13px;color:#ccc;">Loading...</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="mode-tabs" id="inputModeTabs">
+      <button type="button" class="mode-btn active" data-mode="pdf" onclick="selectInputMode('pdf')">📄 PDF Scan</button>
+      <button type="button" class="mode-btn" data-mode="paste" onclick="selectInputMode('paste')">📋 Paste LaTeX (Mathpix/SimpleTex)</button>
+    </div>
+
+    <h2>1. Choose subject</h2>
+    <div class="subject-picker" id="subjectPicker">
+      <button type="button" class="subject-btn" data-subject="Biology" onclick="selectSubject('Biology')">Biology</button>
+      <button type="button" class="subject-btn" data-subject="Physics" onclick="selectSubject('Physics')">Physics</button>
+      <button type="button" class="subject-btn" data-subject="Chemistry" onclick="selectSubject('Chemistry')">Chemistry</button>
+    </div>
+
+    <div id="pdfModeSection">
+      <h2>2. Upload PDF</h2>
+      <div class="upload-row">
+        <input type="file" id="pdfFile" accept="application/pdf" onchange="updateScanButton()"/>
+        <button type="button" class="scan-btn" id="scanBtn" disabled onclick="scanPdf()">Scan PDF</button>
+      </div>
+      <div id="scanBtnHint" style="font-size:11px;color:#666;margin-top:8px;">Pick a subject above and choose a PDF file to enable scanning.</div>
+      <div id="scanStatus"></div>
+    </div>
+
+    <div id="pasteModeSection" style="display:none;">
+      <h2>2. Paste LaTeX text</h2>
+      <div style="margin-bottom:10px;">
+        <label style="display:block;font-size:11px;color:#888;margin-bottom:4px;">Chapter (optional — applied to every parsed question below, overriding any per-question guess)</label>
+        <select id="pasteChapterSelect" style="width:100%;max-width:360px;background:#0d0d0d;border:1px solid #2a2a2a;border-radius:8px;padding:8px 10px;color:#ececec;font-family:'Inter',sans-serif;font-size:13px;">
+          <option value="">— auto-detect per question —</option>
+        </select>
+      </div>
+      <textarea id="pasteTextarea" rows="10" placeholder="Paste Mathpix or SimpleTex output here (both are auto-detected)..." style="width:100%;background:#0d0d0d;border:1px solid #2a2a2a;border-radius:8px;padding:10px 12px;color:#ececec;font-family:ui-monospace,Consolas,monospace;font-size:12px;line-height:1.5;resize:vertical;"></textarea>
+      <div class="upload-row" style="margin-top:10px;">
+        <button type="button" class="scan-btn" id="parseTextBtn" disabled onclick="parsePastedTextIntoBlocks()">Parse Text</button>
+      </div>
+      <div id="parseBtnHint" style="font-size:11px;color:#666;margin-top:8px;">Pick a subject above to enable parsing.</div>
+      <div id="parseHint" style="font-size:12px;margin-top:8px;"></div>
+    </div>
+  </div>
+
+  <div id="summaryBar">
+    <div class="stat"><b id="statQuestionCount">0</b> questions detected from <b id="statPageCount">0</b> pages</div>
+    <div class="stat"><b id="statDiagramCount">0</b> flagged with a diagram</div>
+    <div class="stat"><b id="statSavedCount">0</b> saved</div>
+    <div class="spacer"></div>
+    <button type="button" class="action-btn danger" onclick="clearAllBlocks()">Clear All</button>
+    <button type="button" class="action-btn" onclick="addMissedQuestion()">+ Add Missed Question</button>
+    <button type="button" class="action-btn primary save-all-btn" onclick="saveAllReviewed()">Save All Reviewed</button>
+  </div>
+
+  <div id="flaggedPagesBanner" style="display:none;background:#ef444415;border:1px solid #ef444450;border-radius:10px;padding:12px 14px;margin-bottom:16px;font-size:12px;color:#ef4444;"></div>
+
+  <div id="blocksContainer"></div>
+</div>
+
+<script src="./confirm-modal.js"></script>
+<script>
+  // Relative, not the real backend's own domain -- proxied via this project's own vercel.json
+  // rewrite (/api/:path* -> the real backend), so a contractor opening DevTools' Network tab
+  // never sees which company/host actually serves this. See CONTRACTOR_PDF_REVIEW_DEPLOY.md in
+  // this repo for setup.
+  const API_BASE = '/api';
+  let adminKey = sessionStorage.getItem('admin_key') || '';
+  let currentSubject = null;
+  let currentPdfFilename = null; // filename of the last-scanned PDF, attached to saves so it shows up in Processed PDFs
+  let currentProcessedPdfId = null;  // id of this scan's processed_pdfs row, for the completion/failure update
+  let currentPdfQuestionsExtracted = 0; // running count of questions saved so far for the current scan
+  let chapterList = [];       // [{name, count}] style not needed here - just names for the dropdown
+  let existingRows = [];      // {question, chapter, class} - all active rows for currentSubject
+  let classifier = null;
+  let blocks = [];            // in-memory question blocks for the current scan session
+  let blockIdSeq = 0;
+  let scanFilenameMatch = null; // {chapter, score, tied} from the last scanned PDF's filename, or null
+  let inputMode = 'pdf';      // 'pdf' (Claude Vision scan) or 'paste' (Mathpix/SimpleTex text) -- which input panel is showing
+  const DRAFT_STORAGE_KEY = 'pdf_review_draft_v1'; // versioned so a future schema change can't crash on an old saved draft
+  let pendingDraft = null; // parsed draft object while the resume/discard banner is showing, null otherwise
+  let autoSaveTimer = null;
+  const MIN_SUBJECT_ROWS_FOR_SUGGESTION = 15;
+  const MIN_CONFIDENCE_SCORE = 0.08;
+  const FILENAME_MATCH_THRESHOLD = 0.3;
+
+  // Same source of truth as pyqbank.html's neetSyllabus, kept in sync manually - used both to
+  // fill the chapter dropdown with every real chapter (not just already-tagged ones) and to
+  // deterministically resolve class from chapter name (curriculum is fixed, unlike historical data).
+  const NEET_SYLLABUS = {
+    Biology: {
+      11: ['The Living World', 'Biological Classification', 'Plant Kingdom', 'Animal Kingdom', 'Morphology of Flowering Plants', 'Anatomy of Flowering Plants', 'Structural Organisation in Animals', 'Cell: The Unit of Life', 'Biomolecules', 'Cell Cycle and Cell Division', 'Transport in Plants', 'Mineral Nutrition', 'Photosynthesis in Higher Plants', 'Respiration in Plants', 'Plant Growth and Development', 'Digestion and Absorption', 'Breathing and Exchange of Gases', 'Body Fluids and Circulation', 'Excretory Products and their Elimination', 'Locomotion and Movement', 'Neural Control and Coordination', 'Chemical Coordination and Integration'],
+      12: ['Reproduction in Organisms', 'Sexual Reproduction in Flowering Plants', 'Human Reproduction', 'Reproductive Health', 'Principles of Inheritance and Variation', 'Molecular Basis of Inheritance', 'Evolution', 'Human Health and Disease', 'Strategies for Enhancement in Food Production', 'Microbes in Human Welfare', 'Biotechnology: Principles and Processes', 'Biotechnology and its Applications', 'Organisms and Populations', 'Ecosystem', 'Biodiversity and Conservation', 'Environmental Issues']
+    },
+    Physics: {
+      11: ['Units and Measurements', 'Motion in a Straight Line', 'Motion in a Plane', 'Laws of Motion', 'Work, Energy and Power', 'System of Particles and Rotational Motion', 'Gravitation', 'Mechanical Properties of Solids', 'Mechanical Properties of Fluids', 'Thermal Properties of Matter', 'Thermodynamics', 'Kinetic Theory', 'Oscillations', 'Waves', 'Mathematical Tools'],
+      12: ['Electric Charges and Fields', 'Electrostatic Potential and Capacitance', 'Current Electricity', 'Moving Charges and Magnetism', 'Magnetism and Matter', 'Electromagnetic Induction', 'Alternating Current', 'Electromagnetic Waves', 'Ray Optics and Optical Instruments', 'Wave Optics', 'Dual Nature of Radiation and Matter', 'Atoms', 'Nuclei', 'Semiconductor Electronics: Materials, Devices and Simple Circuits']
+    },
+    Chemistry: {
+      11: ['Some Basic Concepts of Chemistry', 'Structure of Atom', 'Classification of Elements and Periodicity in Properties of Elements', 'Chemical Bonding and Molecular Structure', 'States of Matter: Gases and Liquids', 'Thermodynamics', 'Equilibrium', 'Redox Reactions', 'Hydrogen', 'The s-Block Elements (Alkali and Alkaline Earth Metals)', 'The p-Block Elements', 'Organic Chemistry: Some Basic Principles and Techniques', 'Hydrocarbons', 'Environmental Chemistry'],
+      12: ['The Solid State', 'Solutions', 'Electrochemistry', 'Chemical Kinetics', 'Surface Chemistry', 'General Principles and Processes of Isolation of Elements', 'The p-Block Elements', 'The d and f Block Elements', 'Coordination Compounds', 'Haloalkanes and Haloarenes', 'Alcohols, Phenols and Ethers', 'Aldehydes, Ketones and Carboxylic Acids', 'Amines', 'Biomolecules', 'Polymers', 'Chemistry in Everyday Life']
+    }
+  };
+
+  // Chapter names appearing in both 11 and 12 for a subject (e.g. Chemistry's "The p-Block
+  // Elements" spans both years) resolve to null here - deliberately ambiguous, not guessed.
+  function buildChapterToClass() {
+    const map = {};
+    Object.keys(NEET_SYLLABUS).forEach(subject => {
+      map[subject] = {};
+      const in11 = new Set(NEET_SYLLABUS[subject][11]);
+      const in12 = new Set(NEET_SYLLABUS[subject][12]);
+      new Set([...in11, ...in12]).forEach(chapter => {
+        map[subject][chapter] = (in11.has(chapter) && in12.has(chapter)) ? null : (in11.has(chapter) ? 11 : 12);
+      });
+    });
+    return map;
+  }
+  const CHAPTER_TO_CLASS = buildChapterToClass();
+
+  function allChaptersForSubject(subject) {
+    const syllabus = NEET_SYLLABUS[subject] ? [...NEET_SYLLABUS[subject][11], ...NEET_SYLLABUS[subject][12]] : [];
+    return Array.from(new Set([...syllabus, ...chapterList])).sort();
+  }
+
+  // Deterministic curriculum mapping takes priority over the historical-majority guess,
+  // since it's always correct when unambiguous, unlike a vote over possibly-sparse tagged data.
+  function resolveClassForChapter(subject, chapter) {
+    const fromSyllabus = CHAPTER_TO_CLASS[subject] && CHAPTER_TO_CLASS[subject][chapter];
+    if (fromSyllabus) return String(fromSyllabus);
+    return suggestClass(classifier, chapter);
+  }
+
+  // ---------------- Chapter-from-filename matching ----------------
+
+  function normalizeForFilenameMatch(text) {
+    return text
+      .replace(/\.pdf$/i, '')
+      .replace(/[_-]/g, ' ')
+      .replace(/[()]/g, ' ')
+      .replace(/\b(pyq|dpp|practice|practise|questions?|test|mock|nta|qp)\b/gi, ' ')
+      .replace(/[^a-zA-Z\s]/g, ' ')
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(w => w.length > 1);
+  }
+
+  function overlapScore(fileTokens, chapterTokens) {
+    const intersection = [...fileTokens].filter(w => chapterTokens.has(w)).length;
+    const union = new Set([...fileTokens, ...chapterTokens]).size;
+    return union > 0 ? intersection / union : 0;
+  }
+
+  // Tuned against real filenames from bio_pdfs_to_process/ - matches "Cell the Unit of Life -
+  // PYQ.pdf" style names correctly, and importantly does NOT force a guess for broad/combined
+  // files like "Diversity in Living Organism DPP.pdf" or generic ones like a full mock test.
+  function matchChapterFromFilename(filename, chapterNames) {
+    const fileTokens = new Set(normalizeForFilenameMatch(filename));
+    if (fileTokens.size === 0) return null;
+    let best = null, bestScore = 0, second = 0;
+    chapterNames.forEach(chapter => {
+      const chapterTokens = new Set(normalizeForFilenameMatch(chapter));
+      const score = overlapScore(fileTokens, chapterTokens);
+      if (score > bestScore) { second = bestScore; best = chapter; bestScore = score; }
+      else if (score > second) { second = score; }
+    });
+    if (!best) return null;
+    // A near-tie between two DIFFERENT chapters is a sign of ambiguity, not confidence
+    // (tiny epsilon guards against float rounding, e.g. 0.6 - 0.5 !== exactly 0.1 in JS).
+    const tied = (bestScore - second) < 0.1 - 1e-9;
+    return { chapter: best, score: bestScore, second, tied };
+  }
+
+  function authHeaders(extra) {
+    return Object.assign({ 'X-Admin-Key': adminKey }, extra || {});
+  }
+
+  function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str == null ? '' : String(str);
+    return div.innerHTML;
+  }
+
+  // A non-OK response (404, 422, 500...) doesn't always have the app's own {error: "..."} shape
+  // (e.g. FastAPI's default 404 is {detail: "Not Found"}) - without this, those responses were
+  // silently treated as "success with no data" instead of a visible failure.
+  async function describeHttpError(res) {
+    try {
+      const body = await res.json();
+      return body.error || body.detail || `HTTP ${res.status}`;
+    } catch (e) {
+      return `HTTP ${res.status}`;
+    }
+  }
+
+  async function verifyPassword() {
+    const pw = document.getElementById('gatePassword').value;
+    const errEl = document.getElementById('gateError');
+    errEl.textContent = '';
+    try {
+      // Its own dedicated verify route, not /admin/verify -- that endpoint is the shared login
+      // gate for six other internal admin pages, and widening it to accept this tool's key would
+      // let a contractor's key pass THEIR login screens too (revealing those pages' branding even
+      // though every actual data call there would still correctly reject the key).
+      const res = await fetch(`${API_BASE}/contractor-pdf-review/verify`, { method: 'POST', headers: authHeaders({ 'X-Admin-Key': pw }) });
+      if (res.status === 200) {
+        adminKey = pw;
+        sessionStorage.setItem('admin_key', adminKey);
+        enterDashboard();
+      } else if (res.status === 429) {
+        const data = await res.json().catch(() => ({}));
+        errEl.textContent = data.detail || 'Too many failed attempts. Try again later.';
+      } else {
+        errEl.textContent = 'Wrong password.';
+      }
+    } catch (e) {
+      errEl.textContent = 'Could not reach server.';
+    }
+  }
+
+  document.getElementById('gatePassword').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') verifyPassword();
+  });
+
+  function logout() {
+    sessionStorage.removeItem('admin_key');
+    adminKey = '';
+    document.getElementById('dashboard').style.display = 'none';
+    document.getElementById('gateOverlay').style.display = 'flex';
+    document.getElementById('gatePassword').value = '';
+  }
+
+  function enterDashboard() {
+    document.getElementById('gateOverlay').style.display = 'none';
+    document.getElementById('dashboard').style.display = 'block';
+    checkForDraftAndShowBanner();
+  }
+
+  if (adminKey) enterDashboard();
+
+  // ---------------- Subject selection + data loading ----------------
+
+  async function selectSubject(subject) {
+    currentSubject = subject;
+    document.querySelectorAll('.subject-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.subject === subject));
+    blocks = [];
+    scanFilenameMatch = null;
+    renderAllBlocks();
+    document.getElementById('summaryBar').style.display = 'none';
+    document.getElementById('flaggedPagesBanner').style.display = 'none';
+    updateScanButton();
+    clearDraft(); // a fresh subject pick discards whatever in-progress blocks it just reset
+    await loadSubjectData(subject);
+  }
+
+  // Split out of selectSubject so resumeDraft() can load a subject's chapter/classifier data
+  // without selectSubject's own blocks=[] reset wiping the blocks just restored from a draft.
+  async function loadSubjectData(subject) {
+    const scanBtn = document.getElementById('scanBtn');
+    scanBtn.disabled = true;
+
+    try {
+      const [chaptersRes, classifierRes] = await Promise.all([
+        fetch(`${API_BASE}/admin/pyq-chapters?subject=${encodeURIComponent(subject)}`, { headers: authHeaders() }),
+        fetch(`${API_BASE}/admin/pyq-classifier-data?subject=${encodeURIComponent(subject)}`, { headers: authHeaders() })
+      ]);
+      if (chaptersRes.status === 401 || classifierRes.status === 401) return logout();
+      if (!chaptersRes.ok || !classifierRes.ok) {
+        const detail = !chaptersRes.ok ? await describeHttpError(chaptersRes) : await describeHttpError(classifierRes);
+        alert('Could not load chapter/classifier data for ' + subject + ' (' + detail + ') - you can still scan, but chapter suggestions and the manual dropdown will be empty.');
+        chapterList = []; existingRows = []; classifier = buildClassifier([]);
+        updateScanButton();
+        return;
+      }
+      const chaptersData = await chaptersRes.json();
+      const classifierData = await classifierRes.json();
+      chapterList = chaptersData.chapters || [];
+      existingRows = classifierData.rows || [];
+      classifier = buildClassifier(existingRows);
+    } catch (e) {
+      alert('Could not reach the server to load chapter/classifier data for ' + subject + '.');
+      chapterList = [];
+      existingRows = [];
+      classifier = buildClassifier([]);
+    }
+    updateScanButton();
+  }
+
+  // ---------------- Auto-save / resume draft ----------------
+  // Pure safety net on top of the existing review flow -- never touches save-to-DB, parsing,
+  // or KaTeX rendering. Text/select/checkbox field edits are caught generically via event
+  // delegation on #blocksContainer (see bottom of script); structural mutations (remove/merge/
+  // split/add/scan/diagram upload) call scheduleAutoSave()/saveDraftNow() explicitly at their
+  // own call sites since those don't fire a DOM input/change event on their own.
+
+  // blocks[] only holds diagram URLs/ids/flags -- text/select/checkbox fields live in the DOM
+  // and are normally only pulled in at save time via readBlockFromDom. A draft has to capture
+  // that live DOM state too, or a resume would lose whatever's currently typed but unsaved.
+  function serializeBlocksForDraft() {
+    return blocks.map(b => {
+      const domFields = document.getElementById('q-text-' + b.id) ? readBlockFromDom(b.id) : {};
+      const merged = Object.assign({}, b, domFields);
+      // Transient/derived fields (recomputed on render) don't belong in a persisted draft.
+      Object.keys(merged).forEach(k => { if (k.startsWith('_')) delete merged[k]; });
+      return merged;
+    });
+  }
+
+  function saveDraftNow() {
+    try {
+      if (blocks.length === 0) { localStorage.removeItem(DRAFT_STORAGE_KEY); return; }
+      const draft = {
+        version: 1,
+        savedAt: Date.now(),
+        subject: currentSubject,
+        pdfFilename: currentPdfFilename,
+        processedPdfId: currentProcessedPdfId,
+        pdfQuestionsExtracted: currentPdfQuestionsExtracted,
+        blockIdSeq,
+        scanFilenameMatch,
+        inputMode,
+        blocks: serializeBlocksForDraft()
+      };
+      localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(draft));
+    } catch (e) {
+      // localStorage full or disabled (private browsing, quota exceeded, etc) -- auto-save is
+      // a convenience on top of the real save-to-DB flow, not a requirement, so fail silently
+      // rather than interrupting the admin's review work.
+    }
+  }
+
+  function clearDraft() {
+    try { localStorage.removeItem(DRAFT_STORAGE_KEY); } catch (e) {}
+  }
+
+  function scheduleAutoSave() {
+    clearTimeout(autoSaveTimer);
+    autoSaveTimer = setTimeout(saveDraftNow, 2500);
+  }
+
+  // Called right after a successful save-to-DB (per-block or bulk). Once nothing is left
+  // unsaved there's nothing worth protecting anymore, so the draft is cleared outright instead
+  // of just updated -- otherwise a stale "resume?" prompt could outlive the real save it was
+  // guarding, for a batch the admin already fully finished.
+  function clearDraftIfBatchFullySaved() {
+    if (blocks.length > 0 && blocks.every(b => b.saved)) {
+      clearDraft();
+    } else {
+      saveDraftNow();
+    }
+  }
+
+  function checkForDraftAndShowBanner() {
+    let raw;
+    try {
+      raw = localStorage.getItem(DRAFT_STORAGE_KEY);
+    } catch (e) {
+      return; // localStorage inaccessible -- nothing to offer, nothing to crash over
+    }
+    if (!raw) return;
+    let draft;
+    try {
+      draft = JSON.parse(raw);
+    } catch (e) {
+      clearDraft(); // corrupt JSON -- discard rather than error
+      return;
+    }
+    if (!draft || draft.version !== 1 || !Array.isArray(draft.blocks) || draft.blocks.length === 0) {
+      clearDraft(); // unknown/future version or empty -- start fresh rather than guess at its shape
+      return;
+    }
+    pendingDraft = draft;
+    const when = new Date(draft.savedAt).toLocaleString();
+    const count = draft.blocks.length;
+    document.getElementById('draftBannerText').textContent =
+      `Unsaved work from ${when} found (${count} question${count === 1 ? '' : 's'}${draft.subject ? ', ' + draft.subject : ''}) — Resume or Discard?`;
+    document.getElementById('draftBanner').style.display = 'flex';
+  }
+
+  async function resumeDraft() {
+    if (!pendingDraft) return;
+    const draft = pendingDraft;
+    pendingDraft = null;
+    document.getElementById('draftBanner').style.display = 'none';
+
+    currentSubject = draft.subject || null;
+    currentPdfFilename = draft.pdfFilename || null;
+    currentProcessedPdfId = draft.processedPdfId || null;
+    currentPdfQuestionsExtracted = draft.pdfQuestionsExtracted || 0;
+    blockIdSeq = draft.blockIdSeq || 0;
+    scanFilenameMatch = draft.scanFilenameMatch || null;
+    blocks = draft.blocks;
+
+    if (currentSubject) {
+      document.querySelectorAll('.subject-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.subject === currentSubject));
+    }
+    selectInputMode(draft.inputMode || 'pdf'); // absent on v1 drafts saved before Paste LaTeX mode existed -- default to the only mode that existed then
+    renderAllBlocks();
+    updateSummaryBar();
+    document.getElementById('summaryBar').style.display = blocks.length ? 'flex' : 'none';
+    updateScanButton();
+
+    if (currentSubject) {
+      await loadSubjectData(currentSubject);
+      renderAllBlocks(); // refresh chapter options/suggestions now that chapterList/classifier are loaded
+    }
+  }
+
+  function discardDraft() {
+    clearDraft();
+    pendingDraft = null;
+    document.getElementById('draftBanner').style.display = 'none';
+  }
+
+  function updateScanButton() {
+    // Piggybacked here rather than added to every call site individually -- this already runs
+    // at every point currentSubject/chapterList could have changed (selectSubject, loadSubjectData,
+    // resumeDraft), so the paste-mode button and its chapter dropdown stay in sync for free.
+    updateParseButton();
+    populatePasteChapterSelect();
+    const file = document.getElementById('pdfFile').files[0];
+    document.getElementById('scanBtn').disabled = !currentSubject || !file;
+    const hintEl = document.getElementById('scanBtnHint');
+    if (!hintEl) return;
+    if (currentSubject && file) hintEl.textContent = '';
+    else if (!currentSubject && !file) hintEl.textContent = 'Pick a subject above and choose a PDF file to enable scanning.';
+    else if (!currentSubject) hintEl.textContent = 'Pick a subject above to enable scanning.';
+    else hintEl.textContent = 'Choose a PDF file to enable scanning.';
+  }
+
+  function updateParseButton() {
+    const btn = document.getElementById('parseTextBtn');
+    if (!btn) return;
+    btn.disabled = !currentSubject;
+    const hintEl = document.getElementById('parseBtnHint');
+    if (hintEl) hintEl.textContent = currentSubject ? '' : 'Pick a subject above to enable parsing.';
+  }
+
+  // ---------------- Input mode: PDF Scan vs Paste LaTeX ----------------
+
+  function selectInputMode(mode) {
+    inputMode = mode;
+    document.querySelectorAll('.mode-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.mode === mode));
+    document.getElementById('pdfModeSection').style.display = mode === 'pdf' ? 'block' : 'none';
+    document.getElementById('pasteModeSection').style.display = mode === 'paste' ? 'block' : 'none';
+    updateScanButton(); // also refreshes the paste-mode chapter dropdown -- see its own comment
+  }
+
+  // chapterList only exists once loadSubjectData(subject) resolves; updateScanButton() (called
+  // at every point currentSubject/chapterList could change) keeps this in sync automatically.
+  function populatePasteChapterSelect() {
+    const sel = document.getElementById('pasteChapterSelect');
+    if (!sel) return;
+    const previousValue = sel.value;
+    sel.innerHTML = '<option value="">— auto-detect per question —</option>'
+      + allChaptersForSubject(currentSubject).map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
+    sel.value = previousValue; // no-ops back to "" if that chapter doesn't exist for the new subject
+  }
+
+  // ---------------- Mathpix/SimpleTex paste parsing ----------------
+  // Ported verbatim from admin-scanned-paste-parser.html (same functions, unmodified) --
+  // see that file's own comments for the reasoning behind each regex/heuristic. Kept as an
+  // exact copy rather than a shared <script src> so this page has no runtime dependency on
+  // the other admin tool ever being present/unchanged.
+
+  // Strips a couple of always-safe-to-remove LaTeX document wrappers Mathpix commonly emits
+  // around the whole paste. Anything else (itemize wrappers around JUST the options) is handled
+  // per-question inside parseQuestionChunk, since those can't be safely stripped globally.
+  function cleanupLatexWrappers(text) {
+    return text
+      .replace(/\\begin\{document\}/g, '')
+      .replace(/\\end\{document\}/g, '')
+      .replace(/\\documentclass(\[[^\]]*\])?\{[^}]*\}/g, '')
+      .trim();
+  }
+
+  // [SOURCE YEAR] tag, e.g. "[AIPMT 2007]" -- a bracket group containing a 4-digit year, NOT
+  // part of a \item[...] marker (those are option/question markers, not source tags).
+  function extractSourceTag(chunk) {
+    const re = /\[([^\[\]]*?(\d{4})[^\[\]]*)\]/g;
+    let m;
+    while ((m = re.exec(chunk)) !== null) {
+      const precedingText = chunk.slice(Math.max(0, m.index - 5), m.index);
+      if (/\\item\s*$/.test(precedingText)) continue; // this is a \item[...] marker, not a tag
+      return {
+        sourceTag: m[1].trim(),
+        year: parseInt(m[2], 10),
+        cleaned: chunk.slice(0, m.index) + chunk.slice(m.index + m[0].length)
+      };
+    }
+    return { sourceTag: null, year: null, cleaned: chunk };
+  }
+
+  // Handles BOTH option styles: inline "(A) text (B) text (C) text (D) text" and nested
+  // "\item[(A)] text \item[(B)] text ..." itemize markers.
+  function extractOptions(chunk) {
+    const nestedRe = /\\item\[\(([A-Da-d])\)\]/g;
+    const nestedMatches = [...chunk.matchAll(nestedRe)];
+    if (nestedMatches.length >= 4) {
+      // The nested style wraps its \item[(A)]... markers in \begin{itemize}...\end{itemize},
+      // which sits between the stem and the first marker -- strip it off the stem too, not
+      // just from each option's own text.
+      const stem = chunk.slice(0, nestedMatches[0].index).replace(/\\begin\{itemize\}\s*$/, '');
+      const options = { a: '', b: '', c: '', d: '' };
+      for (let i = 0; i < nestedMatches.length; i++) {
+        const letter = nestedMatches[i][1].toLowerCase();
+        const start = nestedMatches[i].index + nestedMatches[i][0].length;
+        const end = i + 1 < nestedMatches.length ? nestedMatches[i + 1].index : chunk.length;
+        let text = chunk.slice(start, end);
+        text = text.replace(/\\begin\{itemize\}|\\end\{itemize\}/g, '').trim();
+        if (options.hasOwnProperty(letter)) options[letter] = text;
+      }
+      return { stem, options };
+    }
+
+    // Inline style: marker must be preceded by whitespace/start-of-string so it doesn't fire
+    // on a parenthesized letter inside a formula (same heuristic already used in mocktest.html's
+    // (\s)(\([A-E]\)\s) line-break regex).
+    const inlineRe = /(?:^|\s)\(([A-Da-d])\)\s*/g;
+    const inlineMatches = [...chunk.matchAll(inlineRe)];
+    if (inlineMatches.length >= 4) {
+      const stem = chunk.slice(0, inlineMatches[0].index);
+      const options = { a: '', b: '', c: '', d: '' };
+      for (let i = 0; i < inlineMatches.length; i++) {
+        const letter = inlineMatches[i][1].toLowerCase();
+        const start = inlineMatches[i].index + inlineMatches[i][0].length;
+        const end = i + 1 < inlineMatches.length ? inlineMatches[i + 1].index : chunk.length;
+        if (options.hasOwnProperty(letter)) options[letter] = chunk.slice(start, end).trim();
+      }
+      return { stem, options };
+    }
+
+    // No 4-option pattern detected -- whole chunk becomes the stem, options left blank for
+    // manual entry (matches admin-pdf-review.html's "review, don't guess silently" posture).
+    return { stem: chunk, options: { a: '', b: '', c: '', d: '' } };
+  }
+
+  function parseQuestionChunk(rawChunk) {
+    const { sourceTag, year, cleaned } = extractSourceTag(rawChunk);
+    const { stem, options } = extractOptions(cleaned);
+    return {
+      question: stem.trim(),
+      option_a: options.a, option_b: options.b, option_c: options.c, option_d: options.d,
+      source_tag: sourceTag, year
+    };
+  }
+
+  function parseMathpixText(rawText) {
+    const text = cleanupLatexWrappers(rawText);
+    const boundaryRe = /\\item\[\s*\d+\.\s*\]/g;
+    const boundaries = [...text.matchAll(boundaryRe)];
+    if (boundaries.length === 0) return [];
+    const parsed = [];
+    for (let i = 0; i < boundaries.length; i++) {
+      const start = boundaries[i].index + boundaries[i][0].length;
+      const end = i + 1 < boundaries.length ? boundaries[i + 1].index : text.length;
+      parsed.push(parseQuestionChunk(text.slice(start, end)));
+    }
+    return parsed;
+  }
+
+  // SimpleTex glues options directly onto the preceding text with no separator, e.g.
+  // "...no units(B) no units and no dimensions(C)..." -- so unlike Mathpix's inline style,
+  // the marker can't be required to follow whitespace. Instead we require all four markers
+  // A,B,C,D to appear in strict order (each search starts after the previous match), which
+  // keeps this from firing on a stray "(A)"-shaped fragment inside a formula.
+  function extractOptionsSimpleTex(chunk) {
+    const idxA = chunk.indexOf('(A)');
+    const idxB = idxA === -1 ? -1 : chunk.indexOf('(B)', idxA + 3);
+    const idxC = idxB === -1 ? -1 : chunk.indexOf('(C)', idxB + 3);
+    const idxD = idxC === -1 ? -1 : chunk.indexOf('(D)', idxC + 3);
+    if (idxA === -1 || idxB === -1 || idxC === -1 || idxD === -1) {
+      return { stem: chunk, options: { a: '', b: '', c: '', d: '' } };
+    }
+    return {
+      stem: chunk.slice(0, idxA),
+      options: {
+        a: chunk.slice(idxA + 3, idxB).trim(),
+        b: chunk.slice(idxB + 3, idxC).trim(),
+        c: chunk.slice(idxC + 3, idxD).trim(),
+        d: chunk.slice(idxD + 3).trim()
+      }
+    };
+  }
+
+  // ================== Format-agnostic pipeline: mask -> repair -> detect -> split -> extract -> fallback ==================
+  // Replaces the old fixed pipe->letter->numbered priority chain with independently testable
+  // stages that auto-detect whichever delimiter pattern a given OCR dump actually uses, so a new
+  // OCR format/subject doesn't need its own bespoke patch. See test-paste-parser.js and
+  // test-fixtures/ for the regression coverage this is built to keep passing.
+
+  // ---- Stage A: math-span masking ----
+  // Everything below (whitespace repair, pattern detection, splitting) runs on `masked` text and
+  // never has to know $...$/$$...$$ exist -- replaces the old approach where every single pass
+  // had to remember to skip math spans itself.
+  // Placeholder tokens are wrapped in "@@" (plain, printable, non-whitespace) rather than
+  // spaces. A space-delimited token (' 3 ') was tried first and found broken: stems/options are
+  // routinely .trim()'d right where a math span sits at the boundary (this parser is LaTeX-heavy
+  // science content), and trim() silently eats the token's boundary space, leaving a bare digit
+  // that unmaskMathSpans' regex no longer matches -- so the math span never gets restored. "@@"
+  // can't be touched by .trim() (not whitespace), Stage B's letter<->digit boundary rule (not a
+  // letter or digit), or Stage B2's word segmenter (not a letter), so it survives everything
+  // between here and the final unmask pass intact. (An earlier attempt used actual Unicode
+  // control-character escapes for the same reason -- also correct in principle, but they kept
+  // landing in this file as raw control bytes instead of source-level escape sequences, which
+  // silently turns the file into binary as far as tools like git/grep are concerned. Plain "@@"
+  // sidesteps that risk entirely while being just as safe against collision with real content.)
+  function maskMathSpans(text) {
+    const spans = [];
+    const masked = text.replace(/\$\$[\s\S]*?\$\$|\$[^$\n]*?\$/g, m => {
+      const token = '@@' + spans.length + '@@';
+      spans.push(m);
+      return token;
+    });
+    return { masked, spans };
+  }
+  function unmaskMathSpans(text, spans) {
+    if (!text) return text;
+    return text.replace(/@@(\d+)@@/g, (_, i) => spans[Number(i)] ?? '');
+  }
+
+  // ---- Stage B1: letter<->digit boundary repair ----
+  // Re-inserts a space where a marker like "2." collided directly with adjacent prose (e.g.
+  // "givesHOCl2.Both..."), which is what actually breaks the option-splitter below. Deliberately
+  // does NOT also split on a lowercase->uppercase boundary (e.g. "wordWord" -> "word Word") --
+  // tried it, but plain-text chemical formulas outside $...$ (e.g. "SiH" in "(SiH$_3$)$_2$") hit
+  // that exact same pattern and got corrupted into "Si H" on real previously-verified paste
+  // content. Stage B2's dictionary segmenter below now owns that class of decision instead, since
+  // it only splits when both halves are real recognized words.
+  function insertBoundarySpaces(segment) {
+    return segment
+      .replace(/([a-zA-Z])(\d)/g, '$1 $2')
+      .replace(/(\d)([a-zA-Z])/g, '$1 $2');
+  }
+
+  // ---- Stage B2: dictionary word segmentation ----
+  // Compact word list, ordered roughly most-to-least common -- array index doubles as a
+  // frequency rank for the DP segmenter below (same approach as the Python "wordninja" library
+  // this is modeled on: no probabilities are estimated, position in an ordered list stands in
+  // for rank). General English first, then a NEET-specific vocabulary supplement (chemistry/
+  // physics/biology terms pulled from real exam prose seen in this parser's own fixtures) so
+  // common technical vocabulary isn't needlessly chopped. Not exhaustive by design -- an
+  // unrecognized real technical term is meant to stay fused rather than risk a wrong split; grow
+  // this list as real gaps turn up, no other code needs to change.
+  const WORD_SEGMENTATION_DICTIONARY = [
+    // -- tier 1: function/glue words (highest frequency) --
+    'the','of','and','a','i','to','in','is','it','that','was','for','on','are','as','with','his','they','at','be','this','have',
+    'from','or','one','had','by','but','not','what','all','were','when','your','can','there','use','an','each','which','she','do',
+    'how','their','if','will','up','other','about','out','many','then','them','these','so','some','her','would','make','like','him',
+    'into','time','has','look','two','more','write','go','see','no','way','could','people','my','than','first','been','who','now',
+    'find','long','down','day','did','get','made','may','part','over','new','sound','take','only','little','work','know','place',
+    'year','live','back','give','most','very','after','thing','our','just','name','good','sentence','man','think','say','great',
+    'where','help','through','much','before','line','right','too','mean','old','any','same','tell','boy','follow','came','want',
+    'show','also','around','form','three','small','set','put','end','does','another','well','large','must','big','even','such',
+    'because','turn','here','why','ask','went','men','read','need','land','different','home','us','move','try','kind','hand',
+    'picture','again','change','off','play','spell','air','away','animal','house','point','page','letter','mother','answer',
+    'found','study','still','learn','should','America','world','both','each','under','last','never','us','left','number','course',
+    'stay','since','while','during','before','after','through','without','within','across','around','toward','towards',
+    'regarding','according','due','depends','both','either','neither','whether','although','though','unless','until','once',
+    // -- tier 2: exam/academic-prose vocabulary --
+    'correct','following','statement','statements','question','questions','answer','given','below','above','among','between',
+    'order','respectively','value','values','unit','units','equal','unequal','greater','smaller','higher','lower','maximum',
+    'minimum','increase','decrease','increases','decreases','decreasing','increasing','constant','variable','direct','inverse',
+    'proportional','ratio','fraction','total','sum','result','results','reason','reasons','condition','conditions','shows','show',
+    'forms','form','contains','contain','present','absent','true','false','similar','same','none','also','only','because',
+    'therefore','however','thus','hence','since','regarding','define','defined','defines','describe','describes','described',
+    'explain','explains','identify','determine','calculate','find','obtain','represent','represents','represented','indicate',
+    'indicates','indicated','consider','considering','assume','assuming','suppose','let','required','possible','impossible',
+    'necessary','sufficient','equivalent','independent','dependent','positive','negative','neutral','stable','unstable','average',
+    'mean','median','range','graph','curve','line','lines','point','points','plane','surface','area','length','width','height',
+    'depth','distance','speed','velocity','acceleration','force','forces','mass','weight','energy','power','work','pressure',
+    'temperature','volume','density','concentration','solution','solutions','mixture','compound','compounds','element','elements',
+    'molecule','molecules','atom','atoms','electron','electrons','proton','protons','neutron','neutrons','nucleus','nuclear',
+    'orbital','orbitals','shell','shells','subshell','subshells','valence','valency','bond','bonds','bonding','ionic','covalent',
+    'metallic','polar','nonpolar','soluble','insoluble','reaction','reactions','react','reacts','product','products','reactant',
+    'reactants','catalyst','equilibrium','rate','mechanism','structure','structures','shape','shapes','geometry','hybridization',
+    'hybridisation','resonance','isomer','isomers','oxidation','reduction','acid','acids','base','bases','salt','salts','metal',
+    'metals','nonmetal','nonmetals','gas','gases','liquid','liquids','solid','solids','vapour','vapor','boiling','melting',
+    'freezing','hydrolysis','hydrolysed','hydrolyzed','dehydration','esterification','polymerization','polymerisation',
+    'fermentation','oxide','oxides','hydroxide','hydroxides','chloride','chlorides','sulphate','sulfate','sulphide','sulfide',
+    'nitrate','nitrates','carbonate','carbonates','phosphate','phosphates','ammonia','water','carbon','dioxide','monoxide',
+    'hydrogen','oxygen','nitrogen','chlorine','sulphur','sulfur','phosphorus','sodium','potassium','calcium','magnesium',
+    'aluminium','aluminum','silicon','iron','copper','zinc','silver','gold','lead','tin','mercury','bromine','iodine','fluorine',
+    'helium','neon','argon','xenon','krypton','lithium','beryllium','boron','vacant','occupied','empty','full','filled',
+    'unfilled','inert','reactive','strong','weak','high','low','large','small','big','little','short','fast','slow','hot','cold',
+    'heavy','hard','soft','smooth','rough','clear','cloudy','pure','impure','plant','plants','animal','animals','cell','cells',
+    'tissue','tissues','organ','organs','organism','organisms','species','system','systems','process','processes','function',
+    'functions','growth','development','division','reproduction','reproductive','sexual','asexual','gene','genes','genetic',
+    'chromosome','chromosomes','protein','proteins','enzyme','enzymes','hormone','hormones','blood','heart','lung','lungs',
+    'brain','nerve','nerves','muscle','muscles','bone','bones','skin','digestion','digestive','excretion','excretory',
+    'circulation','circulatory','respiration','respiratory','transpiration','translocation','germination','pollination',
+    'fertilization','fertilisation','mitosis','meiosis','replication','transcription','translation','mutation','mutations',
+    'variation','variations','evolution','natural','selection','adaptation','adaptations','ecosystem','ecosystems','population',
+    'populations','community','communities','habitat','habitats','environment','environmental','photosynthesis','chlorophyll',
+    'stomata','xylem','phloem','root','roots','stem','stems','leaf','leaves','flower','flowers','fruit','fruits','seed','seeds',
+    'embryo','zygote','gamete','gametes','sperm','ovum','ovary','testis','uterus','placenta','vitamin','vitamins','mineral',
+    'minerals','deficiency','disease','diseases','infection','immune','immunity','antibody','antibodies','antigen','bacteria',
+    'bacterial','virus','viral','fungus','fungal','parasite','host','symbiosis','nuclear','cytoplasm','membrane','mitochondria',
+    'mitochondrion','ribosome','ribosomes','chloroplast','chloroplasts','vacuole','lysosome','amino','peptide','carbohydrate',
+    'carbohydrates','lipid','lipids','glucose','fructose','sucrose','starch','cellulose','fatty','triglyceride','isoelectronic',
+    'electronegativity','electropositivity','ionization','ionisation','affinity','enthalpy','entropy','thermodynamics',
+    'stoichiometry','periodic','table','group','period','series','wavelength','frequency','amplitude','wave','waves','current',
+    'voltage','resistance','circuit','magnetic','electric','field','charge','charges','capacitor','inductor','resistor','motion',
+    'displacement','momentum','impulse','friction','gravity','gravitational','kinetic','potential','thermal','heat','specific',
+    'latent','refraction','reflection','diffraction','interference','polarization','lens','mirror','image','object','focal',
+    'earth','moon','sun','planet','planets','satellite','satellites','orbit','orbits','star','stars','universe','space','vacuum',
+    'air','wind','sound','sunlight','day','days','night','season','seasons','weather','climate','approximately','roughly',
+    'nearly','almost','exactly','precisely','equation','equations','formula','formulas','expression','expressions','function',
+    'functions','proportionality','conservation','collision','collisions','projectile','trajectory','vector','vectors','scalar',
+    'scalars','magnitude','direction','component','components','uniform','nonuniform','accelerated','instantaneous','average',
+    'apparent','real','virtual','converging','diverging','concave','convex','plano','normal','incident','emergent','critical',
+    'total','internal','dispersion','spectrum','photon','photons','quantum','radioactive','radioactivity','decay','isotope',
+    'isotopes','nuclide','fission','fission','fusion','half','life','binding','mass','defect','semiconductor','conductor',
+    'insulator','diode','transistor','rectifier','amplifier','oscillator','transformer','generator','motor','battery','cell',
+    'cells','emf','ohm','ohms','ampere','volt','watt','joule','newton','pascal','kelvin','celsius','fahrenheit','degree',
+    'degrees','radian','radians','steradian','coulomb','tesla','henry','farad','weber',
+    // -- tier 3: single-letter chemistry orbital labels (scoped, deliberate exception -- see segmentWord) --
+    's','p','d','f',
+  ];
+  const WORD_SEGMENTATION_RANK = new Map(WORD_SEGMENTATION_DICTIONARY.map((w, i) => [w, i]));
+  const MAX_SEGMENT_WORD_LEN = 20; // no dictionary entry above is longer than this; bounds the DP's inner loop
+
+  function wordSegmentationCost(word) {
+    const rank = WORD_SEGMENTATION_RANK.get(word.toLowerCase());
+    return rank === undefined ? null : Math.log(rank + 2);
+  }
+
+  // Viterbi/DP word segmentation (wordninja-style): finds the split of `run` into dictionary
+  // words that minimizes total cost, favoring fewer/more-common words over many rare fragments.
+  // Returns null -- not a partial guess -- if no split exists that fully covers `run` using only
+  // recognized dictionary words. Failing closed here is deliberate: this is only ever used to ADD
+  // spaces, and a wrong guess on real exam vocabulary not in the dictionary (e.g. silently
+  // chopping "isoelectronic" into garbage) is worse than leaving a fused run untouched.
+  function segmentWord(run) {
+    const n = run.length;
+    if (n === 0) return [];
+    const costs = new Array(n + 1).fill(Infinity);
+    const splits = new Array(n + 1).fill(-1);
+    costs[0] = 0;
+    for (let i = 1; i <= n; i++) {
+      for (let j = Math.max(0, i - MAX_SEGMENT_WORD_LEN); j < i; j++) {
+        if (costs[j] === Infinity) continue;
+        const cost = wordSegmentationCost(run.slice(j, i));
+        if (cost === null) continue;
+        const total = costs[j] + cost;
+        if (total < costs[i]) { costs[i] = total; splits[i] = j; }
+      }
+    }
+    if (costs[n] === Infinity) return null;
+    const words = [];
+    let i = n;
+    while (i > 0) { const j = splits[i]; words.unshift(run.slice(j, i)); i = j; }
+    return words;
+  }
+
+  // Applies segmentWord to every maximal alphabetic run that's either long (>=12 chars, per the
+  // reported "fused whitespace" bug) or contains an internal lower->upper case transition -- the
+  // class of bug that blindly splitting on case alone used to corrupt (see the SiH regression
+  // above). Safe here because segmentWord requires BOTH halves to be real dictionary words before
+  // accepting any split, so "SiH" stays untouched (neither "Si" nor "H" alone is a recognized
+  // word) while a genuine run-on like "hasnovacantd" (has+no+vacant+d) still splits.
+  function segmentFusedRuns(text) {
+    return text.replace(/[a-zA-Z]+/g, run => {
+      const hasCaseTransition = /[a-z][A-Z]/.test(run);
+      if (run.length < 12 && !hasCaseTransition) return run;
+      const words = segmentWord(run);
+      if (!words || words.length < 2) return run;
+      return words.join(' ');
+    });
+  }
+
+  // ---- Stage C: pattern detection ----
+  // Counts how many COMPLETE, in-order marker cycles exist in `text` for a 4-marker family (one
+  // full (A)->(B)->(C)->(D) cycle = one question's worth of that style). Generalizes the
+  // indexOf-chain approach already used by extractOptionsSimpleTex/extractOptionsNumbered below.
+  function countSequentialQuadruples(text, markers) {
+    let count = 0;
+    let cursor = 0;
+    for (;;) {
+      let cycleEnd = cursor;
+      let ok = true;
+      for (const marker of markers) {
+        const idx = text.indexOf(marker, cycleEnd);
+        if (idx === -1) { ok = false; break; }
+        cycleEnd = idx + marker.length;
+      }
+      if (!ok) break;
+      count++;
+      cursor = cycleEnd;
+    }
+    return count;
+  }
+
+  // Scores every candidate delimiter pattern against a chunk of text and returns the winner --
+  // "whichever pattern has the most consistent, repeated matches", not a fixed priority order.
+  // Ties fall back to a fixed order (pipe > letter > numbered > table) only as a last resort, not
+  // as the primary mechanism -- pipe and letter markers can't collide with ordinary prose the way
+  // bare "1."/"2." numbers occasionally can, so they're the more trustworthy tie-break default.
+  function detectPatterns(text) {
+    const pipeCount = (text.match(/\|\|/g) || []).length;
+    const scores = {
+      pipe: Math.floor(pipeCount / 4), // "stem || A || B || C || D" = 4 pipes per question
+      letter: countSequentialQuadruples(text, ['(A)', '(B)', '(C)', '(D)']),
+      numbered: countSequentialQuadruples(text, ['1.', '2.', '3.', '4.']),
+      table: pipeCount === 0 ? Math.floor((text.match(/\|/g) || []).length / 5) : 0, // "| stem | A | B | C | D |" = 5 single pipes; only meaningful when no "||" at all
+    };
+    let winner = null, best = 0;
+    for (const key of ['pipe', 'letter', 'numbered', 'table']) {
+      if (scores[key] > best) { best = scores[key]; winner = key; }
+    }
+    return { scores, winner };
+  }
+
+  // Some SimpleTex exports delimit a question with "||" instead of any marker at all, e.g.
+  // "stem || option A || option B || option C || option D". Requires at least 5 non-empty
+  // segments (stem + 4) -- anything short of that isn't this format.
+  function splitByPipeDelimiter(chunk) {
+    if (!chunk.includes('||')) return null;
+    const parts = chunk.split(/\|\|/).map(s => s.trim()).filter(s => s.length > 0);
+    if (parts.length < 5) return null;
+    return { stem: parts[0], options: { a: parts[1], b: parts[2], c: parts[3], d: parts[4] } };
+  }
+
+  // A single markdown table row: "| stem | opt A | opt B | opt C | opt D |". Only attempted when
+  // there's no "||" at all in the chunk (a "||" block is handled by the pipe tier above instead --
+  // both use pipe characters, so this keeps the two from overlapping/double-matching).
+  function splitByTableRow(chunk) {
+    if (chunk.includes('||') || !chunk.includes('|')) return null;
+    const parts = chunk.split('|').map(s => s.trim()).filter(s => s.length > 0);
+    if (parts.length < 5) return null;
+    return { stem: parts[0], options: { a: parts[1], b: parts[2], c: parts[3], d: parts[4] } };
+  }
+
+  // Numbered-marker sibling of extractOptionsSimpleTex below -- same indexOf-chain approach
+  // (strict 1-then-2-then-3-then-4 order), same accepted risk of a false hit on a decimal that
+  // happens to contain all four digit-dot substrings in order, which is rare enough in practice
+  // to not be worth a heavier boundary-anchored regex.
+  function extractOptionsNumbered(chunk) {
+    const idx1 = chunk.indexOf('1.');
+    const idx2 = idx1 === -1 ? -1 : chunk.indexOf('2.', idx1 + 2);
+    const idx3 = idx2 === -1 ? -1 : chunk.indexOf('3.', idx2 + 2);
+    const idx4 = idx3 === -1 ? -1 : chunk.indexOf('4.', idx3 + 2);
+    if (idx1 === -1 || idx2 === -1 || idx3 === -1 || idx4 === -1) {
+      return { stem: chunk, options: { a: '', b: '', c: '', d: '' } };
+    }
+    return {
+      stem: chunk.slice(0, idx1),
+      options: {
+        a: chunk.slice(idx1 + 2, idx2).trim(),
+        b: chunk.slice(idx2 + 2, idx3).trim(),
+        c: chunk.slice(idx3 + 2, idx4).trim(),
+        d: chunk.slice(idx4 + 2).trim()
+      }
+    };
+  }
+
+  // SimpleTex glues options directly onto the preceding text with no separator, e.g.
+  // "...no units(B) no units and no dimensions(C)..." -- so unlike Mathpix's inline style,
+  // the marker can't be required to follow whitespace. Instead we require all four markers
+  // A,B,C,D to appear in strict order (each search starts after the previous match), which
+  // keeps this from firing on a stray "(A)"-shaped fragment inside a formula.
+  function extractOptionsSimpleTex(chunk) {
+    const idxA = chunk.indexOf('(A)');
+    const idxB = idxA === -1 ? -1 : chunk.indexOf('(B)', idxA + 3);
+    const idxC = idxB === -1 ? -1 : chunk.indexOf('(C)', idxB + 3);
+    const idxD = idxC === -1 ? -1 : chunk.indexOf('(D)', idxC + 3);
+    if (idxA === -1 || idxB === -1 || idxC === -1 || idxD === -1) {
+      return { stem: chunk, options: { a: '', b: '', c: '', d: '' } };
+    }
+    return {
+      stem: chunk.slice(0, idxA),
+      options: {
+        a: chunk.slice(idxA + 3, idxB).trim(),
+        b: chunk.slice(idxB + 3, idxC).trim(),
+        c: chunk.slice(idxC + 3, idxD).trim(),
+        d: chunk.slice(idxD + 3).trim()
+      }
+    };
+  }
+
+  // ---- Stage E: option extraction per chunk ----
+  // Runs detectPatterns on the isolated chunk and tries the winning pattern's own extractor
+  // first. If that specific extractor doesn't actually validate (rare -- the count-based score
+  // found candidate markers but they didn't resolve into a clean stem+4-options shape), every
+  // extractor is tried once as a safety net -- functionally the old fixed cascade, now used only
+  // as a fallback net rather than the primary mechanism, so nothing that passed before stops
+  // passing now.
+  function extractOptionsByDetectedPattern(chunk) {
+    const { winner } = detectPatterns(chunk);
+    if (winner === 'pipe') {
+      const r = splitByPipeDelimiter(chunk);
+      if (r) return { stem: r.stem, options: r.options, confidence: 'delimiter', detected_pattern: 'pipe' };
+    } else if (winner === 'letter') {
+      const r = extractOptionsSimpleTex(chunk);
+      if (r.options.a && r.options.b && r.options.c && r.options.d) return { stem: r.stem, options: r.options, confidence: 'marker', detected_pattern: 'letter' };
+    } else if (winner === 'numbered') {
+      const r = extractOptionsNumbered(chunk);
+      if (r.options.a && r.options.b && r.options.c && r.options.d) return { stem: r.stem, options: r.options, confidence: 'marker', detected_pattern: 'numbered' };
+    } else if (winner === 'table') {
+      const r = splitByTableRow(chunk);
+      if (r) return { stem: r.stem, options: r.options, confidence: 'delimiter', detected_pattern: 'table' };
+    }
+    const pipe = splitByPipeDelimiter(chunk);
+    if (pipe) return { stem: pipe.stem, options: pipe.options, confidence: 'delimiter', detected_pattern: 'pipe' };
+    const letters = extractOptionsSimpleTex(chunk);
+    if (letters.options.a && letters.options.b && letters.options.c && letters.options.d) return { stem: letters.stem, options: letters.options, confidence: 'marker', detected_pattern: 'letter' };
+    const numbered = extractOptionsNumbered(chunk);
+    if (numbered.options.a && numbered.options.b && numbered.options.c && numbered.options.d) return { stem: numbered.stem, options: numbered.options, confidence: 'marker', detected_pattern: 'numbered' };
+    const table = splitByTableRow(chunk);
+    if (table) return { stem: table.stem, options: table.options, confidence: 'delimiter', detected_pattern: 'table' };
+    return { stem: chunk, options: { a: '', b: '', c: '', d: '' }, confidence: null, detected_pattern: null };
+  }
+
+  // ---- Stage D: question-boundary splitting ----
+  // A flattened markdown table (one row per question, each row itself "| stem | opt1 | opt2 |
+  // opt3 | opt4 |") loses its row-boundary newlines when pasted, so consecutive rows' pipes run
+  // together into "...opt4 || 159. next stem...". Naively treating EVERY "||" in a chunk as an
+  // option separator (splitByPipeDelimiter above) can't tell a row boundary from an option
+  // boundary and silently swallows every question after the first 4 options into nothing --
+  // this is what caused the 183->19 regression. The fix: "||" immediately followed by a question
+  // number ("158.", "159.", ...) is specifically a NEW QUESTION boundary, never an option
+  // boundary, so it's split on first, before any per-question option extraction happens. The
+  // lookahead keeps the number out of the match itself so it stays part of the next question's
+  // own text ("keeping the number as part of the new question's text").
+  function splitIntoQuestionChunksByPipe(text) {
+    const boundaryRe = /\|\|\s*(?=\d+\.)/g;
+    const boundaries = [...text.matchAll(boundaryRe)];
+    if (boundaries.length === 0) return null;
+    const chunks = [];
+    const leading = text.slice(0, boundaries[0].index).trim();
+    if (leading) chunks.push(leading); // text before the first "||N." boundary is still a question (usually the first one in the blob)
+    for (let i = 0; i < boundaries.length; i++) {
+      const start = boundaries[i].index + boundaries[i][0].length;
+      const end = i + 1 < boundaries.length ? boundaries[i + 1].index : text.length;
+      const piece = text.slice(start, end).trim();
+      if (piece) chunks.push(piece);
+    }
+    return chunks;
+  }
+
+  // Given a list of already question-boundary-split chunks, extracts each one independently via
+  // Stage E (its own remaining "||" separators, then letters, then numbers, then table row). A
+  // chunk that still can't be split is emitted with blank options (tagged 'fallback') rather than
+  // dropped, matching the "never silently lose a question" posture used elsewhere in this parser.
+  function extractQuestionsFromChunks(chunks, chapter) {
+    const results = [];
+    for (const rawChunk of chunks) {
+      const { sourceTag, year, cleaned } = extractSourceTag(rawChunk);
+      const { stem, options, confidence, detected_pattern } = extractOptionsByDetectedPattern(cleaned);
+      if (options.a && options.b && options.c && options.d) {
+        results.push({ question: stem.trim(), option_a: options.a, option_b: options.b, option_c: options.c, option_d: options.d, source_tag: sourceTag, year, parse_confidence: confidence, detected_pattern, chapter });
+      } else {
+        results.push({ question: cleaned.trim(), option_a: '', option_b: '', option_c: '', option_d: '', source_tag: sourceTag, year, parse_confidence: 'fallback', detected_pattern: null, chapter });
+      }
+    }
+    return results;
+  }
+
+  // SimpleTex sometimes emits the trailing [SOURCE YEAR] tag as its own markdown header
+  // line, e.g. "# [AIPMT Canceled 2015]", instead of plain bracket text. Normalize those
+  // away to plain "[...]" BEFORE paragraph-splitting so they're treated as an ordinary
+  // trailing tag rather than mistaken for a real chapter header.
+  function normalizeSimpleTexHeaders(rawText) {
+    return rawText.replace(/^[ \t]*#{1,6}[ \t]+(\[[^\[\]]*\])[ \t]*$/gm, '$1');
+  }
+
+  // ---- Stage F: positional fallback ----
+  // Only ever sees "leftover" paragraphs that already failed Stages B-E, each carrying the
+  // chapter that was active around it in the main pipeline loop (see parseSimpleTexPipeline) --
+  // header paragraphs themselves never reach here, they're fully handled by the main loop, so
+  // this function doesn't need its own header-tracking pass over a document it only sees a
+  // scattered subset of. A run of 5 leftover entries (stem + 4) is grouped purely by position,
+  // guarded against grabbing a pseudo-header/next-question's-stem/self-contained-numbered-stem as
+  // a bogus option -- same heuristics as before. Anything that doesn't fit a clean run is still
+  // emitted with blank options, never silently dropped.
+  function groupLeftoverParagraphsPositionally(leftover) {
+    function isHeader(p) { return /^#{1,6}\s+(.*)$/.test(p.split('\n')[0].trim()); }
+    function isSourceTagOnly(p) { return /^\[[^\[\]]*\d{4}[^\[\]]*\]$/.test(p); }
+    function isPseudoSectionHeader(p) {
+      const line = p.split('\n')[0].trim();
+      return /^Level\s+(I{1,3}|IV)$/i.test(line) || /[\s\-–]Level\s+(I{1,3}|IV)\s*$/i.test(line);
+    }
+    function endsLikeStem(p) { return /[:\-–—?]$/.test(p.trim()); }
+    function looksSelfContained(p) { return /(?:^|[\s\-:])[1-4]\.\s*\S.*(?:^|[\s\-:])[1-4]\.\s*\S/s.test(p); }
+
+    const parsed = [];
+    let i = 0;
+    while (i < leftover.length) {
+      const entry = leftover[i];
+      const p = entry.text;
+      if (isSourceTagOnly(p) || isPseudoSectionHeader(p)) { i++; continue; }
+
+      const candidateOptions = leftover.slice(i + 1, i + 5);
+      const canGroup = candidateOptions.length === 4
+        && !looksSelfContained(p)
+        && candidateOptions.every(e => !isHeader(e.text) && !isSourceTagOnly(e.text) && !isPseudoSectionHeader(e.text) && !endsLikeStem(e.text) && e.text.length > 0 && e.text.length < 300);
+
+      if (canGroup) {
+        const { sourceTag, year, cleaned: stemCleaned } = extractSourceTag(p);
+        let tag = sourceTag, yr = year, consumed = 5;
+        const next = leftover[i + 5];
+        if (!tag && next && isSourceTagOnly(next.text)) {
+          const t = extractSourceTag(next.text);
+          tag = t.sourceTag; yr = t.year;
+          consumed = 6;
+        }
+        parsed.push({
+          question: stemCleaned.trim(),
+          option_a: candidateOptions[0].text.trim(), option_b: candidateOptions[1].text.trim(),
+          option_c: candidateOptions[2].text.trim(), option_d: candidateOptions[3].text.trim(),
+          source_tag: tag, year: yr, chapter: entry.chapter, parse_confidence: 'fallback', detected_pattern: 'position'
+        });
+        i += consumed;
+      } else {
+        parsed.push({ question: p.trim(), option_a: '', option_b: '', option_c: '', option_d: '', source_tag: null, year: null, chapter: entry.chapter, parse_confidence: 'fallback', detected_pattern: null });
+        i++;
+      }
+    }
+    return parsed;
+  }
+
+  function unmaskQuestionFields(q, spans) {
+    return Object.assign({}, q, {
+      question: unmaskMathSpans(q.question, spans),
+      option_a: unmaskMathSpans(q.option_a, spans),
+      option_b: unmaskMathSpans(q.option_b, spans),
+      option_c: unmaskMathSpans(q.option_c, spans),
+      option_d: unmaskMathSpans(q.option_d, spans),
+      chapter: q.chapter ? unmaskMathSpans(q.chapter, spans) : q.chapter,
+      source_tag: q.source_tag ? unmaskMathSpans(q.source_tag, spans) : q.source_tag,
+    });
+  }
+
+  // ---- The pipeline itself ----
+  // Paragraphs (blank-line separated) are the only structural signal SimpleTex gives us, but
+  // OCR line-wrapping often lands a single question's option list across MULTIPLE paragraphs
+  // (one or two options per paragraph) rather than one clean block. We accumulate paragraphs
+  // into a buffer until all 4 options are found, then flush immediately -- this both handles
+  // the multi-paragraph option list AND stops a stray explanation bullet that reuses
+  // "(A)/(B)/(C)/(D)" as a generic label from gluing onto an already-finished question.
+  // A buffer is never *started* from a paragraph that itself opens with an option marker --
+  // a real question stem never does, so that's always an orphaned fragment (leaked-in
+  // explanation text) worth dropping silently, per the "don't auto-match solutions" requirement.
+  //
+  // Fallback is a behavioral improvement over the old two-function design, not just a refactor:
+  // previously the positional grouper only ran when the WHOLE document parsed zero questions via
+  // markers, so a paragraph that failed to resolve in an otherwise-successful document (e.g. a
+  // self-contained numbered-in-stem paragraph like "...is: 1. ... 2. ... 3. ... 4. ...") was
+  // silently dropped instead of getting a real shot at Stage F. Now every unresolved paragraph is
+  // collected into `leftover` and always gets that shot, once, at the end.
+  function parseSimpleTexPipeline(rawText) {
+    const { masked, spans } = maskMathSpans(rawText);
+    const spaced = insertBoundarySpaces(masked);
+    const segmented = segmentFusedRuns(spaced);
+    const normalized = normalizeSimpleTexHeaders(segmented.replace(/\r\n/g, '\n'));
+    const paragraphs = normalized.split(/\n\s*\n+/).map(p => p.trim()).filter(Boolean);
+
+    function tryExtract(text) {
+      const { sourceTag, year, cleaned } = extractSourceTag(text);
+      const { stem, options, confidence, detected_pattern } = extractOptionsByDetectedPattern(cleaned);
+      if (!options.a || !options.b || !options.c || !options.d) return null;
+      return { question: stem.trim(), option_a: options.a, option_b: options.b, option_c: options.c, option_d: options.d, source_tag: sourceTag, year, parse_confidence: confidence, detected_pattern };
+    }
+
+    // How many of A,B,C,D have been found so far, in strict order -- used to gate whether
+    // an incoming option-marker paragraph is really the NEXT option of the question being
+    // accumulated, or an unrelated fragment (e.g. an explanation snippet elsewhere in the
+    // document that happens to open with "(C)" as a generic label) that shouldn't be glued on.
+    function optionProgress(text) {
+      const idxA = text.indexOf('(A)');
+      if (idxA === -1) return 0;
+      const idxB = text.indexOf('(B)', idxA + 3);
+      if (idxB === -1) return 1;
+      const idxC = text.indexOf('(C)', idxB + 3);
+      if (idxC === -1) return 2;
+      const idxD = text.indexOf('(D)', idxC + 3);
+      if (idxD === -1) return 3;
+      return 4;
+    }
+
+    const parsed = [];
+    const leftover = []; // { text, chapter } -- paragraphs that never resolved via B-E, given one shot at Stage F below
+    let currentChapter = '';
+    let buffer = [];
+    let bufferChapter = '';
+
+    function flush() {
+      if (buffer.length === 0) return;
+      const result = tryExtract(buffer.join('\n\n'));
+      if (result) {
+        parsed.push(Object.assign(result, { chapter: bufferChapter }));
+      } else {
+        for (const p of buffer) leftover.push({ text: p, chapter: bufferChapter });
+      }
+      buffer = [];
+    }
+
+    for (let i = 0; i < paragraphs.length; i++) {
+      const para = paragraphs[i];
+      const headerMatch = para.split('\n')[0].trim().match(/^#{1,6}\s+(.*)$/);
+      if (headerMatch) {
+        flush();
+        currentChapter = headerMatch[1].trim();
+        continue;
+      }
+
+      // A single paragraph can itself be an entire flattened multi-question blob (Stage D) --
+      // catching that HERE, before it ever reaches the single-question buffer/leadMatch flow
+      // below, is what stops it from being swallowed as one bogus question (the 183->19
+      // regression). Only acts when there's more than one boundary; a single "||N." or none at
+      // all just falls through to the existing per-paragraph handling further down, unchanged.
+      const pipeQuestionChunks = splitIntoQuestionChunksByPipe(para);
+      if (pipeQuestionChunks && pipeQuestionChunks.length > 1) {
+        flush(); // whatever was accumulating is unrelated to this self-contained blob
+        parsed.push(...extractQuestionsFromChunks(pipeQuestionChunks, currentChapter));
+        continue;
+      }
+
+      const leadMatch = para.match(/^\(([A-D])\)/);
+      if (buffer.length > 0 && leadMatch) {
+        const expectedLetter = 'ABCD'[optionProgress(buffer.join('\n\n'))];
+        if (leadMatch[1] !== expectedLetter) continue; // not the next option in sequence -- orphaned fragment, intentionally dropped
+        buffer.push(para);
+      } else if (!leadMatch) {
+        flush();
+        buffer = [para];
+        bufferChapter = currentChapter;
+      } else {
+        continue; // orphaned option-marker paragraph with no preceding stem -- intentionally dropped
+      }
+
+      if (tryExtract(buffer.join('\n\n'))) {
+        // The "[SOURCE YEAR]" tag sometimes lands in its own trailing paragraph right
+        // after the options -- greedily fold it in before flushing so it isn't lost.
+        const next = paragraphs[i + 1];
+        if (next && /^\[[^\[\]]*\d{4}[^\[\]]*\]$/.test(next.trim())) {
+          buffer.push(next);
+          i++;
+        }
+        flush();
+      }
+    }
+    flush();
+
+    parsed.push(...groupLeftoverParagraphsPositionally(leftover));
+
+    return parsed.map(q => unmaskQuestionFields(q, spans));
+  }
+
+  // Feeds parsed questions into this page's EXISTING block model/render pipeline -- same
+  // blockTemplate, same KaTeX preview, same save flow as a PDF scan. Only the block
+  // construction differs from scanPdf()'s own mapping: source_tag/chapter come from the
+  // parsed text instead of being blank, since Claude Vision extraction never had those to give.
+  function parsePastedTextIntoBlocks() {
+    const raw = document.getElementById('pasteTextarea').value;
+    const hintEl = document.getElementById('parseHint');
+    if (!currentSubject) { hintEl.textContent = 'Pick a subject first.'; hintEl.style.color = '#ef4444'; return; }
+    if (!raw.trim()) { hintEl.textContent = 'Paste some Mathpix or SimpleTex text first.'; hintEl.style.color = '#ef4444'; return; }
+    // Mathpix's \item[N.] marker is unambiguous and already has its own dedicated, unchanged
+    // parser -- it doesn't go through the format-agnostic pipeline below, which exists
+    // specifically for the SimpleTex side, where every real-world format variation has shown up.
+    const isMathpix = /\\item\[/.test(raw);
+    const parsedQuestions = isMathpix ? parseMathpixText(raw) : parseSimpleTexPipeline(raw);
+    if (parsedQuestions.length === 0) {
+      hintEl.textContent = isMathpix
+        ? 'No \\item[N.] question markers found -- check the pasted text matches the expected Mathpix format.'
+        : 'No questions detected -- check the pasted text has recognizable question/option structure.';
+      hintEl.style.color = '#ef4444';
+      return;
+    }
+    // A manually-picked chapter (see populatePasteChapterSelect) applies to every question in this
+    // paste, overriding any per-question guess -- a real paste is normally all one chapter/topic
+    // anyway, and this sidesteps relying on "# Chapter" headers being present/correct at all.
+    const manualChapter = document.getElementById('pasteChapterSelect').value || null;
+    blocks = parsedQuestions.map(q => ({
+      id: 'b' + (blockIdSeq++),
+      question: q.question, option_a: q.option_a, option_b: q.option_b, option_c: q.option_c, option_d: q.option_d,
+      correct_answer: '', question_type: 'mcq',
+      has_diagram: false, diagram_url: null,
+      option_a_diagram_url: null, option_b_diagram_url: null, option_c_diagram_url: null, option_d_diagram_url: null,
+      year: q.year, source_tag: q.source_tag || '', source_page: null, display_number: null,
+      chapter: manualChapter || q.chapter || null, // manual pick (if any) wins over a per-question "# Chapter Name" header guess -- see buildChapterOptionsHtml/applyChapterHint
+      parse_confidence: q.parse_confidence || null, // 'marker' | 'delimiter' | 'fallback' | null (Mathpix) -- see blockTemplate's badge
+      detected_pattern: q.detected_pattern || null, // 'pipe' | 'letter' | 'numbered' | 'table' | 'position' | null -- which Stage C/D winner produced this question, for the badge tooltip + summary below
+      saved: false, savePending: false
+    }));
+    scanFilenameMatch = null; // no filename to match chapters against in paste mode
+    currentPdfFilename = null;
+    currentProcessedPdfId = null;
+    document.getElementById('statPageCount').textContent = '—'; // "pages" doesn't apply to pasted text
+    renderAllBlocks();
+    updateSummaryBar();
+    document.getElementById('summaryBar').style.display = 'flex';
+    document.getElementById('flaggedPagesBanner').style.display = 'none';
+    const missingOptions = blocks.filter(b => !b.option_a && !b.option_b && !b.option_c && !b.option_d).length;
+    const fallbackCount = blocks.filter(b => b.parse_confidence === 'fallback').length;
+    const formatLabel = isMathpix ? 'Mathpix' : 'SimpleTex';
+    // Pattern-mix breakdown instead of a flat count -- e.g. "30 numbered, 8 pipe-delimited, 4
+    // flagged for review" -- so the admin sees the shape of the whole paste before opening a
+    // single card. Counted from detected_pattern (not parse_confidence) so "letter"/"numbered"
+    // (both tagged 'marker' confidence) show up as distinct, informative buckets.
+    const patternLabels = { pipe: 'pipe-delimited', letter: 'lettered (A)(B)(C)(D)', numbered: 'numbered 1.2.3.4', table: 'table-row', position: 'position-grouped' };
+    const patternCounts = {};
+    blocks.forEach(b => { const key = b.detected_pattern || 'unrecognized'; patternCounts[key] = (patternCounts[key] || 0) + 1; });
+    const patternSummary = Object.keys(patternCounts)
+      .filter(k => k !== 'unrecognized')
+      .map(k => `${patternCounts[k]} ${patternLabels[k] || k}`)
+      .join(', ');
+    hintEl.style.color = fallbackCount ? '#f97316' : '#4ade80';
+    hintEl.textContent = `Parsed ${blocks.length} question(s) as ${formatLabel} format` + (patternSummary ? ` — ${patternSummary}` : '') + '.'
+      + (fallbackCount ? ` ${fallbackCount} flagged ⚠ Needs review -- check those first.` : '')
+      + (missingOptions ? ` ${missingOptions} had no options detected -- fill those in manually.` : '');
+    saveDraftNow(); // a fresh parse just replaced the whole batch -- worth persisting right away, same as scanPdf()
+  }
+
+  // ---------------- TF-IDF chapter/class suggestion ----------------
+
+  function tokenize(text) {
+    return (text || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter(w => w.length > 1);
+  }
+
+  function buildClassifier(rows) {
+    const chapterDocs = new Map();
+    const docFreq = new Map();
+    const chapterClassCounts = new Map();
+    const labeledRows = rows.filter(r => r.chapter);
+
+    labeledRows.forEach(row => {
+      const tokens = tokenize(row.question);
+      new Set(tokens).forEach(w => docFreq.set(w, (docFreq.get(w) || 0) + 1));
+      if (!chapterDocs.has(row.chapter)) chapterDocs.set(row.chapter, []);
+      chapterDocs.get(row.chapter).push(tokens);
+      if (!chapterClassCounts.has(row.chapter)) chapterClassCounts.set(row.chapter, {});
+      if (row.class != null) {
+        const counts = chapterClassCounts.get(row.chapter);
+        counts[row.class] = (counts[row.class] || 0) + 1;
+      }
+    });
+
+    const totalDocs = labeledRows.length;
+    const idf = new Map();
+    docFreq.forEach((df, word) => idf.set(word, Math.log((totalDocs + 1) / (df + 1)) + 1));
+
+    const chapterVectors = new Map();
+    chapterDocs.forEach((docsList, chapter) => {
+      const tf = new Map();
+      docsList.forEach(tokens => tokens.forEach(w => tf.set(w, (tf.get(w) || 0) + 1)));
+      const vec = new Map();
+      tf.forEach((count, word) => vec.set(word, count * (idf.get(word) || 0)));
+      chapterVectors.set(chapter, vec);
+    });
+
+    return { chapterVectors, idf, chapterClassCounts, totalDocs };
+  }
+
+  function vectorize(tokens, idf) {
+    const tf = new Map();
+    tokens.forEach(w => tf.set(w, (tf.get(w) || 0) + 1));
+    const vec = new Map();
+    tf.forEach((count, word) => { if (idf.has(word)) vec.set(word, count * idf.get(word)); });
+    return vec;
+  }
+
+  function cosineSim(vecA, vecB) {
+    let dot = 0, normA = 0, normB = 0;
+    vecA.forEach((val, key) => { normA += val * val; if (vecB.has(key)) dot += val * vecB.get(key); });
+    vecB.forEach(val => { normB += val * val; });
+    if (normA === 0 || normB === 0) return 0;
+    return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+  }
+
+  function suggestChapters(clf, questionText, topN) {
+    if (!clf || clf.totalDocs === 0) return [];
+    const qVec = vectorize(tokenize(questionText), clf.idf);
+    const scores = [];
+    clf.chapterVectors.forEach((vec, chapter) => scores.push({ chapter, score: cosineSim(qVec, vec) }));
+    scores.sort((a, b) => b.score - a.score);
+    return scores.slice(0, topN);
+  }
+
+  function suggestClass(clf, chapter) {
+    if (!clf) return null;
+    const counts = clf.chapterClassCounts.get(chapter);
+    if (!counts) return null;
+    let best = null, bestCount = 0, total = 0;
+    Object.keys(counts).forEach(cls => {
+      total += counts[cls];
+      if (counts[cls] > bestCount) { bestCount = counts[cls]; best = cls; }
+    });
+    if (!best || total < 3) return null;
+    return best;
+  }
+
+  function getChapterSuggestion(clf, questionText) {
+    if (!clf || clf.totalDocs < MIN_SUBJECT_ROWS_FOR_SUGGESTION) return { confident: false, suggestions: [] };
+    const ranked = suggestChapters(clf, questionText, 3);
+    if (ranked.length === 0 || ranked[0].score < MIN_CONFIDENCE_SCORE) return { confident: false, suggestions: ranked };
+    return { confident: true, suggestions: ranked };
+  }
+
+  // ---------------- Duplicate detection ----------------
+
+  function normalizeForCompare(text) {
+    return (text || '').toLowerCase().trim().replace(/\s+/g, ' ');
+  }
+
+  function checkDuplicates(rows, questionText, scopeChapter) {
+    const normalizedNew = normalizeForCompare(questionText);
+    const newWords = new Set(tokenize(questionText));
+    let exactMatch = null;
+    const similar = [];
+    rows.forEach(row => {
+      if (normalizeForCompare(row.question) === normalizedNew) { exactMatch = row; return; }
+      if (scopeChapter && row.chapter !== scopeChapter) return;
+      const existingWords = new Set(tokenize(row.question));
+      const intersection = [...newWords].filter(w => existingWords.has(w)).length;
+      const union = new Set([...newWords, ...existingWords]).size;
+      const overlap = union > 0 ? intersection / union : 0;
+      if (overlap >= 0.6) similar.push({ row, overlap });
+    });
+    return { exactMatch, similar };
+  }
+
+  // ---------------- Scan PDF ----------------
+
+  function fileToBase64(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result.split(',')[1]);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function checkPdfAlreadyProcessed(filename) {
+    try {
+      const res = await fetch(`${API_BASE}/admin/pdf-check-status?filename=${encodeURIComponent(filename)}`, { headers: authHeaders() });
+      if (!res.ok) return true; // can't check -- don't block the scan over a tracking lookup failure
+      const data = await res.json();
+      const prev = data.previous;
+      if (!prev) return true;
+      let msg;
+      if (prev.status === 'completed') {
+        msg = `This file was already processed on ${new Date(prev.upload_date).toLocaleDateString()}, extracted ${prev.questions_extracted} question${prev.questions_extracted === 1 ? '' : 's'} — reprocess anyway?`;
+      } else if (prev.status === 'failed') {
+        msg = `This file was previously scanned on ${new Date(prev.upload_date).toLocaleDateString()} but failed — try again?`;
+      } else {
+        msg = `This file is already marked "${prev.status}" from ${new Date(prev.upload_date).toLocaleDateString()} — reprocess anyway?`;
+      }
+      return await showConfirmModal(msg, { confirmLabel: 'Reprocess' });
+    } catch (e) {
+      return true;
+    }
+  }
+
+  async function scanPdf() {
+    const file = document.getElementById('pdfFile').files[0];
+    if (!file || !currentSubject) return;
+    if (!(await checkPdfAlreadyProcessed(file.name))) return;
+    currentPdfFilename = file.name;
+    currentProcessedPdfId = null;
+    currentPdfQuestionsExtracted = 0;
+    const statusEl = document.getElementById('scanStatus');
+    const scanBtn = document.getElementById('scanBtn');
+    scanBtn.disabled = true;
+    statusEl.style.display = 'block';
+    statusEl.textContent = 'Scanning your PDF... this can take a while for many pages.';
+    document.getElementById('flaggedPagesBanner').style.display = 'none';
+    try {
+      const b64 = await fileToBase64(file);
+      const res = await fetch(`${API_BASE}/admin/scan-pdf`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ subject: currentSubject, data: b64, filename: file.name })
+      });
+      if (res.status === 401) return logout();
+      if (!res.ok) { statusEl.textContent = 'Scan failed: ' + await describeHttpError(res); return; }
+      const data = await res.json();
+      currentProcessedPdfId = data.processed_pdf_id || null;
+      if (data.error) { statusEl.textContent = 'Scan failed: ' + data.error; return; }
+      statusEl.style.display = 'none';
+      const filenameMatch = matchChapterFromFilename(file.name, allChaptersForSubject(currentSubject));
+      scanFilenameMatch = (filenameMatch && filenameMatch.score >= FILENAME_MATCH_THRESHOLD && !filenameMatch.tied) ? filenameMatch : null;
+      blocks = (data.questions || []).map(q => ({
+        id: 'b' + (blockIdSeq++),
+        question: q.question, option_a: q.option_a, option_b: q.option_b, option_c: q.option_c, option_d: q.option_d,
+        correct_answer: q.correct_answer || '', question_type: q.question_type || 'mcq',
+        has_diagram: !!q.has_diagram, diagram_url: null,
+        option_a_diagram_url: null, option_b_diagram_url: null, option_c_diagram_url: null, option_d_diagram_url: null,
+        year: q.year, source_page: q.source_page, display_number: null,
+        saved: false, savePending: false
+      }));
+      document.getElementById('statPageCount').textContent = data.pages_scanned || 0;
+      renderAllBlocks();
+      updateSummaryBar();
+      document.getElementById('summaryBar').style.display = 'flex';
+      renderFlaggedPagesBanner(data.flagged_pages || []);
+      saveDraftNow(); // a fresh scan just replaced the whole batch -- worth persisting right away, not after a debounce delay
+    } catch (e) {
+      statusEl.textContent = 'Scan failed — check connection and try again.';
+    } finally {
+      scanBtn.disabled = !currentSubject || !document.getElementById('pdfFile').files[0];
+    }
+  }
+
+  const PDF_STATUS_COLORS = { completed: '#4caf50', failed: '#e05555', processing: '#e0a030', pending: '#888' };
+
+  async function openPdfHistory() {
+    document.getElementById('pdfHistoryOverlay').style.display = 'flex';
+    const listEl = document.getElementById('pdfHistoryList');
+    listEl.textContent = 'Loading...';
+    try {
+      const res = await fetch(`${API_BASE}/admin/processed-pdfs`, { headers: authHeaders() });
+      if (res.status === 401) return logout();
+      const data = await res.json();
+      if (data.error) { listEl.textContent = 'Could not load history: ' + data.error; return; }
+      const pdfs = data.pdfs || [];
+      if (pdfs.length === 0) { listEl.textContent = 'No PDFs processed through this pipeline yet.'; return; }
+      listEl.innerHTML = pdfs.map(p => `
+        <div style="padding:10px 0;border-bottom:1px solid #1e1e1e;">
+          <div style="color:#ececec;font-weight:600;display:flex;align-items:center;gap:8px;">
+            ${escapeHtml(p.filename)}
+            <span style="color:${PDF_STATUS_COLORS[p.status] || '#888'};font-size:10px;font-weight:700;text-transform:uppercase;border:1px solid currentColor;border-radius:4px;padding:1px 5px;">${escapeHtml(p.status)}</span>
+          </div>
+          <div style="color:#666;font-size:11px;margin-top:3px;">
+            ${escapeHtml(p.subject || '')} · ${p.questions_extracted} question${p.questions_extracted === 1 ? '' : 's'} · ${new Date(p.upload_date).toLocaleDateString()}
+            ${p.status === 'failed' && p.error_message ? `<br><span style="color:#e05555;">${escapeHtml(p.error_message)}</span>` : ''}
+          </div>
+        </div>`).join('');
+    } catch (e) {
+      listEl.textContent = 'Could not reach server.';
+    }
+  }
+
+  function closePdfHistory() {
+    document.getElementById('pdfHistoryOverlay').style.display = 'none';
+  }
+
+  function updateSummaryBar() {
+    document.getElementById('statQuestionCount').textContent = blocks.length;
+    document.getElementById('statDiagramCount').textContent = blocks.filter(b => b.has_diagram).length;
+    document.getElementById('statSavedCount').textContent = blocks.filter(b => b.saved).length;
+  }
+
+  function renderFlaggedPagesBanner(flaggedPages) {
+    const banner = document.getElementById('flaggedPagesBanner');
+    if (!flaggedPages || flaggedPages.length === 0) { banner.style.display = 'none'; return; }
+    banner.style.display = 'block';
+    banner.innerHTML = `<strong>${flaggedPages.length} page(s) skipped - extraction failed or possible scanned page:</strong><br>` +
+      flaggedPages.map(f => `Page ${f.page}: ${escapeHtml(f.reason)}`).join('<br>') +
+      `<br>These pages were NOT sent for question extraction and won't appear below - check them manually in the PDF and use "+ Add Missed Question" if needed.`;
+  }
+
+  // ---------------- Block rendering ----------------
+
+  function buildChapterOptionsHtml(block) {
+    const suggestion = block._suggestion || { confident: false, suggestions: [] };
+    // An explicit block.chapter (set only by SimpleTex's "# Chapter Name" headers when pasted
+    // via Paste LaTeX mode) is a real signal from the source text itself, so it wins over the
+    // TF-IDF/filename guess -- PDF-scanned blocks never set this field, so this is a no-op there.
+    const suggestedChapter = block.chapter || (suggestion.confident ? suggestion.suggestions[0].chapter : null);
+    let html = `<option value="">${suggestedChapter || suggestion.confident ? '— pick chapter —' : '— not enough data yet, pick manually —'}</option>`;
+    // Every real NCERT chapter for this subject is selectable, not just ones that already have
+    // tagged rows - otherwise a confident filename/TF-IDF match to a never-before-tagged chapter
+    // would have no matching <option> to select at all.
+    allChaptersForSubject(currentSubject).forEach(name => {
+      const sel = name === suggestedChapter ? ' selected' : '';
+      html += `<option value="${escapeHtml(name)}"${sel}>${escapeHtml(name)}</option>`;
+    });
+    return html;
+  }
+
+  // Human-readable explanation of a badge's detected_pattern, for its tooltip -- so an admin can
+  // see *why* a question landed in a given confidence tier, not just that it did.
+  function describeDetectedPattern(pattern, isFallback) {
+    if (isFallback) {
+      return pattern === 'position'
+        ? 'Grouped by paragraph position -- no (A)(B)(C)(D)/numbered/pipe/table marker was found nearby, so this is a guess based on paragraph order alone.'
+        : 'No (A)(B)(C)(D)/numbered/pipe/table marker was found at all -- options are blank, fill them in manually.';
+    }
+    switch (pattern) {
+      case 'table': return 'Parsed from a markdown table row ("| stem | opt | opt | opt | opt |") rather than (A)(B)(C)(D)/numbered markers.';
+      case 'pipe': default: return 'Parsed from a || pipe-delimited block rather than (A)(B)(C)(D)/numbered markers.';
+    }
+  }
+
+  function blockTemplate(block, displayIndex) {
+    const b = block;
+    return `
+    <div class="q-block${b.saved ? ' is-saved' : ''}" id="block-${b.id}" data-id="${b.id}">
+      <div class="q-block-header">
+        <span class="q-number">Q<input type="text" id="qnum-${b.id}" value="${escapeHtml(b.display_number != null ? b.display_number : String(displayIndex))}" onchange="setQNumber('${b.id}')" title="Edit to match the actual question number in the PDF, if it drifted from the auto count" style="width:34px;background:transparent;border:none;border-bottom:1px dashed #4f8ef780;color:#4f8ef7;font-weight:700;font-size:13px;font-family:'Inter',sans-serif;padding:0 0 1px 2px;"/></span>
+        ${b.has_diagram ? '<span class="q-diagram-badge">Diagram</span>' : ''}
+        <span id="confidence-badge-${b.id}" style="display:${b.saved ? 'none' : 'inline'}">
+          ${b.parse_confidence === 'fallback' ? `<span class="q-confidence-badge fallback" title="${escapeHtml(describeDetectedPattern(b.detected_pattern, true))}">⚠ Needs review</span>` : ''}
+          ${b.parse_confidence === 'delimiter' ? `<span class="q-confidence-badge delimiter" title="${escapeHtml(describeDetectedPattern(b.detected_pattern, false))}">${b.detected_pattern === 'table' ? 'Table row' : 'Pipe-delimited'}</span>` : ''}
+        </span>
+        <span class="q-saved-badge" id="saved-badge-${b.id}" style="display:${b.saved ? 'inline-flex' : 'none'}">Saved</span>
+        <div class="q-block-actions">
+          <button type="button" onclick="mergeWithNext('${b.id}')" title="Merge this block with the next one">Merge next</button>
+          <button type="button" onclick="splitBlock('${b.id}')" title="Split into two separate questions">Split</button>
+          <button type="button" onclick="insertBlockBelow('${b.id}')" title="Insert a new blank question directly after this one">+ Insert Below</button>
+          <button type="button" class="danger-link" onclick="clearAllOptions('${b.id}')" title="Empty all 4 option fields for this question -- question text, answer, and other fields are untouched">Clear All Options</button>
+          <button type="button" class="danger-link" onclick="removeBlock('${b.id}')">Remove</button>
+        </div>
+      </div>
+
+      <div class="q-field">
+        <div class="q-field-label-row"><label>Question</label><button type="button" class="formula-btn" onclick="openFormulaEditor('q-text-${b.id}')">∑ Formula</button></div>
+        <textarea id="q-text-${b.id}" rows="3" oninput="onQuestionTextInput('${b.id}'); autoResizeTextarea(this); updateMathPreview('q-text-${b.id}')">${escapeHtml(b.question)}</textarea>
+        <div class="math-preview" id="q-text-${b.id}-preview"></div>
+      </div>
+
+      <div class="q-options-grid">
+        <div class="q-field">
+          <div class="q-field-label-row"><label>Option A</label><button type="button" class="formula-btn" onclick="openFormulaEditor('opt-a-${b.id}')">∑ Formula</button></div>
+          <textarea id="opt-a-${b.id}" rows="1" oninput="autoResizeTextarea(this); updateMathPreview('opt-a-${b.id}')">${escapeHtml(b.option_a)}</textarea>
+          <div class="math-preview" id="opt-a-${b.id}-preview"></div>
+        </div>
+        <div class="q-field">
+          <div class="q-field-label-row"><label>Option B</label><button type="button" class="formula-btn" onclick="openFormulaEditor('opt-b-${b.id}')">∑ Formula</button></div>
+          <textarea id="opt-b-${b.id}" rows="1" oninput="autoResizeTextarea(this); updateMathPreview('opt-b-${b.id}')">${escapeHtml(b.option_b)}</textarea>
+          <div class="math-preview" id="opt-b-${b.id}-preview"></div>
+        </div>
+        <div class="q-field">
+          <div class="q-field-label-row"><label>Option C</label><button type="button" class="formula-btn" onclick="openFormulaEditor('opt-c-${b.id}')">∑ Formula</button></div>
+          <textarea id="opt-c-${b.id}" rows="1" oninput="autoResizeTextarea(this); updateMathPreview('opt-c-${b.id}')">${escapeHtml(b.option_c)}</textarea>
+          <div class="math-preview" id="opt-c-${b.id}-preview"></div>
+        </div>
+        <div class="q-field q-field-last-option">
+          <div class="q-field-label-row"><label>Option D</label><button type="button" class="formula-btn" onclick="openFormulaEditor('opt-d-${b.id}')">∑ Formula</button></div>
+          <textarea id="opt-d-${b.id}" rows="1" oninput="autoResizeTextarea(this); updateMathPreview('opt-d-${b.id}')">${escapeHtml(b.option_d)}</textarea>
+          <div class="math-preview" id="opt-d-${b.id}-preview"></div>
+        </div>
+      </div>
+
+      <div class="q-meta-grid">
+        <div class="q-field"><label>Answer</label><input type="text" maxlength="1" id="ans-${b.id}" value="${escapeHtml(b.correct_answer)}" placeholder="a/b/c/d"/></div>
+        <div class="q-field"><label>Year</label><input type="number" id="year-${b.id}" value="${b.year != null ? b.year : ''}"/></div>
+        <div class="q-field"><label>Source tag</label><input type="text" id="source-tag-${b.id}" value="${escapeHtml(b.source_tag || '')}" placeholder="e.g. AIPMT Screening 2008"/></div>
+        <div class="q-field"><label>Class</label>
+          <select id="class-${b.id}">
+            <option value="">—</option>
+            <option value="11">11</option>
+            <option value="12">12</option>
+          </select>
+        </div>
+        <div class="q-field">
+          <label>Chapter</label>
+          <select id="chapter-${b.id}" onchange="onChapterChange('${b.id}')">${buildChapterOptionsHtml(b)}</select>
+          <div class="q-suggestion-hint" id="chapter-hint-${b.id}"></div>
+        </div>
+        <div class="q-field checkbox-field">
+          <input type="checkbox" id="hasdiagram-${b.id}" onchange="toggleDiagramSlot('${b.id}')" ${b.has_diagram ? 'checked' : ''}/>
+          <label for="hasdiagram-${b.id}">Question has diagram</label>
+        </div>
+        <div class="q-field checkbox-field">
+          <input type="checkbox" id="optiondiagram-${b.id}" onchange="toggleOptionDiagramSlot('${b.id}')" ${hasAnyOptionDiagram(b) ? 'checked' : ''}/>
+          <label for="optiondiagram-${b.id}">Options have diagram</label>
+        </div>
+      </div>
+
+      <div class="q-diagram-slot" id="diagram-slot-${b.id}" style="display:${b.has_diagram ? 'block' : 'none'}">
+        <label style="font-size:10px;color:#666;text-transform:uppercase;letter-spacing:0.04em;display:block;margin-bottom:5px;">Question diagram</label>
+        <div class="diag-paste-zone" tabindex="0" onpaste="handleDiagramPaste(event, '${b.id}')">
+          <input type="file" accept="image/*" id="diagram-file-${b.id}" onchange="uploadDiagram('${b.id}')"/>
+          <div class="diag-paste-hint">or click here and paste (Ctrl+V) an image</div>
+        </div>
+        <div class="diag-status" id="diagram-status-${b.id}"></div>
+        <div id="diagram-preview-${b.id}">${b.diagram_url ? `<img src="${escapeHtml(b.diagram_url)}"><br><button type="button" class="danger-link" onclick="removeDiagram('${b.id}')">✕ Remove photo</button>` : ''}</div>
+      </div>
+
+      <div class="q-diagram-slot" id="option-diagram-slot-${b.id}" style="display:${hasAnyOptionDiagram(b) ? 'block' : 'none'}">
+        <label style="font-size:10px;color:#666;text-transform:uppercase;letter-spacing:0.04em;display:block;margin-bottom:8px;">Option diagrams (one image per option, upload only the ones that need it)</label>
+        <div class="q-options-grid">
+          ${['a', 'b', 'c', 'd'].map(opt => `
+          <div>
+            <label style="font-size:10px;color:#888;">Option ${opt.toUpperCase()}</label>
+            <div class="diag-paste-zone" tabindex="0" onpaste="handleOptionDiagramPaste(event, '${b.id}', '${opt}')">
+              <input type="file" accept="image/*" id="opt-diagram-file-${opt}-${b.id}" onchange="uploadOptionDiagram('${b.id}', '${opt}')"/>
+              <div class="diag-paste-hint">or click + paste (Ctrl+V)</div>
+            </div>
+            <div class="diag-status" id="opt-diagram-status-${opt}-${b.id}"></div>
+            <div id="opt-diagram-preview-${opt}-${b.id}">${b['option_' + opt + '_diagram_url'] ? `<img src="${escapeHtml(b['option_' + opt + '_diagram_url'])}"><br><button type="button" class="danger-link" onclick="removeOptionDiagram('${b.id}','${opt}')">✕ Remove photo</button>` : ''}</div>
+          </div>`).join('')}
+        </div>
+      </div>
+
+      <div class="q-dup-warning" id="dup-warning-${b.id}"></div>
+
+      <div class="q-block-footer">
+        <button type="button" class="save-btn" id="save-btn-${b.id}" onclick="saveBlock('${b.id}')" ${b.saved ? 'disabled' : ''}>${b.saved ? 'Saved' : 'Save'}</button>
+        <span class="q-source-page">${b.source_page ? 'from page ' + b.source_page : 'manually added'}</span>
+      </div>
+    </div>`;
+  }
+
+  function renderAllBlocks() {
+    const container = document.getElementById('blocksContainer');
+    blocks.forEach(b => {
+      // A confident whole-PDF filename match (e.g. "Cell the Unit of Life - PYQ.pdf") is a
+      // stronger signal than any one question's own TF-IDF match, so it takes priority.
+      b._suggestion = scanFilenameMatch
+        ? { confident: true, suggestions: [{ chapter: scanFilenameMatch.chapter, score: scanFilenameMatch.score }], fromFilename: true }
+        : getChapterSuggestion(classifier, b.question);
+    });
+    if (blocks.length === 0) {
+      container.innerHTML = '<div class="empty-hint">Upload and scan a PDF, or add a question manually, to get started.</div>';
+      return;
+    }
+    container.innerHTML = blocks.map((b, i) => blockTemplate(b, i + 1)).join('') + `
+      <div class="bottom-save-bar">
+        <button type="button" class="action-btn primary save-all-btn" onclick="saveAllReviewed()">Save All Reviewed</button>
+      </div>
+    `;
+    blocks.forEach(b => {
+      const classSel = document.getElementById('class-' + b.id);
+      if (classSel && b.class_ != null) classSel.value = String(b.class_);
+      applyChapterHint(b);
+    });
+    // Freshly-rendered textareas start at their fixed `rows` height regardless of how long
+    // their content is -- size them once here so existing text is fully visible immediately,
+    // not just after the admin types something and triggers the oninput handler.
+    container.querySelectorAll('.q-field textarea').forEach(autoResizeTextarea);
+    // Same reasoning for the math preview -- render once on paint so a formula that's already
+    // in the scanned text (or from a previous edit) shows immediately, not just after the next
+    // keystroke in that field.
+    container.querySelectorAll('.q-field textarea').forEach(t => updateMathPreview(t.id));
+  }
+
+  // ---------------- Formula editor (MathLive) ----------------
+
+  // One shared <math-field> instance for all fields, not one per field -- remembers which
+  // textarea + cursor position it was opened for, so "Insert" always lands in the right spot
+  // regardless of which of the 5 "∑ Formula" buttons triggered it.
+  let formulaEditorTarget = null; // { fieldId, selectionStart, selectionEnd }
+
+  function openFormulaEditor(fieldId) {
+    const textarea = document.getElementById(fieldId);
+    if (!textarea) return;
+    formulaEditorTarget = {
+      fieldId,
+      selectionStart: textarea.selectionStart,
+      selectionEnd: textarea.selectionEnd
+    };
+    const mf = document.getElementById('formulaMathfield');
+    mf.value = '';
+    document.getElementById('formulaModalOverlay').style.display = 'flex';
+    setTimeout(() => mf.focus(), 50);
+  }
+
+  function closeFormulaEditor() {
+    document.getElementById('formulaModalOverlay').style.display = 'none';
+    formulaEditorTarget = null;
+  }
+
+  function confirmFormulaInsert() {
+    if (!formulaEditorTarget) return;
+    const { fieldId, selectionStart, selectionEnd } = formulaEditorTarget;
+    const textarea = document.getElementById(fieldId);
+    const latex = document.getElementById('formulaMathfield').value.trim();
+    if (!textarea || !latex) { closeFormulaEditor(); return; }
+    const insertText = '$$' + latex + '$$';
+    const current = textarea.value;
+    textarea.value = current.slice(0, selectionStart) + insertText + current.slice(selectionEnd);
+    const newCursorPos = selectionStart + insertText.length;
+    textarea.focus();
+    textarea.setSelectionRange(newCursorPos, newCursorPos);
+    autoResizeTextarea(textarea);
+    updateMathPreview(fieldId);
+    // Keep in-memory duplicate-check state in sync with a manually-inserted formula, same as
+    // any other typed edit to the question textarea (options don't feed the dup checker).
+    if (fieldId.startsWith('q-text-')) onQuestionTextInput(fieldId.replace('q-text-', ''));
+    closeFormulaEditor();
+  }
+
+  // ---------------- Live math preview ----------------
+
+  // Same $$...$$ / $...$ pattern as renderMathPreviewHtml below, kept as a separate non-global
+  // regex so .test() below doesn't share (and corrupt) lastIndex state with the 'g'-flagged one
+  // used for matching.
+  const MATH_PATTERN = /\$\$([^$]+)\$\$|\$([^$\n]+)\$/;
+
+  // Splits on $$...$$ (display) and $...$ (inline) same as chat.html's parseWithMath, but
+  // renders the plain-text segments escaped (not through marked) -- this admin tool's fields
+  // are raw question/option text, never markdown, so a lighter parse is enough here.
+  function renderMathPreviewHtml(text) {
+    const parts = [];
+    let lastIndex = 0;
+    const re = /\$\$([^$]+)\$\$|\$([^$\n]+)\$/g;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      if (m.index > lastIndex) parts.push({ type: 'text', value: text.slice(lastIndex, m.index) });
+      parts.push(m[1] !== undefined ? { type: 'display', value: m[1].trim() } : { type: 'inline', value: m[2].trim() });
+      lastIndex = re.lastIndex;
+    }
+    if (lastIndex < text.length) parts.push({ type: 'text', value: text.slice(lastIndex) });
+
+    return parts.map(p => {
+      // \n -> <br> only here, after escaping -- text segments are the only ones that ever see
+      // this replacement, math segments go straight to katex.renderToString below and never
+      // pass through it, so a literal newline typed adjacent to (but outside) a $...$/$$...$$
+      // block can't ever land inside the LaTeX source KaTeX parses.
+      if (p.type === 'text') return escapeHtml(p.value).replace(/\n/g, '<br>');
+      try {
+        return katex.renderToString(p.value, { displayMode: p.type === 'display', throwOnError: false });
+      } catch (e) {
+        return escapeHtml(p.type === 'display' ? '$$' + p.value + '$$' : '$' + p.value + '$');
+      }
+    }).join('');
+  }
+
+  function updateMathPreview(fieldId) {
+    const textarea = document.getElementById(fieldId);
+    const previewEl = document.getElementById(fieldId + '-preview');
+    if (!textarea || !previewEl) return;
+    const text = textarea.value;
+    if (!text.trim() || !MATH_PATTERN.test(text)) { previewEl.innerHTML = ''; previewEl.style.display = 'none'; return; }
+    previewEl.innerHTML = renderMathPreviewHtml(text);
+    previewEl.style.display = 'block';
+  }
+
+  function autoResizeTextarea(el) {
+    el.style.height = 'auto';
+    el.style.height = el.scrollHeight + 'px';
+  }
+
+  function applyChapterHint(block) {
+    const hintEl = document.getElementById('chapter-hint-' + block.id);
+    if (!hintEl) return;
+    if (block.chapter) {
+      // Paste-parsed blocks have no _suggestion at all (no TF-IDF classifier involved), so this
+      // must come before the "!s return" below rather than as a branch inside it.
+      hintEl.textContent = 'From pasted text — verify this is correct.';
+      hintEl.classList.add('confident');
+      const classSel = document.getElementById('class-' + block.id);
+      if (classSel && !classSel.value) {
+        const cls = resolveClassForChapter(currentSubject, block.chapter);
+        if (cls) classSel.value = cls;
+      }
+      return;
+    }
+    const s = block._suggestion;
+    if (!s) return;
+    if (s.confident) {
+      hintEl.textContent = s.fromFilename
+        ? `Suggested from the PDF's filename (score ${s.suggestions[0].score.toFixed(2)})`
+        : `Suggested from similar questions (score ${s.suggestions[0].score.toFixed(2)})`;
+      hintEl.classList.add('confident');
+      const classSel = document.getElementById('class-' + block.id);
+      if (classSel && !classSel.value) {
+        const cls = resolveClassForChapter(currentSubject, s.suggestions[0].chapter);
+        if (cls) classSel.value = cls;
+      }
+    } else {
+      hintEl.textContent = 'Not enough tagged data yet for a confident suggestion — pick manually.';
+      hintEl.classList.remove('confident');
+    }
+  }
+
+  function readBlockFromDom(id) {
+    return {
+      question: document.getElementById('q-text-' + id).value.trim(),
+      option_a: document.getElementById('opt-a-' + id).value.trim(),
+      option_b: document.getElementById('opt-b-' + id).value.trim(),
+      option_c: document.getElementById('opt-c-' + id).value.trim(),
+      option_d: document.getElementById('opt-d-' + id).value.trim(),
+      correct_answer: document.getElementById('ans-' + id).value.trim().toLowerCase(),
+      year: document.getElementById('year-' + id).value ? parseInt(document.getElementById('year-' + id).value, 10) : null,
+      source_tag: document.getElementById('source-tag-' + id).value.trim() || null,
+      class_: document.getElementById('class-' + id).value ? parseInt(document.getElementById('class-' + id).value, 10) : null,
+      chapter: document.getElementById('chapter-' + id).value || null,
+      has_diagram: document.getElementById('hasdiagram-' + id).checked
+    };
+  }
+
+  // ---------------- Block actions ----------------
+
+  function findBlockIndex(id) { return blocks.findIndex(b => b.id === id); }
+
+  function setQNumber(id) {
+    const idx = findBlockIndex(id);
+    if (idx === -1) return;
+    const val = document.getElementById('qnum-' + id).value.trim();
+    blocks[idx].display_number = val || null;
+  }
+
+  function toggleDiagramSlot(id) {
+    const checked = document.getElementById('hasdiagram-' + id).checked;
+    document.getElementById('diagram-slot-' + id).style.display = checked ? 'block' : 'none';
+  }
+
+  // Shared by file-picker uploads and clipboard-paste uploads for both the stem diagram and
+  // per-option diagrams -- onSuccess wires the result back into whichever block/field/preview
+  // triggered the upload.
+  async function uploadImageFile(file, statusElId, onSuccess) {
+    const statusEl = document.getElementById(statusElId);
+    statusEl.textContent = 'Uploading...';
+    try {
+      const b64 = await fileToBase64(file);
+      const res = await fetch(`${API_BASE}/admin/pyq-diagram-upload`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ filename: file.name || 'pasted-image.png', data: b64, media_type: file.type || 'image/png' })
+      });
+      if (res.status === 401) return logout();
+      if (!res.ok) { statusEl.textContent = 'Upload failed: ' + await describeHttpError(res); return; }
+      const data = await res.json();
+      if (data.error) { statusEl.textContent = 'Upload failed: ' + data.error; return; }
+      statusEl.textContent = 'Uploaded';
+      onSuccess(data.url);
+      scheduleAutoSave(); // shared by all 4 diagram upload entry points (stem/option x file-picker/paste)
+    } catch (e) {
+      statusEl.textContent = 'Upload failed — check connection.';
+    }
+  }
+
+  function extractImageFromClipboard(event) {
+    const items = event.clipboardData && event.clipboardData.items;
+    if (!items) return null;
+    for (const item of items) {
+      if (item.type && item.type.startsWith('image/')) return item.getAsFile();
+    }
+    return null;
+  }
+
+  async function uploadDiagram(id) {
+    const fileInput = document.getElementById('diagram-file-' + id);
+    const file = fileInput.files[0];
+    if (!file) return;
+    await uploadImageFile(file, 'diagram-status-' + id, (url) => {
+      const block = blocks[findBlockIndex(id)];
+      block.diagram_url = url;
+      document.getElementById('diagram-preview-' + id).innerHTML = `<img src="${escapeHtml(url)}"><br><button type="button" class="danger-link" onclick="removeDiagram('${id}')">✕ Remove photo</button>`;
+    });
+  }
+
+  async function handleDiagramPaste(event, id) {
+    const file = extractImageFromClipboard(event);
+    if (!file) return;
+    event.preventDefault();
+    await uploadImageFile(file, 'diagram-status-' + id, (url) => {
+      const block = blocks[findBlockIndex(id)];
+      block.diagram_url = url;
+      document.getElementById('diagram-preview-' + id).innerHTML = `<img src="${escapeHtml(url)}"><br><button type="button" class="danger-link" onclick="removeDiagram('${id}')">✕ Remove photo</button>`;
+    });
+  }
+
+  function removeDiagram(id) {
+    const block = blocks[findBlockIndex(id)];
+    if (!block) return;
+    block.diagram_url = null;
+    document.getElementById('diagram-preview-' + id).innerHTML = '';
+    document.getElementById('diagram-status-' + id).textContent = '';
+    const fileInput = document.getElementById('diagram-file-' + id);
+    if (fileInput) fileInput.value = '';
+    scheduleAutoSave();
+  }
+
+  function hasAnyOptionDiagram(block) {
+    return !!(block.option_a_diagram_url || block.option_b_diagram_url || block.option_c_diagram_url || block.option_d_diagram_url);
+  }
+
+  function toggleOptionDiagramSlot(id) {
+    const checked = document.getElementById('optiondiagram-' + id).checked;
+    document.getElementById('option-diagram-slot-' + id).style.display = checked ? 'block' : 'none';
+  }
+
+  async function uploadOptionDiagram(id, opt) {
+    const fileInput = document.getElementById(`opt-diagram-file-${opt}-${id}`);
+    const file = fileInput.files[0];
+    if (!file) return;
+    await uploadImageFile(file, `opt-diagram-status-${opt}-${id}`, (url) => {
+      const block = blocks[findBlockIndex(id)];
+      block['option_' + opt + '_diagram_url'] = url;
+      document.getElementById(`opt-diagram-preview-${opt}-${id}`).innerHTML = `<img src="${escapeHtml(url)}"><br><button type="button" class="danger-link" onclick="removeOptionDiagram('${id}','${opt}')">✕ Remove photo</button>`;
+    });
+  }
+
+  async function handleOptionDiagramPaste(event, id, opt) {
+    const file = extractImageFromClipboard(event);
+    if (!file) return;
+    event.preventDefault();
+    await uploadImageFile(file, `opt-diagram-status-${opt}-${id}`, (url) => {
+      const block = blocks[findBlockIndex(id)];
+      block['option_' + opt + '_diagram_url'] = url;
+      document.getElementById(`opt-diagram-preview-${opt}-${id}`).innerHTML = `<img src="${escapeHtml(url)}"><br><button type="button" class="danger-link" onclick="removeOptionDiagram('${id}','${opt}')">✕ Remove photo</button>`;
+    });
+  }
+
+  function removeOptionDiagram(id, opt) {
+    const block = blocks[findBlockIndex(id)];
+    if (!block) return;
+    block['option_' + opt + '_diagram_url'] = null;
+    document.getElementById(`opt-diagram-preview-${opt}-${id}`).innerHTML = '';
+    document.getElementById(`opt-diagram-status-${opt}-${id}`).textContent = '';
+    const fileInput = document.getElementById(`opt-diagram-file-${opt}-${id}`);
+    if (fileInput) fileInput.value = '';
+    scheduleAutoSave();
+  }
+
+  function onQuestionTextInput(id) {
+    clearTimeout(window['dupTimer' + id]);
+    window['dupTimer' + id] = setTimeout(() => runDuplicateCheck(id), 600);
+  }
+
+  function runDuplicateCheck(id) {
+    const idx = findBlockIndex(id);
+    if (idx === -1) return;
+    const text = document.getElementById('q-text-' + id).value;
+    if (!text.trim()) { document.getElementById('dup-warning-' + id).className = 'q-dup-warning'; return; }
+    const chapterSel = document.getElementById('chapter-' + id);
+    const scopeChapter = chapterSel ? chapterSel.value : null;
+    const result = checkDuplicates(existingRows, text, scopeChapter);
+    const warnEl = document.getElementById('dup-warning-' + id);
+    if (result.exactMatch) {
+      warnEl.textContent = 'This looks identical to an existing question in the bank — you can still save it (click Save twice), then clean it up later if it really is a duplicate.';
+      warnEl.className = 'q-dup-warning warn';
+    } else if (result.similar.length > 0) {
+      warnEl.textContent = `This is ${Math.round(result.similar[0].overlap * 100)}% similar to an existing question in this chapter — double check it isn't a duplicate before saving.`;
+      warnEl.className = 'q-dup-warning warn';
+    } else {
+      warnEl.textContent = '';
+      warnEl.className = 'q-dup-warning';
+    }
+    blocks[idx]._dupChecked = true;
+  }
+
+  function onChapterChange(id) {
+    const chapter = document.getElementById('chapter-' + id).value;
+    const classSel = document.getElementById('class-' + id);
+    if (chapter && classSel && !classSel.value) {
+      const cls = resolveClassForChapter(currentSubject, chapter);
+      if (cls) classSel.value = cls;
+    }
+    runDuplicateCheck(id);
+  }
+
+  async function mergeWithNext(id) {
+    const idx = findBlockIndex(id);
+    if (idx === -1 || idx === blocks.length - 1) return;
+    if (!(await showConfirmModal('Merge this question with the next one? The next block will be removed.', { confirmLabel: 'Merge' }))) return;
+    const a = Object.assign(blocks[idx], readBlockFromDom(blocks[idx].id));
+    const b = Object.assign(blocks[idx + 1], readBlockFromDom(blocks[idx + 1].id));
+    const preferNonEmpty = (x, y) => (x === '' || x == null) ? y : x;
+    a.question = [a.question, b.question].filter(Boolean).join('\n');
+    a.option_a = preferNonEmpty(a.option_a, b.option_a);
+    a.option_b = preferNonEmpty(a.option_b, b.option_b);
+    a.option_c = preferNonEmpty(a.option_c, b.option_c);
+    a.option_d = preferNonEmpty(a.option_d, b.option_d);
+    a.correct_answer = preferNonEmpty(a.correct_answer, b.correct_answer);
+    a.year = a.year != null ? a.year : b.year;
+    a.class_ = a.class_ != null ? a.class_ : b.class_;
+    a.chapter = a.chapter || b.chapter;
+    a.has_diagram = a.has_diagram || b.has_diagram;
+    a.diagram_url = a.diagram_url || b.diagram_url;
+    a.option_a_diagram_url = a.option_a_diagram_url || b.option_a_diagram_url;
+    a.option_b_diagram_url = a.option_b_diagram_url || b.option_b_diagram_url;
+    a.option_c_diagram_url = a.option_c_diagram_url || b.option_c_diagram_url;
+    a.option_d_diagram_url = a.option_d_diagram_url || b.option_d_diagram_url;
+    blocks.splice(idx + 1, 1);
+    renderAllBlocks();
+    updateSummaryBar();
+    scheduleAutoSave();
+  }
+
+  function splitBlock(id) {
+    const idx = findBlockIndex(id);
+    if (idx === -1) return;
+    const current = Object.assign(blocks[idx], readBlockFromDom(id));
+    const secondHalf = {
+      id: 'b' + (blockIdSeq++),
+      question: current.question, option_a: '', option_b: '', option_c: '', option_d: '',
+      correct_answer: '', question_type: current.question_type, has_diagram: false, diagram_url: null,
+      option_a_diagram_url: null, option_b_diagram_url: null, option_c_diagram_url: null, option_d_diagram_url: null,
+      year: current.year, class_: current.class_, chapter: current.chapter, source_page: current.source_page, display_number: null,
+      saved: false, savePending: false
+    };
+    blocks.splice(idx + 1, 0, secondHalf);
+    renderAllBlocks();
+    updateSummaryBar();
+    scheduleAutoSave();
+  }
+
+  function insertBlockBelow(id) {
+    const idx = findBlockIndex(id);
+    if (idx === -1) return;
+    // Sync this block's live DOM edits back into blocks[] first -- renderAllBlocks() below does
+    // a full innerHTML rebuild from blocks[], and without this its still-unsaved text would
+    // revert to whatever was last synced (same reasoning as mergeWithNext/splitBlock above).
+    Object.assign(blocks[idx], readBlockFromDom(id));
+    const newBlock = {
+      id: 'b' + (blockIdSeq++), question: '', option_a: '', option_b: '', option_c: '', option_d: '',
+      correct_answer: '', question_type: 'mcq', has_diagram: false, diagram_url: null,
+      option_a_diagram_url: null, option_b_diagram_url: null, option_c_diagram_url: null, option_d_diagram_url: null,
+      year: null, class_: null, chapter: null, source_page: null, display_number: null, saved: false, savePending: false
+    };
+    blocks.splice(idx + 1, 0, newBlock);
+    // A block with no explicit display_number auto-renumbers for free -- blockTemplate falls
+    // back to its 1-based array position on every render. A block whose number was manually
+    // corrected (e.g. to fix drift from the PDF's own numbering) won't move on its own, so shift
+    // those forward explicitly to keep the whole sequence consistent after the insertion.
+    for (let i = idx + 2; i < blocks.length; i++) {
+      const raw = blocks[i].display_number;
+      const n = raw == null ? NaN : parseInt(raw, 10);
+      if (!isNaN(n) && String(n) === String(raw).trim()) {
+        blocks[i].display_number = String(n + 1);
+      }
+    }
+    document.getElementById('summaryBar').style.display = 'flex';
+    renderAllBlocks();
+    updateSummaryBar();
+    scheduleAutoSave();
+    // Unlike addMissedQuestion (always appended at the very end, scrolls to page bottom), this
+    // new block lands in the middle of the list -- bring it into view and focus it directly so
+    // it's immediately editable without the admin having to go hunting for it.
+    const newEl = document.getElementById('block-' + newBlock.id);
+    if (newEl) {
+      newEl.scrollIntoView({ block: 'center' });
+      const qText = document.getElementById('q-text-' + newBlock.id);
+      if (qText) qText.focus();
+    }
+  }
+
+  async function removeBlock(id) {
+    if (!(await showConfirmModal('Remove this question block?', { confirmLabel: 'Remove', danger: true }))) return;
+    const idx = findBlockIndex(id);
+    if (idx === -1) return;
+    blocks.splice(idx, 1);
+    renderAllBlocks();
+    updateSummaryBar();
+    document.getElementById('summaryBar').style.display = blocks.length ? 'flex' : 'none';
+    saveDraftNow(); // immediate, not debounced -- blocks.length===0 here means the draft should clear right away, not linger for 2.5s
+  }
+
+  // Confirms first, matching removeBlock/mergeWithNext above -- both already confirm() for a
+  // one-click action that destroys real content across multiple fields at once, which this is
+  // too (4 option fields, not a single field an accidental click just re-types). readBlockFromDom
+  // (used at actual save time) reads straight from these DOM elements, so clearing .value here is
+  // the only state that needs touching -- there's no separate in-memory copy of option text to
+  // keep in sync. autoResizeTextarea/updateMathPreview are called directly (not via a dispatched
+  // input event) since this is a programmatic change, not real typing -- oninput never fires on
+  // its own for a script-set .value.
+  async function clearAllOptions(id) {
+    if (!(await showConfirmModal('Clear all 4 option fields for this question?', { confirmLabel: 'Clear Options', danger: true }))) return;
+    ['a', 'b', 'c', 'd'].forEach(opt => {
+      const fieldId = 'opt-' + opt + '-' + id;
+      const el = document.getElementById(fieldId);
+      if (!el) return;
+      el.value = '';
+      autoResizeTextarea(el);
+      updateMathPreview(fieldId);
+    });
+    saveDraftNow(); // immediate, same reasoning as removeBlock -- a deliberate one-shot action, not an in-progress typing session the debounce is meant to coalesce
+  }
+
+  async function clearAllBlocks() {
+    if (blocks.length === 0) return;
+    const unsavedCount = blocks.filter(b => !b.saved).length;
+    const msg = unsavedCount > 0
+      ? `Clear all ${blocks.length} question block(s)? ${unsavedCount} of them are not saved yet and will be lost.`
+      : `Clear all ${blocks.length} question block(s)?`;
+    if (!(await showConfirmModal(msg, { confirmLabel: 'Clear All', danger: true }))) return;
+    blocks = [];
+    renderAllBlocks();
+    updateSummaryBar();
+    document.getElementById('summaryBar').style.display = 'none';
+    document.getElementById('flaggedPagesBanner').style.display = 'none';
+    clearDraft(); // explicit discard -- don't offer to "resume" work the admin just deliberately wiped
+  }
+
+  function addMissedQuestion() {
+    blocks.push({
+      id: 'b' + (blockIdSeq++), question: '', option_a: '', option_b: '', option_c: '', option_d: '',
+      correct_answer: '', question_type: 'mcq', has_diagram: false, diagram_url: null,
+      option_a_diagram_url: null, option_b_diagram_url: null, option_c_diagram_url: null, option_d_diagram_url: null,
+      year: null, class_: null, chapter: null, source_page: null, display_number: null, saved: false, savePending: false
+    });
+    document.getElementById('summaryBar').style.display = 'flex';
+    renderAllBlocks();
+    updateSummaryBar();
+    const el = document.getElementById('blocksContainer');
+    el.scrollTop = el.scrollHeight;
+    window.scrollTo(0, document.body.scrollHeight);
+    scheduleAutoSave();
+  }
+
+  // ---------------- Save ----------------
+
+  function buildCreatePayload(id) {
+    const fields = readBlockFromDom(id);
+    return Object.assign({ subject: currentSubject, source_pdf_filename: currentPdfFilename }, fields);
+  }
+
+  async function saveBlock(id) {
+    const idx = findBlockIndex(id);
+    if (idx === -1) return;
+    const block = blocks[idx];
+    const fields = readBlockFromDom(id);
+    const result = checkDuplicates(existingRows, fields.question, fields.chapter);
+    const btn = document.getElementById('save-btn-' + id);
+
+    if (result.exactMatch && !block._dupConfirmed) {
+      block._dupConfirmed = true;
+      btn.textContent = 'Save anyway?';
+      btn.classList.add('confirm-again');
+      const warnEl = document.getElementById('dup-warning-' + id);
+      warnEl.textContent = 'This is an exact duplicate of an existing question — click again to save anyway.';
+      warnEl.className = 'q-dup-warning warn';
+      return;
+    }
+    if (result.similar.length > 0 && !block._dupConfirmed) {
+      block._dupConfirmed = true;
+      btn.textContent = 'Save anyway?';
+      btn.classList.add('confirm-again');
+      const warnEl = document.getElementById('dup-warning-' + id);
+      warnEl.textContent = `${Math.round(result.similar[0].overlap * 100)}% similar to an existing question — click again to save anyway.`;
+      warnEl.className = 'q-dup-warning warn';
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'Saving...';
+    try {
+      const payload = buildCreatePayload(id);
+      payload.diagram_url = block.diagram_url;
+      payload.option_a_diagram_url = block.option_a_diagram_url;
+      payload.option_b_diagram_url = block.option_b_diagram_url;
+      payload.option_c_diagram_url = block.option_c_diagram_url;
+      payload.option_d_diagram_url = block.option_d_diagram_url;
+      const res = await fetch(`${API_BASE}/admin/pyq-bulk-create`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ questions: [payload] })
+      });
+      if (res.status === 401) return logout();
+      if (!res.ok) {
+        btn.disabled = false;
+        btn.textContent = 'Save';
+        const warnEl = document.getElementById('dup-warning-' + id);
+        warnEl.textContent = 'Save failed: ' + await describeHttpError(res);
+        warnEl.className = 'q-dup-warning block';
+        return;
+      }
+      const data = await res.json();
+      if (data.error) {
+        btn.disabled = false;
+        btn.textContent = 'Save';
+        const warnEl = document.getElementById('dup-warning-' + id);
+        warnEl.textContent = 'Save failed: ' + data.error;
+        warnEl.className = 'q-dup-warning block';
+        return;
+      }
+      block.saved = true;
+      existingRows.push({ question: fields.question, chapter: fields.chapter, class: fields.class_ });
+      btn.textContent = 'Saved';
+      document.getElementById('saved-badge-' + id).style.display = 'inline-flex';
+      document.getElementById('block-' + id).classList.add('is-saved');
+      const confBadge = document.getElementById('confidence-badge-' + id);
+      if (confBadge) confBadge.style.display = 'none'; // review flag is moot once it's been reviewed and saved
+      updateSummaryBar();
+      clearDraftIfBatchFullySaved();
+    } catch (e) {
+      btn.disabled = false;
+      btn.textContent = 'Save';
+    }
+  }
+
+  // Double-submit guard: both "Save All Reviewed" buttons (the summary-bar one and the
+  // bottom-save-bar one, kept in sync via the shared .save-all-btn class since the bottom one
+  // gets torn down and rebuilt by renderAllBlocks()) get disabled synchronously, before the
+  // first `await` in this function -- a disabled button physically can't receive another click
+  // event, so a second, third, fourth... click while the bulk POST to /admin/pyq-bulk-create is
+  // still in flight can no longer resubmit the same still-unsaved batch. That resubmission (no
+  // dedup on the server side) was the actual cause of the Hydrocarbons/etc. duplicate rows found
+  // in the pyq table -- see dedup_pyq_script.py's investigation notes. Mirrors saveBlock()'s own
+  // per-question guard (btn.disabled = true before its fetch), just applied to the bulk button,
+  // which never had it. The outer try/finally guarantees re-enable on every exit path (early
+  // return, success, or failure) -- a stuck-disabled button after an error would be its own bug.
+  //
+  // Verified live 2026-08-25 (Playwright against a local backend, 3 real unsaved blocks): fired
+  // 5 concurrent clicks at "Save All Reviewed" with no wait between them. Only ONE POST to
+  // /admin/pyq-bulk-create actually went out -- confirmed both by a network listener (count=1)
+  // and by the database afterward (exactly 3 rows created, not 6/9/12/15, all sharing one
+  // insert timestamp). Only one "Saved 3 question(s)." alert fired. The button read "Saving..."
+  // and was disabled the moment the first click landed, then correctly returned to "Save All
+  // Reviewed" and re-enabled once that single request settled -- the other 4 clicks either hit
+  // the disabled button and were absorbed, or (if they landed after the first request already
+  // completed) were caught by the existing `unsaved.length === 0` check instead, since the 3
+  // blocks were already marked saved by then. Test rows deleted after verification.
+  async function saveAllReviewed() {
+    const saveAllBtns = document.querySelectorAll('.save-all-btn');
+    const originalLabel = saveAllBtns.length ? saveAllBtns[0].textContent : 'Save All Reviewed';
+    saveAllBtns.forEach(b => { b.disabled = true; b.textContent = 'Saving...'; });
+    try {
+      const unsaved = blocks.filter(b => !b.saved);
+      if (unsaved.length === 0) return;
+      const toSave = [];
+      const skipped = [];
+      let warnedCount = 0;
+      let dupCount = 0;
+      unsaved.forEach(b => {
+        const fields = readBlockFromDom(b.id);
+        if (!fields.question) { skipped.push(b.id); return; }
+        const result = checkDuplicates(existingRows, fields.question, fields.chapter);
+        if (result.exactMatch) dupCount++;
+        else if (result.similar.length > 0) warnedCount++;
+        const payload = Object.assign({ subject: currentSubject, source_pdf_filename: currentPdfFilename }, fields);
+        payload.diagram_url = b.diagram_url;
+        payload.option_a_diagram_url = b.option_a_diagram_url;
+        payload.option_b_diagram_url = b.option_b_diagram_url;
+        payload.option_c_diagram_url = b.option_c_diagram_url;
+        payload.option_d_diagram_url = b.option_d_diagram_url;
+        toSave.push({ id: b.id, payload });
+      });
+
+      if (toSave.length === 0) {
+        alert('Nothing to save — every remaining block is blank.');
+        return;
+      }
+
+      try {
+        const res = await fetch(`${API_BASE}/admin/pyq-bulk-create`, {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ questions: toSave.map(t => t.payload) })
+        });
+        if (res.status === 401) return logout();
+        if (!res.ok) { alert('Bulk save failed: ' + await describeHttpError(res)); return; }
+        const data = await res.json();
+        if (data.error) { alert('Bulk save failed: ' + data.error); return; }
+        toSave.forEach(t => {
+          const block = blocks[findBlockIndex(t.id)];
+          if (!block) return;
+          block.saved = true;
+          existingRows.push({ question: t.payload.question, chapter: t.payload.chapter, class: t.payload.class_ });
+          const btn = document.getElementById('save-btn-' + t.id);
+          if (btn) { btn.textContent = 'Saved'; btn.disabled = true; }
+          const badge = document.getElementById('saved-badge-' + t.id);
+          if (badge) badge.style.display = 'inline-flex';
+          const el = document.getElementById('block-' + t.id);
+          if (el) el.classList.add('is-saved');
+          const confBadge = document.getElementById('confidence-badge-' + t.id);
+          if (confBadge) confBadge.style.display = 'none'; // review flag is moot once it's been reviewed and saved
+        });
+        updateSummaryBar();
+        clearDraftIfBatchFullySaved();
+        if (currentProcessedPdfId) {
+          currentPdfQuestionsExtracted += toSave.length;
+          fetch(`${API_BASE}/admin/pdf-mark-processed`, {
+            method: 'POST',
+            headers: authHeaders({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify({ id: currentProcessedPdfId, status: 'completed', questions_extracted: currentPdfQuestionsExtracted })
+          }).catch(() => {});
+        }
+        let msg = `Saved ${toSave.length} question(s).`;
+        if (skipped.length) msg += ` Skipped ${skipped.length} blank block(s).`;
+        if (dupCount) msg += ` ${dupCount} were exact duplicates of existing questions — saved anyway, delete the extras later.`;
+        if (warnedCount) msg += ` ${warnedCount} were saved despite a similarity warning — worth a second look.`;
+        alert(msg);
+      } catch (e) {
+        alert('Bulk save failed — check connection.');
+      }
+    } finally {
+      saveAllBtns.forEach(b => { b.disabled = false; b.textContent = originalLabel; });
+    }
+  }
+
+  // Catches every question/option/answer/year/source-tag/class/chapter/checkbox edit inside
+  // any block generically (delegated on the stable container, not per-field) -- covers all
+  // current AND future re-rendered fields without needing to touch blockTemplate's existing
+  // on* attributes at all.
+  document.getElementById('blocksContainer').addEventListener('input', scheduleAutoSave);
+  document.getElementById('blocksContainer').addEventListener('change', scheduleAutoSave);
+
+  // Read-only state accessors for automated testing only - nothing in the real UI uses this.
+  window.__test = {
+    get blocks() { return blocks; },
+    get chapterList() { return chapterList; },
+    get existingRows() { return existingRows; },
+    get classifier() { return classifier; },
+    get currentSubject() { return currentSubject; },
+    get pendingDraft() { return pendingDraft; },
+    saveDraftNow, clearDraft, checkForDraftAndShowBanner, resumeDraft, discardDraft,
+    DRAFT_STORAGE_KEY
+  };
+</script>
+</body>
+</html>

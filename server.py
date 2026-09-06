@@ -771,6 +771,62 @@ def verify_admin(request: Request, x_admin_key: str = Header(None)):
 
     _admin_login_attempts.pop(ip, None)
 
+# Independent secret for the isolated, unbranded PDF-review tool shared with an external
+# contractor -- deliberately separate from ADMIN_PASSWORD so it can be rotated/revoked without
+# touching the founder's own admin login. Unset by default (contractor access is opt-in via env).
+CONTRACTOR_PDF_KEY = os.getenv("CONTRACTOR_PDF_KEY")
+
+def verify_contractor_pdf_review(request: Request, x_admin_key: str = Header(None)):
+    """Login check for the isolated tool's own gate -- deliberately its OWN endpoint
+    (/contractor-pdf-review/verify) rather than widening /admin/verify, because /admin/verify is
+    shared as the login gate by six other admin pages (admin-dashboard.html etc.). Widening it
+    would let a contractor's key pass THEIR login screen too -- revealing those pages' shells and
+    branding even though every actual data call on them would still correctly 401. Checks
+    CONTRACTOR_PDF_KEY only, never ADMIN_PASSWORD, so this stays a fully independent credential."""
+    ip = _client_ip(request)
+    now = time.time()
+    record = _admin_login_attempts.get(ip, {"count": 0, "blocked_until": 0})
+    if record["blocked_until"] > now:
+        remaining = int(record["blocked_until"] - now)
+        raise HTTPException(status_code=429, detail=f"Too many failed attempts. Try again in {remaining} seconds.")
+    if not x_admin_key or not CONTRACTOR_PDF_KEY or x_admin_key != CONTRACTOR_PDF_KEY:
+        record["count"] += 1
+        if record["count"] >= ADMIN_MAX_ATTEMPTS:
+            record["blocked_until"] = now + ADMIN_COOLDOWN_SECONDS
+            record["count"] = 0
+        _admin_login_attempts[ip] = record
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    _admin_login_attempts.pop(ip, None)
+
+def verify_admin_or_contractor_pdf(request: Request, x_admin_key: str = Header(None)):
+    """Guards only the handful of work routes the isolated PDF-review tool actually needs
+    (pyq-chapters, scan-pdf, pyq-bulk-create, pyq-diagram-upload, pdf-mark-processed,
+    processed-pdfs, pdf-check-status, pyq-classifier-data) -- accepts EITHER the founder's real
+    ADMIN_PASSWORD (so the original admin-pdf-review.html keeps working unchanged) OR
+    CONTRACTOR_PDF_KEY. Every other admin route in the app (dozens of them -- user-plan overrides,
+    mock-test publishing, question-report resolution, etc.) still requires verify_admin directly
+    and never even compares against CONTRACTOR_PDF_KEY, so that key is cryptographically inert
+    everywhere outside this specific set, by construction rather than convention."""
+    ip = _client_ip(request)
+    now = time.time()
+    record = _admin_login_attempts.get(ip, {"count": 0, "blocked_until": 0})
+    if record["blocked_until"] > now:
+        remaining = int(record["blocked_until"] - now)
+        raise HTTPException(status_code=429, detail=f"Too many failed attempts. Try again in {remaining} seconds.")
+    valid = x_admin_key and (x_admin_key == ADMIN_PASSWORD or (CONTRACTOR_PDF_KEY and x_admin_key == CONTRACTOR_PDF_KEY))
+    if not valid:
+        record["count"] += 1
+        if record["count"] >= ADMIN_MAX_ATTEMPTS:
+            record["blocked_until"] = now + ADMIN_COOLDOWN_SECONDS
+            record["count"] = 0
+        _admin_login_attempts[ip] = record
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    _admin_login_attempts.pop(ip, None)
+
+@app.post("/contractor-pdf-review/verify")
+async def contractor_pdf_review_verify(_: None = Depends(verify_contractor_pdf_review)):
+    return {"ok": True}
+
 # ---------- Rate limiting for paid-API endpoints (per IP, per route) ----------
 _rate_limit_buckets = {}  # "ip:path" -> [timestamps]
 
@@ -4102,7 +4158,7 @@ async def admin_pyq_stats(_: None = Depends(verify_admin)):
         return {"error": str(e)}
 
 @app.get("/admin/pyq-chapters")
-async def admin_pyq_chapters(subject: str, _: None = Depends(verify_admin)):
+async def admin_pyq_chapters(subject: str, _: None = Depends(verify_admin_or_contractor_pdf)):
     if subject not in ("Biology", "Physics", "Chemistry"):
         return {"error": "Invalid subject"}
     try:
@@ -4830,7 +4886,7 @@ def _update_processed_pdf_row(row_id, status: str, questions_extracted=None, err
         pass
 
 @app.post("/admin/scan-pdf")
-def admin_scan_pdf(req: ScanPdfRequest, _: None = Depends(verify_admin), __: None = Depends(rate_limiter(10, 300))):
+def admin_scan_pdf(req: ScanPdfRequest, _: None = Depends(verify_admin_or_contractor_pdf), __: None = Depends(rate_limiter(10, 300))):
     # Deliberately sync (not async def): FastAPI runs sync path functions in a thread pool,
     # so this multi-second-to-multi-minute call doesn't block the event loop for other requests.
     if req.subject not in ("Biology", "Physics", "Chemistry"):
@@ -4852,7 +4908,7 @@ def admin_scan_pdf(req: ScanPdfRequest, _: None = Depends(verify_admin), __: Non
     return result
 
 @app.get("/admin/pyq-classifier-data")
-async def admin_pyq_classifier_data(subject: str, _: None = Depends(verify_admin)):
+async def admin_pyq_classifier_data(subject: str, _: None = Depends(verify_admin_or_contractor_pdf)):
     if subject not in ("Biology", "Physics", "Chemistry"):
         return {"error": "Invalid subject"}
     try:
@@ -4908,7 +4964,7 @@ async def admin_pyq_classifier_data(subject: str, _: None = Depends(verify_admin
         return {"error": str(e)}
 
 @app.post("/admin/pyq-diagram-upload")
-async def admin_pyq_diagram_upload(body: DiagramUploadRequest, _: None = Depends(verify_admin)):
+async def admin_pyq_diagram_upload(body: DiagramUploadRequest, _: None = Depends(verify_admin_or_contractor_pdf)):
     try:
         file_bytes = base64.b64decode(body.data)
     except Exception:
@@ -5241,7 +5297,7 @@ async def _embed_pyq_row_background(row_id, question, chapter, option_a, option_
         print(f"PYQ EMBEDDING FAILED (generation) id={row_id}: {e}", flush=True)
 
 @app.post("/admin/pyq-bulk-create")
-async def admin_pyq_bulk_create(body: PyqBulkCreate, _: None = Depends(verify_admin)):
+async def admin_pyq_bulk_create(body: PyqBulkCreate, _: None = Depends(verify_admin_or_contractor_pdf)):
     if not body.questions:
         return {"error": "No questions provided"}
     if any(q.subject not in ("Biology", "Physics", "Chemistry") for q in body.questions):
@@ -5304,14 +5360,14 @@ async def admin_pyq_bulk_create(body: PyqBulkCreate, _: None = Depends(verify_ad
         return {"error": str(e)}
 
 @app.post("/admin/pdf-mark-processed")
-def admin_pdf_mark_processed(req: PdfMarkProcessedRequest, _: None = Depends(verify_admin)):
+def admin_pdf_mark_processed(req: PdfMarkProcessedRequest, _: None = Depends(verify_admin_or_contractor_pdf)):
     if req.status not in ("completed", "failed"):
         return {"error": "Invalid status"}
     _update_processed_pdf_row(req.id, req.status, questions_extracted=req.questions_extracted, error_message=req.error_message)
     return {"success": True}
 
 @app.get("/admin/pdf-check-status")
-def admin_pdf_check_status(filename: str, _: None = Depends(verify_admin)):
+def admin_pdf_check_status(filename: str, _: None = Depends(verify_admin_or_contractor_pdf)):
     # Most recent processed_pdfs row for this filename, if any -- lets the frontend warn
     # before reprocessing a PDF that's already gone through the pipeline.
     try:
@@ -5333,7 +5389,7 @@ def admin_pdf_check_status(filename: str, _: None = Depends(verify_admin)):
         return {"error": str(e)}
 
 @app.get("/admin/processed-pdfs")
-def admin_processed_pdfs(_: None = Depends(verify_admin)):
+def admin_processed_pdfs(_: None = Depends(verify_admin_or_contractor_pdf)):
     try:
         response = http_requests.get(
             f"{SUPABASE_URL}/rest/v1/processed_pdfs",
