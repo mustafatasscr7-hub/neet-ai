@@ -788,7 +788,16 @@
       if (!text) return '';
       let html = text;
       html = html.replace(/\$\$([^$]+)\$\$/g, function(_, math) {
-        try { return '<div style="text-align:center;margin:8px 0;">' + katex.renderToString(math.trim(), { displayMode: true, throwOnError: false }) + '</div>'; } catch(e) { return _; }
+        // output:'html' -- KaTeX's default also emits a MathML <annotation> holding the raw TeX
+        // source verbatim (e.g. "CoCl_{3}"). Everything here gets run through marked.parse right
+        // after, and marked's own underscore-emphasis scanning doesn't know that text sits inside
+        // an already-rendered math tag -- it reads straight through, and an odd underscore count
+        // in that leaked source text corrupts <em> tags across arbitrarily far DOM structure,
+        // visibly duplicating raw "{3}"/"{5}" fragments next to the real rendered formula (found
+        // via a live PYQ: "$CoCl_{3}(NH_{3})_{5}$"). output:'html' drops the annotation entirely --
+        // the visible glyphs come only from .katex-html, never from .katex-mathml, so this is a
+        // no-op for what's actually on screen.
+        try { return '<div style="text-align:center;margin:8px 0;">' + katex.renderToString(math.trim(), { displayMode: true, throwOnError: false, output: 'html' }) + '</div>'; } catch(e) { return _; }
       });
       html = html.replace(/\$([^$\n]+)\$/g, function(_, math) {
         // Wrapped at 1.2em rather than sized via a competing CSS rule on .katex directly --
@@ -798,7 +807,11 @@
         // internal em-based sizing then still correctly inherits and scales from. Fractions in
         // particular (common in dimensional-formula options) read noticeably small at KaTeX's
         // own default scale since the numerator/denominator are already downscaled internally.
-        try { return '<span style="font-size:1.55em;">' + katex.renderToString(math.trim(), { displayMode: false, throwOnError: false }) + '</span>'; } catch(e) { return _; }
+        // output:'html' -- see the displayMode:true branch above for why this is required, not
+        // just tidy: without it, marked.parse (run on the line right after this) corrupts DOM
+        // structure around any subscript/superscript whose raw TeX source has an odd underscore
+        // count in it.
+        try { return '<span style="font-size:1.55em;">' + katex.renderToString(math.trim(), { displayMode: false, throwOnError: false, output: 'html' }) + '</span>'; } catch(e) { return _; }
       });
       // breaks:true so a single newline in question/option text (e.g. one option per line)
       // renders as a real line break -- marked's default CommonMark behavior collapses a lone

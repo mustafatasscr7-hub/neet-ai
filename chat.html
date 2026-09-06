@@ -2265,7 +2265,12 @@ let selectedImages = [];
           // rather than stacking with it -- rendering it natively bigger via KaTeX itself,
           // not via an em-scaled wrapper span.
           const source = p.isLast ? '\\Large ' + p.value : p.value;
-          const katexHtml = katex.renderToString(source, { displayMode: p.type === 'display', throwOnError: false });
+          // output:'html' -- this HTML ends up inside parseWithMath's own string, which runs
+          // through marked.parse right after (see parseWithMath below for the full explanation of
+          // why that makes KaTeX's default MathML <annotation> dangerous: marked's underscore-
+          // emphasis scanning reads straight through it and corrupts DOM structure whenever the
+          // raw TeX source it contains has an odd underscore count).
+          const katexHtml = katex.renderToString(source, { displayMode: p.type === 'display', throwOnError: false, output: 'html' });
           return p.isLast ? katexHtml : '<span class="' + (p.type === 'display' ? 'chat-math-display' : 'chat-math-inline') + '">' + katexHtml + '</span>';
         } catch (e) {
           return escapeHtml(p.type === 'display' ? '$$' + p.value + '$$' : '$' + p.value + '$');
@@ -2287,7 +2292,17 @@ let selectedImages = [];
       });
       html = html.replace(/\$\$([^$]+)\$\$/g, function(_, math) {
         try {
-          return '<div class="chat-math-display" style="text-align:center;margin:12px 0;overflow-x:auto;">' + katex.renderToString(math.trim(), { displayMode: true, throwOnError: false }) + '</div>';
+          // output:'html' -- see the DOMPurify.sanitize(marked.parse(...)) call at the end of this
+          // function: KaTeX's default MathML <annotation> holds the raw TeX source verbatim (e.g.
+          // "CoCl_{3}"), and marked's underscore-emphasis scanning reads straight through it, not
+          // knowing it's inside an already-rendered math tag -- an odd underscore count in that
+          // leaked text corrupts <em> tags across arbitrarily far DOM structure, visibly
+          // duplicating raw "{3}"/"{5}" fragments next to the real formula (confirmed via a real
+          // PYQ, "$CoCl_{3}(NH_{3})_{5}$", where this codebase's marked+DOMPurify+KaTeX pattern is
+          // shared verbatim with pyqbank.html/savedquestions.html/admin-pyq-preview.html). The
+          // visible glyphs come only from .katex-html, never from .katex-mathml, so dropping the
+          // annotation via output:'html' is a no-op for what's actually on screen.
+          return '<div class="chat-math-display" style="text-align:center;margin:12px 0;overflow-x:auto;">' + katex.renderToString(math.trim(), { displayMode: true, throwOnError: false, output: 'html' }) + '</div>';
         } catch(e) { return _; }
       });
       html = html.replace(/\$([^$\n]+)\$/g, function(_, math) {
@@ -2300,7 +2315,7 @@ let selectedImages = [];
           // em-based sizing then still correctly inherits and scales from. The actual size lives
           // in CSS (.chat-math-inline, scoped to .message-bubble.ai) rather than inline here, so
           // it applies uniformly and stays out of non-bubble contexts like the PYQ solve box.
-          return '<span class="chat-math-inline">' + katex.renderToString(math.trim(), { displayMode: false, throwOnError: false }) + '</span>';
+          return '<span class="chat-math-inline">' + katex.renderToString(math.trim(), { displayMode: false, throwOnError: false, output: 'html' }) + '</span>';
         } catch(e) { return _; }
       });
       // breaks:true so a single newline in question/option text (e.g. one option per line)
