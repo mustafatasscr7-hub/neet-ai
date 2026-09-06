@@ -95,6 +95,32 @@ gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 import requests as http_requests
 from process_pyq_vision import scan_pdf_bytes, scan_mock_test_pdf
 
+# Shared verbatim between SYSTEM_PROMPT (rule 12 below) and _VERIFY_MCQ_HEDGE_SYSTEM further down
+# -- kept as ONE constant specifically so the two can never drift out of sync the way they just
+# did: the verification prompt was left carrying the model's OLD, unfixed belief about this exact
+# comparison for a full commit after the main generation prompt was corrected, silently
+# overriding an already-correct first-pass "B" answer back to the old wrong "C" on every single
+# verification call. A second, independently-maintained copy would only reproduce that risk.
+_INERT_PAIR_EFFECT_SN_PB_FACTS = """The inert pair effect (the ns2 valence electron pair becoming increasingly reluctant to
+    take part in bonding) gets STRONGER going down Group 14 as atomic number increases: C -> Si
+    -> Ge -> Sn -> Pb.
+    - For LEAD (Pb), the effect is DOMINANT: Pb favors +2. PbCl2 is MORE stable than PbCl4. PbCl4
+      is a strong oxidising agent — it readily gets reduced to PbCl2 + Cl2, i.e. Pb(IV) "wants" to
+      become Pb(II). Pb(II) is Pb's settled, stable state, so it is NOT a reducing agent.
+    - For TIN (Sn), the effect is WEAKER — Sn sits higher up the group than Pb, so the trend has
+      not taken over yet. Sn STILL favors +4: SnCl4 is MORE stable than SnCl2, not less. Sn(II)
+      is the LESS stable state for tin, and is a well-known reducing agent for exactly that
+      reason — it readily gets oxidised to the more-stable Sn(IV) (e.g. Sn2+ + 2Ag+ -> Sn4+ +
+      2Ag).
+    - Sn and Pb sit on OPPOSITE sides of this comparison — do not apply Pb's pattern (favors +2)
+      to Sn by assuming the trend already applies uniformly across the whole group by the time
+      you reach Sn. It strengthens gradually down the group; it has not flipped tin's own
+      preference yet.
+    - Worked comparison, exactly the shape a real question asks: PbCl2 (stable) is more stable
+      than PbCl4 (unstable, oxidising agent); SnCl4 (stable) is more stable than SnCl2 (unstable,
+      reducing agent). A statement claiming "SnCl4 is less stable than SnCl2", or "Pb(II) is a
+      good reducing agent", is FALSE both times — the truth is the reverse of each."""
+
 SYSTEM_PROMPT = """You are NEET-AI — an expert tutor for Indian medical entrance exam preparation.
 
 You will be given relevant NCERT content to answer the student's question.
@@ -458,25 +484,7 @@ Rules:
     this specific comparison gets answered backwards, and that a live self-check doesn't fix it
     (the same wrong belief gets confidently re-confirmed) — so treat the reasoning below as
     something to copy exactly, not just a fact to recall from memory.
-    - The inert pair effect (the ns² valence electron pair becoming increasingly reluctant to
-      take part in bonding) gets STRONGER going down Group 14 as atomic number increases: C -> Si
-      -> Ge -> Sn -> Pb.
-    - For LEAD (Pb), the effect is DOMINANT: Pb favors +2. PbCl2 is MORE stable than PbCl4. PbCl4
-      is a strong oxidising agent — it readily gets reduced to PbCl2 + Cl2, i.e. Pb(IV) "wants" to
-      become Pb(II). Pb(II) is Pb's settled, stable state, so it is NOT a reducing agent.
-    - For TIN (Sn), the effect is WEAKER — Sn sits higher up the group than Pb, so the trend has
-      not taken over yet. Sn STILL favors +4: SnCl4 is MORE stable than SnCl2, not less. Sn(II)
-      is the LESS stable state for tin, and is a well-known reducing agent for exactly that
-      reason — it readily gets oxidised to the more-stable Sn(IV) (e.g. Sn2+ + 2Ag+ -> Sn4+ +
-      2Ag).
-    - Sn and Pb sit on OPPOSITE sides of this comparison — do not apply Pb's pattern (favors +2)
-      to Sn by assuming the trend already applies uniformly across the whole group by the time
-      you reach Sn. It strengthens gradually down the group; it has not flipped tin's own
-      preference yet.
-    - Worked comparison, exactly the shape a real question asks: PbCl2 (stable) is more stable
-      than PbCl4 (unstable, oxidising agent); SnCl4 (stable) is more stable than SnCl2 (unstable,
-      reducing agent). A statement claiming "SnCl4 is less stable than SnCl2", or "Pb(II) is a
-      good reducing agent", is FALSE both times — the truth is the reverse of each."""
+    """ + _INERT_PAIR_EFFECT_SN_PB_FACTS
 
 class ImageAttachment(BaseModel):
     data: str
@@ -2389,6 +2397,11 @@ writing it), so its stated final option cannot be trusted as-is.
 Re-derive the correct option from scratch: evaluate every option (A/B/C/D) independently against
 real, standard facts, exactly as if the PROPOSED ANSWER did not exist. Do not simply copy
 whatever option the PROPOSED ANSWER settled on.
+
+KNOWN FACT CORRECTION -- if this question involves the Group 14 inert pair effect (Sn, Pb, or
+their halides/oxidation states), re-derive using this, not your own prior belief about it, which
+has been confirmed wrong on exactly this comparison:
+""" + _INERT_PAIR_EFFECT_SN_PB_FACTS + """
 
 Output ONLY this exact format, nothing else -- no discussion, no "wait", no rechecking, no second
 draft:
