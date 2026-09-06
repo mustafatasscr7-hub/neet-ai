@@ -914,6 +914,32 @@ def _pdf_tier_for_plan(plan: str) -> str:
         return "max"
     return "pro"  # covers "pro" and any other non-free/non-max value defensively
 
+# Real logged doubts (253 across every real chat) top out at 273 characters even for the
+# longest, most fully-spelled-out 4-option MCQ ever typed -- median is 15. 1000 is roughly 3.7x
+# that real ceiling: generous headroom for any real doubt shape (including ones not yet seen in
+# this sample, e.g. a longer assertion-reason question), while still refusing an actual abuse
+# case (pasting a document's worth of text as a single "doubt"), which costs proportionally more
+# on every part of the pipeline that touches the raw text (the embedding call, the full LLM
+# input context) and had no ceiling at all before this.
+MAX_DOUBT_LENGTH = 1000
+
+def validate_doubt_length(text: str):
+    """Raises HTTPException(413) before any model call if the doubt text exceeds the hard
+    character cap -- same "reject with a clear error before any generation" timing and shape as
+    validate_pdf_limits below, called from the /chat route handler directly, not from inside
+    stream_response's generator (a mid-stream failure there would be a much worse UX than a
+    clean upfront rejection). The frontend's own maxlength="1000" on #userInput already stops
+    this in the overwhelming majority of real cases -- this is the real enforcement boundary for
+    anything that bypasses it (a direct API call, a modified request, etc.), so it must never
+    silently truncate: silently cutting off part of a student's real question would answer a
+    different, truncated question without ever telling them that happened."""
+    length = len(text or "")
+    if length > MAX_DOUBT_LENGTH:
+        raise HTTPException(status_code=413, detail={
+            "message": f"Your doubt is too long ({length} characters). Please keep it under {MAX_DOUBT_LENGTH} characters.",
+            "max_chars": MAX_DOUBT_LENGTH, "length": length
+        })
+
 async def validate_pdf_limits(pdf_b64: "str | None", user_id: str):
     """Raises HTTPException(413) before any Gemini call if the PDF exceeds the user's tier
     limit -- called from the /chat route handler (not inside stream_response's generator),
@@ -3080,6 +3106,7 @@ async def send_otp(req: PhoneOtpRequest, _: None = Depends(rate_limiter(3, 600))
 @app.post("/chat")
 async def chat(message: Message, request: Request, _: None = Depends(rate_limiter(15, 60))):
     ip = _client_ip(request)
+    validate_doubt_length(message.text)
     await enforce_daily_budget(message.user_id, ip)
     await validate_pdf_limits(message.pdf, message.user_id)
     return StreamingResponse(

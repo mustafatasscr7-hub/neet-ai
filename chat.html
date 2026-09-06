@@ -1284,7 +1284,7 @@
             </div>
           </div>
         </div>
-        <textarea id="userInput" placeholder="Ask your NEET doubt..." rows="1" data-i18n-placeholder="chat.askPlaceholder"></textarea>
+        <textarea id="userInput" placeholder="Ask your NEET doubt..." rows="1" maxlength="1000" data-i18n-placeholder="chat.askPlaceholder"></textarea>
         <button id="voiceBtn" class="voice-btn" onclick="toggleVoice()" style="background:transparent;border:none;color:#666;cursor:pointer;padding:6px;display:flex;align-items:center;flex-shrink:0;border-radius:8px;" title="Voice input" data-i18n-title="chat.voiceInput">
           <svg class="voice-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
         </button>
@@ -1293,6 +1293,7 @@
           <svg id="stopIcon" viewBox="0 0 24 24" style="display:none"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
         </button>
     </div>
+      <div id="charCounter" style="display:none;text-align:right;font-size:11px;padding:0 4px;"></div>
       </div>
       <div class="input-hint" data-i18n="chat.disclaimerMistakes">NEET-AI can make mistakes. Please verify important answers.</div>
     </div>
@@ -6027,11 +6028,23 @@ function plainTextFromMarkdown(text) {
           } else if (response.status === 413) {
             let detail = {};
             try { detail = (await response.json()).detail || {}; } catch (e) {}
-            let msg = t('chat', 'pdfLimitExceeded')
-              .replace('{size}', localizeNum(detail.max_mb ?? ''))
-              .replace('{pages}', localizeNum(detail.max_pages ?? ''));
-            if (detail.next_tier) {
-              msg += ' ' + t('chat', 'pdfLimitUpgrade').replace('{tier}', detail.next_tier);
+            // Two different things share this status code: a too-long doubt (max_chars) and an
+            // oversized PDF (max_mb) -- distinguished by which fields the backend's own detail
+            // object actually carries, since validate_doubt_length and validate_pdf_limits never
+            // both fire on the same request (a doubt-length rejection happens before the PDF
+            // check even runs).
+            let msg;
+            if (detail.max_chars !== undefined) {
+              msg = t('chat', 'doubtTooLong')
+                .replace('{length}', localizeNum(detail.length ?? ''))
+                .replace('{max}', localizeNum(detail.max_chars ?? ''));
+            } else {
+              msg = t('chat', 'pdfLimitExceeded')
+                .replace('{size}', localizeNum(detail.max_mb ?? ''))
+                .replace('{pages}', localizeNum(detail.max_pages ?? ''));
+              if (detail.next_tier) {
+                msg += ' ' + t('chat', 'pdfLimitUpgrade').replace('{tier}', detail.next_tier);
+              }
             }
             addMessageRow('ai', msg, undefined, aiIndex);
           } else {
@@ -6993,10 +7006,27 @@ function plainTextFromMarkdown(text) {
       }
     });
 
+    const CHAR_LIMIT = 1000;
+    // Stays hidden for the overwhelming majority of real typing (median real doubt is ~15 chars,
+    // longest ever logged is 273) -- only becomes relevant once someone is genuinely closing in
+    // on the cap, same "quiet until it matters" approach as the 80%-of-daily-cap usage banner.
+    function updateCharCounter(el) {
+      const counter = document.getElementById('charCounter');
+      const len = el.value.length;
+      if (len < 900) {
+        counter.style.display = 'none';
+        return;
+      }
+      counter.style.display = 'block';
+      counter.textContent = `${len}/${CHAR_LIMIT}`;
+      counter.style.color = len >= CHAR_LIMIT ? '#ef4444' : (len >= 950 ? '#f59e0b' : '#666');
+    }
+
     input.addEventListener('input', function() {
       this.style.height = 'auto';
       this.style.height = Math.min(this.scrollHeight, 160) + 'px';
       updateSlashMenuForInput(this);
+      updateCharCounter(this);
     });
 
     document.getElementById('welcomeInput').addEventListener('keydown', function(e) {
