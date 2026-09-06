@@ -2093,6 +2093,60 @@ async def log_provider_usage(provider: str, peak_window: bool, input_tokens: int
     except Exception:
         pass
 
+def _hash_media_files(images: list, pdf: Optional[str]) -> list:
+    """Computes hash+type+size for the raw submitted bytes, without keeping the bytes themselves
+    -- called before the Gemini call so the metadata exists even if the stream is interrupted
+    before finishing. Returns a list of {hash, media_type, size_bytes} dicts: one per image, or a
+    single entry for a PDF. Decoding is cheap relative to the model call itself (base64 is already
+    in memory), so this adds no meaningful latency."""
+    files = []
+    if images:
+        for img in images:
+            try:
+                raw = base64.b64decode(img.data)
+                files.append({
+                    "hash": hashlib.sha256(raw).hexdigest(),
+                    "media_type": img.media_type or "image/jpeg",
+                    "size_bytes": len(raw)
+                })
+            except Exception:
+                pass
+    elif pdf:
+        try:
+            raw = base64.b64decode(pdf)
+            files.append({
+                "hash": hashlib.sha256(raw).hexdigest(),
+                "media_type": "application/pdf",
+                "size_bytes": len(raw)
+            })
+        except Exception:
+            pass
+    return files
+
+async def log_media_doubt(user_id: str, ip: str, doubt_type: str, files: list, response_text: str):
+    """Server-side audit trail for image/PDF doubts, written unconditionally once generation
+    completes -- independent of whether the client is still connected or ever calls its own
+    chat-save endpoint. Before this, the only record of an image/PDF doubt was provider_usage_log
+    (token counts/cost only, no content) plus whatever the *client* chose to persist to `chats`,
+    which turned out to be nothing for every real image/PDF call ever logged (see the RAG/Gemini
+    audit this fixes). See create_media_doubt_log_table.sql; RLS locked to the service-role key
+    only, same as provider_usage_log -- this is an internal audit table, never served to a client.
+    Best-effort like log_provider_usage: never let a logging failure affect the student-facing
+    response, which has already been fully streamed by the time this runs."""
+    try:
+        await async_client.post(
+            f"{SUPABASE_URL}/rest/v1/media_doubt_log", headers={**ADMIN_HEADERS, "Content-Type": "application/json"},
+            json={
+                "user_id": user_id or None,
+                "ip": ip or None,
+                "doubt_type": doubt_type,
+                "files": files,
+                "response_text": response_text
+            }
+        )
+    except Exception:
+        pass
+
 async def _stream_qwen(system: str, messages: list, user_id: str, ip: str, endpoint: str, billing_context: dict = None, max_tokens: int = 1024):
     """Yields text chunks from Qwen-Flash and logs real usage. Any failure -- at connection time
     or partway through the stream -- propagates to the caller as-is; _stream_with_peak_fallback
@@ -2741,6 +2795,10 @@ IMPORTANT -- BE CONCISE:
             selected_model = "gemini-3.5-flash-lite"
             print(f"MODEL SELECTED: {selected_model}", flush=True)
             sys.stdout.flush()
+            # Computed up front (before the call, not after) so it's already in hand even if the
+            # stream below is interrupted mid-way -- see log_media_doubt's own docstring for why
+            # this write can no longer depend on the client completing anything.
+            media_files = _hash_media_files(images, None)
             image_parts = [
                 genai_types.Part.from_bytes(
                     data=base64.b64decode(img.data),
@@ -2781,6 +2839,11 @@ IMPORTANT -- BE CONCISE:
                         await log_token_usage(user_id, last_usage.prompt_token_count + last_usage.candidates_token_count, ip)
                     except Exception:
                         pass
+                if full_answer:
+                    try:
+                        await log_media_doubt(user_id, ip, "image", media_files, full_answer)
+                    except Exception:
+                        pass
             return
         elif pdf:
             # Moved off Claude to Gemini 3.5 Flash-Lite -- same client/pattern as the images
@@ -2789,6 +2852,7 @@ IMPORTANT -- BE CONCISE:
             selected_model = "gemini-3.5-flash-lite"
             print(f"MODEL SELECTED: {selected_model}", flush=True)
             sys.stdout.flush()
+            media_files = _hash_media_files(None, pdf)
             pdf_part = genai_types.Part.from_bytes(data=base64.b64decode(pdf), mime_type="application/pdf")
             gemini_stream = await gemini_client.aio.models.generate_content_stream(
                 model=selected_model,
@@ -2817,6 +2881,11 @@ IMPORTANT -- BE CONCISE:
                         pass
                     try:
                         await log_token_usage(user_id, last_usage.prompt_token_count + last_usage.candidates_token_count, ip)
+                    except Exception:
+                        pass
+                if full_answer:
+                    try:
+                        await log_media_doubt(user_id, ip, "pdf", media_files, full_answer)
                     except Exception:
                         pass
             return
