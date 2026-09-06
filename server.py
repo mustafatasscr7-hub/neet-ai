@@ -3676,6 +3676,16 @@ async def referral_status(user_id: str):
         bonus_rows = bonus_resp.json() if bonus_resp.status_code == 200 else []
         bonus_balance = bonus_rows[0]["balance"] if bonus_rows else 0
 
+        # No separate "total granted" column to track -- every completed referral this account was
+        # ever part of (as referrer, or the one time it could be the referred side) credited exactly
+        # REFERRAL_BONUS_TOKENS, so the sum is fully recoverable from the referrals rows already
+        # fetched above. Lets the frontend show "% of bonus remaining" without a schema change, and
+        # correctly reflects a fresh grant arriving on top of a partially-spent balance (e.g. a
+        # referrer who earns a second referral before spending down the first sees the bar jump back
+        # toward full, not stay stuck relative to only the first grant).
+        was_referred_completed = bool(referred_by_rows) and referred_by_rows[0]["status"] == "completed"
+        bonus_total_granted = REFERRAL_BONUS_TOKENS * (completed_referrals + (1 if was_referred_completed else 0))
+
         return {
             "code": _referral_code_for_user(user_id),
             "was_referred": bool(referred_by_rows),
@@ -3683,6 +3693,7 @@ async def referral_status(user_id: str):
             "referrals_completed": completed_referrals,
             "referrals_pending": pending_referrals,
             "bonus_balance": bonus_balance,
+            "bonus_total_granted": bonus_total_granted,
         }
     except Exception as e:
         return {"error": str(e)}

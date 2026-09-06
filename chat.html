@@ -5669,6 +5669,11 @@ function plainTextFromMarkdown(text) {
     }
 
     async function refreshUsageBanner() {
+      // Also keeps the Settings > Usage tab's bars (including the Referral Bonus one, which needs
+      // to visibly deplete right after a text doubt spends from it) live -- refreshUsageBanner()
+      // already runs after every doubt completes, so piggybacking here means no separate polling
+      // loop is needed. renderUsageSection no-ops immediately if that tab isn't the one open.
+      renderUsageSection();
       const warningEl = document.getElementById('usageWarning');
       const limitEl = document.getElementById('limitBanner');
       const proWarningEl = document.getElementById('proUsageWarningBanner');
@@ -6819,12 +6824,35 @@ function plainTextFromMarkdown(text) {
       if (isManualRefresh) container.style.opacity = '0.6';
 
       try {
-        const res = await fetch(`${API_BASE}/usage/summary?user_id=${encodeURIComponent(session.user.id)}`);
+        const [res, referralRes] = await Promise.all([
+          fetch(`${API_BASE}/usage/summary?user_id=${encodeURIComponent(session.user.id)}`),
+          fetch(`${API_BASE}/referral/status?user_id=${encodeURIComponent(session.user.id)}`)
+        ]);
         const data = await res.json();
+        const referralData = await referralRes.json().catch(() => null);
         if (document.getElementById('usageSummaryContainer') !== container) return; // tab changed mid-fetch
 
         const todayData = data.today;
         const w = data.weekly;
+
+        // Bonus section is entirely omitted once the balance hits 0 -- not shown as "exhausted",
+        // just gone -- so a student who never referred anyone, or fully spent what they earned,
+        // sees a Usage tab identical to before this feature existed.
+        const bonusBalance = referralData && !referralData.error ? (referralData.bonus_balance || 0) : 0;
+        const bonusTotal = referralData ? (referralData.bonus_total_granted || 0) : 0;
+        const bonusPercent = bonusTotal > 0 ? Math.max(0, Math.min(100, Math.round((bonusBalance / bonusTotal) * 100))) : 0;
+        const bonusSectionHtml = bonusBalance > 0 ? `
+          <div class="usage-section">
+            <div class="usage-section-head">
+              <span class="usage-section-title">${t('chat', 'referralBonusHeading')}</span>
+              <span class="usage-section-stat" style="color:#4ade80;">${t('chat', 'referralBonusActive')}</span>
+            </div>
+            <div class="usage-bar-track">
+              <div class="usage-bar-fill" style="width:${bonusPercent}%;background:linear-gradient(90deg,#a78bfa,#7c3aed);"></div>
+            </div>
+            <div class="usage-section-sub">${t('chat', 'referralBonusSub')}</div>
+          </div>
+        ` : '';
 
         // Rounded to whole numbers for display only (standard round-half-up, via Math.round) --
         // the real percent_used from the server keeps its 1-decimal precision for whatever else
@@ -6838,6 +6866,7 @@ function plainTextFromMarkdown(text) {
         const weekGradient = w.unlimited ? 'linear-gradient(90deg,#86e6ae,#4ade80)' : usageBarGradient(weekPercent);
 
         container.innerHTML = `
+          ${bonusSectionHtml}
           <div class="usage-section">
             <div class="usage-section-head">
               <span class="usage-section-title">${t('chat', 'usageTodayHeading')}</span>
