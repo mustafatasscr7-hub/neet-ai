@@ -2313,6 +2313,89 @@ async def _stream_qwen_verified(system: str, messages: list, problem_text: str, 
     missing_quantity = _extract_missing_quantity(verify_raw)
     yield _build_insufficient_data_answer(missing_quantity)
 
+_NCERT_CHAPTER_LINE_PREFIX = "📚 Chapter:"
+# Deliberately identical wording to the SYSTEM_PROMPT's own fallback instruction (rule 1, step
+# B) -- this is what the model is ALREADY told to write by hand when nothing was retrieved. The
+# prompt instruction alone isn't reliable (a live audit found it fabricating specific wrong
+# citations instead -- e.g. "NCERT Class X, Chapter 5" for osmosis, or claiming a real NCERT
+# topic like the spectrochemical series doesn't exist in the syllabus at all), so this constant
+# is what actually reaches the student now, written here in code instead of trusted to the model.
+_NCERT_NO_RETRIEVAL_CHAPTER_LINE = "📚 Chapter: Not available — answering from general knowledge, not a specific retrieved NCERT chapter."
+# Generous enough to comfortably hold "VISUAL_INTENT: no\n\nNEET Importance: N/5\n\n" plus the
+# Chapter line itself (observed real answers: well under 150 chars to that point) with margin,
+# but small enough that a conversational or clarify-type reply -- which never contains "Answer:"
+# or a Chapter line at all, by the prompt's own format rules -- doesn't sit buffered for long
+# before the safety valve below flushes it unmodified.
+_CITATION_LOCK_BUFFER_CAP = 220
+
+async def _force_citation_when_no_retrieval(stream, has_retrieval: bool):
+    """Wraps a text-doubt's answer stream and deterministically overrides whatever the model
+    wrote (or omitted) on the 📚 Chapter: line when search_ncert() found nothing for this doubt
+    -- see the two fabrication examples in the constant's comment above, both confirmed via live
+    audit against real logged doubts. has_retrieval=True (a real NCERT match was found) makes
+    this a complete no-op passthrough at zero cost -- those answers are entirely unaffected by
+    this function, exactly as before.
+
+    Only buffers the small prefix up through the Chapter line (or through the literal "Answer:"
+    that always immediately follows it, if the model chose the prompt's other allowed option of
+    omitting the line entirely) -- everything after that point streams live and unmodified, so
+    this costs at most one short, near-instant buffering delay at the very start of an answer,
+    not the full-response buffering _stream_qwen_verified uses (that one has no choice, since
+    verification needs the complete answer before it can decide anything; this fix doesn't need
+    to inspect the model's answer content at all, only find-and-replace one already-fixed line).
+
+    Bails out immediately (no buffering at all beyond what's already accumulated) the instant a
+    conversational (DOUBT_TYPE:) or ambiguous/clarify (AMBIGUOUS: yes) reply is detected, since
+    the SYSTEM_PROMPT's own format rules mean neither of those ever contains a Chapter line --
+    without this, such a reply would sit buffered until the safety-valve cap below, for nothing.
+    """
+    if has_retrieval:
+        async for chunk in stream:
+            yield chunk
+        return
+
+    buffer = ""
+    resolved = False
+    async for chunk in stream:
+        if resolved:
+            yield chunk
+            continue
+        buffer += chunk
+
+        if "DOUBT_TYPE:" in buffer or "AMBIGUOUS: yes" in buffer:
+            resolved = True
+            yield buffer
+            continue
+
+        chapter_idx = buffer.find(_NCERT_CHAPTER_LINE_PREFIX)
+        if chapter_idx != -1:
+            nl_idx = buffer.find("\n", chapter_idx)
+            if nl_idx == -1 and len(buffer) - chapter_idx < 300:
+                continue  # the Chapter line itself is still arriving mid-line
+            if nl_idx == -1:
+                nl_idx = len(buffer)
+            resolved = True
+            yield buffer[:chapter_idx] + _NCERT_NO_RETRIEVAL_CHAPTER_LINE + buffer[nl_idx:]
+            continue
+
+        answer_idx = buffer.find("Answer:")
+        if answer_idx != -1:
+            # Model took the prompt's other allowed option and omitted the Chapter line
+            # entirely -- insert the fixed line right before Answer: instead, so it's always
+            # present and consistent regardless of which option the model happened to pick.
+            resolved = True
+            yield buffer[:answer_idx] + _NCERT_NO_RETRIEVAL_CHAPTER_LINE + "\n\n" + buffer[answer_idx:]
+            continue
+
+        if len(buffer) > _CITATION_LOCK_BUFFER_CAP:
+            # Safety valve: the expected markers never showed up within a generous prefix
+            # window (an answer shape this function didn't anticipate) -- flush as-is rather
+            # than buffering indefinitely or risking mangling something unexpected.
+            resolved = True
+            yield buffer
+    if not resolved and buffer:
+        yield buffer
+
 async def stream_response(text: str, history: list = [], images: list = [], pdf: str = None, answer_style: str = "detailed", student_name: str = "", language: str = "en", user_id: str = "", personalize: bool = True, skip_cache: bool = False, ip: str = ""):
     images = (images or [])[:3]
     import hashlib
@@ -2588,7 +2671,7 @@ IMPORTANT -- BE CONCISE:
             pending = ""
             checkpoint = 0
             override_needed = False
-            async for text_chunk in _rest_of_stream():
+            async for text_chunk in _force_citation_when_no_retrieval(_rest_of_stream(), bool(results)):
                 full_answer += text_chunk
 
                 if checkpoint == 2:
@@ -2662,7 +2745,8 @@ IMPORTANT -- BE CONCISE:
                 )
                 full_answer = ""
                 billing_context = {"bill": True}
-                async for text_chunk in _stream_with_peak_fallback(override_system, messages, user_id, ip, "/chat", billing_context, force_qwen):
+                override_stream = _stream_with_peak_fallback(override_system, messages, user_id, ip, "/chat", billing_context, force_qwen)
+                async for text_chunk in _force_citation_when_no_retrieval(override_stream, bool(results)):
                     full_answer += text_chunk
                     yield text_chunk
             if not images and not pdf and use_shared_cache:
