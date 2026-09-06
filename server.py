@@ -2313,6 +2313,130 @@ async def _stream_qwen_verified(system: str, messages: list, problem_text: str, 
     missing_quantity = _extract_missing_quantity(verify_raw)
     yield _build_insufficient_data_answer(missing_quantity)
 
+# ---------- Second-pass verification for MCQ answers that hedge on their own final choice ----------
+# Live-audit finding, distinct from the borrowed-value trap above: on a "which of these
+# statements is false" MCQ with more than one plausible-looking wrong option (real example: an
+# inert-pair-effect question about SnCl2/SnCl4/PbCl2/PbCl4 stability), the model's own reasoning
+# visibly backtracked mid-answer ("Wait -- let me re-check... However, we need to pick the single
+# incorrect statement. Both C and D appear incorrect...") and settled on a letter that doesn't
+# match the standard published answer for that exact fact pattern -- despite getting the
+# underlying chemistry trend right. This is a different failure shape than insufficient-data: the
+# model isn't fabricating a number from missing data, it's failing to reliably commit to the
+# right option once it's already noticed more than one candidate looks wrong. Gated purely on the
+# QUESTION being MCQ-shaped (cheap, known before generation, same style as
+# _is_multi_object_numerical) -- hedging itself can only be checked after the answer exists, so
+# unlike the numeric trigger this always buffers an MCQ's first pass rather than streaming it
+# live; the SIMULATED_STREAM replay (see _stream_qwen_verified above) keeps that invisible to the
+# student regardless of whether hedging actually ends up firing.
+_MCQ_OPTION_RE = re.compile(r'(?<![A-Za-z0-9])([A-Da-d])[\.\)]\s', re.MULTILINE)
+
+def _is_mcq_shaped(text: str) -> bool:
+    """At least 3 distinct lettered options (A-D, either case) present in the question -- same
+    reasoning as _is_multi_object_numerical's own threshold choice: a single stray "A." elsewhere
+    in the text (e.g. citing a source) shouldn't count, but real 4-option MCQs clear this easily
+    even if one option is formatted slightly differently than the other three. Deliberately NOT
+    anchored to line-start/newline -- confirmed live that real student-typed MCQs are often
+    submitted as one run-on line ("...will be:  A) 3 J B) 6 J C) 9 J D) 18 J") with no newlines
+    between options at all, which an earlier line-anchored version of this regex missed entirely
+    (matched zero options, silently skipping the whole mechanism for exactly this common shape)."""
+    letters = set(m.group(1).upper() for m in _MCQ_OPTION_RE.finditer(text))
+    return len(letters) >= 3
+
+# Deliberately broad per the audit's own examples, not narrowed in advance -- "however" and
+# "actually" alone are common in ordinary explanatory prose too (real false-positive risk), but
+# rather than guess at a tighter pattern up front, this ships as specified and gets measured
+# against a real sample of logged answers (see the trigger-rate report) so any narrowing later is
+# based on an actual observed false-positive rate, not a guess -- same "measure, don't assume"
+# discipline this codebase has already applied elsewhere (e.g. the verify-prompt latency trim).
+_HEDGE_PATTERNS = [
+    re.compile(r'\bwait\b[\s,—-]', re.IGNORECASE),
+    re.compile(r'let me re-?(check|evaluate|consider|examine|analyze)', re.IGNORECASE),
+    re.compile(r'\bhowever\b', re.IGNORECASE),
+    re.compile(r'\bactually\b', re.IGNORECASE),
+    re.compile(r'\bboth\s+\w+\s+and\s+\w+\s+(appear|seem|look|are)\b', re.IGNORECASE),
+]
+
+def _has_hedging_language(text: str) -> bool:
+    return any(p.search(text) for p in _HEDGE_PATTERNS)
+
+_VERIFY_MCQ_HEDGE_SYSTEM = """The ORIGINAL QUESTION is a multiple-choice question. The PROPOSED ANSWER
+below contains hedging or self-contradictory reasoning (the model second-guessed itself while
+writing it), so its stated final option cannot be trusted as-is.
+
+Re-derive the correct option from scratch: evaluate every option (A/B/C/D) independently against
+real, standard facts, exactly as if the PROPOSED ANSWER did not exist. Do not simply copy
+whatever option the PROPOSED ANSWER settled on.
+
+Output ONLY this exact format, nothing else -- no discussion, no "wait", no rechecking, no second
+draft:
+FINAL_OPTION: <single letter, A or B or C or D>
+REASON: <under 15 words>"""
+
+_VERIFY_MCQ_HEDGE_MAX_TOKENS = 80
+
+_FINAL_OPTION_RE = re.compile(r'FINAL_OPTION:\s*\(?([A-D])\)?', re.IGNORECASE)
+_HEDGE_REASON_RE = re.compile(r'REASON:\s*(.+)', re.IGNORECASE)
+
+async def _verify_mcq_hedge(question_text: str, first_answer: str, user_id: str, ip: str, billing_context: dict = None):
+    """Same shape as _verify_given_values: a focused, independent second call whose verdict is
+    parsed from a rigid output format in code, not trusted from the model's own free-text
+    conclusion. Unlike a 3rd call that asks the ORIGINAL model to fix its own answer (tried for
+    the insufficient-data trap, reproduced the same mistake 4/5 times because the model re-reads
+    its own prior commitment) this call never sees the PROPOSED ANSWER's conclusion as something
+    to defend -- it's told outright the conclusion is unreliable and to re-derive independently,
+    which is a materially different (and, per _verify_given_values' own precedent, trustworthy)
+    task than "please reconsider and fix your answer."""
+    user_msg = f"ORIGINAL QUESTION:\n{question_text}\n\nPROPOSED ANSWER (self-contradictory, do not trust its conclusion):\n{first_answer}"
+    messages = [{"role": "user", "content": user_msg}]
+    chunks = []
+    async for c in _stream_qwen(_VERIFY_MCQ_HEDGE_SYSTEM, messages, user_id, ip, "/chat-verify", billing_context, max_tokens=_VERIFY_MCQ_HEDGE_MAX_TOKENS):
+        chunks.append(c)
+    full = "".join(chunks)
+    option_match = _FINAL_OPTION_RE.search(full)
+    reason_match = _HEDGE_REASON_RE.search(full)
+    option = option_match.group(1).upper() if option_match else None
+    reason = reason_match.group(1).strip() if reason_match else None
+    return option, reason
+
+def _append_hedge_verification_note(first_answer: str, option: str, reason: str) -> str:
+    # Appended, never spliced into/over the original text -- editing the original answer's own
+    # "Final Answer:" line in place would require reliably locating it across many different
+    # phrasings the model uses (confirmed inconsistent in real samples: "Answer: C) 9 J",
+    # "Final Answer: Option B -- 20 m", or just prose like "...the wrong statement is Option C").
+    # Appending a clearly-labelled note sidesteps that fragile extraction entirely and is honest
+    # about what happened, rather than silently rewriting the model's own reasoning after the
+    # fact -- shown regardless of whether it agrees with or corrects the original, since a
+    # confirming note is still useful signal that the hedge didn't end up mattering.
+    note = f"\n\n---\n🔍 **Verification check** (this answer second-guessed itself, so it was independently re-checked): the correct option is **{option}**"
+    if reason:
+        note += f" -- {reason}."
+    else:
+        note += "."
+    return first_answer + note
+
+async def _stream_mcq_hedge_verified(system: str, messages: list, question_text: str, user_id: str, ip: str, endpoint: str, billing_context: dict = None, force_qwen: bool = False):
+    """Used only when the question matches _is_mcq_shaped -- see the trigger condition in
+    stream_response's text branch. Buffers the full first answer (from whichever model
+    _stream_with_peak_fallback would have picked anyway -- this isn't Qwen-specific the way the
+    insufficient-data verifier is, since the audit's own confirmed failure case was a DeepSeek
+    answer), then only spends a second call if _has_hedging_language finds something in it."""
+    chunks = []
+    async for c in _stream_with_peak_fallback(system, messages, user_id, ip, endpoint, billing_context, force_qwen):
+        chunks.append(c)
+    first_answer = "".join(chunks)
+
+    if not _has_hedging_language(first_answer):
+        yield SIMULATED_STREAM_MARKER
+        yield first_answer
+        return
+
+    yield SIMULATED_STREAM_MARKER
+    option, reason = await _verify_mcq_hedge(question_text, first_answer, user_id, ip, billing_context)
+    if option:
+        yield _append_hedge_verification_note(first_answer, option, reason)
+    else:
+        yield first_answer
+
 _NCERT_CHAPTER_LINE_PREFIX = "📚 Chapter:"
 # Deliberately identical wording to the SYSTEM_PROMPT's own fallback instruction (rule 1, step
 # B) -- this is what the model is ALREADY told to write by hand when nothing was retrieved. The
@@ -2638,8 +2762,15 @@ IMPORTANT -- BE CONCISE:
             # unaffected and streams exactly as before.
             use_qwen_for_this_request = is_peak or force_qwen
             multi_object_numerical = use_qwen_for_this_request and _is_multi_object_numerical(text)
+            # Checked as a separate elif, not stacked with multi_object_numerical -- a question
+            # matching both is theoretically possible but not worth double-buffering/verifying
+            # for; the borrowed-value trap's own trigger takes priority since it's the
+            # longer-established, Qwen-specific mechanism.
+            mcq_shaped = (not multi_object_numerical) and _is_mcq_shaped(text)
             if multi_object_numerical:
                 stream_source = _stream_qwen_verified(full_system, messages, text, user_id, ip, "/chat", billing_context)
+            elif mcq_shaped:
+                stream_source = _stream_mcq_hedge_verified(full_system, messages, text, user_id, ip, "/chat", billing_context, force_qwen)
             else:
                 stream_source = _stream_with_peak_fallback(full_system, messages, user_id, ip, "/chat", billing_context, force_qwen)
 
