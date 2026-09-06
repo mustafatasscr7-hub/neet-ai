@@ -74,6 +74,10 @@
   .batch-item .item-status { font-size: 10px; margin-top: 6px; min-height: 12px; }
   .batch-item .item-status.error { color: #ef4444; }
   .batch-item .item-status.success { color: #4ade80; }
+  .star-rating-input { display: flex; gap: 3px; cursor: pointer; font-size: 16px; line-height: 1; margin-top: 6px; }
+  .star-rating-input .star-choice { color: #3a3a3a; transition: color 0.1s ease; }
+  .star-rating-input .star-choice.star-filled { color: #f5c518; }
+  .star-rating-input .star-choice:hover { color: #f5c518; }
   .hindi-badge { font-size: 10px; padding: 2px 7px; border-radius: 20px; font-weight: 600; display: inline-block; background: #f9731620; color: #f97316; margin-left: 6px; }
 
   #uploadStatus { font-size: 12px; margin-top: 12px; display: none; }
@@ -327,7 +331,8 @@
       name: deriveNameFromFilename(filename || file.name),
       description: '',
       nameHi: '',
-      descriptionHi: ''
+      descriptionHi: '',
+      importanceRating: 0
     });
   }
 
@@ -380,6 +385,9 @@
             <input type="text" value="${escapeHtml(item.descriptionHi)}" placeholder="विवरण (optional)" oninput="updateItemField(${item.id}, 'descriptionHi', this.value)"/>
           </div>
         </div>
+        <div class="star-rating-input" title="Importance rating">
+          ${[1, 2, 3, 4, 5].map(n => `<span class="star-choice ${n <= item.importanceRating ? 'star-filled' : ''}" onclick="setItemRating(${item.id}, ${n})">★</span>`).join('')}
+        </div>
         <div class="item-status" id="item-status-${item.id}"></div>
       </div>
     `).join('');
@@ -390,6 +398,15 @@
   function updateItemField(id, field, value) {
     const item = pendingImages.find(p => p.id === id);
     if (item) item[field] = value;
+  }
+
+  // Clicking the currently-selected top star again clears the rating back to unrated (0/null) --
+  // otherwise there'd be no way to undo a rating before upload without removing the whole item.
+  function setItemRating(id, rating) {
+    const item = pendingImages.find(p => p.id === id);
+    if (!item) return;
+    item.importanceRating = (item.importanceRating === rating) ? 0 : rating;
+    renderBatchGrid();
   }
 
   function removeBatchItem(id) {
@@ -437,7 +454,8 @@
           description: item.description.trim() || null,
           name_hi: item.nameHi.trim() || null,
           description_hi: item.descriptionHi.trim() || null,
-          image_url: uploadData.url
+          image_url: uploadData.url,
+          importance_rating: item.importanceRating || null
         })
       });
       if (createRes.status === 401) return { id: item.id, error: 'unauthorized' };
@@ -529,6 +547,7 @@
         <td>
           <div class="row-name">${escapeHtml(d.name)}${(d.name_hi || d.description_hi || d.subtopic_hi) ? '<span class="hindi-badge" title="Has Hindi metadata">हिं</span>' : ''}</div>
           ${d.description ? `<div class="row-desc">${escapeHtml(d.description)}</div>` : ''}
+          ${d.importance_rating ? `<div class="row-desc" style="color:#f5c518;letter-spacing:1px;">${'★'.repeat(d.importance_rating)}${'☆'.repeat(5 - d.importance_rating)}</div>` : ''}
         </td>
         <td><span class="subject-chip ${escapeHtml(d.subject)}">${escapeHtml(d.subject)}</span></td>
         <td>${d.class != null ? escapeHtml(String(d.class)) : '—'}</td>

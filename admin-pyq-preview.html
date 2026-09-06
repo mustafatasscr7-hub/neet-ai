@@ -199,6 +199,11 @@
     .lang-section-label { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: #4f8ef7; margin-bottom: 6px; }
     .lang-section-label.hindi { color: #f97316; }
     .hindi-badge { font-size: 10px; padding: 2px 7px; border-radius: 20px; font-weight: 600; display: inline-block; background: #f9731620; color: #f97316; margin-left: 6px; }
+    .star-rating-input { display: flex; gap: 3px; cursor: pointer; font-size: 18px; line-height: 1; }
+    .star-rating-input .star-choice { color: #3a3a3a; transition: color 0.1s ease; }
+    .star-rating-input .star-choice.star-filled { color: #f5c518; }
+    .star-rating-input .star-choice:hover { color: #f5c518; }
+    .diagram-stars-view { font-size: 12px; letter-spacing: 1px; color: #f5c518; margin-top: 4px; }
   </style>
 </head>
 <body>
@@ -1604,6 +1609,13 @@
       area.querySelectorAll('.q-edit-field textarea').forEach(autoResizeTextarea);
     }
 
+    // Read-only display, same glyphs/fill logic the student-facing views use -- omitted
+    // entirely for an unrated diagram (d.importance_rating is null), never shown as 0 stars.
+    function diagramStarsViewHtml(rating) {
+      if (!rating) return '';
+      return `<div class="diagram-stars-view">${'★'.repeat(rating)}${'☆'.repeat(5 - rating)}</div>`;
+    }
+
     function diagramViewCardHtml(d) {
       const statusBadge = d.reviewed
         ? '<span class="q-confirmed-flag">Confirmed</span>'
@@ -1625,6 +1637,7 @@
           ${d.description ? `<div class="q-text" style="font-size:12px;color:#888;">${escapeHtml(d.description)}</div>` : ''}
           ${d.name_hi ? `<div class="q-text" style="margin-top:6px;margin-bottom:4px;"><strong>${escapeHtml(d.name_hi)}</strong></div>` : ''}
           ${d.description_hi ? `<div class="q-text" style="font-size:12px;color:#888;">${escapeHtml(d.description_hi)}</div>` : ''}
+          ${diagramStarsViewHtml(d.importance_rating)}
           <div class="q-admin-bar">
             <span class="q-admin-id">${d.id}</span>
             <button type="button" class="q-edit-btn" onclick="startDiagramEdit(${d.id})">Edit</button>
@@ -1692,6 +1705,13 @@
               </div>
             </div>
           </div>
+          <div class="q-edit-field">
+            <label>Importance rating</label>
+            <div class="star-rating-input" onclick="handleDiagramStarClick(event)">
+              ${[1, 2, 3, 4, 5].map(n => `<span class="star-choice ${n <= (d.importance_rating || 0) ? 'star-filled' : ''}" data-star="${n}">★</span>`).join('')}
+            </div>
+            <input type="hidden" data-field="importance_rating" value="${d.importance_rating || ''}"/>
+          </div>
           <img class="q-diagram-img diagram-thumb" src="${escapeHtml(d.image_url)}" alt="" onclick="openDiagramLightbox('${escapeHtml(d.image_url)}')"/>
           <div class="q-admin-bar">
             <span class="q-admin-id">${d.id}</span>
@@ -1699,6 +1719,23 @@
             <button type="button" class="q-save-btn" onclick="saveDiagramEdit(${d.id}, this)">Save</button>
           </div>
         </div>`;
+    }
+
+    // Clicking the currently-selected top star again clears the rating back to unrated (the
+    // hidden input goes back to '') -- otherwise there'd be no way to un-rate a diagram once
+    // it had been rated at all, short of deleting and re-uploading it.
+    function handleDiagramStarClick(e) {
+      const starEl = e.target.closest('.star-choice');
+      if (!starEl) return;
+      const n = parseInt(starEl.dataset.star, 10);
+      const wrap = starEl.closest('.star-rating-input');
+      const hidden = wrap.nextElementSibling;
+      const current = parseInt(hidden.value || '0', 10);
+      const newVal = (n === current) ? 0 : n;
+      hidden.value = newVal || '';
+      wrap.querySelectorAll('.star-choice').forEach(s => {
+        s.classList.toggle('star-filled', parseInt(s.dataset.star, 10) <= newVal);
+      });
     }
 
     function onDiagramEditSubjectChange(selectEl) {
@@ -1733,7 +1770,8 @@
         description_hi: getVal('description_hi').trim() || null,
         subtopic: getVal('subtopic').trim() || null,
         subtopic_hi: getVal('subtopic_hi').trim() || null,
-        subject: getVal('subject')
+        subject: getVal('subject'),
+        importance_rating: getVal('importance_rating') ? parseInt(getVal('importance_rating'), 10) : null
       };
       const originalLabel = btnEl.textContent;
       btnEl.disabled = true;

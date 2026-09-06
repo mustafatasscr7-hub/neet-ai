@@ -907,6 +907,14 @@
        as everything else in the app. */
     .diagram-skeleton-label { font-size: 12px; color: #888; animation: thinkingFade 2.2s ease-in-out infinite; }
     body.light-mode .diagram-skeleton-label { color: #7a7a85 !important; }
+    /* Muted, small, sits above the image rather than over it -- deliberately not gold/bright so
+       it reads as a quiet secondary signal, never competing with the diagram itself. Omitted
+       entirely for an unrated diagram (see buildDiagramStars), not shown as an empty row. */
+    .diagram-stars { font-size: 11px; letter-spacing: 1.5px; margin-bottom: 8px; }
+    .diagram-stars .star-filled { color: #a89968; }
+    .diagram-stars .star-empty { color: #4a4a52; }
+    body.light-mode .diagram-stars .star-filled { color: #a08a4a !important; }
+    body.light-mode .diagram-stars .star-empty { color: #d5d5dd !important; }
 
     .input-area { padding: 16px 24px 24px; background: #0d0d0d; }
     .input-wrapper { max-width: 820px; margin: 0 auto; background: #111111; border: 1px solid #2a2a2a; border-radius: 14px; display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; transition: border-color 0.2s; }
@@ -3429,6 +3437,21 @@ let selectedImages = [];
       return container;
     }
 
+    // Omitted entirely (returns null) for an unrated diagram -- never rendered as an empty/all-
+    // unfilled row, per spec. Shared by showDiagramModal and renderInlineDiagram below.
+    function buildDiagramStars(rating) {
+      if (!rating) return null;
+      const row = document.createElement('div');
+      row.className = 'diagram-stars';
+      for (let i = 1; i <= 5; i++) {
+        const s = document.createElement('span');
+        s.className = i <= rating ? 'star-filled' : 'star-empty';
+        s.textContent = i <= rating ? '★' : '☆';
+        row.appendChild(s);
+      }
+      return row;
+    }
+
     // No lightbox/expanded-image pattern existed anywhere in this file before -- built fresh,
     // structurally following showPYQModal's own construction pattern (createElement + inline
     // cssText) so it fits the existing visual style rather than introducing a new one.
@@ -3476,6 +3499,9 @@ let selectedImages = [];
       rightGroup.appendChild(closeBtn);
       header.appendChild(rightGroup);
       box.appendChild(header);
+
+      const stars = buildDiagramStars(diagram.importance_rating);
+      if (stars) box.appendChild(stars);
 
       const imgFrame = document.createElement('div');
       imgFrame.className = 'diagram-modal-imgframe';
@@ -3547,6 +3573,8 @@ let selectedImages = [];
       // width regardless of the image's real size. max-width:100% is the fallback cap for a
       // wide/landscape image, which already caps out at the message column's own max-width.
       wrap.style.cssText = 'width:fit-content;max-width:100%;margin:20px auto;background:#141420;border:1px solid #2a2a3a;border-radius:10px;padding:12px;display:flex;flex-direction:column;align-items:center;box-shadow:0 4px 16px rgba(0,0,0,0.35);opacity:0;transform:translateY(8px) scale(0.98);transition:opacity 0.28s ease,transform 0.28s ease;';
+      const stars = buildDiagramStars(diagram.importance_rating);
+      if (stars) wrap.appendChild(stars);
       wrap.appendChild(buildDiagramImage(diagram, { maxHeight: '400px', onClick: () => showDiagramModal(diagram) }));
       if (diagram.description) {
         const caption = document.createElement('p');

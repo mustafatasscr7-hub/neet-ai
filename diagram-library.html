@@ -48,6 +48,15 @@
     .diagram-card-tag { font-size: 10.5px; color: #999; display: inline-flex; align-items: center; gap: 6px; background: #1a1a1a; padding: 3px 9px; border-radius: 20px; border: 1px solid #26262e; max-width: 100%; }
     .diagram-card-tag span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .diagram-card-tag-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
+    /* Muted, small, sits above the thumbnail rather than over it -- deliberately not gold/bright
+       so it reads as a quiet secondary signal, never competing with the diagram image itself.
+       Omitted from the DOM entirely for an unrated diagram (see diagramStarsHtml), not shown as
+       an empty/all-unfilled row. */
+    .diagram-stars { font-size: 10.5px; letter-spacing: 1.5px; padding: 6px 10px 0; }
+    .diagram-stars .star-filled { color: #a89968; }
+    .diagram-stars .star-empty { color: #3a3a40; }
+    body.light-mode .diagram-stars .star-filled { color: #a08a4a !important; }
+    body.light-mode .diagram-stars .star-empty { color: #d5d5dd !important; }
     .diagram-card-report-row { display: flex; justify-content: flex-end; margin-top: 6px; }
 
     /* Report-a-diagram: identical to pyqbank.html/chat.html's report-a-question component --
@@ -269,6 +278,7 @@ let allDiagrams = [];      // everything matching the current Subject+Class fetc
             const chapterLabel = chapterName(d.chapter || '');
             return `
               <div class="diagram-card" onclick="openDiagram(${i})">
+                ${diagramStarsHtml(d.importance_rating)}
                 <div class="diagram-card-thumb-wrap thumb-loading">
                   <img class="diagram-card-thumb" src="${d.image_url}" alt="${escapeHtml(displayName || '')}" loading="lazy" onload="this.classList.add('loaded');this.parentElement.classList.remove('thumb-loading')" onerror="this.parentElement.classList.remove('thumb-loading')" />
                 </div>
@@ -293,6 +303,16 @@ let allDiagrams = [];      // everything matching the current Subject+Class fetc
       return div.innerHTML;
     }
 
+    // Omitted entirely (returns '') for an unrated diagram -- never rendered as an empty/all-
+    // unfilled row, per spec.
+    function diagramStarsHtml(rating) {
+      if (!rating) return '';
+      const stars = Array.from({ length: 5 }, (_, i) =>
+        `<span class="${i < rating ? 'star-filled' : 'star-empty'}">${i < rating ? '★' : '☆'}</span>`
+      ).join('');
+      return `<div class="diagram-stars">${stars}</div>`;
+    }
+
     function openDiagram(index) {
       const d = displayedDiagrams[index];
       const lang = getLang();
@@ -300,7 +320,8 @@ let allDiagrams = [];      // everything matching the current Subject+Class fetc
         diagram_id: d.id,
         image_url: d.image_url,
         name: (lang === 'hi' && d.name_hi) ? d.name_hi : d.name,
-        description: (lang === 'hi' && d.description_hi) ? d.description_hi : d.description
+        description: (lang === 'hi' && d.description_hi) ? d.description_hi : d.description,
+        importance_rating: d.importance_rating
       };
       showDiagramModal(diagram);
     }
@@ -355,6 +376,22 @@ let allDiagrams = [];      // everything matching the current Subject+Class fetc
       return container;
     }
 
+    // Same omit-if-unrated rule as diagramStarsHtml -- returns null rather than an empty element
+    // so the caller can just skip appending it.
+    function buildDiagramStars(rating) {
+      if (!rating) return null;
+      const row = document.createElement('div');
+      row.className = 'diagram-stars';
+      row.style.cssText = 'padding:0 0 12px;';
+      for (let i = 1; i <= 5; i++) {
+        const s = document.createElement('span');
+        s.className = i <= rating ? 'star-filled' : 'star-empty';
+        s.textContent = i <= rating ? '★' : '☆';
+        row.appendChild(s);
+      }
+      return row;
+    }
+
     function showDiagramModal(diagram) {
       const existing = document.getElementById('diagram-modal');
       if (existing) existing.remove();
@@ -392,6 +429,9 @@ let allDiagrams = [];      // everything matching the current Subject+Class fetc
       rightGroup.appendChild(closeBtn);
       header.appendChild(rightGroup);
       box.appendChild(header);
+
+      const stars = buildDiagramStars(diagram.importance_rating);
+      if (stars) box.appendChild(stars);
 
       const imgFrame = document.createElement('div');
       imgFrame.className = 'diagram-modal-imgframe';

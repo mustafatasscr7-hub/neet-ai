@@ -585,6 +585,9 @@ class DiagramCreate(BaseModel):
     name_hi: Optional[str] = None
     description_hi: Optional[str] = None
     image_url: str
+    # 1-5, or None/omitted if not yet rated -- an admin's manual "how exam-relevant is this
+    # diagram" signal, shown to students as a small star row wherever the diagram appears.
+    importance_rating: Optional[int] = None
 
 class DiagramUpdate(BaseModel):
     subject: Optional[str] = None
@@ -597,6 +600,7 @@ class DiagramUpdate(BaseModel):
     name_hi: Optional[str] = None
     description_hi: Optional[str] = None
     reviewed: Optional[bool] = None
+    importance_rating: Optional[int] = None
 
 class DiagramMatchRequest(BaseModel):
     text: str   # the student's doubt text (same text /chat embeds for NCERT RAG)
@@ -3236,7 +3240,7 @@ async def diagram_match(req: DiagramMatchRequest, _: None = Depends(rate_limiter
         # similarity is already computed by match_diagrams for its own threshold filter above --
         # exposing it here doesn't touch the matching logic itself, it just lets the caller (the
         # frontend's confidence-tier split) see the same number the RPC already had.
-        return {"matched": True, "diagram_id": top["id"], "image_url": top["image_url"], "name": top.get("name"), "description": top.get("description"), "similarity": top.get("similarity")}
+        return {"matched": True, "diagram_id": top["id"], "image_url": top["image_url"], "name": top.get("name"), "description": top.get("description"), "importance_rating": top.get("importance_rating"), "similarity": top.get("similarity")}
     except Exception:
         return {"matched": False}
 
@@ -3250,7 +3254,7 @@ async def diagram_match(req: DiagramMatchRequest, _: None = Depends(rate_limiter
 async def list_diagrams(subject: str = "", class_num: int = 0, _: None = Depends(rate_limiter(30, 60))):
     try:
         params = {
-            "select": "id,subject,class,chapter,name,description,name_hi,description_hi,image_url",
+            "select": "id,subject,class,chapter,name,description,name_hi,description_hi,image_url,importance_rating",
             "reviewed": "eq.true",
             "order": "chapter.asc,name.asc",
             "limit": 500
@@ -4584,6 +4588,8 @@ async def admin_diagrams_create(body: DiagramCreate, _: None = Depends(verify_ad
         return {"error": "Invalid subject"}
     if not body.chapter.strip() or not body.name.strip() or not body.image_url.strip():
         return {"error": "chapter, name, and image_url are required"}
+    if body.importance_rating is not None and body.importance_rating not in (1, 2, 3, 4, 5):
+        return {"error": "importance_rating must be 1-5"}
     name = body.name.strip()
     chapter = body.chapter.strip()
     description = body.description.strip() if body.description else None
@@ -4610,6 +4616,7 @@ async def admin_diagrams_create(body: DiagramCreate, _: None = Depends(verify_ad
         "name_hi": name_hi,
         "description_hi": description_hi,
         "image_url": body.image_url,
+        "importance_rating": body.importance_rating,
         "embedding": embedding
     }
     try:
@@ -4632,7 +4639,7 @@ async def admin_diagrams_list(_: None = Depends(verify_admin)):
             f"{SUPABASE_URL}/rest/v1/diagrams",
             headers=ADMIN_HEADERS,
             params={
-                "select": "id,subject,class,chapter,subtopic,subtopic_hi,name,description,name_hi,description_hi,image_url,reviewed,created_at",
+                "select": "id,subject,class,chapter,subtopic,subtopic_hi,name,description,name_hi,description_hi,image_url,importance_rating,reviewed,created_at",
                 "order": "created_at.desc",
                 "limit": 1000
             }
@@ -4647,6 +4654,8 @@ async def admin_diagrams_list(_: None = Depends(verify_admin)):
 async def admin_diagram_update(diagram_id: int, body: DiagramUpdate, _: None = Depends(verify_admin)):
     if body.subject is not None and body.subject not in ("Biology", "Physics", "Chemistry"):
         return {"error": "Invalid subject"}
+    if body.importance_rating is not None and body.importance_rating not in (1, 2, 3, 4, 5):
+        return {"error": "importance_rating must be 1-5"}
     update_fields = {}
     if body.subject is not None:
         update_fields["subject"] = body.subject
@@ -4671,6 +4680,10 @@ async def admin_diagram_update(diagram_id: int, body: DiagramUpdate, _: None = D
         update_fields["description_hi"] = body.description_hi
     if body.reviewed is not None:
         update_fields["reviewed"] = body.reviewed
+    # Rating can legitimately be cleared back to unrated (null), same "not sent" vs "sent as
+    # null" distinction as description/subtopic/Hindi fields above.
+    if "importance_rating" in body.model_fields_set:
+        update_fields["importance_rating"] = body.importance_rating
     if not update_fields:
         return {"error": "No fields to update"}
 
@@ -4700,7 +4713,7 @@ async def admin_diagram_update(diagram_id: int, body: DiagramUpdate, _: None = D
         response = await async_client.patch(
             f"{SUPABASE_URL}/rest/v1/diagrams",
             headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
-            params={"id": f"eq.{diagram_id}", "select": "id,subject,class,chapter,subtopic,subtopic_hi,name,description,name_hi,description_hi,image_url,reviewed,created_at"},
+            params={"id": f"eq.{diagram_id}", "select": "id,subject,class,chapter,subtopic,subtopic_hi,name,description,name_hi,description_hi,image_url,importance_rating,reviewed,created_at"},
             json=update_fields
         )
         if response.status_code >= 400:
