@@ -4688,6 +4688,74 @@ async def ensure_correct_answer_endpoint(req: EnsureCorrectAnswerRequest, _: Non
 
     return {"correct_answer": label}
 
+@app.post("/admin/pyq-backfill-correct-answer")
+async def admin_pyq_backfill_correct_answer(limit: int = 200, _: None = Depends(verify_admin)):
+    """Proactive counterpart to /ensure-correct-answer's lazy, one-question-at-a-time resolution --
+    same "process up to `limit` per call, call repeatedly until remaining hits 0" shape as
+    admin_backfill_difficulty above, reusing the exact same solve_correct_answer() resolver so the
+    two paths can never disagree about how an answer gets determined. correct_answer is an empty
+    string for an unresolved row (never NULL -- confirmed against real data), so the filter is
+    eq.<empty> rather than is.null."""
+    try:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/pyq",
+            headers=ADMIN_HEADERS,
+            params={"correct_answer": "eq.",
+                    "select": "id,question,option_a,option_b,option_c,option_d",
+                    "limit": str(limit)}
+        )
+        if resp.status_code >= 400:
+            return {"error": resp.text}
+        rows = resp.json()
+    except Exception as e:
+        return {"error": str(e)}
+
+    if not rows:
+        return {"resolved": 0, "failed": 0, "remaining_blank": 0, "tokens_used": 0}
+
+    loop = asyncio.get_event_loop()
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = [
+            loop.run_in_executor(
+                executor, solve_correct_answer, row["question"], row.get("option_a", ""),
+                row.get("option_b", ""), row.get("option_c", ""), row.get("option_d", "")
+            )
+            for row in rows
+        ]
+        solved = await asyncio.gather(*futures)
+
+    resolved_count = 0
+    failed_count = 0
+    total_tokens = 0
+    for row, (label, tokens) in zip(rows, solved):
+        total_tokens += tokens
+        if label:
+            try:
+                save_resp = await async_client.patch(
+                    f"{SUPABASE_URL}/rest/v1/pyq",
+                    headers={**ADMIN_HEADERS, "Content-Type": "application/json"},
+                    params={"id": f"eq.{row['id']}"},
+                    json={"correct_answer": label}
+                )
+                if save_resp.status_code < 400:
+                    resolved_count += 1
+                else:
+                    failed_count += 1
+            except Exception:
+                failed_count += 1
+        else:
+            failed_count += 1
+
+    count_resp = await async_client.head(
+        f"{SUPABASE_URL}/rest/v1/pyq",
+        headers={**ADMIN_HEADERS, "Prefer": "count=exact"},
+        params={"correct_answer": "eq.", "select": "id"}
+    )
+    remaining = int(count_resp.headers.get("content-range", "*/0").split("/")[-1])
+
+    return {"resolved": resolved_count, "failed": failed_count, "remaining_blank": remaining,
+            "tokens_used": total_tokens}
+
 # ---------- Multiple Solution Methods (alternate solving approach, on-demand + permanently cached) ----------
 
 def generate_alternate_method(question: str, primary_answer: str, options_context: str = "", language: str = "en"):
