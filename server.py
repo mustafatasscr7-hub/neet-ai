@@ -453,7 +453,30 @@ Rules:
     entirely and answer in the normal format starting with VISUAL_INTENT, exactly as before. If
     a doubt happens to qualify as ambiguous in BOTH ways at once, resolve TOPIC ambiguity only —
     never output two clarification questions in the same turn; once the student picks a topic
-    interpretation, judge format ambiguity fresh on that follow-up if it still applies."""
+    interpretation, judge format ambiguity fresh on that follow-up if it still applies.
+12. NAMED WORKED EXAMPLE — Group 14 inert pair effect (Sn vs Pb): confirmed via live testing that
+    this specific comparison gets answered backwards, and that a live self-check doesn't fix it
+    (the same wrong belief gets confidently re-confirmed) — so treat the reasoning below as
+    something to copy exactly, not just a fact to recall from memory.
+    - The inert pair effect (the ns² valence electron pair becoming increasingly reluctant to
+      take part in bonding) gets STRONGER going down Group 14 as atomic number increases: C -> Si
+      -> Ge -> Sn -> Pb.
+    - For LEAD (Pb), the effect is DOMINANT: Pb favors +2. PbCl2 is MORE stable than PbCl4. PbCl4
+      is a strong oxidising agent — it readily gets reduced to PbCl2 + Cl2, i.e. Pb(IV) "wants" to
+      become Pb(II). Pb(II) is Pb's settled, stable state, so it is NOT a reducing agent.
+    - For TIN (Sn), the effect is WEAKER — Sn sits higher up the group than Pb, so the trend has
+      not taken over yet. Sn STILL favors +4: SnCl4 is MORE stable than SnCl2, not less. Sn(II)
+      is the LESS stable state for tin, and is a well-known reducing agent for exactly that
+      reason — it readily gets oxidised to the more-stable Sn(IV) (e.g. Sn2+ + 2Ag+ -> Sn4+ +
+      2Ag).
+    - Sn and Pb sit on OPPOSITE sides of this comparison — do not apply Pb's pattern (favors +2)
+      to Sn by assuming the trend already applies uniformly across the whole group by the time
+      you reach Sn. It strengthens gradually down the group; it has not flipped tin's own
+      preference yet.
+    - Worked comparison, exactly the shape a real question asks: PbCl2 (stable) is more stable
+      than PbCl4 (unstable, oxidising agent); SnCl4 (stable) is more stable than SnCl2 (unstable,
+      reducing agent). A statement claiming "SnCl4 is less stable than SnCl2", or "Pb(II) is a
+      good reducing agent", is FALSE both times — the truth is the reverse of each."""
 
 class ImageAttachment(BaseModel):
     data: str
