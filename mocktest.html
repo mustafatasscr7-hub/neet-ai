@@ -1077,12 +1077,27 @@ async function saveQuestionFromMock(index) {
       clearMockProgress(); // real submission -- the saved in-progress snapshot must not resurface for a future attempt
       const timeTaken = Math.floor((Date.now() - startTime) / 1000);
 
+      // correct_answer comes through as either a letter ("b"), a 1-based number string ("2"),
+      // or the literal string "EMPTY" for a row whose answer was never resolved, depending on
+      // where the row originated -- same three shapes chat.html's PYQ-modal already normalizes
+      // for the identical reason. Without this, a digit/EMPTY-format row's userAnswer (always
+      // 'a'-'d') could never equal the raw stored value, silently marking every real student
+      // answer wrong regardless of what they actually picked. Purely defensive: a normal
+      // letter-format correct_answer maps to itself unchanged, so already-correct scoring for
+      // every question that isn't malformed is completely unaffected.
+      const numToLetter = { '1': 'a', '2': 'b', '3': 'c', '4': 'd' };
       let correct = 0, wrong = 0, skipped = 0;
       const results = questions.map((q, i) => {
         const userAnswer = answers[i];
-        const correctAnswer = q.correct_answer ? q.correct_answer.toLowerCase() : null;
+        const raw = (q.correct_answer || '').toLowerCase().trim();
+        const correctAnswer = ['a', 'b', 'c', 'd'].includes(raw) ? raw : (numToLetter[raw] || null);
         let status = 'skipped';
-        if (!userAnswer) { skipped++; status = 'skipped'; }
+        // Also lands here when the student DID pick an option but correctAnswer couldn't be
+        // determined (blank/'EMPTY'/unparseable) -- reusing the existing "skipped" bucket rather
+        // than inventing a new status mockresults.html has no styling or filter for; the
+        // important property is that this never counts as `wrong` and never costs the student
+        // negative marking for a data problem that isn't their fault.
+        if (!userAnswer || !correctAnswer) { skipped++; status = 'skipped'; }
         else if (userAnswer === correctAnswer) { correct++; status = 'correct'; }
         else { wrong++; status = 'wrong'; }
         return { ...q, userAnswer, status };
