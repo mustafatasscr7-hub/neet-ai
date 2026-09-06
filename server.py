@@ -2403,15 +2403,38 @@ their halides/oxidation states), re-derive using this, not your own prior belief
 has been confirmed wrong on exactly this comparison:
 """ + _INERT_PAIR_EFFECT_SN_PB_FACTS + """
 
-Output ONLY this exact format, nothing else -- no discussion, no "wait", no rechecking, no second
-draft:
-FINAL_OPTION: <single letter, A or B or C or D>
-REASON: <under 15 words>"""
+Output ONLY this exact format, in this exact order, nothing else added before, between, or after
+it -- no preamble, no "wait", no rechecking, no second draft, no restating the question:
 
-_VERIFY_MCQ_HEDGE_MAX_TOKENS = 80
+A: TRUE or FALSE (<reason, under 8 words>)
+B: TRUE or FALSE (<reason, under 8 words>)
+C: TRUE or FALSE (<reason, under 8 words>)
+D: TRUE or FALSE (<reason, under 8 words>)
+TIE-BREAK: <only if MORE THAN ONE option is FALSE -- under 20 words on which single false option
+is the most directly and unambiguously false, i.e. the one a well-written question would have
+intended as "the" wrong answer, as opposed to one that's only wrong on a technicality or a
+secondary clause. Omit this line completely if exactly one option is FALSE -- there is nothing to
+tie-break.>
+FINAL_OPTION: <single letter, A or B or C or D>
+REASON: <under 15 words>
+
+This is a fixed-length checklist, not an invitation to reason at length -- one short line per
+option, at most one tie-break line, then commit. If the question asks for the correct (not
+incorrect) statement, apply the same TRUE/FALSE-per-option logic and let FINAL_OPTION be the one
+TRUE option instead (no tie-break needed unless more than one option is also TRUE)."""
+
+# Raised from the single-line-verdict version's 80 -- the per-option checklist plus one optional
+# tie-break line needs more room, but this is still a hard ceiling on a fixed-shape output (4
+# option lines + at most 1 tie-break line + 2 final lines), not an open-ended "explain your
+# reasoning" budget -- exactly the distinction that mattered for _VERIFY_GIVEN_VALUES_MAX_TOKENS's
+# own cap (see its comment): a real worst case there hit the old uncapped ceiling re-litigating
+# its own answer with "wait, let me recheck" once given room to ramble. Measured live against the
+# real failing MCQ: the full structured output comfortably fits under 150 tokens.
+_VERIFY_MCQ_HEDGE_MAX_TOKENS = 220
 
 _FINAL_OPTION_RE = re.compile(r'FINAL_OPTION:\s*\(?([A-D])\)?', re.IGNORECASE)
 _HEDGE_REASON_RE = re.compile(r'REASON:\s*(.+)', re.IGNORECASE)
+_HEDGE_TIE_BREAK_RE = re.compile(r'TIE-BREAK:\s*(.+)', re.IGNORECASE)
 
 async def _verify_mcq_hedge(question_text: str, first_answer: str, user_id: str, ip: str, billing_context: dict = None):
     """Same shape as _verify_given_values: a focused, independent second call whose verdict is
@@ -2421,7 +2444,15 @@ async def _verify_mcq_hedge(question_text: str, first_answer: str, user_id: str,
     its own prior commitment) this call never sees the PROPOSED ANSWER's conclusion as something
     to defend -- it's told outright the conclusion is unreliable and to re-derive independently,
     which is a materially different (and, per _verify_given_values' own precedent, trustworthy)
-    task than "please reconsider and fix your answer."""
+    task than "please reconsider and fix your answer."
+
+    The per-option TRUE/FALSE checklist (with an optional TIE-BREAK line) exists because a bare
+    "just tell me the final letter" format was confirmed live to override an already-correct
+    first-pass answer: on a genuinely multi-flaw question (3 of 4 options individually false),
+    a forced single-letter judgment has no room to weigh WHICH false option the question-setter
+    likely intended, and gravitates toward whichever one is simplest to flag in isolation. Giving
+    it a bounded, fixed-length place to do that same weighing -- not an open-ended one -- is what
+    the first-pass answer was already doing successfully in its own free-form prose."""
     user_msg = f"ORIGINAL QUESTION:\n{question_text}\n\nPROPOSED ANSWER (self-contradictory, do not trust its conclusion):\n{first_answer}"
     messages = [{"role": "user", "content": user_msg}]
     chunks = []
@@ -2430,11 +2461,13 @@ async def _verify_mcq_hedge(question_text: str, first_answer: str, user_id: str,
     full = "".join(chunks)
     option_match = _FINAL_OPTION_RE.search(full)
     reason_match = _HEDGE_REASON_RE.search(full)
+    tie_break_match = _HEDGE_TIE_BREAK_RE.search(full)
     option = option_match.group(1).upper() if option_match else None
     reason = reason_match.group(1).strip() if reason_match else None
-    return option, reason
+    tie_break = tie_break_match.group(1).strip() if tie_break_match else None
+    return option, reason, tie_break
 
-def _append_hedge_verification_note(first_answer: str, option: str, reason: str) -> str:
+def _append_hedge_verification_note(first_answer: str, option: str, reason: str, tie_break: str = None) -> str:
     # Appended, never spliced into/over the original text -- editing the original answer's own
     # "Final Answer:" line in place would require reliably locating it across many different
     # phrasings the model uses (confirmed inconsistent in real samples: "Answer: C) 9 J",
@@ -2448,6 +2481,11 @@ def _append_hedge_verification_note(first_answer: str, option: str, reason: str)
         note += f" -- {reason}."
     else:
         note += "."
+    # Only present when the checklist found more than one individually-false option -- surfaces
+    # WHY this one was picked over the other false option(s), instead of the note reading as a
+    # flat, unexplained override of whatever the first pass concluded.
+    if tie_break:
+        note += f" ({tie_break})"
     return first_answer + note
 
 async def _stream_mcq_hedge_verified(system: str, messages: list, question_text: str, user_id: str, ip: str, endpoint: str, billing_context: dict = None, force_qwen: bool = False):
@@ -2467,9 +2505,9 @@ async def _stream_mcq_hedge_verified(system: str, messages: list, question_text:
         return
 
     yield SIMULATED_STREAM_MARKER
-    option, reason = await _verify_mcq_hedge(question_text, first_answer, user_id, ip, billing_context)
+    option, reason, tie_break = await _verify_mcq_hedge(question_text, first_answer, user_id, ip, billing_context)
     if option:
-        yield _append_hedge_verification_note(first_answer, option, reason)
+        yield _append_hedge_verification_note(first_answer, option, reason, tie_break)
     else:
         yield first_answer
 
