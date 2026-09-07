@@ -4243,6 +4243,18 @@ function plainTextFromMarkdown(text) {
       selectionToolbar.classList.remove('visible');
     }
 
+    // Distinct from hideSelectionToolbar above: this is for an explicit dismissal (click
+    // elsewhere, Escape, scroll) where the highlight itself should also go away, not just the
+    // popup. hideSelectionToolbar alone is kept selection-neutral because one of its call sites
+    // (mouseup landing on a selection outside any AI bubble) hides the popup for a selection the
+    // student may have deliberately made elsewhere on the page (e.g. copying a header label) --
+    // forcibly clearing that would be a new, unrelated regression, not a fix.
+    function dismissSelectionToolbar() {
+      hideSelectionToolbar();
+      const sel = window.getSelection();
+      if (sel) sel.removeAllRanges();
+    }
+
     // Quoted-context block shown above the input box after "Ask about this" -- separate from
     // the input's own value (unlike the old behavior, which just wrote a prefixed string into
     // the textarea). Cleared on send or via its own dismiss button.
@@ -4323,12 +4335,25 @@ function plainTextFromMarkdown(text) {
       }, 0);
     });
 
-    chatWindow.addEventListener('scroll', hideSelectionToolbar);
+    chatWindow.addEventListener('scroll', dismissSelectionToolbar);
 
+    // dismissSelectionToolbar (not just hideSelectionToolbar) is what actually fixes the
+    // reported bug here: clicking on an empty/non-text area of the page doesn't always make the
+    // browser collapse the existing Selection on its own, so without explicitly clearing it, the
+    // mouseup handler above (which re-checks the selection a tick later, via its own
+    // setTimeout(0)) can still find the OLD selection anchored inside an AI bubble and re-show
+    // the toolbar right after this handler hides it -- confirmed live via Playwright before this
+    // fix: the toolbar and highlight both persisted through a real click on an empty page area.
     document.addEventListener('mousedown', function(e) {
       if (!selectionToolbar.classList.contains('visible')) return;
       if (selectionToolbar.contains(e.target)) return;
-      hideSelectionToolbar();
+      dismissSelectionToolbar();
+    });
+
+    document.addEventListener('keydown', function(e) {
+      if (e.key !== 'Escape') return;
+      if (!selectionToolbar.classList.contains('visible')) return;
+      dismissSelectionToolbar();
     });
 
     document.addEventListener('mousedown', function(e) {
