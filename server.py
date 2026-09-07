@@ -3299,7 +3299,12 @@ async def generate_title(message: Message, request: Request, _: None = Depends(r
     ip = _client_ip(request)
     await enforce_daily_budget(message.user_id, ip)
     client = deepseek_client
-    fallback_title = "New Chat" if message.language != "hi" else "नई चैट"
+    # Deliberately NOT "New Chat" -- that's also the sidebar's own placeholder text for a
+    # conversation that has no title yet at all (see chat.html's .new-chat-text), so a greeting
+    # returning it here was indistinguishable from titling having silently never happened. Rule 4
+    # below tells the model to return this verbatim for exactly the greeting/small-talk/no-topic
+    # case, and _clean_title's own regex backstop falls back to the same value.
+    fallback_title = "Casual Chat" if message.language != "hi" else "सामान्य चैट"
     title_lang = "entirely in Hindi (Devanagari script) — every word in Hindi, no English words mixed in" if message.language == "hi" else "in English"
     response = client.messages.create(
         model="deepseek-v4-flash",
