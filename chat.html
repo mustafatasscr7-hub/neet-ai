@@ -7016,6 +7016,17 @@ function plainTextFromMarkdown(text) {
           });
           refreshPinnedSectionVisibility();
           makeHistoryListSortable(document.getElementById('pinnedList'), document.getElementById('historyList'));
+
+          // Cross-page handoff from the standalone pages' shared sidebar.js (Question Bank, Saved
+          // Questions, Diagram Library, Mock Tests, Scoreboard) -- their own Pinned/Recent items
+          // link here as chat.html?open=<id> rather than rendering the conversation inline, since
+          // those pages have no chat window of their own. Loads it the same way clicking that
+          // same chat in the sidebar already does.
+          const openId = new URLSearchParams(window.location.search).get('open');
+          if (openId) {
+            const target = chats.find(c => String(c.id) === openId);
+            if (target) loadConversationFromSupabase(target);
+          }
         }
       } else {
         document.getElementById('loginNudge').style.display = 'flex';
