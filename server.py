@@ -2821,7 +2821,11 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
         role = "user" if msg["role"] == "user" else "assistant"
         messages.append({"role": role, "content": msg["text"]})
 
-        print(f"Images received: {len(images)}, PDF received: {bool(pdf)}")
+    # Was previously indented one level deeper, inside the loop above -- describes THIS request's
+    # own attachments, unrelated to iterating over prior history, so it printed once per history
+    # message (repeating the same current-request info N times) instead of once. Cosmetic only --
+    # confirmed via live testing that this never affected `messages`/history construction itself.
+    print(f"Images received: {len(images)}, PDF received: {bool(pdf)}")
     if images:
         content = [
             {
