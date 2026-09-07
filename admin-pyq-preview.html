@@ -181,6 +181,9 @@
     .report-resolve-btn { background: #4ade80; border: none; color: #0a0a0a; padding: 6px 14px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
     .report-resolve-btn:hover { background: #3fcc70; }
     .report-resolve-btn:disabled { opacity: 0.6; cursor: default; }
+    .report-approve-btn { background: #4f8ef7; border: none; color: #fff; padding: 6px 14px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
+    .report-approve-btn:hover { background: #3b7de8; }
+    .report-approve-btn:disabled { opacity: 0.6; cursor: default; }
     .report-deleted-note { color: #ef4444; font-style: italic; font-size: 12px; padding: 10px 0; }
 
     .pagination { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 16px; }
@@ -1914,6 +1917,7 @@
             <div class="report-header">
               <span class="report-count-badge">${g.count} report${g.count === 1 ? '' : 's'}</span>
               <div class="report-reasons-list">${reasonsHtml}</div>
+              ${g.question ? `<button type="button" class="report-approve-btn" onclick="approveReportGroup('${g.pyq_id}', this)">✅ Approve</button>` : ''}
               <button type="button" class="report-resolve-btn" onclick="resolveReportGroup('${g.pyq_id}', this)">Mark Resolved</button>
             </div>
             ${notesHtml}
@@ -1921,6 +1925,33 @@
           </div>`;
       }).join('');
       area.querySelectorAll('.q-edit-field textarea').forEach(autoResizeTextarea);
+    }
+
+    // Restores the question to circulation (re-activates the same row -- /report-question only
+    // ever deactivated it, never moved or copied it anywhere) and resolves its report(s) in one
+    // action. Whatever the row currently holds is what comes back, so any inline edit already
+    // saved via this tool's existing saveEdit() PATCH before clicking Approve is what gets
+    // restored, not the originally-reported content.
+    async function approveReportGroup(pyqId, btnEl) {
+      const originalLabel = btnEl.textContent;
+      btnEl.disabled = true;
+      btnEl.textContent = 'Approving...';
+      try {
+        const res = await fetch(`${API_BASE}/admin/question-reports/${pyqId}/approve`, {
+          method: 'PATCH', headers: authHeaders()
+        });
+        if (res.status === 401) return logout();
+        if (!res.ok) { alert('Could not approve: ' + await describeHttpError(res)); btnEl.disabled = false; btnEl.textContent = originalLabel; return; }
+        const data = await res.json();
+        if (data.error) { alert('Could not approve: ' + data.error); btnEl.disabled = false; btnEl.textContent = originalLabel; return; }
+        reportGroups = reportGroups.filter(g => g.pyq_id !== pyqId);
+        delete reportedRowsMap[pyqId];
+        renderReportedQuestions();
+      } catch (e) {
+        alert('Could not reach server.');
+        btnEl.disabled = false;
+        btnEl.textContent = originalLabel;
+      }
     }
 
     async function resolveReportGroup(pyqId, btnEl) {

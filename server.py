@@ -3545,6 +3545,24 @@ async def report_question(req: ReportQuestionRequest, _: None = Depends(rate_lim
         )
         if response.status_code >= 400:
             return {"error": response.text}
+        # Pulled out of student circulation immediately on report, not just once an admin gets to
+        # it -- is_active is already the real, existing visibility gate every student-facing pyq
+        # query filters on (pyqbank.html's chapter browser, /mock-test-questions, etc.), so this
+        # is a soft-deactivate, not a delete: the row, its id, and every reference to it (saved
+        # questions, personalised test sets) stay intact, and admin-pyq-preview.html's Reports
+        # view (which joins in the full live row regardless of is_active) can still show, edit,
+        # and -- via /admin/question-reports/{pyq_id}/approve below -- restore it exactly as it
+        # is at approval time, including any edits made during review. Best-effort: a student's
+        # report should still succeed even if this particular PATCH fails for some reason.
+        try:
+            await async_client.patch(
+                f"{SUPABASE_URL}/rest/v1/pyq",
+                headers={**ADMIN_HEADERS, "Content-Type": "application/json"},
+                params={"id": f"eq.{req.pyq_id}"},
+                json={"is_active": False}
+            )
+        except Exception as e:
+            print(f"REPORT DEACTIVATE ERROR (pyq_id={req.pyq_id}): {e}", flush=True)
         return {"success": True}
     except HTTPException:
         raise
@@ -3759,12 +3777,16 @@ async def get_mock_test_questions():
         # column list already used by /mock-tests/{id}/questions, confirmed sufficient since
         # mocktest.html only ever reads these fields off a question object.
         cols = "id,subject,chapter,year,question,option_a,option_b,option_c,option_d,correct_answer,difficulty,diagram_url,option_a_diagram_url,option_b_diagram_url,option_c_diagram_url,option_d_diagram_url"
+        # is_active=eq.true was missing here -- every other student-facing pyq query (pyqbank.html's
+        # chapter browser, etc.) already filters on it, but this random-sample endpoint didn't, so a
+        # question deactivated for a report (see /report-question) could still be handed out in a
+        # random mock test even though it had already disappeared from the PYQ Bank itself.
         # Also ran sequentially before (3 blocking sync `requests.get()` calls back-to-back,
         # each stalling the event loop) -- now fired concurrently via the shared async client.
         bio_resp, phy_resp, che_resp = await asyncio.gather(
-            async_client.get(f"{SUPABASE_URL}/rest/v1/pyq", headers=headers, params={"subject": "eq.Biology", "select": cols, "limit": 200}),
-            async_client.get(f"{SUPABASE_URL}/rest/v1/pyq", headers=headers, params={"subject": "eq.Physics", "select": cols, "limit": 200}),
-            async_client.get(f"{SUPABASE_URL}/rest/v1/pyq", headers=headers, params={"subject": "eq.Chemistry", "select": cols, "limit": 200}),
+            async_client.get(f"{SUPABASE_URL}/rest/v1/pyq", headers=headers, params={"subject": "eq.Biology", "is_active": "eq.true", "select": cols, "limit": 200}),
+            async_client.get(f"{SUPABASE_URL}/rest/v1/pyq", headers=headers, params={"subject": "eq.Physics", "is_active": "eq.true", "select": cols, "limit": 200}),
+            async_client.get(f"{SUPABASE_URL}/rest/v1/pyq", headers=headers, params={"subject": "eq.Chemistry", "is_active": "eq.true", "select": cols, "limit": 200}),
         )
         bio, phy, che = bio_resp.json(), phy_resp.json(), che_resp.json()
         bio_q = random.sample(bio, min(90, len(bio)))
@@ -6008,6 +6030,45 @@ async def admin_resolve_question_reports(pyq_id: str, _: None = Depends(verify_a
         if response.status_code >= 400:
             return {"error": response.text}
         return {"success": True, "resolved_count": len(response.json())}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.patch("/admin/question-reports/{pyq_id}/approve")
+async def admin_approve_question_report(pyq_id: str, _: None = Depends(verify_admin)):
+    """Restores a reported question to circulation -- re-activates the SAME row /report-question
+    deactivated (never moved or copied anywhere, so this is just flipping is_active back to true),
+    and resolves its report(s) in the same action so approving is one click, not two. Whatever the
+    row currently contains is what comes back -- if the admin edited it via this tool's existing
+    inline-edit PATCH before approving, that edit is already saved on the row by the time this
+    runs, so the corrected version is what gets restored, not the originally-flagged content.
+    Reports a clear, distinct error if the row was hard-deleted (via the existing pyq-delete
+    button) rather than left to restore -- there's nothing left to reactivate in that case."""
+    try:
+        check = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
+            params={"id": f"eq.{pyq_id}", "select": "id"}
+        )
+        if not check.json():
+            return {"error": "This question was permanently deleted, not just deactivated -- nothing to restore."}
+
+        reactivate_resp = await async_client.patch(
+            f"{SUPABASE_URL}/rest/v1/pyq",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json"},
+            params={"id": f"eq.{pyq_id}"},
+            json={"is_active": True}
+        )
+        if reactivate_resp.status_code >= 400:
+            return {"error": reactivate_resp.text}
+
+        resolve_resp = await async_client.patch(
+            f"{SUPABASE_URL}/rest/v1/question_reports",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
+            params={"pyq_id": f"eq.{pyq_id}", "resolved": "eq.false"},
+            json={"resolved": True}
+        )
+        if resolve_resp.status_code >= 400:
+            return {"error": resolve_resp.text}
+        return {"success": True, "resolved_count": len(resolve_resp.json())}
     except Exception as e:
         return {"error": str(e)}
 
