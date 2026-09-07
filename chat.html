@@ -5578,7 +5578,6 @@ function plainTextFromMarkdown(text) {
     // Daily usage banner: reads usage_log/user_plan directly (RLS allows reading only your own
     // rows) for display purposes only -- real enforcement is server-side in server.py, so this
     // can't be used to bypass anything, it just decides what to show.
-    const DAILY_TOKEN_BUDGET_FREE = 50000;  // must match server.py's constant
     const DAILY_TOKEN_BUDGET_GUEST = 14000; // must match server.py's constant
     const DAILY_TOKEN_LIMIT_PRO = 950000;   // must match server.py's constant -- real, enforced,
                                              // visible daily cap. Max's own ceiling is a silent
@@ -5589,37 +5588,6 @@ function plainTextFromMarkdown(text) {
                                             // real blended average across all 3 providers, measured
                                             // from provider_usage_log (2026-08-27, n=285)
     const WARNING_THRESHOLD_DOUBTS = 3;
-
-    function getISTDateString() {
-      // Fixed +5:30 offset (India has no DST) -- must mirror server.py's IST math exactly,
-      // NOT plain toISOString().split('T')[0] (that's UTC date, not IST date).
-      const IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000;
-      return new Date(Date.now() + IST_OFFSET_MS).toISOString().split('T')[0];
-    }
-
-    function getISTYesterdayString() {
-      const IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000;
-      const shifted = new Date(Date.now() + IST_OFFSET_MS - 86400000);
-      return shifted.toISOString().split('T')[0];
-    }
-
-    // Mirrors server.py's _active_cooldown_seconds -- the block clears a fixed COOLDOWN_HOURS
-    // after limit_reached_at was set, not at IST midnight, so a block from late yesterday can
-    // still be active into today. Checking both rows covers that.
-    function computeActiveCooldownSeconds(rows, todayStr, yesterdayStr) {
-      const COOLDOWN_HOURS = 24;
-      const byDate = {};
-      (rows || []).forEach(r => { byDate[r.usage_date] = r; });
-      for (const d of [yesterdayStr, todayStr]) {
-        const row = byDate[d];
-        if (row && row.limit_reached_at) {
-          const elapsedMs = Date.now() - new Date(row.limit_reached_at).getTime();
-          const remainingMs = COOLDOWN_HOURS * 3600000 - elapsedMs;
-          if (remainingMs > 0) return Math.floor(remainingMs / 1000);
-        }
-      }
-      return null;
-    }
 
     function formatCountdown(ms) {
       const totalMinutes = Math.max(0, Math.floor(ms / 60000));
@@ -5815,16 +5783,23 @@ function plainTextFromMarkdown(text) {
         return;
       }
 
-      // Fetch today's AND yesterday's row -- a block set late yesterday can still be within its
-      // rolling 24h cooldown today, same reasoning as server.py's enforce_daily_budget.
-      const todayStr = getISTDateString();
-      const yesterdayStr = getISTYesterdayString();
-      const { data: usageRows } = await client.from('usage_log').select('usage_date,tokens_used,limit_reached_at')
-        .eq('user_id', session.user.id).in('usage_date', [todayStr, yesterdayStr]);
-      const todayRow = (usageRows || []).find(r => r.usage_date === todayStr);
-      const used = todayRow ? todayRow.tokens_used : 0;
-      const retryAfterSeconds = computeActiveCooldownSeconds(usageRows, todayStr, yesterdayStr);
-      applyUsageDisplay(used, DAILY_TOKEN_BUDGET_FREE, 'free', retryAfterSeconds);
+      // Same /usage/summary call the Pro/Max branch above already uses, rather than a second,
+      // independently-maintained computation of the same thing -- this used to re-derive
+      // tokens_used and the rolling 24h-from-crossing cooldown client-side via a direct
+      // usage_log query + computeActiveCooldownSeconds(), a hand-rolled reimplementation of
+      // exactly what /usage/summary already computes server-side via _active_cooldown_seconds
+      // (server.py already special-cases plan=="free" there for this same rolling-cooldown
+      // behavior, not a plain midnight reset). Two independently-maintained copies of the same
+      // logic is exactly how this counter and Settings > Usage tab's bar (which always calls
+      // /usage/summary, for every plan) could drift apart and disagree -- this was the actual
+      // bug, not the AVG_TOKENS_PER_DOUBT estimate step that runs after it.
+      try {
+        const res = await fetch(`${API_BASE}/usage/summary?user_id=${session.user.id}`);
+        const data = await res.json();
+        applyUsageDisplay(data.today.tokens_used, data.today.budget, 'free', data.today.blocked ? data.today.reset_in_seconds : null);
+      } catch (e) {
+        warningEl.style.display = 'none'; limitEl.style.display = 'none'; setSendEnabled(true);
+      }
     }
 
  async function sendMessage() {
