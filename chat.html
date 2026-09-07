@@ -2051,6 +2051,14 @@ let selectedImages = [];
       // going through that loop), since every render path (reload, version-switch, retry) funnels
       // through this one function.
       text = text.replace(/^\s*DOUBT_TYPE:\s*conversational\s*\n+/i, '');
+      // Same reasoning, same fix shape, for "VISUAL_INTENT: yes/no" -- the streaming loop strips
+      // this live too (see its own comment, just above where it reads VISUAL_INTENT_BUFFER_CAP),
+      // but that only covers a message as it's being freshly generated. Any message saved to
+      // history before this function had this line (or any future path that hands this function
+      // raw text without going through the streaming loop first) still has the literal marker
+      // sitting in its saved text -- this strips it on every render, including a reload of an
+      // already-saved message, with no separate database cleanup needed.
+      text = text.replace(/^\s*VISUAL_INTENT:\s*(yes|no)\s*\n+/i, '');
       const ratingMatch = text.match(/NEET Importance:\s*\[?(\d)\]?\s*\/\s*5/i);
       const chapterMatch = text.match(/📚?\s*\**\s*Chapter:\**\s*\[?([^\n\]]+)\]?/i);
       if (!ratingMatch && !chapterMatch) return { cleanText: text, metaHtml: '' };
