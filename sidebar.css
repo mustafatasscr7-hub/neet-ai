@@ -26,10 +26,10 @@ body.light-mode .page-main-content::-webkit-scrollbar-thumb:hover { background: 
 .sidebar-resize-handle:hover, .sidebar-resize-handle.active { background: rgba(124,58,237,0.4); }
 .sidebar.collapsed .sidebar-resize-handle { display: none; }
 @media (hover: none) { .sidebar-resize-handle { display: none; } }
-.sidebar.collapsed .new-chat-btn { justify-content: center; padding: 10px 0; width: 100%; }
-.sidebar.collapsed .nav-item { justify-content: center; padding: 10px 0; }
-.sidebar.collapsed .profile-btn { justify-content: center; padding: 10px 0; }
-.sidebar.collapsed .logo { display: flex; justify-content: center; }
+.sidebar.collapsed .new-chat-btn { justify-content: center; padding: 10px 0; gap: 0; width: 100%; }
+.sidebar.collapsed .nav-item { justify-content: center; padding: 10px 0; gap: 0; }
+.sidebar.collapsed .profile-btn { justify-content: center; padding: 10px 0; gap: 0; }
+.sidebar.collapsed .logo { display: flex; justify-content: center; padding: 10px 0; gap: 0; }
 /* Collapse/expand fades the sidebar's text and icons alongside the width transition instead of
    snapping them away with display:none -- max-width/max-height (not display) is what actually
    lets these transition smoothly; overflow:hidden on each just clips the collapsing box, same
@@ -40,8 +40,18 @@ body.light-mode .page-main-content::-webkit-scrollbar-thumb:hover { background: 
    collapse their HEIGHT since they stack vertically instead. Both fade opacity too, and the
    justify-content/padding rules above are what actually re-center each icon in the 56px rail as
    its label shrinks away. pointer-events:none keeps a collapsed, invisible-but-still-technically-
-   laid-out element from swallowing clicks meant for whatever's now underneath it. Kept identical
-   to chat.html's own copy of this same fix. */
+   laid-out element from swallowing clicks meant for whatever's now underneath it.
+   gap:0 on all four rows above is load-bearing, not tidying: max-width/max-height:0 shrinks a
+   hidden sibling itself to nothing, but flex `gap` still reserves its full space BETWEEN visible
+   children regardless of how small either neighbor is -- confirmed live as a real bug, not
+   theoretical: with the label/profile-info's own gap left untouched, the still-visible icon
+   (toggle button, nav icon, "+" icon, or profile avatar) was centered against a phantom width that
+   included one or two 10px gaps to invisible siblings, landing 5-10px left of the rail's actual
+   center and reading as squeezed against the left edge -- most visible on the profile avatar (two
+   invisible siblings' worth of gap) and the top toggle button (whose own .logo padding was 12px
+   horizontal, sized for the expanded row, never reset for the 56px rail at all). .logo's added
+   padding:10px 0 matches the same collapsed vertical rhythm every other row in the column already
+   had. Kept identical to chat.html's own copy of this same fix. */
 .sidebar.collapsed .new-chat-btn span:not(.icon),
 .sidebar.collapsed .nav-item span,
 .sidebar.collapsed .profile-info,
@@ -61,6 +71,11 @@ body.light-mode .page-main-content::-webkit-scrollbar-thumb:hover { background: 
   pointer-events: none;
 }
 .logo { display: flex; align-items: center; gap: 10px; padding: 6px 12px; margin-bottom: 4px; }
+/* Was an inline style="justify-content:space-between" on the element itself -- moved into CSS
+   because an inline style outranks every stylesheet rule regardless of specificity, permanently
+   overriding .sidebar.collapsed .logo's own justify-content:center below and pinning the toggle
+   button flush against the rail's right edge instead of actually centering it. */
+.sidebar:not(.collapsed) .logo { justify-content: space-between; }
 .logo-icon { width: 24px; height: 24px; max-width: 24px; display: flex; align-items: center; justify-content: center; overflow: hidden; opacity: 1; transition: opacity 0.2s ease, max-width 0.2s ease; }
 .logo-icon img { width: 100%; height: 100%; object-fit: contain; display: block; }
 
