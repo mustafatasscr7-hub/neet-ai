@@ -10,7 +10,7 @@
 .page-with-sidebar-layout { height: 100vh; display: flex; overflow: hidden; }
 .page-main-content { position: relative; flex: 1; min-width: 0; overflow-y: auto; height: 100vh; }
 
-.sidebar { position: relative; width: 260px; background: #111111; display: flex; flex-direction: column; padding: 12px 8px; gap: 4px; border-right: 1px solid #1e1e1e; flex-shrink: 0; transition: width 0.2s; overflow: hidden; }
+.sidebar { position: relative; width: 260px; background: #111111; display: flex; flex-direction: column; padding: 12px 8px; gap: 4px; border-right: 1px solid #1e1e1e; flex-shrink: 0; transition: width 0.25s ease-in-out; overflow: hidden; }
 .sidebar.collapsed { width: 56px; }
 .sidebar.resizing { transition: none; }
 .sidebar-resize-handle { position: absolute; top: 0; right: 0; width: 6px; height: 100%; cursor: col-resize; z-index: 20; background: transparent; touch-action: none; }
@@ -18,33 +18,54 @@
 .sidebar.collapsed .sidebar-resize-handle { display: none; }
 @media (hover: none) { .sidebar-resize-handle { display: none; } }
 .sidebar.collapsed .new-chat-btn { justify-content: center; padding: 10px 0; width: 100%; }
-.sidebar.collapsed .new-chat-btn span:not(.icon) { display: none; }
 .sidebar.collapsed .nav-item { justify-content: center; padding: 10px 0; }
-.sidebar.collapsed .nav-item span { display: none; }
-.sidebar.collapsed .sidebar-label { display: none; }
-.sidebar.collapsed .history-list { display: none; }
-.sidebar.collapsed .sidebar-divider { display: none; }
-.sidebar.collapsed .profile-info { display: none; }
-.sidebar.collapsed .profile-more { display: none; }
-.sidebar.collapsed .login-nudge { display: none !important; }
-.sidebar.collapsed .guest-menu { display: none !important; }
 .sidebar.collapsed .profile-btn { justify-content: center; padding: 10px 0; }
 .sidebar.collapsed .logo { display: flex; justify-content: center; }
-.sidebar.collapsed .logo .logo-icon { display: none; }
+/* Collapse/expand fades the sidebar's text and icons alongside the width transition instead of
+   snapping them away with display:none -- max-width/max-height (not display) is what actually
+   lets these transition smoothly; overflow:hidden on each just clips the collapsing box, same
+   role .sidebar's own overflow:hidden plays for the rail itself. Split into two groups: inline
+   row content (new-chat/nav-item labels, logo icon, profile name+plan+more-icon) collapses its
+   WIDTH since these sit beside another element in the same row and need to shrink sideways;
+   block-level sections (Pinned/Recent label, the list itself, the divider, the guest/login boxes)
+   collapse their HEIGHT since they stack vertically instead. Both fade opacity too, and the
+   justify-content/padding rules above are what actually re-center each icon in the 56px rail as
+   its label shrinks away. pointer-events:none keeps a collapsed, invisible-but-still-technically-
+   laid-out element from swallowing clicks meant for whatever's now underneath it. Kept identical
+   to chat.html's own copy of this same fix. */
+.sidebar.collapsed .new-chat-btn span:not(.icon),
+.sidebar.collapsed .nav-item span,
+.sidebar.collapsed .profile-info,
+.sidebar.collapsed .profile-more,
+.sidebar.collapsed .logo .logo-icon {
+  opacity: 0;
+  max-width: 0;
+  pointer-events: none;
+}
+.sidebar.collapsed .sidebar-label,
+.sidebar.collapsed .history-list,
+.sidebar.collapsed .sidebar-divider,
+.sidebar.collapsed .login-nudge,
+.sidebar.collapsed .guest-menu {
+  opacity: 0;
+  max-height: 0;
+  pointer-events: none;
+}
 .logo { display: flex; align-items: center; gap: 10px; padding: 6px 12px; margin-bottom: 4px; }
-.logo-icon { width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; }
+.logo-icon { width: 24px; height: 24px; max-width: 24px; display: flex; align-items: center; justify-content: center; overflow: hidden; opacity: 1; transition: opacity 0.2s ease, max-width 0.2s ease; }
 .logo-icon img { width: 100%; height: 100%; object-fit: contain; display: block; }
 
 .new-chat-btn { display: flex; align-items: center; gap: 10px; background: transparent; border: 1px solid transparent; color: #ececec; padding: 8px 12px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 500; font-family: 'Inter', sans-serif; transition: all 0.2s; width: 100%; text-align: left; margin-bottom: 4px; }
 .new-chat-btn:hover { background: #1a1a1a; }
 .new-chat-btn .icon { font-size: 15px; color: #4f8ef7; width: 16px; display: inline-flex; justify-content: center; }
+.new-chat-btn span:not(.icon) { opacity: 1; max-width: 200px; overflow: hidden; white-space: nowrap; transition: opacity 0.2s ease, max-width 0.2s ease; }
 
-.sidebar-label { font-size: 12px; font-weight: 600; color: #666; padding: 10px 12px 6px; flex-shrink: 0; }
+.sidebar-label { font-size: 12px; font-weight: 600; color: #666; padding: 10px 12px 6px; flex-shrink: 0; opacity: 1; max-height: 40px; overflow: hidden; transition: opacity 0.2s ease, max-height 0.25s ease; }
 
 .sidebar-scroll-area { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
 .sidebar-scroll-area::-webkit-scrollbar { width: 3px; }
 .sidebar-scroll-area::-webkit-scrollbar-thumb { background: #2a2a2a; border-radius: 4px; }
-.history-list { display: flex; flex-direction: column; gap: 2px; flex-shrink: 0; }
+.history-list { display: flex; flex-direction: column; gap: 2px; flex-shrink: 0; opacity: 1; max-height: 100vh; overflow: hidden; transition: opacity 0.2s ease, max-height 0.25s ease; }
 
 .history-item { box-sizing: border-box; height: 38px; padding: 0 12px; border-radius: 8px; font-size: 13px; line-height: 1.4; color: #888; cursor: pointer; transition: background 0.15s, color 0.15s; border: 1px solid transparent; position: relative; display: flex; align-items: center; flex-shrink: 0; }
 .history-item:hover { background: #1a1a1a; color: #ccc; }
@@ -56,21 +77,23 @@
 .nav-item:hover { background: #1a1a1a; color: #ccc; }
 .nav-item.active { background: #1a1a1a; color: #ececec; }
 .nav-item svg { width: 16px; height: 16px; min-width: 16px; flex-shrink: 0; }
+.nav-item span { opacity: 1; max-width: 200px; overflow: hidden; white-space: nowrap; transition: opacity 0.2s ease, max-width 0.2s ease; }
 
-.sidebar-divider { height: 1px; background: #1e1e1e; margin: 6px 0; }
+.sidebar-divider { height: 1px; background: #1e1e1e; margin: 6px 0; opacity: 1; max-height: 1px; overflow: hidden; transition: opacity 0.2s ease, max-height 0.25s ease, margin 0.25s ease; }
+.sidebar.collapsed .sidebar-divider { margin: 0; }
 .sidebar-bottom { margin-top: auto; padding-top: 8px; border-top: 1px solid #1e1e1e; position: relative; }
 
-.profile-btn { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 8px; cursor: pointer; transition: background 0.2s; }
+.profile-btn { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 8px; cursor: pointer; transition: background 0.2s, padding 0.2s; }
 .profile-btn:hover { background: #1a1a1a; }
 .profile-avatar { width: 28px; height: 28px; background: linear-gradient(135deg, #4f8ef7, #7c3aed); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: white; flex-shrink: 0; }
 .guest-avatar-btn { width: 28px; height: 28px; border-radius: 50%; background: #1e1e1e; border: 1px solid #2a2a2a; align-items: center; justify-content: center; cursor: pointer; color: #888; margin: 0 auto; transition: all 0.2s; }
 .guest-avatar-btn svg { width: 15px; height: 15px; }
 .guest-avatar-btn:hover { background: #252525; color: #ccc; border-color: #3a3a3a; }
 .sidebar:not(.collapsed) .guest-avatar-btn { display: none !important; }
-.profile-info { flex: 1; min-width: 0; }
+.profile-info { flex: 1; min-width: 0; opacity: 1; max-width: 200px; overflow: hidden; transition: opacity 0.2s ease, max-width 0.2s ease; }
 .profile-name { font-size: 13px; font-weight: 600; color: #ececec; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .profile-plan { font-size: 11px; color: #444; margin-top: 1px; }
-.profile-more { width: 14px; height: 14px; flex-shrink: 0; }
+.profile-more { width: 14px; height: 14px; max-width: 14px; flex-shrink: 0; opacity: 1; overflow: hidden; transition: opacity 0.2s ease, max-width 0.2s ease; }
 
 .profile-menu { position: fixed; width: 228px; background: #1e1e1e; border: 1px solid #2a2a2a; border-radius: 10px; padding: 6px; z-index: 100; box-shadow: 0 -4px 20px rgba(0,0,0,0.4); }
 .profile-menu-email { padding: 7px 12px 9px; font-size: 12px; color: #666; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -89,7 +112,11 @@
 .item-menu-option:hover { background: #2a2a2a; }
 .item-menu-divider { height: 1px; background: #2a2a2a; margin: 4px 6px; }
 
-.login-nudge { display: flex; flex-direction: column; gap: 10px; padding: 12px; background: #1a1a1a; border-radius: 10px; border: 1px solid #2a2a2a; }
+.login-nudge { display: flex; flex-direction: column; gap: 10px; padding: 12px; background: #1a1a1a; border-radius: 10px; border: 1px solid #2a2a2a; opacity: 1; max-height: 200px; overflow: hidden; transition: opacity 0.2s ease, max-height 0.25s ease; }
+/* No dedicated base rule otherwise -- guest-menu's own layout (display:flex etc.) is set inline
+   in the markup; this only adds the same collapse-fade properties every other sidebar section
+   gets, composed on top of that inline display. */
+.guest-menu { opacity: 1; max-height: 300px; overflow: hidden; transition: opacity 0.2s ease, max-height 0.25s ease; }
 .nudge-text { display: flex; flex-direction: column; gap: 3px; }
 .nudge-text strong { font-size: 13px; color: #ececec; font-weight: 600; }
 .nudge-text span { font-size: 11px; color: #555; line-height: 1.4; }
