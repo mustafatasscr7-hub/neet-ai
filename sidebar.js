@@ -24,6 +24,22 @@ function toggleSidebar() {
   const collapsing = !sidebar.classList.contains('collapsed');
   sidebar.classList.toggle('collapsed');
   sidebar.style.width = collapsing ? '' : (getSavedSidebarWidth() + 'px');
+  refreshPinnedSectionVisibility();
+}
+
+// pinnedList/pinnedLabel share the .history-list/.sidebar-label classes that ".sidebar.collapsed"
+// hides via CSS -- but they also get an inline display style set (below, when there are pinned
+// chats to show) which outranks that stylesheet rule. Without re-syncing here, a collapsed 56px
+// icon-rail sidebar with pinned chats keeps pinnedList forced to display:flex and its full-text
+// rows get crushed into the icon rail's width instead of actually hiding. Same fix as chat.html's
+// own refreshPinnedSectionVisibility.
+function refreshPinnedSectionVisibility() {
+  const list = document.getElementById('pinnedList');
+  const label = document.getElementById('pinnedLabel');
+  if (!list || !label) return;
+  const show = list.children.length > 0 && !document.querySelector('.sidebar').classList.contains('collapsed');
+  list.style.display = show ? 'flex' : 'none';
+  label.style.display = show ? 'block' : 'none';
 }
 
 function toggleSearchChats() {
@@ -223,10 +239,7 @@ function initSidebar() {
           const item = createHistoryItem(chat.id, chat.title);
           (chat.is_pinned ? pinnedList : historyList).appendChild(item);
         });
-        if (chats.some(c => c.is_pinned)) {
-          document.getElementById('pinnedLabel').style.display = 'block';
-          pinnedList.style.display = 'flex';
-        }
+        refreshPinnedSectionVisibility();
       }
     } else {
       document.getElementById('loginNudge').style.display = 'flex';
