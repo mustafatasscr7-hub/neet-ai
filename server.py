@@ -182,10 +182,10 @@ normal answer starting with VISUAL_INTENT as always, with real, substantive, bul
 under Answer:/Key Points: (never a brush-off, never asking the student to narrow it down) -- but
 OMIT both the "NEET Importance: N/5" line and the "📚 Chapter:" line COMPLETELY. Completely means
 no line starting with "NEET Importance" and no line starting with "📚 Chapter" anywhere in the
-reply, in any form -- this includes the "Chapter: Not available — answering from general
-knowledge..." fallback sentence rule 1 below offers for the unrelated case of a real factual doubt
-with nothing retrieved; that fallback does not apply here and must not appear either. Go directly
-from VISUAL_INTENT to Answer:. There is no single fact here being rated for exam-frequency or
+reply, in any form -- this is stricter than rule 1 below's own no-retrieval case (a real factual
+doubt with nothing retrieved), which omits the Chapter line too but is still a full academic
+answer with NEET Importance shown; this branch has neither, ever. Go directly from VISUAL_INTENT
+to Answer:. There is no single fact here being rated for exam-frequency or
 attributed to one chapter -- these are study aids or re-presentations of content the student
 already has in view, not a graded factual claim. For the format/length sub-case specifically, the
 condensed or simplified answer must still be genuinely complete for what was actually asked --
@@ -245,9 +245,9 @@ Rules:
    particular chapter's content in the first place.)
    STEP A: Look at the user message. Does it literally contain the text "Retrieved from:"?
    STEP B: If NO — stop immediately, do not proceed to step C, do not try to recall the chapter
-   from your own knowledge no matter how confident you are. Write "📚 Chapter: Not available —
-   answering from general knowledge, not a specific retrieved NCERT chapter." (or omit the
-   Chapter line entirely) and move on to the rest of the answer.
+   from your own knowledge no matter how confident you are. Omit the 📚 Chapter: line entirely —
+   no line starting with "Chapter" at all, not even a placeholder or "not available" sentence —
+   and move on to the rest of the answer.
    STEP C: If YES — copy ONE of the listed entries into the Chapter line EXACTLY as given (same
    class number, same chapter number, same chapter name, character-for-character); if several
    entries are listed, pick whichever single one is most relevant to the question, but the text
@@ -2737,13 +2737,6 @@ async def _stream_mcq_hedge_verified(system: str, messages: list, question_text:
         yield first_answer
 
 _NCERT_CHAPTER_LINE_PREFIX = "📚 Chapter:"
-# Deliberately identical wording to the SYSTEM_PROMPT's own fallback instruction (rule 1, step
-# B) -- this is what the model is ALREADY told to write by hand when nothing was retrieved. The
-# prompt instruction alone isn't reliable (a live audit found it fabricating specific wrong
-# citations instead -- e.g. "NCERT Class X, Chapter 5" for osmosis, or claiming a real NCERT
-# topic like the spectrochemical series doesn't exist in the syllabus at all), so this constant
-# is what actually reaches the student now, written here in code instead of trusted to the model.
-_NCERT_NO_RETRIEVAL_CHAPTER_LINE = "📚 Chapter: Not available — answering from general knowledge, not a specific retrieved NCERT chapter."
 # Generous enough to comfortably hold "VISUAL_INTENT: no\n\nNEET Importance: N/5\n\n" plus the
 # Chapter line itself (observed real answers: well under 150 chars to that point) with margin,
 # but small enough that a conversational or clarify-type reply -- which never contains "Answer:"
@@ -2752,12 +2745,24 @@ _NCERT_NO_RETRIEVAL_CHAPTER_LINE = "📚 Chapter: Not available — answering fr
 _CITATION_LOCK_BUFFER_CAP = 220
 
 async def _force_citation_when_no_retrieval(stream, has_retrieval: bool):
-    """Wraps a text-doubt's answer stream and deterministically overrides whatever the model
-    wrote (or omitted) on the 📚 Chapter: line when search_ncert() found nothing for this doubt
-    -- see the two fabrication examples in the constant's comment above, both confirmed via live
-    audit against real logged doubts. has_retrieval=True (a real NCERT match was found) makes
-    this a complete no-op passthrough at zero cost -- those answers are entirely unaffected by
-    this function, exactly as before.
+    """Wraps a text-doubt's answer stream and deterministically strips whatever the model wrote
+    on the 📚 Chapter: line when search_ncert() found nothing for this doubt, rather than
+    trusting the model's own citation. Originally replaced it with a standard "Chapter: Not
+    available -- answering from general knowledge..." fallback sentence instead of removing it
+    -- a live audit had found the model fabricating specific wrong citations otherwise (e.g.
+    "NCERT Class X, Chapter 5" for osmosis, or claiming a real NCERT topic like the
+    spectrochemical series doesn't exist in the syllabus at all), so SOME deterministic
+    correction was needed. That fallback sentence itself is now removed too, by request: a
+    "not available" badge next to every general-knowledge answer read as clutter more than
+    useful signal, and the underlying no-fabrication guarantee only ever needed the Chapter line
+    to not lie, not to say something in its place. So this now fully OMITS the line for a
+    no-retrieval answer instead of substituting standard text -- the citation badge just doesn't
+    appear at all for these answers, same as it already didn't for the study-aid/mnemonic-or-
+    format-request case.
+
+    has_retrieval=True (a real NCERT match was found) makes this a complete no-op passthrough at
+    zero cost -- those answers are entirely unaffected by this function, exactly as before; only
+    the no-retrieval path is touched.
 
     Only buffers the small prefix up through the Chapter line (or through the literal "Answer:"
     that always immediately follows it, if the model chose the prompt's other allowed option of
@@ -2765,7 +2770,7 @@ async def _force_citation_when_no_retrieval(stream, has_retrieval: bool):
     this costs at most one short, near-instant buffering delay at the very start of an answer,
     not the full-response buffering _stream_qwen_verified uses (that one has no choice, since
     verification needs the complete answer before it can decide anything; this fix doesn't need
-    to inspect the model's answer content at all, only find-and-replace one already-fixed line).
+    to inspect the model's answer content at all, only find-and-strip one line).
 
     Bails out immediately (no buffering at all beyond what's already accumulated) the instant a
     conversational (DOUBT_TYPE:) or ambiguous/clarify (AMBIGUOUS: yes) reply is detected, since
@@ -2790,17 +2795,6 @@ async def _force_citation_when_no_retrieval(stream, has_retrieval: bool):
             yield buffer
             continue
 
-        # The study-aid/mnemonic-or-format-request case (SYSTEM_PROMPT) goes straight from
-        # VISUAL_INTENT to Answer: with NEITHER a NEET Importance NOR a Chapter line -- every
-        # normal academic answer always has "NEET Importance" before "Answer:", so its absence
-        # by the time "Answer:" (or a stray Chapter line) shows up is exactly that case. Without
-        # this check, this function used to force the fallback citation right back in for a
-        # mnemonic/format-request answer that had correctly omitted it, directly contradicting
-        # the instruction this whole case exists to enforce -- confirmed live: "in short explain"/
-        # "simplify this"/etc. follow-ups all still showed the "Chapter: Not available..." badge
-        # despite NEET Importance itself being correctly suppressed.
-        is_study_aid_or_format_case = "NEET Importance" not in buffer
-
         chapter_idx = buffer.find(_NCERT_CHAPTER_LINE_PREFIX)
         if chapter_idx != -1:
             nl_idx = buffer.find("\n", chapter_idx)
@@ -2809,25 +2803,18 @@ async def _force_citation_when_no_retrieval(stream, has_retrieval: bool):
             if nl_idx == -1:
                 nl_idx = len(buffer)
             resolved = True
-            if is_study_aid_or_format_case:
-                # Model wrote a Chapter line despite the instruction not to -- strip it rather
-                # than standardizing it to the fallback text, since this case must have no
-                # Chapter line at all, not just a non-fabricated one.
-                yield buffer[:chapter_idx] + buffer[nl_idx:].lstrip("\n")
-            else:
-                yield buffer[:chapter_idx] + _NCERT_NO_RETRIEVAL_CHAPTER_LINE + buffer[nl_idx:]
+            # Strips the line outright instead of substituting fallback text -- whatever the
+            # model wrote here isn't grounded in anything real, and the fix is to not show a
+            # citation at all rather than show a standardized non-citation.
+            yield buffer[:chapter_idx] + buffer[nl_idx:].lstrip("\n")
             continue
 
         answer_idx = buffer.find("Answer:")
         if answer_idx != -1:
+            # Model already omitted the Chapter line entirely (the prompt's other allowed
+            # option) -- nothing to strip, pass through unmodified.
             resolved = True
-            if is_study_aid_or_format_case:
-                yield buffer  # correctly omitted -- nothing to fix, forcing it back in would be wrong
-            else:
-                # Model took the prompt's other allowed option and omitted the Chapter line
-                # entirely -- insert the fixed line right before Answer: instead, so it's always
-                # present and consistent regardless of which option the model happened to pick.
-                yield buffer[:answer_idx] + _NCERT_NO_RETRIEVAL_CHAPTER_LINE + "\n\n" + buffer[answer_idx:]
+            yield buffer
             continue
 
         if len(buffer) > _CITATION_LOCK_BUFFER_CAP:
