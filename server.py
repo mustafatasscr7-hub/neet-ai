@@ -667,6 +667,11 @@ class DiagramUploadRequest(BaseModel):
     data: str  # base64-encoded image bytes
     media_type: str = "image/png"
 
+class ChatImageUploadRequest(BaseModel):
+    data: str  # base64-encoded image bytes
+    media_type: str = "image/png"
+    user_id: str
+
 class DiagramCreate(BaseModel):
     subject: str
     class_: Optional[int] = Field(None, alias="class")
@@ -5184,6 +5189,47 @@ async def admin_diagram_upload(body: DiagramUploadRequest, _: None = Depends(ver
         )
         if response.status_code >= 400:
             return {"error": f"Storage upload failed (is the '{DIAGRAMS_BUCKET}' bucket created and public?): {response.text}"}
+        return {"url": f"{SUPABASE_URL}/storage/v1/object/public/{DIAGRAMS_BUCKET}/{path}"}
+    except Exception as e:
+        return {"error": str(e)}
+
+# Student-submitted chat image attachments -- previously never persisted at all: the message
+# object saved to chats.messages only ever carried {role, text}, so an attached image displayed
+# fine for the live session (rendered straight from in-memory base64) but vanished on the next
+# page load with no way to recover it. Reuses DIAGRAMS_BUCKET (already a public bucket, already
+# verified working) under a chat-uploads/ prefix rather than requiring a second bucket be created
+# manually in the Supabase dashboard just for this. No admin gate -- any logged-in student can
+# call this for their own attachment -- same trust model as the rest of this codebase's student-
+# facing endpoints (a plain user_id field, no server-side session/JWT verification), not a new
+# relaxation introduced here.
+MAX_CHAT_IMAGE_BYTES = 8 * 1024 * 1024
+@app.post("/chat-image-upload")
+async def chat_image_upload(body: ChatImageUploadRequest):
+    if not body.user_id:
+        return {"error": "Not logged in"}
+    if not body.media_type.startswith("image/"):
+        return {"error": "Only image attachments can be uploaded"}
+    try:
+        file_bytes = base64.b64decode(body.data)
+    except Exception:
+        return {"error": "Could not decode image data"}
+    if len(file_bytes) > MAX_CHAT_IMAGE_BYTES:
+        return {"error": "Image too large"}
+    import uuid
+    ext = body.media_type.split("/")[-1].split("+")[0] or "png"
+    path = f"chat-uploads/{uuid.uuid4().hex}.{ext}"
+    try:
+        response = http_requests.post(
+            f"{SUPABASE_URL}/storage/v1/object/{DIAGRAMS_BUCKET}/{path}",
+            headers={
+                "apikey": SUPABASE_SERVICE_KEY,
+                "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+                "Content-Type": body.media_type
+            },
+            data=file_bytes
+        )
+        if response.status_code >= 400:
+            return {"error": response.text}
         return {"url": f"{SUPABASE_URL}/storage/v1/object/public/{DIAGRAMS_BUCKET}/{path}"}
     except Exception as e:
         return {"error": str(e)}

@@ -1851,12 +1851,39 @@ let selectedImages = [];
       return canvas.toDataURL('image/jpeg', COMPRESS_QUALITY);
     }
 
+    // Uploads a chat image attachment to Storage the moment it's attached (not at send time) so
+    // its URL is already resolved -- or very close to it -- by the time the student actually hits
+    // Send; the message itself still renders instantly off the in-memory base64 regardless (see
+    // sendMessage's imgRow), this only feeds the URL that gets persisted for reload-survival (see
+    // userMsgObj.images below). Resolves to null rather than throwing on any failure (logged out,
+    // network error, etc.) -- a failed upload must never block sending the message, it just means
+    // this one image won't survive a page refresh, same as the pre-existing behavior for everyone.
+    async function uploadChatImageForPersistence(dataUrl) {
+      try {
+        const { data: { session } } = await client.auth.getSession();
+        if (!session) return null; // guest chats aren't persisted to Supabase at all -- nothing to upload for
+        const media_type = dataUrl.split(';')[0].split(':')[1];
+        const base64 = dataUrl.split(',')[1];
+        const res = await fetch(`${API_BASE}/chat-image-upload`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ data: base64, media_type, user_id: session.user.id })
+        });
+        const json = await res.json();
+        return json.url || null;
+      } catch (e) {
+        return null;
+      }
+    }
+
     async function addImageFiles(files) {
       const room = maxImages() - selectedImages.length;
       if (room <= 0) { renderAttachmentPreview(); return; }
       for (const file of files.slice(0, room)) {
         const data = await compressImageFile(file);
-        selectedImages.push({ data, name: file.name || 'Pasted image' });
+        const entry = { data, name: file.name || 'Pasted image' };
+        entry.uploadPromise = uploadChatImageForPersistence(data);
+        selectedImages.push(entry);
         renderAttachmentPreview();
       }
     }
@@ -4016,6 +4043,20 @@ let selectedImages = [];
         contentWrapper.appendChild(bubble);
         contentWrapper.appendChild(buildActionsDiv('ai', timeStr, msgObj));
       } else {
+        // An attached image used to vanish on reload -- the live send renders it straight from
+        // the in-memory base64 (imgRow in sendMessage), but userMsgObj itself never carried the
+        // image at all, so the text portion survived a page refresh while the image didn't (see
+        // sendMessage's upload-on-attach + userMsgObj.images for where this is now persisted).
+        // Same visual structure as that live imgRow: a wrapped row of thumbnails, right-aligned,
+        // above the text bubble.
+        if (msgObj && msgObj.images && msgObj.images.length) {
+          const imgWrap = document.createElement('div');
+          imgWrap.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end;margin-bottom:8px;';
+          imgWrap.innerHTML = msgObj.images.map(url =>
+            `<img src="${url}" style="max-width:200px;max-height:200px;border-radius:12px;border:1px solid #2a2a3a;display:block;"/>`
+          ).join('');
+          contentWrapper.appendChild(imgWrap);
+        }
         // A quoted "Ask about this" selection used to vanish the moment the message sent --
         // it only ever lived in the pre-send preview box (clearQuotedContext() wipes it right
         // after streamAIResponse fires), so the permanent chat history showed just the
@@ -4032,8 +4073,13 @@ let selectedImages = [];
           quoteBox.appendChild(quoteTextEl);
           contentWrapper.appendChild(quoteBox);
         }
-        bubble.textContent = text;
-        contentWrapper.appendChild(bubble);
+        // Skips an empty bubble entirely when there's no caption text (an image-only send) --
+        // matches the live imgRow's own `${text ? ... : ''}` conditional, which the reload path
+        // never mirrored before.
+        if (text) {
+          bubble.textContent = text;
+          contentWrapper.appendChild(bubble);
+        }
         contentWrapper.appendChild(buildActionsDiv('user', timeStr));
       }
     
@@ -5955,6 +6001,19 @@ function plainTextFromMarkdown(text) {
         type: img.data.split(';')[0].split(':')[1]
       }));
       const pdfData = selectedPDF;
+
+      // Resolves the Storage URL(s) kicked off back when each image was attached (see
+      // addImageFiles) -- by now they're almost always already settled, so this rarely adds real
+      // wait, and it happens after the message has already rendered on screen either way. This is
+      // what makes an image attachment persist across a page refresh: userMsgObj carries the real
+      // URL, not just the text portion, so loadConversation/addMessageRow have something to
+      // restore. A failed upload resolves to null and is filtered out rather than blocking the
+      // send -- that image just won't survive a refresh, same as before this fix existed.
+      if (selectedImages.length > 0) {
+        const uploadedUrls = await Promise.all(selectedImages.map(img => img.uploadPromise));
+        const validUrls = uploadedUrls.filter(Boolean);
+        if (validUrls.length > 0) userMsgObj.images = validUrls;
+      }
 
       // Captured into imagesPayload/pdfData/activeQuote above already, so clearing the compose-box
       // UI state (attachment thumbnail, quoted-context box) here is safe -- and it needs to happen
