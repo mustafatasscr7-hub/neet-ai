@@ -1017,7 +1017,14 @@
     .pyq-results { margin-top: 12px; border-top: 1px solid #1e1e1e; padding-top: 12px; }
     .pyq-item { padding: 8px 0; border-bottom: 1px solid #1a1a1a; font-size: 13px; color: #aaa; line-height: 1.5; }
    .pyq-year { color: #4f8ef7; font-weight: 600; margin-right: 8px; }
- .message-actions { display: flex; align-items: center; gap: 4px; margin-top: 6px; width: fit-content; }
+ .message-actions { display: flex; align-items: center; gap: 4px; margin-top: 6px; opacity: 0; transition: opacity 0.2s; width: fit-content; }
+    /* Matches Claude.ai's own pattern: hover-to-reveal on every message EXCEPT the most recent
+       one, which stays permanently visible (see markLatestMessageRow's MutationObserver below --
+       .is-latest tracks whichever .message-row is currently last in #chatWindow, and moves to the
+       new one automatically as messages are added). */
+    .message-row:hover .message-actions { opacity: 1; }
+    .message-content:hover .message-actions { opacity: 1; }
+    .message-row.is-latest .message-actions { opacity: 1; }
 .message-time { font-size: 11px; font-weight: 500; color: rgba(255,255,255,0.35); padding: 0 4px; align-self: center; user-select: none; }
   
     .action-btn { background: transparent; border: none; color: #666; cursor: pointer; padding: 4px 6px; border-radius: 6px; display: flex; align-items: center; justify-content: center; transition: all 0.2s; }
@@ -1365,6 +1372,21 @@
     const chatWindow = document.getElementById('chatWindow');
     const sendBtn = document.getElementById('sendBtn');
     const inputArea = document.getElementById('inputArea');
+
+    // Keeps exactly one .message-row tagged .is-latest -- the CSS above uses that to keep its
+    // action row permanently visible (Claude.ai's own pattern), while every older message falls
+    // back to hover-to-reveal. A MutationObserver instead of calling this from every place a row
+    // gets added (addMessageRow, the image-attachment row, ensureAiRow's streaming bubble, loading
+    // a past conversation) so a future new call site can't silently forget to update it -- this
+    // fires on any childList change to #chatWindow regardless of which code path caused it. Retry/
+    // version-switch mutate an EXISTING row's content in place rather than adding/removing a row,
+    // so they don't fire this and don't need to -- the last row stays the last row either way.
+    function markLatestMessageRow() {
+      const rows = chatWindow.querySelectorAll('.message-row');
+      rows.forEach(r => r.classList.remove('is-latest'));
+      if (rows.length) rows[rows.length - 1].classList.add('is-latest');
+    }
+    new MutationObserver(markLatestMessageRow).observe(chatWindow, { childList: true });
 
     // ---------------- Auto-focus (matches Claude.ai's chat input always being ready to type
     // into, rather than needing a click first) ----------------
