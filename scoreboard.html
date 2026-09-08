@@ -640,6 +640,11 @@
       return `<button type="button" class="report-flag-btn" title="Report a problem with this question" onclick="event.stopPropagation(); openReportPopup('${pyqId}', this)"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><polygon points="12,3 22,21 2,21" fill="#ef4444" stroke="#ef4444" stroke-width="2.5" stroke-linejoin="round"/><rect x="10.8" y="9" width="2.4" height="6.5" rx="1.2" fill="#fff"/><circle cx="12" cy="18" r="1.3" fill="#fff"/></svg></button>`;
     }
 
+    // The flag button that opened the currently-open report popup -- submitReport's own btnEl
+    // argument is the popup's Submit button (appended straight to document.body, not nested
+    // inside the question card), so this is tracked separately to find the actual card afterward.
+    let reportOriginBtn = null;
+
     function closeReportPopup() {
       const existing = document.getElementById('reportPopup');
       if (existing) existing.remove();
@@ -658,6 +663,7 @@
 
     function openReportPopup(pyqId, btnEl) {
       closeReportPopup();
+      reportOriginBtn = btnEl;
       const popup = document.createElement('div');
       popup.id = 'reportPopup';
       popup.className = 'report-popup';
@@ -718,11 +724,25 @@
         }
         popup.innerHTML = '<div class="report-popup-thanks">✓ Reported, thank you</div>';
         setTimeout(closeReportPopup, 1600);
+        removeReportedQuestionFromView();
       } catch (e) {
         errEl.textContent = e.name === 'AbortError' ? 'Timed out -- try again.' : 'Could not reach server.';
         btnEl.disabled = false; btnEl.textContent = 'Submit';
       } finally {
         clearTimeout(timeoutId);
+      }
+    }
+
+    // Was previously left showing the just-flagged question until the student navigated away or
+    // refreshed -- /report-question already deactivates the row server-side on submit, this just
+    // brings the view in sync immediately instead of waiting for a reload.
+    function removeReportedQuestionFromView() {
+      const card = reportOriginBtn && reportOriginBtn.closest('.review-question-card');
+      if (!card) return;
+      const panel = card.parentElement;
+      card.remove();
+      if (panel && panel.classList.contains('open') && !panel.querySelector('.review-question-card')) {
+        panel.innerHTML = `<div class="review-empty">${t('scoreboard', 'noQuestionsInFilter')}</div>`;
       }
     }
 

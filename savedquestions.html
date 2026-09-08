@@ -706,6 +706,11 @@
       }
     }
 
+    // The flag button that opened the currently-open report popup -- submitReport's own btnEl
+    // argument is the popup's Submit button (appended straight to document.body, not nested
+    // inside the question card), so this is tracked separately to find the actual card afterward.
+    let reportOriginBtn = null;
+
     function closeReportPopup() {
       const existing = document.getElementById('reportPopup');
       if (existing) existing.remove();
@@ -724,6 +729,7 @@
 
     function openReportPopup(pyqId, btnEl) {
       closeReportPopup();
+      reportOriginBtn = btnEl;
       const popup = document.createElement('div');
       popup.id = 'reportPopup';
       popup.className = 'report-popup';
@@ -784,11 +790,28 @@
         }
         popup.innerHTML = '<div class="report-popup-thanks">✓ Reported, thank you</div>';
         setTimeout(closeReportPopup, 1600);
+        removeReportedQuestionFromView();
       } catch (e) {
         errEl.textContent = e.name === 'AbortError' ? 'Timed out -- try again.' : 'Could not reach server.';
         btnEl.disabled = false; btnEl.textContent = 'Submit';
       } finally {
         clearTimeout(timeoutId);
+      }
+    }
+
+    // Was previously left showing the just-flagged question until the student navigated away or
+    // refreshed -- /report-question already deactivates the row server-side on submit, this just
+    // brings the view in sync immediately instead of waiting for a reload. Not keyed by pyq id
+    // (the card's own DOM id uses the saved_questions row's id, a different id than the pyq_id
+    // the report button carries) -- walking up from the button that actually opened the popup
+    // avoids that mismatch entirely.
+    function removeReportedQuestionFromView() {
+      const card = reportOriginBtn && reportOriginBtn.closest('.question-card');
+      if (!card) return;
+      const container = card.parentElement;
+      card.remove();
+      if (container && container.id === 'questionsList' && !container.querySelector('.question-card')) {
+        container.innerHTML = `<div class="empty">${t('savedquestions','noSavedFound')}<br><br>${t('savedquestions','saveHint')}</div>`;
       }
     }
 

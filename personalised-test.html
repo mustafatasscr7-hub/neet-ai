@@ -139,6 +139,11 @@
     .difficulty-badge { display: inline-block; padding: 1.5px 7px; border-radius: 999px; font-size: 10.5px; font-weight: 500; letter-spacing: 0; line-height: 1.5; }
     .report-flag-btn { background: none; border: none; cursor: pointer; display: inline-flex; align-items: center; opacity: 0.35; padding: 2px 4px; margin-left: auto; transition: opacity 0.15s, transform 0.15s; }
     .report-flag-btn:hover, .report-flag-btn:focus-visible { opacity: 1; transform: scale(1.15); }
+    /* Live-test context (see handleReportedQuestionInView): the question stays answerable, this
+       is just the flag button's own persistent "already reported" state -- greyed out since the
+       icon's red fill is hardcoded inline SVG, not something a color-only rule could override. */
+    .report-flag-btn.reported { opacity: 0.35; filter: grayscale(1); cursor: default; }
+    .report-flag-btn.reported:hover { opacity: 0.35; transform: none; }
     .report-popup { position: fixed; z-index: 2000; background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 10px; padding: 12px; width: 220px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); font-size: 12px; }
     .report-popup-title { font-weight: 600; margin-bottom: 8px; color: #ececec; }
     .report-reason-row { display: flex; align-items: center; gap: 6px; padding: 4px 0; color: #ccc; cursor: pointer; font-size: 12px; }
@@ -1517,6 +1522,11 @@
       return `<button type="button" class="report-flag-btn" title="Report a problem with this question" onclick="event.stopPropagation(); openReportPopup('${pyqId}', this)"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><polygon points="12,3 22,21 2,21" fill="#ef4444" stroke="#ef4444" stroke-width="2.5" stroke-linejoin="round"/><rect x="10.8" y="9" width="2.4" height="6.5" rx="1.2" fill="#fff"/><circle cx="12" cy="18" r="1.3" fill="#fff"/></svg></button>`;
     }
 
+    // The flag button that opened the currently-open report popup -- submitReport's own btnEl
+    // argument is the popup's Submit button (appended straight to document.body, not nested
+    // inside the question card), so this is tracked separately for the success handler.
+    let reportOriginBtn = null;
+
     function closeReportPopup() {
       const existing = document.getElementById('reportPopup');
       if (existing) existing.remove();
@@ -1535,6 +1545,7 @@
 
     function openReportPopup(pyqId, btnEl) {
       closeReportPopup();
+      reportOriginBtn = btnEl;
       const popup = document.createElement('div');
       popup.id = 'reportPopup';
       popup.className = 'report-popup';
@@ -1598,11 +1609,36 @@
         }
         popup.innerHTML = '<div class="report-popup-thanks">✓ Reported, thank you</div>';
         setTimeout(closeReportPopup, 1600);
+        handleReportedQuestionInView();
       } catch (e) {
         errEl.textContent = e.name === 'AbortError' ? 'Timed out -- try again.' : 'Could not reach server.';
         btnEl.disabled = false; btnEl.textContent = 'Submit';
       } finally {
         clearTimeout(timeoutId);
+      }
+    }
+
+    // The report button appears in two very different contexts here -- the live, already-
+    // numbered, in-progress timed test (renderQuestion) and the post-test review list
+    // (renderQuestionReview, .question-card cards). Removing a question mid-test would break
+    // navigation/scoring, so it's only safe to actually remove the card in the review context;
+    // detected by walking up from the button that opened the popup rather than tracking a
+    // separate "which screen" flag; live-test just gets an immediate visible "reported" state on
+    // the flag button itself instead, same as mocktest.html.
+    function handleReportedQuestionInView() {
+      const card = reportOriginBtn && reportOriginBtn.closest('.question-card');
+      if (card) {
+        const container = card.parentElement;
+        card.remove();
+        if (container && container.id === 'questionReview' && !container.querySelector('.question-card')) {
+          container.innerHTML = '<div class="no-results">No questions in this category.</div>';
+        }
+        return;
+      }
+      if (reportOriginBtn) {
+        reportOriginBtn.disabled = true;
+        reportOriginBtn.classList.add('reported');
+        reportOriginBtn.title = 'Reported';
       }
     }
 

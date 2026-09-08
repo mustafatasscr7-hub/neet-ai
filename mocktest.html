@@ -48,6 +48,11 @@
     .difficulty-badge { display: inline-block; padding: 1.5px 7px; border-radius: 999px; font-size: 10.5px; font-weight: 500; letter-spacing: 0; line-height: 1.5; }
     .report-flag-btn { background: none; border: none; cursor: pointer; display: inline-flex; align-items: center; opacity: 0.35; padding: 2px 4px; margin-left: auto; transition: opacity 0.15s, transform 0.15s; }
     .report-flag-btn:hover, .report-flag-btn:focus-visible { opacity: 1; transform: scale(1.15); }
+    /* Live-test context (see markQuestionReportedInView): the question stays answerable, this is
+       just the flag button's own persistent "already reported" state -- greyed out since the
+       icon's red fill is hardcoded inline SVG, not something a color-only rule could override. */
+    .report-flag-btn.reported { opacity: 0.35; filter: grayscale(1); cursor: default; }
+    .report-flag-btn.reported:hover { opacity: 0.35; transform: none; }
     .report-popup { position: fixed; z-index: 2000; background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 10px; padding: 12px; width: 220px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); font-size: 12px; }
     .report-popup-title { font-weight: 600; margin-bottom: 8px; color: #ececec; }
     .report-reason-row { display: flex; align-items: center; gap: 6px; padding: 4px 0; color: #ccc; cursor: pointer; font-size: 12px; }
@@ -926,6 +931,11 @@ async function ensureDifficulties(questions, table, idField = 'id') {
   }
 }
 
+// The flag button that opened the currently-open report popup -- submitReport's own btnEl
+// argument is the popup's Submit button (appended straight to document.body, not nested inside
+// the question card), so this is tracked separately to update the actual flag button afterward.
+let reportOriginBtn = null;
+
 function closeReportPopup() {
   const existing = document.getElementById('reportPopup');
   if (existing) existing.remove();
@@ -944,6 +954,7 @@ function toggleReportNote(radioEl) {
 
 function openReportPopup(pyqId, btnEl) {
   closeReportPopup();
+  reportOriginBtn = btnEl;
   const popup = document.createElement('div');
   popup.id = 'reportPopup';
   popup.className = 'report-popup';
@@ -1007,12 +1018,28 @@ async function submitReport(pyqId, btnEl) {
     }
     popup.innerHTML = '<div class="report-popup-thanks">✓ Reported, thank you</div>';
     setTimeout(closeReportPopup, 1600);
+    markQuestionReportedInView();
   } catch (e) {
     errEl.textContent = e.name === 'AbortError' ? 'Timed out -- try again.' : 'Could not reach server.';
     btnEl.disabled = false; btnEl.textContent = 'Submit';
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+// Unlike the review-style pages (PYQ Bank, Saved Questions, etc.), this is a LIVE, already-
+// numbered, in-progress timed test -- removing the reported question here would break navigation
+// (Q1 of 30 -> Q1 of 29 mid-attempt), the answer grid, and scoring, none of which is safe to do
+// to a test the student is actively taking. The underlying pyq row is already deactivated server-
+// side (so it won't be picked for a FUTURE test), but this attempt keeps it fully answerable.
+// What WAS missing -- confirmed live, matches this bug's own report -- is any visible sign the
+// report actually went through beyond the popup, which auto-closes in 1.6s: the flag button
+// itself now flips to a persistent "reported" state instead of silently going back to normal.
+function markQuestionReportedInView() {
+  if (!reportOriginBtn) return;
+  reportOriginBtn.disabled = true;
+  reportOriginBtn.classList.add('reported');
+  reportOriginBtn.title = 'Reported';
 }
 
 function formatQuestionText(text) {

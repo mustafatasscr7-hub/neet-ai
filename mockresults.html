@@ -788,6 +788,11 @@ function generateScorecard() {
       return `<span style="margin-left:auto;display:inline-flex;align-items:center;gap:10px;">${difficultyBadgeHtml(difficulty)}${reportFlagBtnHtml(pyqId)}</span>`;
     }
 
+    // The flag button that opened the currently-open report popup -- submitReport's own btnEl
+    // argument is the popup's Submit button (appended straight to document.body, not nested
+    // inside the question card), so this is tracked separately to find the actual card afterward.
+    let reportOriginBtn = null;
+
     function closeReportPopup() {
       const existing = document.getElementById('reportPopup');
       if (existing) existing.remove();
@@ -806,6 +811,7 @@ function generateScorecard() {
 
     function openReportPopup(pyqId, btnEl) {
       closeReportPopup();
+      reportOriginBtn = btnEl;
       const popup = document.createElement('div');
       popup.id = 'reportPopup';
       popup.className = 'report-popup';
@@ -866,11 +872,25 @@ function generateScorecard() {
         }
         popup.innerHTML = '<div class="report-popup-thanks">✓ Reported, thank you</div>';
         setTimeout(closeReportPopup, 1600);
+        removeReportedQuestionFromView();
       } catch (e) {
         errEl.textContent = e.name === 'AbortError' ? 'Timed out -- try again.' : 'Could not reach server.';
         btnEl.disabled = false; btnEl.textContent = 'Submit';
       } finally {
         clearTimeout(timeoutId);
+      }
+    }
+
+    // Was previously left showing the just-flagged question until the student navigated away or
+    // refreshed -- /report-question already deactivates the row server-side on submit, this just
+    // brings the view in sync immediately instead of waiting for a reload.
+    function removeReportedQuestionFromView() {
+      const card = reportOriginBtn && reportOriginBtn.closest('.question-card');
+      if (!card) return;
+      const container = card.parentElement;
+      card.remove();
+      if (container && !container.querySelector('.question-card')) {
+        container.innerHTML = '<div class="no-results">No questions in this category.</div>';
       }
     }
 

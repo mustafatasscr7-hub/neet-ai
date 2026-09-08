@@ -3009,6 +3009,14 @@ let selectedImages = [];
       return '';
     }
 
+    // The flag button that opened the currently-open report popup -- submitReport's own btnEl
+    // argument is the popup's Submit button (appended straight to document.body, not nested
+    // inside the question card), so this is tracked separately to find the actual card afterward.
+    let reportOriginBtn = null;
+    // The questions array showPYQModal is currently rendering from -- see its own comment above
+    // for why removeReportedQuestionFromView needs this exposed rather than just removing a DOM node.
+    let currentPyqModalQuestions = null;
+
     function closeReportPopup() {
       const existing = document.getElementById('reportPopup');
       if (existing) existing.remove();
@@ -3027,6 +3035,7 @@ let selectedImages = [];
 
     function openReportPopup(pyqId, btnEl) {
       closeReportPopup();
+      reportOriginBtn = btnEl;
       const popup = document.createElement('div');
       popup.id = 'reportPopup';
       popup.className = 'report-popup';
@@ -3087,11 +3096,26 @@ let selectedImages = [];
         }
         popup.innerHTML = '<div class="report-popup-thanks">✓ Reported, thank you</div>';
         setTimeout(closeReportPopup, 1600);
+        removeReportedQuestionFromView(pyqId);
       } catch (e) {
         errEl.textContent = e.name === 'AbortError' ? 'Timed out -- try again.' : 'Could not reach server.';
         btnEl.disabled = false; btnEl.textContent = 'Submit';
       } finally {
         clearTimeout(timeoutId);
+      }
+    }
+
+    // Was previously left showing the just-flagged question until the student navigated away or
+    // refreshed -- /report-question already deactivates the row server-side on submit, this just
+    // brings the view in sync immediately instead of waiting for a reload. Also splices it out of
+    // currentPyqModalQuestions (see showPYQModal's own comment) so it can't reappear on a subject-
+    // tab switch, not just removed from the currently-visible DOM card.
+    function removeReportedQuestionFromView(pyqId) {
+      const card = reportOriginBtn && reportOriginBtn.closest('.pyq-q-card');
+      if (card) card.remove();
+      if (currentPyqModalQuestions) {
+        const idx = currentPyqModalQuestions.findIndex(q => q.id === pyqId);
+        if (idx !== -1) currentPyqModalQuestions.splice(idx, 1);
       }
     }
 
@@ -3206,6 +3230,13 @@ let selectedImages = [];
     async function showPYQModal(questions, matchType = 'exact') {
       const existing = document.getElementById('pyq-modal');
       if (existing) existing.remove();
+
+      // Exposed at module level so removeReportedQuestionFromView (called from outside this
+      // closure) can splice a reported question out of the SAME array renderPYQQuestions filters
+      // from on every subject-tab switch -- removing only the rendered DOM card would otherwise
+      // let the reported question silently reappear the moment the student switches tabs and
+      // back, since that re-render re-reads from this array fresh each time.
+      currentPyqModalQuestions = questions;
 
       // Works whether or not the match_pyq RPC's own column list already includes difficulty --
       // already-set values cost zero DeepSeek calls either way, this just fills in anything null.

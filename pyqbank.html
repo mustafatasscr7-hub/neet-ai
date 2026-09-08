@@ -438,6 +438,10 @@
     let currentChapterAllYears = [];
     let currentYearFilter = '';
     let currentQuestionIndex = 0;
+    // The flag button that opened the currently-open report popup -- submitReport's own btnEl
+    // argument is the popup's Submit button (appended straight to document.body, not nested
+    // inside the question card), so this is tracked separately to find the actual card afterward.
+    let reportOriginBtn = null;
 
     const subjectConfig = {
       'Biology': { icon: '🔬', color: '#4ade80' },
@@ -828,6 +832,7 @@
 
     function openReportPopup(pyqId, btnEl) {
       closeReportPopup();
+      reportOriginBtn = btnEl;
       const popup = document.createElement('div');
       popup.id = 'reportPopup';
       popup.className = 'report-popup';
@@ -891,12 +896,37 @@
         }
         popup.innerHTML = '<div class="report-popup-thanks">✓ Reported, thank you</div>';
         setTimeout(closeReportPopup, 1600);
+        removeReportedQuestionFromView(pyqId);
       } catch (e) {
         errEl.textContent = e.name === 'AbortError' ? 'Timed out -- try again.' : 'Could not reach server.';
         btnEl.disabled = false; btnEl.textContent = 'Submit';
       } finally {
         clearTimeout(timeoutId);
       }
+    }
+
+    // Was previously left showing the just-flagged question until the student navigated away or
+    // refreshed -- /report-question already deactivates the row server-side on submit, this just
+    // brings the view in sync immediately instead of waiting for a reload. One question shown at
+    // a time here (not a scrollable list), so removal means "advance past it" -- splice it out of
+    // the in-memory question set and re-render at the same position (which now holds what used to
+    // be the next question), same as clicking Next would land on, not a raw DOM removal (which
+    // would leave the "Question X of Y" count and Prev/Next bounds stale).
+    function removeReportedQuestionFromView(pyqId) {
+      const idx = currentChapterQuestions.findIndex(q => q.id === pyqId);
+      if (idx === -1) return;
+      currentChapterQuestions.splice(idx, 1);
+      if (currentChapterQuestions.length === 0) {
+        document.getElementById('mainContent').innerHTML = `<div class="empty">${t('pyqbank','noQuestionsFound')}</div>`;
+        return;
+      }
+      if (currentQuestionIndex >= currentChapterQuestions.length) currentQuestionIndex--;
+      // classNum here is only ever used to rebuild Prev/Next/year-filter onclick strings (never
+      // to filter/query anything -- currentChapterQuestions/currentQuestionIndex already do
+      // that), so the module-level selectedClass set by showQuestions() is exactly what those
+      // buttons were already using -- not the raw pyq row's own `class` column, which doesn't
+      // necessarily match the syllabus-class grouping (11 vs 12) chapters are looked up by.
+      renderSingleQuestion(selectedSubject, selectedClass, selectedChapter);
     }
 
     function parseWithMath(text) {
@@ -1141,6 +1171,8 @@ function handleBack() {
 
     // SCREEN 4 — Questions
     async function showQuestions(subject, classNum, chapter, yearFilter = null) {
+      selectedSubject = subject;
+      selectedClass = classNum;
       selectedChapter = chapter;
       document.getElementById('mainContent').innerHTML = `
         <div class="breadcrumb">
