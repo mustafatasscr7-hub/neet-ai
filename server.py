@@ -1389,15 +1389,23 @@ DAILY_TOKEN_BUDGET_GUEST = 14000  # ~2.5 doubts/day -- deliberately tight vs. th
 # window that starts anywhere "today" can only still be active sometime "tomorrow", never further.
 async def _fetch_usage_rows(table: str, id_field: str, id_value: str):
     """Returns (today_str, yesterday_str, rows_by_date) for the shared today+yesterday lookup
-    both the enforcement check and the read-only status endpoint need."""
+    both the enforcement check and the read-only status endpoint need. Fails open (empty
+    rows_by_date, i.e. "no usage on record") on any Supabase error -- same fail-open principle as
+    get_user_plan() below -- so a transient DB blip degrades to letting the student through
+    rather than an unhandled 500 on every /chat, /solve, /title, and /summarize-answer request,
+    for every plan tier that routes through this."""
     today = _ist_today()
     yesterday = (date.fromisoformat(today) - timedelta(days=1)).isoformat()
-    resp = await async_client.get(
-        f"{SUPABASE_URL}/rest/v1/{table}", headers=ADMIN_HEADERS,
-        params={id_field: f"eq.{id_value}", "usage_date": f"in.({yesterday},{today})",
-                "select": "usage_date,tokens_used,limit_reached_at"}
-    )
-    return today, yesterday, {r["usage_date"]: r for r in resp.json()}
+    try:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/{table}", headers=ADMIN_HEADERS,
+            params={id_field: f"eq.{id_value}", "usage_date": f"in.({yesterday},{today})",
+                    "select": "usage_date,tokens_used,limit_reached_at"}
+        )
+        return today, yesterday, {r["usage_date"]: r for r in resp.json()}
+    except Exception as e:
+        print(f"USAGE ROWS FETCH FAILED ({table}, {id_field}={id_value}): {e}", flush=True)
+        return today, yesterday, {}
 
 def _active_cooldown_seconds(today: str, yesterday: str, rows_by_date: dict) -> "int | None":
     """Read-only: does today's or yesterday's row have a limit_reached_at still within the
@@ -1427,11 +1435,19 @@ async def _check_rolling_cooldown(table: str, id_field: str, id_value: str, budg
     used_today = today_row["tokens_used"] if today_row else 0
     if used_today >= budget:
         if not (today_row and today_row.get("limit_reached_at")):
-            await async_client.patch(
-                f"{SUPABASE_URL}/rest/v1/{table}", headers={**ADMIN_HEADERS, "Content-Type": "application/json"},
-                params={id_field: f"eq.{id_value}", "usage_date": f"eq.{today}"},
-                json={"limit_reached_at": datetime.now(timezone.utc).isoformat()}
-            )
+            try:
+                await async_client.patch(
+                    f"{SUPABASE_URL}/rest/v1/{table}", headers={**ADMIN_HEADERS, "Content-Type": "application/json"},
+                    params={id_field: f"eq.{id_value}", "usage_date": f"eq.{today}"},
+                    json={"limit_reached_at": datetime.now(timezone.utc).isoformat()}
+                )
+            except Exception as e:
+                # Best-effort, not fail-open -- the student IS genuinely over budget, already
+                # determined from the read above (which succeeded, or this branch couldn't have
+                # been reached). This write only tracks WHEN the cooldown started for computing
+                # retry_after correctly later; a failure here shouldn't overturn a decision
+                # already made from data that was actually read successfully.
+                print(f"LIMIT_REACHED_AT WRITE FAILED ({table}, {id_field}={id_value}): {e}", flush=True)
         return COOLDOWN_HOURS * 3600
     return None
 
@@ -1442,11 +1458,18 @@ async def _check_plan_daily_limit(user_id: str, budget: int):
     (limit_reached_at) tracking needed the way Free's rolling window requires, since a fresh
     usage_date row naturally appears the moment real midnight IST passes."""
     today = _ist_today()
-    resp = await async_client.get(
-        f"{SUPABASE_URL}/rest/v1/usage_log", headers=ADMIN_HEADERS,
-        params={"user_id": f"eq.{user_id}", "usage_date": f"eq.{today}", "select": "tokens_used"}
-    )
-    rows = resp.json()
+    try:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/usage_log", headers=ADMIN_HEADERS,
+            params={"user_id": f"eq.{user_id}", "usage_date": f"eq.{today}", "select": "tokens_used"}
+        )
+        rows = resp.json()
+    except Exception as e:
+        # Fails open -- same principle as get_user_plan(): a transient DB error here should not
+        # block a paying student from asking a doubt. Can't know today's real usage, so this
+        # request simply goes unenforced rather than 500ing.
+        print(f"PLAN DAILY LIMIT CHECK FAILED (user_id={user_id}): {e}", flush=True)
+        return
     tokens_used = rows[0]["tokens_used"] if rows else 0
     if tokens_used >= budget:
         raise HTTPException(status_code=402, detail={
@@ -1488,11 +1511,18 @@ async def check_max_usage_tier(user_id: str) -> "str | None":
     if plan != "max":
         return None
     today = _ist_today()
-    resp = await async_client.get(
-        f"{SUPABASE_URL}/rest/v1/usage_log", headers=ADMIN_HEADERS,
-        params={"user_id": f"eq.{user_id}", "usage_date": f"eq.{today}", "select": "tokens_used"}
-    )
-    rows = resp.json()
+    try:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/usage_log", headers=ADMIN_HEADERS,
+            params={"user_id": f"eq.{user_id}", "usage_date": f"eq.{today}", "select": "tokens_used"}
+        )
+        rows = resp.json()
+    except Exception as e:
+        # Fails open (no forced downgrade) -- matches this function's own "NEVER blocks" contract
+        # from its docstring above. Not being able to read today's usage just means we can't tell
+        # whether breakeven was crossed, so this request gets normal routing rather than an error.
+        print(f"MAX USAGE TIER CHECK FAILED (user_id={user_id}): {e}", flush=True)
+        return None
     tokens_used = rows[0]["tokens_used"] if rows else 0
     if tokens_used >= MAX_BREAKEVEN_THRESHOLD:
         await _log_max_usage_alert(user_id, tokens_used, "breakeven", "downgraded_to_cheapest_model")
@@ -3335,13 +3365,22 @@ async def get_cached_pyq_solution(pyq_id: str, language: str):
     thinking indicator for a fixed ~1s on a hit instead of an instant, jarring pop-in."""
     if not pyq_id:
         return None
-    resp = await async_client.get(
-        f"{SUPABASE_URL}/rest/v1/pyq_solution_cache",
-        headers=SOLVE_CACHE_HEADERS,
-        params={"pyq_id": f"eq.{pyq_id}", "language": f"eq.{language}", "select": "solution"}
-    )
-    rows = resp.json()
-    return rows[0]["solution"] if rows else None
+    try:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/pyq_solution_cache",
+            headers=SOLVE_CACHE_HEADERS,
+            params={"pyq_id": f"eq.{pyq_id}", "language": f"eq.{language}", "select": "solution"}
+        )
+        rows = resp.json()
+        return rows[0]["solution"] if rows else None
+    except Exception as e:
+        # Treat any failure here as a cache miss, not a request failure -- this is a cheap lookup
+        # ahead of the real (expensive) generation in stream_solve_response, which already has its
+        # own proper error handling. Failing the whole /solve request over a transient blip on
+        # this cheap check -- when generation would likely have succeeded fine -- would be a worse
+        # outcome than just regenerating. Same fail-open principle as the budget-check fixes above.
+        print(f"PYQ SOLUTION CACHE LOOKUP FAILED (pyq_id={pyq_id}): {e}", flush=True)
+        return None
 
 async def stream_solve_response(pyq_id: str, cached_solution, question: str, option_a: str, option_b: str, option_c: str, option_d: str, correct_answer: str, language: str = "en", user_id: str = "", ip: str = ""):
     if cached_solution is not None:
@@ -5337,8 +5376,14 @@ async def admin_diagram_upload(body: DiagramUploadRequest, _: None = Depends(ver
 # facing endpoints (a plain user_id field, no server-side session/JWT verification), not a new
 # relaxation introduced here.
 MAX_CHAT_IMAGE_BYTES = 8 * 1024 * 1024
+# Every other student-facing endpoint here has a rate limiter -- this one didn't, despite being
+# the most expensive-per-call (a real binary write to Supabase Storage, up to MAX_CHAT_IMAGE_BYTES
+# each), leaving it the one unmetered way to keep costing storage indefinitely. 10/60 is more
+# conservative than /chat's 15/60 -- a real doubt rarely attaches more than a couple images at
+# once, unlike a text message which is always exactly one -- while still comfortably covering a
+# student attaching several images across a session.
 @app.post("/chat-image-upload")
-async def chat_image_upload(body: ChatImageUploadRequest):
+async def chat_image_upload(body: ChatImageUploadRequest, _: None = Depends(rate_limiter(10, 60))):
     if not body.user_id:
         return {"error": "Not logged in"}
     if not body.media_type.startswith("image/"):
