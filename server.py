@@ -1548,18 +1548,68 @@ async def log_token_usage(user_id: str, tokens: int, ip: str = ""):
         pass  # never let logging failure break a response the student already received
 
 # ---------------- Referral program ----------------
-# A student's referral code is just their own user_id with hyphens stripped (32 hex chars) --
-# no lookup table needed to go from code -> user_id, since it's the UUID with formatting
-# removed. Every registered student already has one automatically, including everyone who
-# signed up before this feature existed -- nothing to backfill, nothing to generate/store.
-def _referral_code_for_user(user_id: str) -> str:
-    return user_id.replace("-", "")
+# Short, human-readable codes (7 chars, e.g. "7K4XPQR"), stored in user_referral_codes -- not
+# derived from the user_id anymore (see referral_short_code_migration.sql for why: the old
+# scheme was unreadable, untypeable by hand, and leaked the referrer's real user_id to anyone who
+# got a link). Alphabet excludes 0/O and 1/I/L -- the classic ambiguous-character set for a code
+# someone reads off one screen and types into another, sometimes read aloud or copied from a
+# screenshot.
+import secrets
+REFERRAL_CODE_LENGTH = 7
+REFERRAL_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
-def _user_id_from_referral_code(code: str):
-    hex_code = (code or "").strip().replace("-", "").lower()
-    if len(hex_code) != 32 or not all(c in "0123456789abcdef" for c in hex_code):
+def _generate_referral_code() -> str:
+    return "".join(secrets.choice(REFERRAL_CODE_ALPHABET) for _ in range(REFERRAL_CODE_LENGTH))
+
+async def _referral_code_for_user(user_id: str) -> str:
+    """Get-or-create: returns this student's existing stored code, or generates and persists a
+    new one on first call -- covers a brand new signup and any pre-existing account the same way,
+    so there's no separate lazy-backfill path to keep in sync. (The 7 real accounts that existed
+    when this table was introduced were also backfilled once directly, non-lazily -- see
+    migrate_referral_codes.py -- so nobody's very first Settings load pays the generation cost.)"""
+    resp = await async_client.get(
+        f"{SUPABASE_URL}/rest/v1/user_referral_codes", headers=ADMIN_HEADERS,
+        params={"user_id": f"eq.{user_id}", "select": "code", "limit": 1}
+    )
+    rows = resp.json() if resp.status_code == 200 else []
+    if rows:
+        return rows[0]["code"]
+    # Retry a few times on the astronomically unlikely event of a genuine code collision
+    # (32^7 ≈ 34 trillion possible codes) -- cheaper than pre-checking uniqueness before insert.
+    for _ in range(5):
+        code = _generate_referral_code()
+        insert_resp = await async_client.post(
+            f"{SUPABASE_URL}/rest/v1/user_referral_codes",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
+            json={"user_id": user_id, "code": code}
+        )
+        if insert_resp.status_code < 400:
+            return insert_resp.json()[0]["code"]
+        if insert_resp.status_code == 409:
+            # user_id is ALSO the primary key here (one row per student, ever) -- a concurrent
+            # request for this SAME student (e.g. two tabs both loading Settings at once) can hit
+            # this same conflict for a reason that has nothing to do with the code itself, so
+            # re-check for an existing row before assuming it was a genuine code collision.
+            existing = await async_client.get(
+                f"{SUPABASE_URL}/rest/v1/user_referral_codes", headers=ADMIN_HEADERS,
+                params={"user_id": f"eq.{user_id}", "select": "code", "limit": 1}
+            )
+            existing_rows = existing.json() if existing.status_code == 200 else []
+            if existing_rows:
+                return existing_rows[0]["code"]
+            continue  # genuine code collision -- retry with a freshly generated code
+    raise RuntimeError(f"Could not generate a unique referral code for user {user_id}")
+
+async def _user_id_from_referral_code(code: str):
+    normalized = (code or "").strip().upper()
+    if not normalized:
         return None
-    return f"{hex_code[0:8]}-{hex_code[8:12]}-{hex_code[12:16]}-{hex_code[16:20]}-{hex_code[20:32]}"
+    resp = await async_client.get(
+        f"{SUPABASE_URL}/rest/v1/user_referral_codes", headers=ADMIN_HEADERS,
+        params={"code": f"eq.{normalized}", "select": "user_id", "limit": 1}
+    )
+    rows = resp.json() if resp.status_code == 200 else []
+    return rows[0]["user_id"] if rows else None
 
 REFERRAL_BONUS_TOKENS = 50000
 
@@ -4251,11 +4301,11 @@ async def admin_set_user_plan(req: SetUserPlanRequest, _: None = Depends(verify_
 async def referral_my_code(user_id: str):
     if not user_id:
         return {"error": "user_id required"}
-    return {"code": _referral_code_for_user(user_id)}
+    return {"code": await _referral_code_for_user(user_id)}
 
 @app.post("/referral/register")
 async def referral_register(req: RegisterReferralRequest):
-    referrer_id = _user_id_from_referral_code(req.referral_code)
+    referrer_id = await _user_id_from_referral_code(req.referral_code)
     if not referrer_id:
         return {"error": "Invalid referral code"}
     if referrer_id == req.referred_id:
@@ -4264,11 +4314,14 @@ async def referral_register(req: RegisterReferralRequest):
         # referred_id is UNIQUE at the database level (see the migration) -- this insert is the
         # real enforcement that a student can only ever be tied to one referral code, ever. A
         # second attempt, even with a different code, always fails here with a conflict; it
-        # never silently overwrites the first one.
+        # never silently overwrites the first one. Stores the normalized (trimmed, uppercased)
+        # code -- the same form _user_id_from_referral_code actually matched against -- rather
+        # than whatever raw casing/whitespace the student typed, so this column stays a reliable
+        # audit trail of the real code used.
         resp = await async_client.post(
             f"{SUPABASE_URL}/rest/v1/referrals",
             headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
-            json={"referrer_id": referrer_id, "referred_id": req.referred_id, "referral_code": req.referral_code}
+            json={"referrer_id": referrer_id, "referred_id": req.referred_id, "referral_code": req.referral_code.strip().upper()}
         )
         if resp.status_code == 409:
             return {"error": "This account has already used a referral code"}
@@ -4315,7 +4368,7 @@ async def referral_status(user_id: str):
         bonus_total_granted = REFERRAL_BONUS_TOKENS * (completed_referrals + (1 if was_referred_completed else 0))
 
         return {
-            "code": _referral_code_for_user(user_id),
+            "code": await _referral_code_for_user(user_id),
             "was_referred": bool(referred_by_rows),
             "referred_status": referred_by_rows[0]["status"] if referred_by_rows else None,
             "referrals_completed": completed_referrals,
