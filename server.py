@@ -161,17 +161,35 @@ chapter"). This is NOT the same as a genuine request to explain or understand a 
 photosynthesis", "what is the Krebs cycle") — those stay full academic doubts as normal, even if
 the answer happens to include a bonus mnemonic as part of explaining the concept. The test is
 whether explaining/understanding the concept is what's being asked for at all, not whether the
-word "mnemonic" or "recall" appears. For this study-aid case: write the normal answer starting
-with VISUAL_INTENT as always, with real, substantive, bulleted content under Answer:/Key Points:
-(never a brush-off, never asking the student to narrow it down) -- but OMIT both the "NEET
-Importance: N/5" line and the "📚 Chapter:" line COMPLETELY. Completely means no line starting
-with "NEET Importance" and no line starting with "📚 Chapter" anywhere in the reply, in any form
--- this includes the "Chapter: Not available — answering from general knowledge..." fallback
-sentence rule 1 below offers for the unrelated case of a real factual doubt with nothing
-retrieved; that fallback does not apply here and must not appear either. Go directly from
-VISUAL_INTENT to Answer:. There is no single fact here being rated for exam-frequency or
-attributed to one chapter -- these are study aids for content the student already has in view,
-not a graded factual claim.
+word "mnemonic" or "recall" appears.
+
+The SAME case also covers a plain FORMAT/LENGTH follow-up about an answer you already gave earlier
+in this conversation — "explain in short", "explain shorter", "simplify this", "make it brief",
+"shorter please", "explain briefly", "TL;DR", "less detail", "summarize the above" — where the
+student is asking you to re-present content you already covered, not asking a new factual
+question. The test has the same shape as the mnemonic case above: is there any new subject content
+actually being asked about, or is this purely about HOW the existing answer should be re-
+delivered? A bare "explain in short"/"simplify this" with no new topic named is always this case,
+regardless of which earlier topic it implicitly refers to. This is different from a FRESH doubt
+that happens to also request brevity as a stylistic preference — "What is osmosis, briefly?" or
+"Explain photosynthesis in short" still names a real topic being asked about for the first time,
+so it stays a full academic doubt with NEET Importance/Chapter as normal; "briefly"/"in short"
+there is a tone instruction on a genuine new question, not evidence the student is asking you to
+reformat something already given.
+
+For either sub-case above (mnemonic/study-aid request, or format/length follow-up): write the
+normal answer starting with VISUAL_INTENT as always, with real, substantive, bulleted content
+under Answer:/Key Points: (never a brush-off, never asking the student to narrow it down) -- but
+OMIT both the "NEET Importance: N/5" line and the "📚 Chapter:" line COMPLETELY. Completely means
+no line starting with "NEET Importance" and no line starting with "📚 Chapter" anywhere in the
+reply, in any form -- this includes the "Chapter: Not available — answering from general
+knowledge..." fallback sentence rule 1 below offers for the unrelated case of a real factual doubt
+with nothing retrieved; that fallback does not apply here and must not appear either. Go directly
+from VISUAL_INTENT to Answer:. There is no single fact here being rated for exam-frequency or
+attributed to one chapter -- these are study aids or re-presentations of content the student
+already has in view, not a graded factual claim. For the format/length sub-case specifically, the
+condensed or simplified answer must still be genuinely complete for what was actually asked --
+shorter or simpler is never an excuse for vague or incomplete content.
 
 For EVERY academic answer follow this exact format:
 
@@ -221,8 +239,8 @@ Final Answer: Maximum height = 20 m
 Rules:
 1. Answer ONLY from the NCERT content provided to you. This applies most strictly to the 📚
    Chapter: line — follow this exact mechanical procedure for it, in order, before writing
-   anything else in that line. (Skip this whole procedure for the study-aid/mnemonic-request case
-   described before the format template — that case omits the Chapter line unconditionally,
+   anything else in that line. (Skip this whole procedure for the study-aid/mnemonic-or-format-
+   request case described before the format template — that case omits the Chapter line unconditionally,
    regardless of what STEP A below would find, since it's not answering from or citing any
    particular chapter's content in the first place.)
    STEP A: Look at the user message. Does it literally contain the text "Retrieved from:"?
@@ -249,8 +267,8 @@ Rules:
    translation. This only applies to terms that actually appear in the retrieved NCERT Content —
    if a term you need isn't present in what was retrieved, use your own best Hindi terminology as
    normal; never force-fit an unrelated retrieved term onto a concept it doesn't actually describe.
-2. Always show the NEET Importance rating AT THE TOP, EXCEPT for the study-aid/mnemonic-request
-   case described just above the format template — that case omits it entirely, not just moves it
+2. Always show the NEET Importance rating AT THE TOP, EXCEPT for the study-aid/mnemonic-or-format-
+   request case described just above the format template — that case omits it entirely, not just moves it
 3. Use bullet points — never big paragraphs
 4. Answer length should match question complexity
 5. If question is outside NCERT say: This is outside the NCERT NEET syllabus.
@@ -2772,6 +2790,17 @@ async def _force_citation_when_no_retrieval(stream, has_retrieval: bool):
             yield buffer
             continue
 
+        # The study-aid/mnemonic-or-format-request case (SYSTEM_PROMPT) goes straight from
+        # VISUAL_INTENT to Answer: with NEITHER a NEET Importance NOR a Chapter line -- every
+        # normal academic answer always has "NEET Importance" before "Answer:", so its absence
+        # by the time "Answer:" (or a stray Chapter line) shows up is exactly that case. Without
+        # this check, this function used to force the fallback citation right back in for a
+        # mnemonic/format-request answer that had correctly omitted it, directly contradicting
+        # the instruction this whole case exists to enforce -- confirmed live: "in short explain"/
+        # "simplify this"/etc. follow-ups all still showed the "Chapter: Not available..." badge
+        # despite NEET Importance itself being correctly suppressed.
+        is_study_aid_or_format_case = "NEET Importance" not in buffer
+
         chapter_idx = buffer.find(_NCERT_CHAPTER_LINE_PREFIX)
         if chapter_idx != -1:
             nl_idx = buffer.find("\n", chapter_idx)
@@ -2780,16 +2809,25 @@ async def _force_citation_when_no_retrieval(stream, has_retrieval: bool):
             if nl_idx == -1:
                 nl_idx = len(buffer)
             resolved = True
-            yield buffer[:chapter_idx] + _NCERT_NO_RETRIEVAL_CHAPTER_LINE + buffer[nl_idx:]
+            if is_study_aid_or_format_case:
+                # Model wrote a Chapter line despite the instruction not to -- strip it rather
+                # than standardizing it to the fallback text, since this case must have no
+                # Chapter line at all, not just a non-fabricated one.
+                yield buffer[:chapter_idx] + buffer[nl_idx:].lstrip("\n")
+            else:
+                yield buffer[:chapter_idx] + _NCERT_NO_RETRIEVAL_CHAPTER_LINE + buffer[nl_idx:]
             continue
 
         answer_idx = buffer.find("Answer:")
         if answer_idx != -1:
-            # Model took the prompt's other allowed option and omitted the Chapter line
-            # entirely -- insert the fixed line right before Answer: instead, so it's always
-            # present and consistent regardless of which option the model happened to pick.
             resolved = True
-            yield buffer[:answer_idx] + _NCERT_NO_RETRIEVAL_CHAPTER_LINE + "\n\n" + buffer[answer_idx:]
+            if is_study_aid_or_format_case:
+                yield buffer  # correctly omitted -- nothing to fix, forcing it back in would be wrong
+            else:
+                # Model took the prompt's other allowed option and omitted the Chapter line
+                # entirely -- insert the fixed line right before Answer: instead, so it's always
+                # present and consistent regardless of which option the model happened to pick.
+                yield buffer[:answer_idx] + _NCERT_NO_RETRIEVAL_CHAPTER_LINE + "\n\n" + buffer[answer_idx:]
             continue
 
         if len(buffer) > _CITATION_LOCK_BUFFER_CAP:
