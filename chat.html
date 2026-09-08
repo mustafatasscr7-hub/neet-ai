@@ -7025,7 +7025,16 @@ function plainTextFromMarkdown(text) {
           const openId = new URLSearchParams(window.location.search).get('open');
           if (openId) {
             const target = chats.find(c => String(c.id) === openId);
-            if (target) loadConversationFromSupabase(target);
+            if (target) {
+              loadConversationFromSupabase(target);
+              // This handoff calls loadConversationFromSupabase directly instead of going through
+              // a real click on the sidebar item, so the .active highlight createHistoryItem's own
+              // click listener normally applies never runs -- set it here too, same as that
+              // listener does, so the opened chat shows as selected just like any other.
+              document.querySelectorAll('.history-item').forEach(i => i.classList.remove('active'));
+              const openedItem = document.getElementById('conv-' + openId);
+              if (openedItem) openedItem.classList.add('active');
+            }
           }
         }
       } else {
