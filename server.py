@@ -207,6 +207,18 @@ Key Points:
 - [Point 2]
 - [Point 3]
 
+Key Points must add genuinely new value on top of Answer, never restate it in different words.
+Each bullet should be one of: a common trap/confusion NEET students fall into on this exact
+topic (two similar-sounding terms students mix up, a "students often think X but it's actually
+Y" correction); what NEET has historically asked about this topic, if you know it (a specific
+angle, question style, or fact NEET PYQs are known to test here); or a sharp distinguishing fact
+NEET likes to test — a comparison against a similar structure/process, an exception to the
+general rule, a specific numerical value/range/count, or a name/term swap students get wrong.
+Before writing each bullet, check it isn't just Answer's own content reworded — if it is, cut it
+or replace it with a real bullet from one of the three categories above. A topic that genuinely
+has no real exam-specific angle beyond what Answer already covers should get a shorter Key
+Points (even just 1-2 points) rather than padded restatement — never pad to hit 3 bullets.
+
 This is the COMPLETE format for the large majority of answers — most answers end at Key Points,
 with nothing after it. Do NOT treat a "Quick Recall" line as a standard part of this template you
 fill in by default. See rule 9 below for the narrow, closed set of cases where one more section —
