@@ -5956,6 +5956,19 @@ function plainTextFromMarkdown(text) {
       }));
       const pdfData = selectedPDF;
 
+      // Captured into imagesPayload/pdfData/activeQuote above already, so clearing the compose-box
+      // UI state (attachment thumbnail, quoted-context box) here is safe -- and it needs to happen
+      // here, before the request even goes out, not after streamAIResponse resolves below. That
+      // await doesn't return until the ENTIRE response has finished streaming, so the previous
+      // clear-after-await left the attachment preview sitting in the input box for the whole
+      // answer's generation time instead of disappearing the instant the message was actually
+      // sent. streamAIResponse catches its own errors internally (shows an inline "Something went
+      // wrong" message rather than rejecting), so this isn't gated on the request succeeding either
+      // way -- once a message is sent, its compose-box state is done regardless of what happens to
+      // the response.
+      clearAttachments();
+      clearQuotedContext();
+
       // When a quote is active, the model needs to see it as explicit context rather than just
       // the student's follow-up alone -- the PYQ search button, though, should still search on
       // just what the student actually asked, not the wrapped sentence.
@@ -5969,9 +5982,6 @@ function plainTextFromMarkdown(text) {
         streamOptions.pyqSearchText = text;
       }
       await streamAIResponse(questionForModel, streamOptions);
-
-      clearAttachments();
-      clearQuotedContext();
     }
 
     // Multiple Solution Methods: fired after the primary answer finishes streaming, never
