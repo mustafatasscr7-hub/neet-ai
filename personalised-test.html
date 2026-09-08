@@ -16,10 +16,8 @@
     a { color: inherit; }
 
     /* ===== SETUP SCREEN (catalog) ===== */
-    #setupScreen { min-height: 100vh; padding: 96px 24px 60px; position: relative; }
-    .back-fixed { position: fixed; top: 16px; left: 16px; }
-    .back-fixed button { background: transparent; border: 1px solid #2a2a2a; color: #888; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 13px; font-family: 'Inter', sans-serif; transition: all 0.2s; }
-    .back-fixed button:hover { color: #ccc; }
+    #setupScreen { min-height: 100vh; }
+    .catalog-body { padding: 32px 24px 60px; }
 
     .catalog-wrap { max-width: 1000px; margin: 0 auto; width: 100%; }
     .catalog-header { margin-bottom: 28px; }
@@ -104,7 +102,7 @@
     .generate-btn:disabled { background: #2a2a2a; color: #666; cursor: not-allowed; }
 
     @media (max-width: 640px) {
-      #setupScreen { padding: 88px 16px 40px; }
+      .catalog-body { padding: 24px 16px 40px; }
     }
 
     /* ===== TEST SCREEN (adapted from mocktest.html) ===== */
@@ -276,8 +274,6 @@
     body.light-mode a { color: inherit !important; }
 
     /* Setup / catalog screen */
-    body.light-mode .back-fixed button { background: #ffffff !important; border-color: #d5d5dd !important; color: #55555f !important; }
-    body.light-mode .back-fixed button:hover { color: #0d0d0d !important; }
     body.light-mode .setup-title { color: #0d0d0d !important; }
     body.light-mode .setup-subtitle { color: #55555f !important; }
 
@@ -430,10 +426,16 @@
 
   <!-- ===== SETUP SCREEN (catalog) ===== -->
   <div id="setupScreen">
-    <div class="back-fixed" style="display:flex;gap:8px;">
-      <button onclick="window.location.href='./chat.html'" data-i18n="personalisedTest.backToNeetAi">← Back to NEET-AI</button>
-      <button class="lang-toggle" onclick="toggleLang()">हिं</button>
+    <div class="header">
+      <div style="display:flex;align-items:center;gap:16px;">
+        <button onclick="window.location.href='./chat.html'" style="background:transparent;border:none;color:#555;cursor:pointer;font-size:13px;font-family:Inter,sans-serif;padding:0;" onmouseover="this.style.color='#4f8ef7'" onmouseout="this.style.color=(typeof getTheme==='function'&&getTheme()==='light')?'#55555f':'#555'" data-i18n="personalisedTest.backToNeetAi">← Back to NEET-AI</button>
+        <span class="header-title">NEET<span>-AI</span> <span data-i18n="personalisedTest.title">Personalised Test</span></span>
+      </div>
+      <div style="display:flex;gap:10px;">
+        <button class="lang-toggle" onclick="toggleLang()" style="background:transparent;border:1px solid #2a2a2a;color:#888;padding:8px 14px;border-radius:8px;cursor:pointer;font-size:13px;font-family:Inter,sans-serif;">हिं</button>
+      </div>
     </div>
+    <div class="catalog-body">
     <div class="catalog-wrap">
       <div class="catalog-header">
         <div class="setup-icon">🎯</div>
@@ -541,6 +543,7 @@
           <button class="generate-btn" id="generateBtn" onclick="generateTest()" disabled data-i18n="personalisedTest.selectSubjectFirst">Select at least one subject to continue</button>
         </div>
       </div>
+    </div>
     </div>
   </div>
 
