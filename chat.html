@@ -3175,7 +3175,7 @@ let selectedImages = [];
       }
     }
 
-    async function showPYQModal(questions, isFallback = false) {
+    async function showPYQModal(questions, matchType = 'exact') {
       const existing = document.getElementById('pyq-modal');
       if (existing) existing.remove();
 
@@ -3199,19 +3199,30 @@ let selectedImages = [];
 
      const header = document.createElement('div');
       header.style.cssText = 'display:flex;flex-direction:column;gap:4px;margin-bottom:16px;';
-      // isFallback: the primary threshold search found nothing, this is the relaxed "related, not
-      // exact" pass instead (see PYQ_FALLBACK_THRESHOLD in server.py) -- distinct color/subtitle
-      // so a student isn't misled into thinking these directly answer their doubt.
+      // matchType: 'exact' -- primary threshold search found a direct hit. 'related' -- the
+      // relaxed "related, not exact" pass instead (see PYQ_FALLBACK_THRESHOLD in server.py).
+      // 'chapter' -- neither semantic pass found anything, these are just every PYQ from the same
+      // chapter as the answer's own citation (see PYQ_CARD_COLUMNS/chapter fallback in
+      // search_pyq). Each gets its own color/subtitle so a student isn't misled into thinking
+      // these directly answer their doubt.
       const titleRow = document.createElement('div');
       titleRow.style.cssText = 'display:flex;justify-content:space-between;align-items:center;';
-      titleRow.innerHTML = isFallback
-        ? `<h3 style="margin:0;color:#f59e0b;">📋 Related Questions</h3>`
-        : `<h3 style="margin:0;color:#a78bfa;">📋 Related Past Year Questions</h3>`;
+      const titleByType = {
+        exact: `<h3 style="margin:0;color:#a78bfa;">📋 Related Past Year Questions</h3>`,
+        related: `<h3 style="margin:0;color:#f59e0b;">📋 Related Questions</h3>`,
+        chapter: `<h3 style="margin:0;color:#60a5fa;">📋 Questions From This Chapter</h3>`,
+      };
+      titleRow.innerHTML = titleByType[matchType] || titleByType.exact;
       header.appendChild(titleRow);
-      if (isFallback) {
+      if (matchType === 'related') {
         const subtitle = document.createElement('div');
         subtitle.style.cssText = 'font-size:12px;color:#888;';
         subtitle.textContent = `No exact match for this doubt — here are related ${subjectName(dominantSubject) || dominantSubject} questions instead.`;
+        header.appendChild(subtitle);
+      } else if (matchType === 'chapter') {
+        const subtitle = document.createElement('div');
+        subtitle.style.cssText = 'font-size:12px;color:#888;';
+        subtitle.textContent = `No closely related PYQs found for this doubt — here are other questions from the same chapter instead.`;
         header.appendChild(subtitle);
       }
 
@@ -4029,14 +4040,14 @@ let selectedImages = [];
               const res = await fetch(`${API_BASE}/pyq`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ text: buildPyqSearchQuery(userQuestion, chapterText) })
+                body: JSON.stringify({ text: buildPyqSearchQuery(userQuestion, chapterText), chapter: chapterText || '' })
               });
               const data = await res.json();
               if (data.pyqs && data.pyqs.length > 0) {
-                showPYQModal(data.pyqs, data.related);
+                showPYQModal(data.pyqs, data.match_type);
                 pyqBtn.innerHTML = '📋 Previous Year Questions';
               } else {
-                pyqBtn.innerHTML = '❌ No PYQs found';
+                pyqBtn.innerHTML = '🔍 No PYQs found for this topic yet';
               }
             } catch(e) {
               pyqBtn.innerHTML = '❌ Error loading';
@@ -4245,14 +4256,14 @@ function plainTextFromMarkdown(text) {
             const res = await fetch(`${API_BASE}/pyq`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ text: buildPyqSearchQuery(pyqSearchText, chapterText) })
+              body: JSON.stringify({ text: buildPyqSearchQuery(pyqSearchText, chapterText), chapter: chapterText || '' })
             });
             const data = await res.json();
             if (data.pyqs && data.pyqs.length > 0) {
-              showPYQModal(data.pyqs, data.related);
+              showPYQModal(data.pyqs, data.match_type);
               pyqBtn.innerHTML = '📋 Previous Year Questions';
             } else {
-              pyqBtn.innerHTML = '❌ No PYQs found';
+              pyqBtn.innerHTML = '🔍 No PYQs found for this topic yet';
             }
           } catch(e) {
             pyqBtn.innerHTML = '❌ Error loading';
@@ -4937,7 +4948,7 @@ function plainTextFromMarkdown(text) {
         });
         const data = await res.json();
         if (data.pyqs && data.pyqs.length > 0) {
-          showPYQModal(data.pyqs, data.related);
+          showPYQModal(data.pyqs, data.match_type);
         } else {
           addMessageRow('ai', `No matching PYQs found for "${topic}".`);
         }
@@ -6585,14 +6596,14 @@ function plainTextFromMarkdown(text) {
             const res = await fetch(`${API_BASE}/pyq`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ text: buildPyqSearchQuery(pyqSearchText, chapterText) })
+              body: JSON.stringify({ text: buildPyqSearchQuery(pyqSearchText, chapterText), chapter: chapterText || '' })
             });
             const data = await res.json();
             if (data.pyqs && data.pyqs.length > 0) {
-              showPYQModal(data.pyqs, data.related);
+              showPYQModal(data.pyqs, data.match_type);
               pyqBtn.innerHTML = '📋 Previous Year Questions';
             } else {
-              pyqBtn.innerHTML = '❌ No PYQs found';
+              pyqBtn.innerHTML = '🔍 No PYQs found for this topic yet';
             }
           } catch(e) {
             pyqBtn.innerHTML = '❌ Error loading';

@@ -580,6 +580,7 @@ class Message(BaseModel):
     user_id: str = ""
     personalize: bool = True
     skip_cache: bool = False
+    chapter: str = ""
 
 class PhoneOtpRequest(BaseModel):
     phone: str
@@ -1964,13 +1965,28 @@ OFF_TOPIC_PYQ_TERMS = {
     "capital of",
 }
 
+# Word-boundary regex, not plain substring -- a bare "in" check silently flagged any query
+# containing "principle" as off-topic (matches "ipl" at "prIncIPLe"), which is exactly why real
+# NEET queries like "Le Chatelier's Principle", "Pauli exclusion principle", "Bernoulli's
+# principle" and "Aufbau principle" were getting zero PYQ results. \b works fine for the
+# multi-word phrases here too (e.g. "world cup").
+_OFF_TOPIC_PYQ_RE = re.compile(r'\b(?:' + '|'.join(re.escape(term) for term in OFF_TOPIC_PYQ_TERMS) + r')\b')
+
 def _is_off_topic_pyq_query(text: str) -> bool:
     normalized = text.strip().lower()
-    return any(term in normalized for term in OFF_TOPIC_PYQ_TERMS)
+    return bool(_OFF_TOPIC_PYQ_RE.search(normalized))
 
-async def search_pyq(query: str, limit: int = 5):
+PYQ_CHAPTER_FALLBACK_LIMIT = 6
+
+# Columns needed to render a full PYQ card client-side (question, options incl. per-option
+# diagrams, correct answer, difficulty) -- same explicit list already used by
+# /mock-test-questions, kept in sync deliberately rather than select=* (which would also drag
+# each row's embedding vector along for nothing).
+PYQ_CARD_COLUMNS = "id,subject,chapter,year,question,option_a,option_b,option_c,option_d,correct_answer,difficulty,diagram_url,option_a_diagram_url,option_b_diagram_url,option_c_diagram_url,option_d_diagram_url"
+
+async def search_pyq(query: str, limit: int = 5, chapter: str = ""):
     if _is_off_topic_pyq_query(query):
-        return [], False
+        return [], "none"
     headers = {
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
@@ -1988,15 +2004,37 @@ async def search_pyq(query: str, limit: int = 5):
 
     results = await _search_at(PYQ_MATCH_THRESHOLD, limit)
     if results:
-        return results, False
+        return results, "exact"
 
     # No real match even after the typo/spacing merge-variant fallback inside _search_at -- try
-    # once more at the relaxed "related, not exact" threshold before giving up entirely. Returns
-    # (results, True) only when this relaxed pass actually found something; an empty result here
-    # means the corpus genuinely has nothing close, and the caller should show honest "no results"
-    # rather than being told a fallback ran and still return nothing.
+    # once more at the relaxed "related, not exact" threshold before giving up entirely.
     fallback_results = await _search_at(PYQ_FALLBACK_THRESHOLD, PYQ_FALLBACK_LIMIT)
-    return fallback_results, bool(fallback_results)
+    if fallback_results:
+        return fallback_results, "related"
+
+    # Both semantic tiers came up empty (either no embedded rows are close at all, or this
+    # specific query embeds poorly -- e.g. a very short/generic doubt). Rather than a dead-end
+    # "nothing found", fall back to a direct chapter-level lookup using the chapter citation the
+    # answer itself already generated -- a real chapter match, not a similarity guess, so no
+    # threshold tuning needed here. Only runs when the caller actually has a chapter to filter on.
+    chapter = (chapter or "").strip()
+    if chapter:
+        chapter_resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/pyq",
+            headers=headers,
+            params={
+                "chapter": f"ilike.{chapter}",
+                "is_active": "eq.true",
+                "select": PYQ_CARD_COLUMNS,
+                "limit": PYQ_CHAPTER_FALLBACK_LIMIT,
+                "order": "year.desc",
+            },
+        )
+        chapter_results = chapter_resp.json() if chapter_resp.status_code == 200 else []
+        if chapter_results:
+            return chapter_results, "chapter"
+
+    return [], "none"
 
 async def get_student_context(user_id: str) -> str:
     if not user_id:
@@ -3690,8 +3728,8 @@ async def report_diagram(req: ReportDiagramRequest, _: None = Depends(rate_limit
 
 @app.post("/pyq")
 async def get_pyq(message: Message, _: None = Depends(rate_limiter(15, 60))):
-    results, related = await search_pyq(message.text)
-    return {"pyqs": results, "related": related}
+    results, match_type = await search_pyq(message.text, chapter=message.chapter)
+    return {"pyqs": results, "match_type": match_type}
 
 # Powers pricing.html's NEET-year selector (date-based annual pricing, pre-Razorpay -- see
 # create_neet_exam_dates_table.sql). Public/no-auth, same reasoning as /diagrams: this is
