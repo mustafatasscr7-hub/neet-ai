@@ -331,9 +331,13 @@
     const { createClient } = supabase
     const client = createClient(SUPABASE_URL, SUPABASE_KEY)
 
-    // A referral LINK (?ref=CODE) pre-fills the code and assumes the visitor wants to sign up,
-    // not sign in -- almost nobody clicks a referral link intending to log into an existing
-    // account. Still fully editable/enterable by hand either way.
+    // Deliberately kept as a dormant fallback: Settings > Account no longer generates or shows
+    // any ?ref=CODE link (referral is code-only now, entered by hand at the field below) -- but
+    // this parsing itself costs nothing to leave, still correctly pre-fills the SAME manual field
+    // if a link somehow does exist (an old share, a support message, a future marketing use), and
+    // deleting it would only remove a harmless convenience, not any real functionality. Assumes a
+    // visitor arriving via one wants to sign up, not sign in -- almost nobody clicks a referral
+    // link intending to log into an existing account. Still fully editable/enterable by hand either way.
     const urlReferralCode = new URLSearchParams(window.location.search).get('ref') || ''
     let isSignUp = !!urlReferralCode
 
