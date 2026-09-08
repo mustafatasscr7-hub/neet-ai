@@ -2492,10 +2492,22 @@ let selectedImages = [];
       return text.replace(MERMAID_FENCE_RE, '\n<div class="mermaid-placeholder">📊 Generating diagram…</div>\n');
     }
 
+    // Previously rendered fullText completely raw, with the "NEET Importance: N/5"/"Chapter: ..."
+    // lines only ever swapped for the stars/pill component in the FINAL render that runs once
+    // streaming ends (extractAnswerMeta below is the exact same parse that final render already
+    // did) -- so for the whole live-typing duration of every academic answer, the student saw the
+    // literal unstyled text sitting at the top of the bubble, then watched it visibly snap to the
+    // star component the instant the response finished. Running the same extraction on every
+    // throttled render tick means the swap happens the moment the "NEET Importance: N/5" line has
+    // fully streamed in -- normally within the first tick or two, since it's always the very first
+    // line -- instead of waiting for the entire answer. extractAnswerMeta no-ops safely (returns
+    // the text unchanged) both before that line is complete and for any bubble that never has one
+    // (e.g. the alternate-method sub-explanation rendered via this same function at solDiv).
     function renderStreamingText(bubble, fullText) {
-      const safeLen = findSafeRenderBoundary(fullText);
-      const safePrefix = maskMermaidBlocksForStreaming(fullText.slice(0, safeLen));
-      bubble.innerHTML = parseWithMath(safePrefix) + escapeStreamingTail(fullText.slice(safeLen));
+      const { cleanText, metaHtml } = extractAnswerMeta(fullText);
+      const safeLen = findSafeRenderBoundary(cleanText);
+      const safePrefix = maskMermaidBlocksForStreaming(cleanText.slice(0, safeLen));
+      bubble.innerHTML = metaHtml + parseWithMath(safePrefix) + escapeStreamingTail(cleanText.slice(safeLen));
     }
 
     // ---------------- Mermaid flowchart rendering ----------------
