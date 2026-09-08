@@ -306,13 +306,8 @@ Rules:
    a PROCESS or SEQUENCE (e.g. "make me a flowchart of the steps in photosynthesis"), output it
    as a Mermaid flowchart in a ```mermaid code block — never say you can't create visual diagrams,
    and never draw one using plain text arrows (→, ↓) or ASCII boxes instead.
-   Do NOT do this if you classified VISUAL_INTENT: yes above (rule 10) — that means the student
-   wants to SEE a real NCERT figure/structure, which is handled entirely by a separate diagram-
-   matching system, not by you inventing one. Inventing your own flowchart for a request that's
-   really asking to see a real diagram (e.g. "show eubacteria", "what does the cell look like")
-   is redundant with that system and confuses the student with two different "diagrams" for the
-   same answer. If VISUAL_INTENT is yes, skip this rule entirely regardless of how the question is
-   phrased.
+   Do NOT do this if you classified VISUAL_INTENT: yes above — skip this rule entirely regardless
+   of phrasing; see rule 10 for why (a real diagram lookup handles that case, not a self-drawn one).
 
    Build it for NEET exam prep, not as a literal restatement of the answer text turned into boxes:
    - Structure it around what NEET actually tests about this topic — the order examiners ask about
@@ -398,8 +393,8 @@ Rules:
    not appear anywhere in your response at all. Do not manufacture a generic mnemonic just to have
    something there: an acronym whose "explanation" just re-reads its own letters back out (e.g.
    inventing "KUBU" for kidney→ureter→bladder→urethra and then explaining it as "K-U-B-U: kidney,
-   ureter, bladder, urethra") is exactly the weak, forced pattern this checklist exists to prevent,
-   and a forced mnemonic is worse than no section at all. When (b), (c), or (d) is met but no
+   ureter, bladder, urethra") is exactly the weak, forced pattern this checklist exists to prevent
+   (see below for why a forced one is worse than none). When (b), (c), or (d) is met but no
    famous mnemonic already exists, you may construct a genuinely useful one of your own — but only
    for content that actually satisfies one of the four criteria, never
    as a fallback for content that satisfies none of them.
@@ -2195,11 +2190,15 @@ DEEPSEEK_RATES = {
     "off_peak": {"cache_hit": 0.007, "cache_miss": 0.22, "output": 0.66},
 }
 # Qwen-Flash's published rate for the 0-256K input tier (fetched from
-# alibabacloud.com/help/en/model-studio/model-pricing on 2026-08-14). Alibaba's docs mention a
-# separate, lower cache-hit rate exists but don't publish a number for it, so this deliberately
-# applies the flat input rate to all input tokens -- a conservative (slight over-, never under-)
-# estimate rather than guessing an unconfirmed discount.
-QWEN_FLASH_RATE = {"input": 0.05, "output": 0.40}
+# alibabacloud.com/help/en/model-studio/model-pricing on 2026-08-14). cache_hit is Alibaba's
+# published rate for IMPLICIT (automatic, no code required) context caching -- 20% of the
+# standard input price -- confirmed live against the real qwen-flash model on the exact
+# dashscope-intl compatible-mode endpoint this file calls: a repeated identical system prompt
+# came back with prompt_tokens_details.cached_tokens equal to essentially the entire ~8.8K-token
+# prompt (8704/8839), both in a plain and a streaming call. An earlier version of this comment
+# said Alibaba didn't publish a cache-hit number at all; they now do, hence this changing from a
+# flat "apply full input rate to everything" estimate to actually pricing the hit/miss split.
+QWEN_FLASH_RATE = {"input": 0.05, "cache_hit": 0.01, "output": 0.40}
 # Gemini 3.5 Flash-Lite's standard (non-batch) tier -- the tier that actually applies to live
 # streaming /chat requests (fetched from ai.google.dev/gemini-api/docs/pricing on 2026-08-14).
 GEMINI_FLASH_LITE_RATE = {"input": 0.30, "output": 2.50}
@@ -2208,8 +2207,8 @@ def _deepseek_cost(cache_miss_tokens: int, cache_hit_tokens: int, output_tokens:
     r = DEEPSEEK_RATES["peak" if is_peak else "off_peak"]
     return (cache_miss_tokens * r["cache_miss"] + cache_hit_tokens * r["cache_hit"] + output_tokens * r["output"]) / 1_000_000
 
-def _qwen_cost(input_tokens: int, output_tokens: int) -> float:
-    return (input_tokens * QWEN_FLASH_RATE["input"] + output_tokens * QWEN_FLASH_RATE["output"]) / 1_000_000
+def _qwen_cost(cache_miss_tokens: int, cache_hit_tokens: int, output_tokens: int) -> float:
+    return (cache_miss_tokens * QWEN_FLASH_RATE["input"] + cache_hit_tokens * QWEN_FLASH_RATE["cache_hit"] + output_tokens * QWEN_FLASH_RATE["output"]) / 1_000_000
 
 def _gemini_cost(input_tokens: int, output_tokens: int) -> float:
     return (input_tokens * GEMINI_FLASH_LITE_RATE["input"] + output_tokens * GEMINI_FLASH_LITE_RATE["output"]) / 1_000_000
@@ -2317,7 +2316,7 @@ async def _stream_qwen(system: str, messages: list, user_id: str, ip: str, endpo
         stream_options={"include_usage": True},
         messages=[{"role": "system", "content": system}] + messages
     )
-    input_tokens = output_tokens = 0
+    input_tokens = output_tokens = cache_hit_tokens = 0
     try:
         async for chunk in qwen_stream:
             if chunk.choices and chunk.choices[0].delta.content:
@@ -2325,12 +2324,19 @@ async def _stream_qwen(system: str, messages: list, user_id: str, ip: str, endpo
             if chunk.usage:
                 input_tokens = chunk.usage.prompt_tokens
                 output_tokens = chunk.usage.completion_tokens
+                # Alibaba's implicit context cache -- automatic, no request-side opt-in needed,
+                # confirmed live to actually populate this field on this exact model/endpoint (see
+                # QWEN_FLASH_RATE's comment). None on an SDK version that predates this field, or
+                # on a genuine cache miss, both mean "nothing cached" -- 0 either way.
+                details = chunk.usage.prompt_tokens_details
+                cache_hit_tokens = (details.cached_tokens or 0) if details else 0
     finally:
         # Best-effort even on a mid-stream failure -- whatever tokens were actually used still
         # get logged/counted against the student's daily budget; log_token_usage() itself is a
         # no-op for tokens<=0, so a failure before any usage chunk arrived costs nothing extra.
         if input_tokens or output_tokens:
-            cost = _qwen_cost(input_tokens, output_tokens)
+            cache_miss_tokens = max(0, input_tokens - cache_hit_tokens)
+            cost = _qwen_cost(cache_miss_tokens, cache_hit_tokens, output_tokens)
             try:
                 await log_provider_usage("qwen-flash", True, input_tokens, output_tokens, cost, endpoint, user_id)
             except Exception:
