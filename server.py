@@ -3625,7 +3625,8 @@ async def merge_guest_usage(req: MergeGuestUsageRequest, request: Request):
             )
         return {"merged": tokens}
     except Exception as e:
-        return {"merged": 0, "error": str(e)}
+        print(f"MERGE GUEST USAGE ERROR (user_id={req.user_id}): {e}", flush=True)
+        return {"merged": 0, "error": "Something went wrong. Please try again."}
 
 USAGE_PROVIDER_BREAKDOWN_DAYS = 30  # no real billing-cycle concept exists yet (flat subscription,
                                      # Razorpay not live) -- a rolling 30-day window is used as the
@@ -3787,7 +3788,8 @@ async def report_question(req: ReportQuestionRequest, _: None = Depends(rate_lim
     except HTTPException:
         raise
     except Exception as e:
-        return {"error": str(e)}
+        print(f"REPORT QUESTION ERROR (pyq_id={req.pyq_id}, user_id={req.user_id}): {e}", flush=True)
+        return {"error": "Something went wrong. Please try again."}
 
 DIAGRAM_REPORT_REASONS = {"wrong_image", "mislabeled", "low_quality", "incorrect_content", "other"}
 DIAGRAM_REPORT_SOURCES = {"chat", "library"}
@@ -3825,7 +3827,8 @@ async def report_diagram(req: ReportDiagramRequest, _: None = Depends(rate_limit
     except HTTPException:
         raise
     except Exception as e:
-        return {"error": str(e)}
+        print(f"REPORT DIAGRAM ERROR (diagram_id={req.diagram_id}, user_id={req.user_id}): {e}", flush=True)
+        return {"error": "Something went wrong. Please try again."}
 
 @app.post("/pyq")
 async def get_pyq(message: Message, _: None = Depends(rate_limiter(15, 60))):
@@ -3981,7 +3984,8 @@ async def list_diagrams(subject: str = "", class_num: int = 0, _: None = Depends
             return {"error": response.text}
         return {"diagrams": response.json()}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"LIST DIAGRAMS ERROR (subject={subject}, class_num={class_num}): {e}", flush=True)
+        return {"error": "Something went wrong. Please try again."}
 
 @app.get("/mock-test-questions")
 async def get_mock_test_questions():
@@ -4015,7 +4019,8 @@ async def get_mock_test_questions():
         questions = bio_q + phy_q + che_q
         return {"questions": questions, "total": len(questions)}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"MOCK TEST QUESTIONS ERROR: {e}", flush=True)
+        return {"error": "Something went wrong. Please try again."}
 
 @app.get("/mock-tests/available")
 async def get_available_mock_tests(user_id: str = ""):
@@ -4057,7 +4062,8 @@ async def get_available_mock_tests(user_id: str = ""):
         available = [t for t in published if t["id"] not in taken_ids]
         return {"available": available, "total_published": len(published)}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"AVAILABLE MOCK TESTS ERROR (user_id={user_id}): {e}", flush=True)
+        return {"error": "Something went wrong. Please try again."}
 
 @app.get("/mock-tests/{mock_test_id}/questions")
 async def get_mock_test_questions_by_id(mock_test_id: int):
@@ -4086,7 +4092,8 @@ async def get_mock_test_questions_by_id(mock_test_id: int):
         questions = response.json()
         return {"questions": questions, "total": len(questions)}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"MOCK TEST QUESTIONS BY ID ERROR (mock_test_id={mock_test_id}): {e}", flush=True)
+        return {"error": "Something went wrong. Please try again."}
 
 @app.get("/pyq-chapters")
 async def get_pyq_chapters(subject: str):
@@ -4131,7 +4138,8 @@ async def get_pyq_chapters(subject: str):
         chapters = [{"name": ch, "count": counts[ch]} for ch in sorted(counts.keys())]
         return {"chapters": chapters}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"PYQ CHAPTERS ERROR (subject={subject}): {e}", flush=True)
+        return {"error": "Something went wrong. Please try again."}
 
 @app.post("/personalised-test-questions")
 async def get_personalised_test_questions(req: PersonalisedTestRequest):
@@ -4171,7 +4179,8 @@ async def get_personalised_test_questions(req: PersonalisedTestRequest):
         selected = random.sample(pool, min(count, available)) if available else []
         return {"questions": selected, "requested": count, "available": available}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"PERSONALISED TEST QUESTIONS ERROR: {e}", flush=True)
+        return {"error": "Something went wrong. Please try again."}
 
 @app.get("/personalised-catalog")
 async def get_personalised_catalog(subject: str):
@@ -4193,7 +4202,8 @@ async def get_personalised_catalog(subject: str):
         )
         return {"tests": response.json()}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"PERSONALISED CATALOG ERROR (subject={subject}): {e}", flush=True)
+        return {"error": "Something went wrong. Please try again."}
 
 @app.post("/personalised-catalog-start")
 async def start_personalised_catalog_test(req: PersonalisedCatalogStartRequest):
@@ -4231,7 +4241,8 @@ async def start_personalised_catalog_test(req: PersonalisedCatalogStartRequest):
         questions = questions_response.json()
         return {"questions": questions, "title": rows[0]["title"]}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"PERSONALISED CATALOG START ERROR (subject={req.subject}, test_number={req.test_number}): {e}", flush=True)
+        return {"error": "Something went wrong. Please try again."}
 
 @app.get("/health")
 def health():
@@ -4339,7 +4350,7 @@ async def admin_set_user_plan(req: SetUserPlanRequest, _: None = Depends(verify_
 @app.get("/referral/my-code")
 async def referral_my_code(user_id: str):
     if not user_id:
-        return {"error": "user_id required"}
+        raise HTTPException(status_code=400, detail="user_id is required")
     return {"code": await _referral_code_for_user(user_id)}
 
 @app.post("/referral/register")
@@ -4368,12 +4379,13 @@ async def referral_register(req: RegisterReferralRequest):
             return {"error": resp.text}
         return {"success": True}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"REFERRAL REGISTER ERROR (referrer_id={referrer_id}, referred_id={req.referred_id}): {e}", flush=True)
+        return {"error": "Something went wrong. Please try again."}
 
 @app.get("/referral/status")
 async def referral_status(user_id: str):
     if not user_id:
-        return {"error": "user_id required"}
+        raise HTTPException(status_code=400, detail="user_id is required")
     try:
         referred_by_resp = await async_client.get(
             f"{SUPABASE_URL}/rest/v1/referrals", headers=ADMIN_HEADERS,
@@ -4416,7 +4428,8 @@ async def referral_status(user_id: str):
             "bonus_total_granted": bonus_total_granted,
         }
     except Exception as e:
-        return {"error": str(e)}
+        print(f"REFERRAL STATUS ERROR (user_id={user_id}): {e}", flush=True)
+        return {"error": "Something went wrong. Please try again."}
 
 @app.get("/admin/pyq-stats")
 async def admin_pyq_stats(_: None = Depends(verify_admin)):
@@ -4776,7 +4789,8 @@ async def classify_difficulty_endpoint(req: ClassifyDifficultyRequest, _: None =
             return {"error": resp.text}
         rows = resp.json()
     except Exception as e:
-        return {"error": str(e)}
+        print(f"CLASSIFY DIFFICULTY FETCH ERROR (table={req.table}): {e}", flush=True)
+        return {"error": "Something went wrong. Please try again."}
 
     result = {}
     to_classify = []
@@ -4938,7 +4952,8 @@ async def ensure_correct_answer_endpoint(req: EnsureCorrectAnswerRequest, _: Non
             return {"error": "Question not found"}
         row = rows[0]
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ENSURE CORRECT ANSWER FETCH ERROR (pyq_id={req.pyq_id}): {e}", flush=True)
+        return {"error": "Something went wrong. Please try again."}
 
     if row.get("correct_answer"):
         return {"correct_answer": row["correct_answer"]}
@@ -5411,7 +5426,8 @@ async def chat_image_upload(body: ChatImageUploadRequest, _: None = Depends(rate
             return {"error": response.text}
         return {"url": f"{SUPABASE_URL}/storage/v1/object/public/{DIAGRAMS_BUCKET}/{path}"}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"CHAT IMAGE UPLOAD ERROR (user_id={body.user_id}): {e}", flush=True)
+        return {"error": "Something went wrong. Please try again."}
 
 @app.post("/admin/diagrams-create")
 async def admin_diagrams_create(body: DiagramCreate, _: None = Depends(verify_admin)):
