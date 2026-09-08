@@ -6304,10 +6304,11 @@ function plainTextFromMarkdown(text) {
             if (!isClarification && now - lastRenderTime >= RENDER_THROTTLE_MS) {
               renderStreamingText(textArea, fullText);
               lastRenderTime = now;
-              // scrollBottom() animates via scroll-behavior:smooth - throttled with the
-              // render, not called on every character, or repeated calls interrupt each
-              // other's in-flight animation and look like jittery flicker.
-              scrollBottom();
+              // Deliberately no scrollBottom() here -- the one scrollBottom() call made when the
+              // typing indicator first appears (see above, right after streamAIResponse starts)
+              // already brings the new response into view; repeating it on every throttled render
+              // tick as more tokens arrive would keep dragging the student down instead of letting
+              // them read from the top of the answer or scroll freely while it streams.
             }
             // Yielding here is only to let the browser get a paint in between throttled
             // renders above, not to pace the reveal -- doing it every character (previously
@@ -6540,12 +6541,16 @@ function plainTextFromMarkdown(text) {
         }
       }
 
-      userScrolled = false;
       isStreaming = false;
       streamController = null;
       document.getElementById('sendIcon').style.display = 'block';
       document.getElementById('stopIcon').style.display = 'none';
+      // scrollBottom() must run BEFORE userScrolled resets below -- it reads that flag to decide
+      // whether to move the view at all, so resetting first would force a snap to the bottom here
+      // even when the student deliberately scrolled away mid-stream to read something. Resetting
+      // right after just starts the NEXT message's own scroll tracking fresh.
       scrollBottom();
+      userScrolled = false;
       focusMessageInput();
     }
 
