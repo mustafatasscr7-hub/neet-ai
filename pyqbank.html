@@ -986,6 +986,21 @@
       el.innerHTML = parseWithMath(fullText.slice(0, safeLen)) + escapeStreamingTail(fullText.slice(safeLen));
     }
 
+    // Solution/alternate-method text (AI-generated via /solve, already its own well-formed
+    // markdown -- bullets, **bold** labels) must NOT go through parseWithMath's ML/AR/SEQ
+    // detectors above: those exist to reformat a raw PYQ *question* stem's run-together
+    // "(i)...(ii)...(iii)..." text, and SEQ_ITEM_RE's "(A)/(B)/(C)/(D)" marker matching
+    // collides with the model's own "**(A)** Some point..." bold-labeled bullets, splitting the
+    // text mid-"**" span and leaving literal, unrendered "**" in the output (confirmed via a
+    // real solution: "- **(A)** Formation of..." got sliced into "**" and "(A)** Formation..."
+    // as two separate list items, neither of which is a valid bold span on its own). Skipping
+    // straight to parseWithMathInner (KaTeX + marked, no ML/AR/SEQ) avoids the collision
+    // entirely -- solution text was never a match-list/AR/sequence-stem to begin with.
+    function renderStreamingSolutionText(el, fullText) {
+      const safeLen = findSafeRenderBoundary(fullText);
+      el.innerHTML = parseWithMathInner(fullText.slice(0, safeLen)) + escapeStreamingTail(fullText.slice(safeLen));
+    }
+
 function handleBack() {
       if (selectedChapter) { selectedChapter = null; showClasses(selectedSubject); }
       else if (selectedSubject) { showSubjects(); }
@@ -1378,7 +1393,7 @@ ${q.diagram_url ? `<img class="q-diagram-img" src="${q.diagram_url}">` : ''}
       const content = document.createElement('div');
       content.className = 'alt-method-content';
       content.style.display = 'none';
-      content.innerHTML = parseWithMath(altText);
+      content.innerHTML = parseWithMathInner(altText);
       btn.onclick = function() {
         const opening = content.style.display === 'none';
         content.style.display = opening ? 'block' : 'none';
@@ -1463,13 +1478,13 @@ ${q.diagram_url ? `<img class="q-diagram-img" src="${q.diagram_url}">` : ''}
             fullText += chunk[ci];
             const now = Date.now();
             if (now - lastRenderTime >= RENDER_THROTTLE_MS) {
-              renderStreamingText(solDiv, fullText);
+              renderStreamingSolutionText(solDiv, fullText);
               lastRenderTime = now;
             }
             await new Promise(r => setTimeout(r, 1));
           }
         }
-        solDiv.innerHTML = parseWithMath(fullText);
+        solDiv.innerHTML = parseWithMathInner(fullText);
         btn.textContent = t('pyqbank','hideSolution');
         btn.disabled = false;
 

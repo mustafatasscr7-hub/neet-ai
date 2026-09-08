@@ -2372,7 +2372,16 @@ let selectedImages = [];
       if (lastIndex < stepsText.length) parts.push({ type: 'text', value: stepsText.slice(lastIndex) });
 
       const rendered = parts.map(p => {
-        if (p.type === 'text') return escapeHtml(p.value).replace(/\n/g, '<br>');
+        // **bold** -> <strong> on the escaped text -- this whole function's output gets inserted
+        // as a raw HTML block (<div class="solution-steps">...) into the string that parseWithMath
+        // then hands to marked.parse, and marked treats an already-HTML block as opaque, never
+        // re-scanning its contents for inline markdown. Without this, any "**" the model puts
+        // inside a Solution:/📝 Solution: block (both /chat's own numeric-answer format and
+        // /solve's PYQ template route through here) stays literal, unrendered asterisks on screen
+        // (confirmed via a real /solve response: "**Seed habit**", "**(A)**" etc never became
+        // bold). Same fix as pyqbank.html/savedquestions.html's Show Solution panels and
+        // scoreboard.html's renderMathInText -- all hit the same underlying gap independently.
+        if (p.type === 'text') return escapeHtml(p.value).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>');
         try {
           // \Large REPLACES the chat-math-inline/-display CSS scaling for this one segment
           // rather than stacking with it -- rendering it natively bigger via KaTeX itself,

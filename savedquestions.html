@@ -640,6 +640,19 @@
       el.innerHTML = parseWithMath(fullText.slice(0, safeLen)) + escapeStreamingTail(fullText.slice(safeLen));
     }
 
+    // Solution text (AI-generated via /solve, already well-formed markdown -- bullets, **bold**
+    // labels) must NOT go through parseWithMath's ML/AR/SEQ detectors above: those exist to
+    // reformat a raw PYQ *question* stem's run-together "(i)...(ii)...(iii)..." text, and
+    // SEQ_ITEM_RE's "(A)/(B)/(C)/(D)" marker matching collides with the model's own
+    // "**(A)** Some point..." bold-labeled bullets, splitting the text mid-"**" span and leaving
+    // literal, unrendered "**" in the output (same bug/fix as pyqbank.html -- see its own comment
+    // here for the confirmed real example). parseWithMathInner (KaTeX + marked, no ML/AR/SEQ)
+    // skips the collision entirely.
+    function renderStreamingSolutionText(el, fullText) {
+      const safeLen = findSafeRenderBoundary(fullText);
+      el.innerHTML = parseWithMathInner(fullText.slice(0, safeLen)) + escapeStreamingTail(fullText.slice(safeLen));
+    }
+
     function formatDate(iso) {
       return localizeNum(new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }));
     }
@@ -897,13 +910,13 @@
             fullText += chunk[ci];
             const now = Date.now();
             if (now - lastRenderTime >= RENDER_THROTTLE_MS) {
-              renderStreamingText(solDiv, fullText);
+              renderStreamingSolutionText(solDiv, fullText);
               lastRenderTime = now;
             }
             await new Promise(r => setTimeout(r, 1));
           }
         }
-        solDiv.innerHTML = parseWithMath(fullText);
+        solDiv.innerHTML = parseWithMathInner(fullText);
         btn.textContent = t('pyqbank','hideSolution');
         btn.disabled = false;
       } catch(e) {
