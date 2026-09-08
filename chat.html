@@ -1477,13 +1477,32 @@
 
     chatWindow.addEventListener('scroll', function() {
       const atBottom = chatWindow.scrollHeight - chatWindow.scrollTop - chatWindow.clientHeight < 50;
-      if (!atBottom && isStreaming) { userScrolled = true; }
-      else if (atBottom) { userScrolled = false; }
+      // Only ever RESETS userScrolled here, never sets it true -- setting it from scroll
+      // POSITION alone (the old "!atBottom && isStreaming" check) was confirmed live to fire from
+      // two non-user sources: (a) scrollBottom()'s own smooth-scroll animation reports
+      // atBottom=false on every intermediate frame before it arrives, and (b) the browser's own
+      // scroll-bound re-clamp fires a tiny 'scroll' event (a few px, zero user input) when
+      // streamed content grows the container out from under a stationary scrollTop. Case (b)
+      // especially would stick userScrolled=true for the rest of the response -- confirmed via a
+      // live scroll-event trace, screen instantly stopped following mid-stream, and the final
+      // catch-up scrollBottom() at stream-end silently no-opped because it read that same wrongly-
+      // true flag. See the wheel/touchmove listener below for the actual, input-based signal.
+      if (atBottom) { userScrolled = false; }
       // Independent of userScrolled/isStreaming above -- that flag only tracks "did the student
       // scroll away DURING a live response", not "are they at the bottom right now" in general
       // (e.g. reading old messages with nothing streaming). The button's own visibility is based
       // purely on real scroll position, computed fresh here on every scroll event.
       updateScrollToBottomBtn(false);
+    });
+
+    // The only place userScrolled is set true -- gated on real physical input (wheel/touch),
+    // never inferred from scroll position/direction, so a programmatic scrollBottom() animation
+    // or a content-growth-triggered browser scroll-bound reclamp (neither is the student doing
+    // anything) can never be mistaken for the student deliberately scrolling away mid-response.
+    ['wheel', 'touchmove'].forEach(function(evt) {
+      chatWindow.addEventListener(evt, function() {
+        if (isStreaming) userScrolled = true;
+      }, { passive: true });
     });
 
     // highlightNew: true when called because new content just arrived while the student is
