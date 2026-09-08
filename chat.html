@@ -3687,6 +3687,46 @@ let selectedImages = [];
       document.body.appendChild(modal);
     }
 
+    // Lightbox for a student's own submitted image attachment (as opposed to showDiagramModal
+    // above, which is for matched NCERT diagrams and carries a title/report-button/caption this
+    // doesn't need). Deliberately minimal -- just the image, full-size, with all three standard
+    // close paths. Escape only closes while this specific lightbox is open: the listener is
+    // added on open and removed on close rather than left as a permanent global handler.
+    function _imageLightboxEscHandler(e) {
+      if (e.key === 'Escape') closeImageLightbox();
+    }
+
+    function closeImageLightbox() {
+      const existing = document.getElementById('image-lightbox');
+      if (existing) existing.remove();
+      document.removeEventListener('keydown', _imageLightboxEscHandler);
+    }
+
+    function showImageLightbox(src) {
+      closeImageLightbox();
+
+      const modal = document.createElement('div');
+      modal.id = 'image-lightbox';
+      modal.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);z-index:1100;display:flex;align-items:center;justify-content:center;cursor:zoom-out;';
+      modal.onclick = function(e) { if (e.target === modal) closeImageLightbox(); };
+
+      const img = document.createElement('img');
+      img.src = src;
+      img.style.cssText = 'max-width:90vw;max-height:88vh;border-radius:10px;box-shadow:0 8px 40px rgba(0,0,0,0.5);cursor:default;';
+      img.onclick = function(e) { e.stopPropagation(); };
+      modal.appendChild(img);
+
+      const closeBtn = document.createElement('button');
+      closeBtn.textContent = '✕';
+      closeBtn.setAttribute('aria-label', 'Close');
+      closeBtn.style.cssText = 'position:fixed;top:20px;right:24px;background:rgba(30,30,46,0.85);border:none;color:#fff;font-size:20px;width:40px;height:40px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;z-index:1101;';
+      closeBtn.onclick = closeImageLightbox;
+      modal.appendChild(closeBtn);
+
+      document.body.appendChild(modal);
+      document.addEventListener('keydown', _imageLightboxEscHandler);
+    }
+
     // Collapsed to match the base RPC floor (server.py's DIAGRAM_MATCH_THRESHOLD) -- any match
     // at all, combined with VISUAL_INTENT: yes, now auto-embeds. There's no longer a distinct
     // "matched but not confident enough" tier: since match_diagrams itself never returns a row
@@ -4085,8 +4125,9 @@ let selectedImages = [];
           const imgWrap = document.createElement('div');
           imgWrap.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end;margin-bottom:8px;';
           imgWrap.innerHTML = msgObj.images.map(url =>
-            `<img src="${url}" style="max-width:200px;max-height:200px;border-radius:12px;border:1px solid #2a2a3a;display:block;"/>`
+            `<img class="chat-img-thumb" src="${url}" style="max-width:200px;max-height:200px;border-radius:12px;border:1px solid #2a2a3a;display:block;cursor:zoom-in;"/>`
           ).join('');
+          imgWrap.querySelectorAll('.chat-img-thumb').forEach(el => { el.onclick = () => showImageLightbox(el.src); });
           contentWrapper.appendChild(imgWrap);
         }
         // A quoted "Ask about this" selection used to vanish the moment the message sent --
@@ -6015,8 +6056,9 @@ function plainTextFromMarkdown(text) {
         const imgRow = document.createElement('div');
         imgRow.className = 'message-row user';
         imgRow.dataset.msgIndex = userIndex;
-        const thumbs = selectedImages.map(img => `<img src="${img.data}" style="max-width:200px;max-height:200px;border-radius:12px;border:1px solid #2a2a3a;display:block;"/>`).join('');
+        const thumbs = selectedImages.map(img => `<img class="chat-img-thumb" src="${img.data}" style="max-width:200px;max-height:200px;border-radius:12px;border:1px solid #2a2a3a;display:block;cursor:zoom-in;"/>`).join('');
        imgRow.innerHTML = `<div class="avatar user">👤</div><div class="message-content user"><div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;"><div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end;">${thumbs}</div>${text ? `<div class="message-bubble user">${text}</div>` : ''}</div></div>`;
+        imgRow.querySelectorAll('.chat-img-thumb').forEach(el => { el.onclick = () => showImageLightbox(el.src); });
         chatWindow.appendChild(imgRow);
         scrollBottom();
       } else {
