@@ -788,7 +788,7 @@
        SCROLLABLE CONTENT height, not its visible viewport, so with many messages it would render
        far below what's actually on screen. .main itself never scrolls, so anchoring here keeps
        this genuinely fixed in the viewport regardless of .chat-window's internal scroll offset. */
-    .scroll-to-bottom-btn { display: none; position: absolute; bottom: 110px; left: 50%; transform: translateX(-50%); width: 40px; height: 40px; border-radius: 50%; background: #4f8ef71c; border: none; color: #4f8ef7; align-items: center; justify-content: center; cursor: pointer; box-shadow: 0 4px 14px rgba(0,0,0,0.25); z-index: 50; transition: filter 0.15s ease, transform 0.15s ease; }
+    .scroll-to-bottom-btn { display: none; position: absolute; bottom: 150px; left: 50%; transform: translateX(-50%); width: 40px; height: 40px; border-radius: 50%; background: #4f8ef71c; border: none; color: #4f8ef7; align-items: center; justify-content: center; cursor: pointer; box-shadow: 0 4px 14px rgba(0,0,0,0.25); z-index: 50; transition: filter 0.15s ease, transform 0.15s ease; }
     .scroll-to-bottom-btn:hover { filter: brightness(1.15); transform: translateX(-50%) translateY(-2px); }
     .scroll-to-bottom-btn.has-new { background: #4f8ef7; color: #fff; animation: scrollBtnPulse 1.6s ease-in-out infinite; }
     @keyframes scrollBtnPulse { 0%, 100% { box-shadow: 0 4px 14px rgba(79,142,247,0.4); } 50% { box-shadow: 0 4px 22px rgba(79,142,247,0.7); } }
