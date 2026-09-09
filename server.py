@@ -2076,6 +2076,29 @@ PYQ_CHAPTER_FALLBACK_LIMIT = 6
 # each row's embedding vector along for nothing).
 PYQ_CARD_COLUMNS = "id,subject,chapter,year,question,option_a,option_b,option_c,option_d,correct_answer,difficulty,diagram_url,option_a_diagram_url,option_b_diagram_url,option_c_diagram_url,option_d_diagram_url"
 
+async def _backfill_pyq_chapters(results: list, headers: dict) -> list:
+    """match_pyq (the RPC _search_at below calls into) doesn't select/return a chapter column at
+    all -- confirmed live against the real RPC response shape. Every question a student sees via
+    chat.html's PYQ modal flows through this RPC, so its own "Save" button was always writing
+    chapter=null to saved_questions, and Saved Questions had nothing to show for those rows (the
+    card's own display logic was already correct -- there was just never any data to render).
+    Rather than needing a migration to redefine the RPC's own SQL (no DDL access here), this
+    backfills chapter with one follow-up lookup against the real pyq table by id -- cheap (one
+    extra request, only when at least one result is actually missing it) and self-healing for
+    every future search, not just a one-time data fix."""
+    missing_ids = [r["id"] for r in results if r.get("id") and not r.get("chapter")]
+    if not missing_ids:
+        return results
+    resp = await async_client.get(
+        f"{SUPABASE_URL}/rest/v1/pyq", headers=headers,
+        params={"id": f"in.({','.join(missing_ids)})", "select": "id,chapter"}
+    )
+    chapter_by_id = {row["id"]: row.get("chapter") for row in resp.json()} if resp.status_code == 200 else {}
+    for r in results:
+        if not r.get("chapter"):
+            r["chapter"] = chapter_by_id.get(r.get("id"))
+    return results
+
 async def search_pyq(query: str, limit: int = 5, chapter: str = ""):
     if _is_off_topic_pyq_query(query):
         return [], "none"
@@ -2096,13 +2119,13 @@ async def search_pyq(query: str, limit: int = 5, chapter: str = ""):
 
     results = await _search_at(PYQ_MATCH_THRESHOLD, limit)
     if results:
-        return results, "exact"
+        return await _backfill_pyq_chapters(results, headers), "exact"
 
     # No real match even after the typo/spacing merge-variant fallback inside _search_at -- try
     # once more at the relaxed "related, not exact" threshold before giving up entirely.
     fallback_results = await _search_at(PYQ_FALLBACK_THRESHOLD, PYQ_FALLBACK_LIMIT)
     if fallback_results:
-        return fallback_results, "related"
+        return await _backfill_pyq_chapters(fallback_results, headers), "related"
 
     # Both semantic tiers came up empty (either no embedded rows are close at all, or this
     # specific query embeds poorly -- e.g. a very short/generic doubt). Rather than a dead-end
