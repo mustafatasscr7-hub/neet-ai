@@ -1037,6 +1037,38 @@ function handleBack() {
       else { window.location.href = './chat.html'; }
     }
 
+    // Shared breadcrumb builder for every drill-down level below Subject Selection -- was
+    // previously only inlined once, inside showQuestions' own loading-state template, which
+    // meant it vanished the instant that template got replaced (the empty-questions state, and
+    // renderSingleQuestion's real question-card view, both overwrite #mainContent wholesale and
+    // neither carried a copy of it). That left the actual question view -- what a student is
+    // looking at nearly all the time on this screen -- with no way back to the chapter list or
+    // subject selection at all, and showClasses (the subject's chapter-list screen) never had one
+    // to begin with. classNum/chapter are optional so this same function covers all 3 real depths:
+    // subject only (showClasses), subject+class+chapter (showQuestions' loading/empty states and
+    // renderSingleQuestion).
+    function buildPyqBreadcrumb(subject, classNum, chapter) {
+      let html = `<div class="breadcrumb">
+        <span class="breadcrumb-item" onclick="showSubjects()">${t('pyqbank','pageTitle')}</span>`;
+      if (classNum) {
+        html += `
+        <span class="breadcrumb-sep">›</span>
+        <span class="breadcrumb-item" onclick="showClasses('${subject}')">${subjectName(subject)}</span>
+        <span class="breadcrumb-sep">›</span>
+        <span class="breadcrumb-item" onclick="showClasses('${subject}')">${t('pyqbank','classWord')} ${localizeNum(classNum)}</span>`;
+        if (chapter) {
+          html += `
+        <span class="breadcrumb-sep">›</span>
+        <span class="breadcrumb-item active">${chapterName(chapter)}</span>`;
+        }
+      } else {
+        html += `
+        <span class="breadcrumb-sep">›</span>
+        <span class="breadcrumb-item active">${subjectName(subject)}</span>`;
+      }
+      return html + `</div>`;
+    }
+
     // SCREEN 1 — Subject Selection
     async function showSubjects() {
       selectedSubject = null; selectedClass = null; selectedChapter = null;
@@ -1112,6 +1144,7 @@ function handleBack() {
       const cfg = subjectConfig[subject];
 
       document.getElementById('mainContent').innerHTML = `
+        ${buildPyqBreadcrumb(subject)}
         <div class="page-header-row">
           <div class="page-icon-badge" style="background:radial-gradient(circle, ${cfg.color}29, ${cfg.color}08);">
             <span style="font-size:20px;">${cfg.icon}</span>
@@ -1175,15 +1208,7 @@ function handleBack() {
       selectedClass = classNum;
       selectedChapter = chapter;
       document.getElementById('mainContent').innerHTML = `
-        <div class="breadcrumb">
-          <span class="breadcrumb-item" onclick="showSubjects()">${t('pyqbank','pageTitle')}</span>
-          <span class="breadcrumb-sep">›</span>
-          <span class="breadcrumb-item" onclick="showClasses('${subject}')">${subjectName(subject)}</span>
-          <span class="breadcrumb-sep">›</span>
-          <span class="breadcrumb-item" onclick="showClasses('${subject}')">${t('pyqbank','classWord')} ${localizeNum(classNum)}</span>
-          <span class="breadcrumb-sep">›</span>
-          <span class="breadcrumb-item active">${chapterName(chapter)}</span>
-        </div>
+        ${buildPyqBreadcrumb(subject, classNum, chapter)}
         <div class="loading"><div class="spinner"></div>${t('pyqbank','loadingQuestions')}</div>
       `;
 
@@ -1193,6 +1218,7 @@ const { data, error } = await query;
 
       if (error || !data || data.length === 0) {
         document.getElementById('mainContent').innerHTML = `
+          ${buildPyqBreadcrumb(subject, classNum, chapter)}
           <div class="empty">${t('pyqbank','noQuestionsFound')}</div>
         `;
         return;
@@ -1227,6 +1253,7 @@ const chapterEscaped = chapter.replace(/'/g, "\\'");
 const yearOptions = `<option value="" ${currentYearFilter === '' ? 'selected' : ''}>${t('pyqbank','allYears')}</option>` + years.map(y => `<option value="${y}" ${String(y) === String(currentYearFilter) ? 'selected' : ''}>${localizeNum(y)}</option>`).join('');
 
 document.getElementById('mainContent').innerHTML = `
+        ${buildPyqBreadcrumb(subject, classNum, chapter)}
         <div class="page-title">${chapterName(chapter)}</div>
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;gap:12px;flex-wrap:wrap;">
           <div class="page-subtitle">${t('pyqbank','questionOf').replace('{i}', localizeNum(i + 1)).replace('{n}', localizeNum(data.length))}</div>
