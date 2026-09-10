@@ -70,7 +70,7 @@
 
     /* Report-a-diagram: identical to pyqbank.html/chat.html's report-a-question component --
        same flag icon, same popup treatment, same colours -- just wired to /report-diagram. */
-    .report-flag-btn { background: none; border: none; cursor: pointer; display: inline-flex; align-items: center; opacity: 0.35; padding: 2px 4px; font-size: 11px; font-weight: 500; color: inherit; transition: opacity 0.15s, color 0.15s; }
+    .report-flag-btn { background: none; border: none; cursor: pointer; display: inline-flex; align-items: center; opacity: 0.2; padding: 2px 4px; font-size: 10px; font-weight: 500; color: inherit; transition: opacity 0.15s, color 0.15s; }
     .report-flag-btn:hover, .report-flag-btn:focus-visible { opacity: 1; color: #ef4444; text-decoration: underline; }
     .report-popup { position: fixed; z-index: 2000; background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 10px; padding: 12px; width: 220px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); font-size: 12px; }
     .report-popup-title { font-weight: 600; margin-bottom: 8px; color: #ececec; }
@@ -590,7 +590,7 @@ let allDiagrams = [];      // everything matching the current Subject+Class fetc
     ];
 
     function diagramReportFlagBtnHtml(diagramId, source) {
-      return `<button type="button" class="report-flag-btn" title="Report a problem with this diagram" onclick="event.stopPropagation(); openDiagramReportPopup(${diagramId}, '${source}', this)">Report</button>`;
+      return `<button type="button" class="report-flag-btn" title="Report a problem with this diagram" onclick="event.stopPropagation(); openDiagramReportPopup(${diagramId}, '${source}', this)">report</button>`;
     }
 
     function closeDiagramReportPopup() {
