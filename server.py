@@ -3286,6 +3286,7 @@ IMPORTANT -- BE CONCISE:
             pending = ""
             checkpoint = 0
             override_needed = False
+            override_reason = None
             async for text_chunk in _force_citation_when_no_retrieval(_rest_of_stream(), bool(results)):
                 full_answer += text_chunk
 
@@ -3302,16 +3303,44 @@ IMPORTANT -- BE CONCISE:
                     if nl_idx == -1 and len(pending) < 64:
                         continue
                     first_line = (pending[:nl_idx] if nl_idx != -1 else pending).strip()
-                    if first_line != "AMBIGUOUS: yes":
+                    if first_line == "DOUBT_TYPE: conversational":
+                        checkpoint = 3
+                        # Falls through to checkpoint 3 below in this same iteration.
+                    elif first_line != "AMBIGUOUS: yes":
                         checkpoint = 2
                         if billing_context["bill"] and full_answer.strip().startswith("AMBIGUOUS: yes"):
                             billing_context["bill"] = False
                         yield pending
                         pending = ""
                         continue
-                    checkpoint = 1
-                    # Falls through to the checkpoint 1 block below in this same iteration -- a
-                    # real stream can deliver both header lines in a single chunk.
+                    else:
+                        checkpoint = 1
+                        # Falls through to the checkpoint 1 block below in this same iteration --
+                        # a real stream can deliver both header lines in a single chunk.
+
+                if checkpoint == 3:
+                    # The prompt requires 1-3 sentences of natural prose right after this marker
+                    # (see the DOUBT_TYPE: conversational rule above) -- confirmed live (4/4
+                    # reproduction against the exact failing real-conversation phrasings) that
+                    # Qwen sometimes emits ONLY the marker line and stops generating entirely,
+                    # leaving nothing for the client to show once it strips the marker (see
+                    # chat.html's emptyReplyFallback -- that's the "I'm not sure how to respond"
+                    # text this was masking as if it were a real model reply). DeepSeek, given the
+                    # identical prompt, always continues past the marker -- this is a Qwen
+                    # generation-stopping quirk on top of the classification question, not a
+                    # DeepSeek issue. Buffer past the marker's own newline and require real
+                    # content to follow before passing anything through; a stream that ends here
+                    # with nothing after the marker falls through to the override below.
+                    nl_idx2 = pending.find("\n")
+                    after_marker = pending[nl_idx2 + 1:] if nl_idx2 != -1 else ""
+                    if not after_marker.strip():
+                        continue
+                    checkpoint = 2
+                    if billing_context["bill"] and full_answer.strip().startswith("AMBIGUOUS: yes"):
+                        billing_context["bill"] = False
+                    yield pending
+                    pending = ""
+                    continue
 
                 if checkpoint == 1:
                     first_nl = pending.find("\n")
@@ -3324,43 +3353,80 @@ IMPORTANT -- BE CONCISE:
                     invalid = _is_denylisted_clarify_doubt(text) or (is_topic_type and not _is_legitimate_topic_ambiguity(text))
                     if invalid:
                         override_needed = True
+                        override_reason = "invalid_clarify"
                         break
                     checkpoint = 2
                     if billing_context["bill"] and full_answer.strip().startswith("AMBIGUOUS: yes"):
                         billing_context["bill"] = False
                     yield pending
                     pending = ""
+            # Reached either if the stream ended while checkpoint 3 was still waiting for real
+            # content after the DOUBT_TYPE: conversational marker (see checkpoint 3 above), or --
+            # confirmed live to be the actual common shape -- checkpoint never even got that far
+            # because the marker was the model's ENTIRE completion with no trailing newline at
+            # all, so checkpoint 0's own "wait for a newline" guard just buffered it forever
+            # without ever inspecting first_line. Either way, generation stopped right at the
+            # marker, same as an invalid clarify attempt, so this discards the bare marker and
+            # regenerates instead of flushing it (which chat.html would just strip back down to
+            # nothing and paper over with a generic non-answer).
+            if checkpoint == 3 or (checkpoint == 0 and pending.strip() == "DOUBT_TYPE: conversational"):
+                override_needed = True
+                override_reason = "empty_conversational"
+                pending = ""
             # Stream ended while still buffered (checkpoint 0 waiting for a newline that never
             # came, or checkpoint 1 similarly on the second line) -- confirmed live: a short
             # conversational reply whose ENTIRE completion is under 64 chars with no newline at
-            # all (e.g. Qwen returning just "DOUBT_TYPE: conversational" and nothing else, no
-            # trailing newline, generation just stopping there) left `pending` sitting unflushed
-            # forever, since the checkpoint-0/1 blocks only ever yield from inside the loop. The
-            # student got a real 200 OK with a completely empty body -- this flushes whatever
-            # survived instead of silently discarding it. Not reachable when override_needed is
-            # true (that path already `break`s with intentionally-discarded pending content, by
-            # design -- a fresh override attempt follows below).
+            # all left `pending` sitting unflushed forever, since the checkpoint-0/1 blocks only
+            # ever yield from inside the loop. The student got a real 200 OK with a completely
+            # empty body -- this flushes whatever survived instead of silently discarding it. Not
+            # reachable when override_needed is true (that path already `break`s, or the
+            # checkpoint-3 case above already clears `pending`, with a fresh override attempt
+            # following below either way).
             if not override_needed and pending:
                 if billing_context["bill"] and full_answer.strip().startswith("AMBIGUOUS: yes"):
                     billing_context["bill"] = False
                 yield pending
                 pending = ""
             if override_needed:
-                # The discarded attempt's own tiny (two-line) token cost still gets logged by
-                # _stream_qwen/_stream_deepseek's own finally block when the `break` above closes
-                # it via GeneratorExit -- same accepted partial-cost tradeoff as before, and
-                # negligible next to a full response's cost either way. This second call is a
-                # completely fresh request/response cycle, billed normally.
-                override_system = full_system + (
-                    "\n\nOVERRIDE (server-enforced, not optional): this exact doubt has been "
-                    "confirmed through repeated real testing to NOT be genuinely ambiguous, "
-                    "despite rule 11 above. Answer it directly and normally in the standard "
-                    "format starting with VISUAL_INTENT -- do not output AMBIGUOUS/"
-                    "CLARIFY_TYPE under any circumstances for this doubt."
-                )
-                full_answer = ""
-                billing_context = {"bill": True}
-                override_stream = _stream_with_peak_fallback(override_system, messages, user_id, ip, "/chat", billing_context, force_qwen)
+                # The discarded attempt's own tiny token cost still gets logged by
+                # _stream_qwen/_stream_deepseek's own finally block when the `break` above (or the
+                # generator simply running out for the checkpoint-3 case) closes it, same accepted
+                # partial-cost tradeoff as before, and negligible next to a full response's cost
+                # either way. This second call is a completely fresh request/response cycle,
+                # billed normally.
+                if override_reason == "empty_conversational":
+                    override_system = full_system + (
+                        "\n\nOVERRIDE (server-enforced, not optional): your previous attempt at "
+                        "this exact doubt stopped right after writing \"DOUBT_TYPE: "
+                        "conversational\" with nothing else -- that is never a complete response. "
+                        "Re-decide from scratch: if this message is genuinely just conversational "
+                        "(a greeting, thanks, small talk, or a question about the app/AI itself), "
+                        "write DOUBT_TYPE: conversational followed immediately by 1-3 sentences of "
+                        "real natural-language reply, same as the rule above. If on reflection it "
+                        "actually names real NEET Physics/Chemistry/Biology subject matter -- even "
+                        "if broad, informal, or unusually phrased -- answer it as a full academic "
+                        "doubt instead, starting with VISUAL_INTENT as always. Either way you must "
+                        "produce real content this time, not just a bare classification marker."
+                    )
+                    full_answer = ""
+                    billing_context = {"bill": True}
+                    # Forced straight to DeepSeek, not the normal peak-hour routing -- confirmed
+                    # live (4/4) that Qwen is the one that stops generating right after this
+                    # marker, so retrying through the same routing during a peak window would
+                    # likely just reproduce the identical empty response. DeepSeek reliably
+                    # continues past the marker with the required natural-language reply.
+                    override_stream = _stream_deepseek(override_system, messages, user_id, ip, is_peak, "/chat", billing_context)
+                else:
+                    override_system = full_system + (
+                        "\n\nOVERRIDE (server-enforced, not optional): this exact doubt has been "
+                        "confirmed through repeated real testing to NOT be genuinely ambiguous, "
+                        "despite rule 11 above. Answer it directly and normally in the standard "
+                        "format starting with VISUAL_INTENT -- do not output AMBIGUOUS/"
+                        "CLARIFY_TYPE under any circumstances for this doubt."
+                    )
+                    full_answer = ""
+                    billing_context = {"bill": True}
+                    override_stream = _stream_with_peak_fallback(override_system, messages, user_id, ip, "/chat", billing_context, force_qwen)
                 async for text_chunk in _force_citation_when_no_retrieval(override_stream, bool(results)):
                     full_answer += text_chunk
                     yield text_chunk
