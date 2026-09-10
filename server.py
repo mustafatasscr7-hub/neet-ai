@@ -39,10 +39,10 @@ async_client: httpx.AsyncClient = None
 async def lifespan(app: FastAPI):
     global async_client
     async_client = httpx.AsyncClient()
-    # See _warm_openai_embedding_connection's own comment (below openai_client's definition) for
-    # why this exists -- runs before the `yield`, so it completes before uvicorn accepts any real
-    # connection.
-    _warm_openai_embedding_connection("boot")
+    # See _warm_openai_embedding_connection's own comment (below openai_async_client's definition)
+    # for why this exists -- runs before the `yield`, so it completes before uvicorn accepts any
+    # real connection.
+    await _warm_openai_embedding_connection("boot")
     keepalive_task = asyncio.create_task(_openai_keepalive_loop())
     yield
     keepalive_task.cancel()
@@ -69,13 +69,20 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", SUPABASE_KEY)
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "neetai-admin-2027")
 
-openai_client = openai.OpenAI(api_key=OPENAI_KEY)
+# Async client used for every real embedding call (get_embedding, the warm-up/keep-alive calls
+# below) -- migrated off a sync openai.OpenAI client specifically because the retry-compounding
+# investigation found the sync client's blocking .embeddings.create() call prevented
+# asyncio.gather() from achieving real parallelism when _match_with_merge_fallback fires multiple
+# retry variants concurrently (measured live: only ~1.4x speedup gathering 5 sync calls, vs. the
+# near-linear speedup real async concurrency gives). Same AsyncOpenAI pattern already used for
+# qwen_async_client below.
+openai_async_client = openai.AsyncOpenAI(api_key=OPENAI_KEY)
 
 # Confirmed live via the /chat latency profiling investigation: the FIRST call through
-# openai_client in a freshly-started process pays several seconds (5-14s across repeated tests) of
-# pure TCP+TLS connection-setup cost on top of the actual embedding call (200-3500ms once the
-# connection is warm) -- that cost landed entirely on whichever real student's doubt happened to
-# be first. _warm_openai_embedding_connection() fires a throwaway embedding call at boot (see
+# openai_async_client in a freshly-started process pays several seconds (5-14s across repeated
+# tests) of pure TCP+TLS connection-setup cost on top of the actual embedding call (200-3500ms once
+# the connection is warm) -- that cost landed entirely on whichever real student's doubt happened
+# to be first. _warm_openai_embedding_connection() fires a throwaway embedding call at boot (see
 # lifespan), before uvicorn accepts any real connection, so no real request ever pays it --
 # confirmed live with a controlled cold-boot test: TTFB on the first real request sent immediately
 # after "Application startup complete" dropped from the multi-second cold range into the normal
@@ -94,17 +101,14 @@ openai_client = openai.OpenAI(api_key=OPENAI_KEY)
 # continuous traffic) that no interval short of wastefully frequent polling could reliably catch
 # the *next* real burst anyway -- multi-day gaps are a different problem this loop doesn't solve,
 # and isn't trying to; it's aimed at keeping a burst's own later requests warm once one has started.
-def _warm_openai_embedding_connection(context: str):
+async def _warm_openai_embedding_connection(context: str):
     """Never raises -- a warm-up failure (network blip, OpenAI outage) must never crash startup or
     kill the background loop below, just skip this round silently. Worst case on failure: the next
     real request pays the cold-start cost itself, exactly the pre-fix behavior, not something new
-    to break. Intentionally sync (openai_client itself is sync -- see get_embedding's own comment
-    on why), which is fine both at boot (nothing is being served yet) and from the periodic
-    background task (a few hundred ms blocking the event loop once every few minutes is a non-issue
-    next to the multi-second cold-start cost it prevents)."""
+    to break."""
     try:
         t0 = time.perf_counter()
-        openai_client.embeddings.create(model="text-embedding-3-small", input="warmup")
+        await openai_async_client.embeddings.create(model="text-embedding-3-small", input="warmup")
         print(f"OPENAI CONNECTION WARM-UP ({context}): {(time.perf_counter() - t0) * 1000:.0f}ms", flush=True)
     except Exception as e:
         print(f"OPENAI CONNECTION WARM-UP ({context}) FAILED (non-fatal): {e}", flush=True)
@@ -115,7 +119,7 @@ _OPENAI_KEEPALIVE_INTERVAL_SECONDS = 240  # 4 min -- see the comment above _warm
 async def _openai_keepalive_loop():
     while True:
         await asyncio.sleep(_OPENAI_KEEPALIVE_INTERVAL_SECONDS)
-        _warm_openai_embedding_connection("periodic keep-alive")
+        await _warm_openai_embedding_connection("periodic keep-alive")
 
 # Text doubt-answering (/chat, /solve) runs on DeepSeek V4 Flash via its Anthropic-compatible
 # endpoint, not Claude -- the `anthropic` package is still used here as an SDK, just pointed at
@@ -1779,9 +1783,10 @@ async def get_embedding(text: str):
     if cached:
         return cached[0]["embedding"]
 
-    # Not converted to AsyncOpenAI: openai_client is a single module-level instance already
-    # reused across requests, so it already gets connection-pooling benefits.
-    response = openai_client.embeddings.create(
+    # AsyncOpenAI (openai_async_client) -- migrated from a sync client specifically so a burst of
+    # concurrent embedding calls (see _match_with_merge_fallback's retry variants) can achieve real
+    # parallelism instead of each blocking the event loop in turn.
+    response = await openai_async_client.embeddings.create(
         model="text-embedding-3-small",
         input=text
     )
@@ -1995,8 +2000,26 @@ def _generate_space_merge_variants(text: str) -> list:
 async def _match_with_merge_fallback(query: str, embed_fn, search_fn):
     """embed_fn(text) -> embedding, sync or async (both handled via iscoroutine on the call
     result). search_fn(embedding) -> awaitable returning a list of already-threshold-filtered
-    result rows. Tries the raw query first; only on an empty result does it retry each single-
-    adjacent-word-merge variant in turn, returning the first variant that produces a real match."""
+    result rows. Tries the raw query first; only on an empty result does it retry every single-
+    adjacent-word-merge variant.
+
+    Retry variants fire CONCURRENTLY (asyncio.gather), not sequentially -- real-query profiling
+    found up to 17 variants tried for one real doubt, each a full embed+search round trip, summing
+    to as much as 9+ real seconds of pure latency. Variants are safe to parallelize: each is a pure
+    function of the ORIGINAL query text (never of a previous variant's result), so none of them
+    depends on another having run first. What must NOT change is which variant wins when more than
+    one matches -- still "the first variant in the original list order with a non-empty result",
+    exactly as the sequential version returned, not "whichever network call happens to finish
+    first" (that would make the winner depend on request timing, a real behavior change). Achieved
+    by gathering every variant's result THEN scanning them in original order, rather than acting on
+    each as it completes.
+
+    This alone doesn't fully collapse worst-case latency to one round trip, though -- confirmed
+    live that it depends on embed_fn actually being async under the hood too (get_embedding now is,
+    migrated off a sync OpenAI client specifically for this); gather() over a sync/blocking call
+    only overlaps ~1.4x, not the near-linear speedup real concurrent I/O gives, since a call that
+    never yields to the event loop can't be interleaved with the others no matter how it's
+    scheduled."""
     async def _embed(text):
         result = embed_fn(text)
         return await result if asyncio.iscoroutine(result) else result
@@ -2005,9 +2028,17 @@ async def _match_with_merge_fallback(query: str, embed_fn, search_fn):
     results = await search_fn(embedding)
     if results:
         return results
-    for variant in _generate_space_merge_variants(query):
+
+    variants = _generate_space_merge_variants(query)
+    if not variants:
+        return results
+
+    async def _try_variant(variant):
         v_embedding = await _embed(variant)
-        v_results = await search_fn(v_embedding)
+        return await search_fn(v_embedding)
+
+    variant_results = await asyncio.gather(*[_try_variant(v) for v in variants])
+    for v_results in variant_results:
         if v_results:
             return v_results
     return results
