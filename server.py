@@ -1997,11 +1997,40 @@ def _generate_space_merge_variants(text: str) -> list:
         for i in range(len(words) - 1)
     ]
 
-async def _match_with_merge_fallback(query: str, embed_fn, search_fn):
+# Margin subtracted from a search's own real match threshold to get its off-topic pre-check gate
+# (see _match_with_merge_fallback's offtopic_gate_threshold param). Empirically validated for
+# NCERT English specifically: measured the raw (unfiltered) top similarity score of the FIRST
+# (raw-query, pre-retry) attempt against 107 real historical doubts, then cross-referenced against
+# whether the full retry pipeline (up to 17 variants) ever found a match. Result was a clean,
+# zero-overlap split -- every query that eventually matched anything had a raw first-attempt score
+# >= 0.495 (essentially AT the 0.5 threshold already); every query that never matched, no matter
+# how many variants it tried, scored <= 0.494. In fact 25 of the 26 eventual matches succeeded on
+# the very first attempt with zero retries needed -- only one ("Show me the structure of
+# Eubacteria") needed a variant, and its raw score was 0.495, a 0.005 gap, not the kind of
+# meaningful typo/spacing recovery (up to ~0.19 points, per the original fix's own measurement)
+# the retry mechanism exists for. 0.05 sits comfortably below that observed 0.494 no-match
+# ceiling -- enough margin to protect a genuine near-miss not represented in that one sample,
+# while still skipping the retry loop entirely for the large majority of queries that have no
+# realistic chance of crossing threshold no matter how they're re-worded. Applied identically
+# (threshold - 0.05) to PYQ and Hindi NCERT search below on the same general principle -- word-
+# merging can only recover a small, bounded similarity gap regardless of corpus -- but those two
+# were NOT independently measured against real query data the way English NCERT was.
+_OFFTOPIC_GATE_MARGIN = 0.05
+
+async def _match_with_merge_fallback(query: str, embed_fn, search_fn, offtopic_gate_threshold: float = None):
     """embed_fn(text) -> embedding, sync or async (both handled via iscoroutine on the call
-    result). search_fn(embedding) -> awaitable returning a list of already-threshold-filtered
-    result rows. Tries the raw query first; only on an empty result does it retry every single-
-    adjacent-word-merge variant.
+    result). search_fn(embedding) -> awaitable returning (results, raw_top_score): results is the
+    already-threshold-and-label-filtered list exactly as before; raw_top_score is the best
+    similarity score seen BEFORE the real threshold filter (None if literally no rows came back at
+    all), used only for the off-topic pre-check gate below. Tries the raw query first; only on an
+    empty result does it retry every single-adjacent-word-merge variant.
+
+    Off-topic pre-check gate: if the raw query's own first attempt comes back empty AND its raw
+    top score is below offtopic_gate_threshold, the retry loop is skipped entirely -- returns empty
+    immediately, the same end result as exhausting every variant and finding nothing, just without
+    actually trying them. See _OFFTOPIC_GATE_MARGIN for how that threshold is derived and the real
+    data behind it. offtopic_gate_threshold=None (the default) disables the gate -- always tries
+    every variant, the pre-gate behavior; every real caller below passes a real value.
 
     Retry variants fire CONCURRENTLY (asyncio.gather), not sequentially -- real-query profiling
     found up to 17 variants tried for one real doubt, each a full embed+search round trip, summing
@@ -2025,8 +2054,11 @@ async def _match_with_merge_fallback(query: str, embed_fn, search_fn):
         return await result if asyncio.iscoroutine(result) else result
 
     embedding = await _embed(query)
-    results = await search_fn(embedding)
+    results, raw_top_score = await search_fn(embedding)
     if results:
+        return results
+
+    if offtopic_gate_threshold is not None and raw_top_score is not None and raw_top_score < offtopic_gate_threshold:
         return results
 
     variants = _generate_space_merge_variants(query)
@@ -2035,7 +2067,8 @@ async def _match_with_merge_fallback(query: str, embed_fn, search_fn):
 
     async def _try_variant(variant):
         v_embedding = await _embed(variant)
-        return await search_fn(v_embedding)
+        v_results, _ = await search_fn(v_embedding)
+        return v_results
 
     variant_results = await asyncio.gather(*[_try_variant(v) for v in variants])
     for v_results in variant_results:
@@ -2057,6 +2090,11 @@ async def search_ncert(query: str, limit: int = 3):
         # labels) -- falls back to chapter_name for English rows, where chapter_name_en is null.
         return [r for r in rows if (r.get("chapter_name_en") or r.get("chapter_name")) not in NCERT_NON_CHAPTER_LABELS]
 
+    # Both branches call their RPC with match_threshold=0 (raw, unfiltered by the DB) and apply the
+    # real threshold in Python instead -- same single round trip as before, but this is what
+    # exposes the raw top score _match_with_merge_fallback's off-topic gate needs. match_count is
+    # padded to at least 10 so the exclusion filter (Appendix/etc, rare but real) doesn't eat into
+    # what would otherwise be a real top-`limit` result set.
     if language == "hi":
         # Gemini gemini-embedding-001 shadow trial, cut over live 2026-08-28 -- see
         # NCERT_MATCH_THRESHOLD_HI_GEMINI above for the calibration behind this threshold, and
@@ -2069,10 +2107,17 @@ async def search_ncert(query: str, limit: int = 3):
             response = await async_client.post(
                 f"{SUPABASE_URL}/rest/v1/rpc/match_ncert_hi_gemini",
                 headers=headers,
-                json={"query_embedding": embedding, "match_threshold": NCERT_MATCH_THRESHOLD_HI_GEMINI, "match_count": limit}
+                json={"query_embedding": embedding, "match_threshold": 0, "match_count": max(limit, 10)}
             )
-            return _filter_results(response.json()) if response.status_code == 200 else []
-        return await _match_with_merge_fallback(query, _get_gemini_query_embedding, _search)
+            if response.status_code != 200:
+                return [], None
+            candidates = _filter_results(response.json())
+            raw_top_score = candidates[0]["similarity"] if candidates else None
+            real_results = [r for r in candidates if r.get("similarity", 0) >= NCERT_MATCH_THRESHOLD_HI_GEMINI][:limit]
+            return real_results, raw_top_score
+        # Gate not independently validated against real Hindi query data the way English was --
+        # see _OFFTOPIC_GATE_MARGIN -- applied on the same general principle regardless.
+        return await _match_with_merge_fallback(query, _get_gemini_query_embedding, _search, NCERT_MATCH_THRESHOLD_HI_GEMINI - _OFFTOPIC_GATE_MARGIN)
     else:
         # English path: same get_embedding() call (OpenAI text-embedding-3-small, embedding_cache-
         # backed), same match_ncert RPC, same NCERT_MATCH_THRESHOLD_EN, same filter_language param
@@ -2081,10 +2126,17 @@ async def search_ncert(query: str, limit: int = 3):
             response = await async_client.post(
                 f"{SUPABASE_URL}/rest/v1/rpc/match_ncert",
                 headers=headers,
-                json={"query_embedding": embedding, "match_threshold": NCERT_MATCH_THRESHOLD_EN, "match_count": limit, "filter_language": language}
+                json={"query_embedding": embedding, "match_threshold": 0, "match_count": max(limit, 10), "filter_language": language}
             )
-            return _filter_results(response.json()) if response.status_code == 200 else []
-        return await _match_with_merge_fallback(query, get_embedding, _search)
+            if response.status_code != 200:
+                return [], None
+            candidates = _filter_results(response.json())
+            raw_top_score = candidates[0]["similarity"] if candidates else None
+            real_results = [r for r in candidates if r.get("similarity", 0) >= NCERT_MATCH_THRESHOLD_EN][:limit]
+            return real_results, raw_top_score
+        # Gate threshold: NCERT_MATCH_THRESHOLD_EN - _OFFTOPIC_GATE_MARGIN = 0.45 -- see
+        # _OFFTOPIC_GATE_MARGIN's own comment for the real 107-query validation behind this one.
+        return await _match_with_merge_fallback(query, get_embedding, _search, NCERT_MATCH_THRESHOLD_EN - _OFFTOPIC_GATE_MARGIN)
 
 def _ncert_chapter_citation(subject: str, class_num, chapter_name: str, lookup_name: str = None) -> str:
     """Builds an authoritative citation string like 'NCERT Class 12, Chapter 3 -- Current
@@ -2222,14 +2274,23 @@ async def search_pyq(query: str, limit: int = 5, chapter: str = ""):
         "Content-Type": "application/json"
     }
     async def _search_at(threshold, count):
+        # match_threshold=0 (raw, DB-unfiltered) + real threshold applied in Python -- same single
+        # round trip, but exposes the raw top score for the off-topic gate. Gate itself
+        # (threshold - _OFFTOPIC_GATE_MARGIN) is the same general principle validated for English
+        # NCERT, not independently re-measured for PYQ's own corpus/thresholds.
         async def _do(embedding):
             response = await async_client.post(
                 f"{SUPABASE_URL}/rest/v1/rpc/match_pyq",
                 headers=headers,
-                json={"query_embedding": embedding, "match_threshold": threshold, "match_count": count}
+                json={"query_embedding": embedding, "match_threshold": 0, "match_count": max(count, 10)}
             )
-            return response.json() if response.status_code == 200 else []
-        return await _match_with_merge_fallback(query, get_embedding, _do)
+            if response.status_code != 200:
+                return [], None
+            rows = response.json()
+            raw_top_score = rows[0]["similarity"] if rows else None
+            real_results = [r for r in rows if r.get("similarity", 0) >= threshold][:count]
+            return real_results, raw_top_score
+        return await _match_with_merge_fallback(query, get_embedding, _do, threshold - _OFFTOPIC_GATE_MARGIN)
 
     results = await _search_at(PYQ_MATCH_THRESHOLD, limit)
     if results:
@@ -4308,7 +4369,10 @@ async def diagram_match(req: DiagramMatchRequest, _: None = Depends(rate_limiter
                 headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"},
                 json={"query_embedding": embedding, "match_threshold": DIAGRAM_MATCH_THRESHOLD, "match_count": 1, "filter_chapter": chapter}
             )
-            return response.json() if response.status_code == 200 else []
+            # Out of scope for the off-topic gate (no gate threshold passed below -- this RPC is
+            # still called at the real threshold directly, so there's no raw/unfiltered score to
+            # report). _match_with_merge_fallback's contract just needs SOME second tuple element.
+            return (response.json() if response.status_code == 200 else []), None
         # Merge-variant fallback matters most here: diagram reference embeddings are built from
         # very short text (often just a bare name), which measured as the most typo/spacing-
         # fragile of the three matching systems this covers -- see _match_with_merge_fallback.
