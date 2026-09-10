@@ -6129,6 +6129,26 @@ function plainTextFromMarkdown(text) {
       bubble.appendChild(wrap);
     }
 
+    // Mirrors server.py's _normalize_smalltalk/_SMALLTALK_RESPONSES exactly -- the server is the
+    // one that actually decides whether a message gets the fast-path canned reply, this copy only
+    // needs to know the SAME set of strings so the typing indicator can show the right loading
+    // text immediately on send, without waiting for a round-trip to find out. Only the key set
+    // matters here, not the reply text itself (the server owns that). Keep this list in sync by
+    // hand with server.py's _SMALLTALK_RESPONSES if either changes.
+    const SMALLTALK_KEYS = new Set([
+      'hi', 'hello', 'hey', 'hii', 'hiya',
+      'good morning', 'good afternoon', 'good evening',
+      'thanks', 'thank you', 'thanks a lot', 'thank you so much',
+      'ok', 'okay', 'alright',
+      'bye', 'goodbye', 'good night',
+    ]);
+    function normalizeSmalltalk(text) {
+      return (text || '').trim().toLowerCase().replace(/[^\w\s]/g, '').trim();
+    }
+    function isSmalltalkFastPath(text) {
+      return SMALLTALK_KEYS.has(normalizeSmalltalk(text));
+    }
+
     // Shared by sendMessage / retryMessage / editMessage: calls /chat for questionText
     // (assumed to already be the last entry in currentConversation), streams the
     // response into a new AI bubble, and persists the updated conversation.
@@ -6164,20 +6184,28 @@ function plainTextFromMarkdown(text) {
         typingRow.className = 'typing-row';
         typingRow.innerHTML = '<div class="avatar ai"><img src="assets/logo.svg" alt="NEET-AI" width="32" height="32" /></div><div class="thinking-indicator"><span class="thinking-orb"></span><span class="thinking-text"></span></div>';
         chatWindow.appendChild(typingRow);
-        // Cycles through a few NEET/study-themed phrases while the real answer is still being
-        // generated server-side (NCERT search, model routing, first token) -- reads the phrase
-        // fresh via t() on every tick rather than building the array once, so a language switch
-        // mid-flight (rare, but possible) is picked up immediately instead of finishing in the
-        // old language. The interval id lives on the row itself so any code path that removes
-        // this row (including the plain querySelectorAll cleanup on Stop) can also clear it.
-        const THINKING_PHRASE_KEYS = ['thinkingPhrase1', 'thinkingPhrase2', 'thinkingPhrase3', 'thinkingPhrase4', 'thinkingPhrase5'];
         const thinkingTextEl = typingRow.querySelector('.thinking-text');
-        let thinkingPhraseIdx = 0;
-        thinkingTextEl.textContent = t('chat', THINKING_PHRASE_KEYS[0]);
-        typingRow._thinkingInterval = setInterval(() => {
-          thinkingPhraseIdx = (thinkingPhraseIdx + 1) % THINKING_PHRASE_KEYS.length;
-          thinkingTextEl.textContent = t('chat', THINKING_PHRASE_KEYS[thinkingPhraseIdx]);
-        }, 2000);
+        if (isSmalltalkFastPath(questionText)) {
+          // Greeting/smalltalk doubts skip NCERT search and the model call entirely server-side
+          // (see server.py's _SMALLTALK_RESPONSES) and resolve almost instantly -- a rotating,
+          // RAG-flavored phrase like "Checking NCERT..." would be actively misleading here, so
+          // this shows one generic, brief phrase with no rotation instead.
+          thinkingTextEl.textContent = t('chat', 'thinkingPhrase1');
+        } else {
+          // Cycles through a few NEET/study-themed phrases while the real answer is still being
+          // generated server-side (NCERT search, model routing, first token) -- reads the phrase
+          // fresh via t() on every tick rather than building the array once, so a language switch
+          // mid-flight (rare, but possible) is picked up immediately instead of finishing in the
+          // old language. The interval id lives on the row itself so any code path that removes
+          // this row (including the plain querySelectorAll cleanup on Stop) can also clear it.
+          const THINKING_PHRASE_KEYS = ['thinkingPhrase1', 'thinkingPhrase2', 'thinkingPhrase3', 'thinkingPhrase4', 'thinkingPhrase5'];
+          let thinkingPhraseIdx = 0;
+          thinkingTextEl.textContent = t('chat', THINKING_PHRASE_KEYS[0]);
+          typingRow._thinkingInterval = setInterval(() => {
+            thinkingPhraseIdx = (thinkingPhraseIdx + 1) % THINKING_PHRASE_KEYS.length;
+            thinkingTextEl.textContent = t('chat', THINKING_PHRASE_KEYS[thinkingPhraseIdx]);
+          }, 2000);
+        }
       }
       function removeTypingRow() {
         if (typingRow) {

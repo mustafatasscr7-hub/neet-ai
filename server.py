@@ -3265,8 +3265,49 @@ async def _force_citation_when_no_retrieval(stream, has_retrieval: bool):
     if not resolved and buffer:
         yield buffer
 
+_SMALLTALK_STRIP_RE = re.compile(r"[^\w\s]")
+
+def _normalize_smalltalk(text: str) -> str:
+    """Lowercase, trim, strip punctuation, collapse to a bare comparison key -- exact-match only,
+    no fuzzy/substring matching, so "hii" and "hi" are two separate dict entries rather than one
+    rule trying to catch both. Deliberately mirrors chat.html's own normalizeSmalltalk() (see that
+    function's comment for why the two copies have to be kept in sync by hand)."""
+    return _SMALLTALK_STRIP_RE.sub("", text.strip().lower()).strip()
+
+# Short, conservative, exact-match only -- deliberately excludes anything that could plausibly be
+# a real answer to a clarifying question the AI just asked (e.g. "yes"/"no"/"sure"/"k"), not just
+# smalltalk. Near-synonyms share one canned reply rather than each getting its own. Grouped by
+# canned reply so it's obvious at a glance which strings produce which text.
+_SMALLTALK_RESPONSES = {}
+for _k in ("hi", "hello", "hey", "hii", "hiya"):
+    _SMALLTALK_RESPONSES[_k] = "Hey! What NEET topic are we working on today?"
+for _k in ("good morning", "good afternoon", "good evening"):
+    _SMALLTALK_RESPONSES[_k] = f"{_k.capitalize()}! What NEET topic are we working on today?"
+for _k in ("thanks", "thank you", "thanks a lot", "thank you so much"):
+    _SMALLTALK_RESPONSES[_k] = "You're welcome! Come back anytime you've got a doubt."
+for _k in ("ok", "okay", "alright"):
+    _SMALLTALK_RESPONSES[_k] = "Sounds good — let me know if you've got a doubt!"
+for _k in ("bye", "goodbye", "good night"):
+    _SMALLTALK_RESPONSES[_k] = "Bye! Come back anytime you've got a doubt — good luck with your prep!"
+del _k
+
 async def stream_response(text: str, history: list = [], images: list = [], pdf: str = None, answer_style: str = "detailed", student_name: str = "", language: str = "en", user_id: str = "", personalize: bool = True, skip_cache: bool = False, ip: str = ""):
     images = (images or [])[:3]
+    # Fast path for exact-match greeting/smalltalk, before ANY of the expensive work below --
+    # no embedding call, no NCERT/PYQ vector search, no model API call at all, just a canned reply
+    # returned directly. Gated on no images/pdf (a greeting alongside an attachment isn't pure
+    # smalltalk -- the attachment still needs the real pipeline). Wrapped as "DOUBT_TYPE:
+    # conversational\n\n<reply>" -- the exact shape a genuine model-generated conversational reply
+    # already takes, so chat.html's existing marker-stripping renders it identically with zero
+    # frontend changes to the render path itself (only the loading-state text needed updating --
+    # see chat.html's own smalltalk check for that). Persistence (chat history save) is likewise
+    # untouched: this yields through the same stream the client already saves to Supabase after
+    # every real answer, so nothing downstream needs to know this wasn't a real model call.
+    if not images and not pdf:
+        smalltalk_reply = _SMALLTALK_RESPONSES.get(_normalize_smalltalk(text))
+        if smalltalk_reply is not None:
+            yield f"DOUBT_TYPE: conversational\n\n{smalltalk_reply}"
+            return
     import hashlib
     # Personalized answers are specific to this student and must never be served from —
     # or written to — the shared answer cache, which is keyed only on question text.
