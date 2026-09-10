@@ -39,7 +39,13 @@ async_client: httpx.AsyncClient = None
 async def lifespan(app: FastAPI):
     global async_client
     async_client = httpx.AsyncClient()
+    # See _warm_openai_embedding_connection's own comment (below openai_client's definition) for
+    # why this exists -- runs before the `yield`, so it completes before uvicorn accepts any real
+    # connection.
+    _warm_openai_embedding_connection("boot")
+    keepalive_task = asyncio.create_task(_openai_keepalive_loop())
     yield
+    keepalive_task.cancel()
     await async_client.aclose()
 
 app = FastAPI(lifespan=lifespan)
@@ -64,6 +70,53 @@ SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", SUPABASE_KEY)
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "neetai-admin-2027")
 
 openai_client = openai.OpenAI(api_key=OPENAI_KEY)
+
+# Confirmed live via the /chat latency profiling investigation: the FIRST call through
+# openai_client in a freshly-started process pays several seconds (5-14s across repeated tests) of
+# pure TCP+TLS connection-setup cost on top of the actual embedding call (200-3500ms once the
+# connection is warm) -- that cost landed entirely on whichever real student's doubt happened to
+# be first. _warm_openai_embedding_connection() fires a throwaway embedding call at boot (see
+# lifespan), before uvicorn accepts any real connection, so no real request ever pays it --
+# confirmed live with a controlled cold-boot test: TTFB on the first real request sent immediately
+# after "Application startup complete" dropped from the multi-second cold range into the normal
+# 2000-3500ms warm range.
+#
+# Railway is configured with sleepApplication: false (railway.json) and restarts only ON_FAILURE,
+# so the process itself doesn't recycle on idle -- but does the underlying connection go stale
+# during a real quiet stretch even though the process stays up? Tested directly: repeated the same
+# controlled cold-boot test with an added idle gap (5s/15s/60s/300s) before sending the first real
+# request -- TTFB stayed in the normal 2000-3500ms range at every gap tested, including the full
+# 5 minutes. So this connection is more resilient to idling than a typical 60-300s proxy/keep-alive
+# timeout would suggest, at least up to 5 minutes -- the keep-alive loop below is kept anyway as
+# cheap (a 1-2 token call every few minutes) insurance against a shorter-lived pool under different
+# real conditions, not because staleness was actually reproduced. Real call volume is currently
+# sparse enough (confirmed via provider_usage_log: real Gemini/embedding bursts days apart, not
+# continuous traffic) that no interval short of wastefully frequent polling could reliably catch
+# the *next* real burst anyway -- multi-day gaps are a different problem this loop doesn't solve,
+# and isn't trying to; it's aimed at keeping a burst's own later requests warm once one has started.
+def _warm_openai_embedding_connection(context: str):
+    """Never raises -- a warm-up failure (network blip, OpenAI outage) must never crash startup or
+    kill the background loop below, just skip this round silently. Worst case on failure: the next
+    real request pays the cold-start cost itself, exactly the pre-fix behavior, not something new
+    to break. Intentionally sync (openai_client itself is sync -- see get_embedding's own comment
+    on why), which is fine both at boot (nothing is being served yet) and from the periodic
+    background task (a few hundred ms blocking the event loop once every few minutes is a non-issue
+    next to the multi-second cold-start cost it prevents)."""
+    try:
+        t0 = time.perf_counter()
+        openai_client.embeddings.create(model="text-embedding-3-small", input="warmup")
+        print(f"OPENAI CONNECTION WARM-UP ({context}): {(time.perf_counter() - t0) * 1000:.0f}ms", flush=True)
+    except Exception as e:
+        print(f"OPENAI CONNECTION WARM-UP ({context}) FAILED (non-fatal): {e}", flush=True)
+
+_OPENAI_KEEPALIVE_INTERVAL_SECONDS = 240  # 4 min -- see the comment above _warm_openai_embedding_
+# connection for what this is (and isn't) actually protecting against. Started/cancelled in
+# lifespan below.
+async def _openai_keepalive_loop():
+    while True:
+        await asyncio.sleep(_OPENAI_KEEPALIVE_INTERVAL_SECONDS)
+        _warm_openai_embedding_connection("periodic keep-alive")
+
 # Text doubt-answering (/chat, /solve) runs on DeepSeek V4 Flash via its Anthropic-compatible
 # endpoint, not Claude -- the `anthropic` package is still used here as an SDK, just pointed at
 # a different base_url; there is no live Claude/anthropic.com client left in this file. DeepSeek's
