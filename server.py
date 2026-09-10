@@ -2525,6 +2525,57 @@ def _build_gemini_call_args(cache_name: Optional[str], extra_context: str, full_
         config = genai_types.GenerateContentConfig(system_instruction=full_system, max_output_tokens=1024)
     return contents, config
 
+async def _stream_gemini_media(media_parts: list, doubt_type: str, media_files: list, full_system: str, user_message: str, user_id: str, ip: str):
+    """Shared by stream_response's images and pdf branches -- previously ~90% identical inline code
+    duplicated in both (cache lookup, the actual Gemini call, cost tracking, media-doubt logging),
+    unlike DeepSeek/Qwen which already went through shared helpers (_stream_deepseek/_stream_qwen).
+    The only real difference between an image doubt and a PDF doubt is how media_parts gets built
+    and what doubt_type log_media_doubt records -- both now live at the two call sites instead of
+    duplicating everything else around them. Pure extraction: every line of logic below is
+    unchanged from what previously sat inline in each branch, just no longer copy-pasted twice."""
+    selected_model = "gemini-3.5-flash-lite"
+    print(f"MODEL SELECTED: {selected_model}", flush=True)
+    sys.stdout.flush()
+    gemini_cache_name = await _get_gemini_system_cache()
+    gemini_extra_context = full_system[len(SYSTEM_PROMPT):]
+    gemini_contents, gemini_config = _build_gemini_call_args(gemini_cache_name, gemini_extra_context, full_system, media_parts, user_message)
+    gemini_stream = await gemini_client.aio.models.generate_content_stream(
+        model=selected_model,
+        contents=gemini_contents,
+        config=gemini_config
+    )
+    full_answer = ""
+    last_usage = None
+    try:
+        async for chunk in gemini_stream:
+            if chunk.text:
+                full_answer += chunk.text
+                yield chunk.text
+            if chunk.usage_metadata:
+                last_usage = chunk.usage_metadata
+    finally:
+        # Log on the way out (including on an early client disconnect) rather than only on a clean
+        # finish. Gemini reports usage_metadata cumulatively on every streamed chunk, so the last
+        # chunk seen (even a partial stream) already holds the running totals -- no separate "final
+        # message" fetch needed the way Anthropic's SDK requires.
+        if last_usage:
+            cache_hit_tokens = last_usage.cached_content_token_count or 0
+            cache_miss_tokens = max(0, last_usage.prompt_token_count - cache_hit_tokens)
+            cost = _gemini_cost(cache_miss_tokens, cache_hit_tokens, last_usage.candidates_token_count)
+            try:
+                await log_provider_usage("gemini-3.5-flash-lite", False, last_usage.prompt_token_count, last_usage.candidates_token_count, cost, "/chat", user_id)
+            except Exception:
+                pass
+            try:
+                await log_token_usage(user_id, last_usage.prompt_token_count + last_usage.candidates_token_count, ip)
+            except Exception:
+                pass
+        if full_answer:
+            try:
+                await log_media_doubt(user_id, ip, doubt_type, media_files, full_answer)
+            except Exception:
+                pass
+
 async def log_provider_usage(provider: str, peak_window: bool, input_tokens: int, output_tokens: int, cost: float, endpoint: str, user_id: str = ""):
     """Additive to log_token_usage() (which drives per-user daily budget enforcement, keyed by
     total tokens only) -- this is purely for cost/provider analytics: one row per completed
@@ -3283,9 +3334,6 @@ IMPORTANT -- BE CONCISE:
         full_system = SYSTEM_PROMPT + name_context + style_context + lang_context + student_context + graph_context + conciseness_context
         if images:
             # See the gemini_client comment above for why images specifically moved off Claude.
-            selected_model = "gemini-3.5-flash-lite"
-            print(f"MODEL SELECTED: {selected_model}", flush=True)
-            sys.stdout.flush()
             # Computed up front (before the call, not after) so it's already in hand even if the
             # stream below is interrupted mid-way -- see log_media_doubt's own docstring for why
             # this write can no longer depend on the client completing anything.
@@ -3297,92 +3345,17 @@ IMPORTANT -- BE CONCISE:
                 )
                 for img in images
             ]
-            gemini_cache_name = await _get_gemini_system_cache()
-            gemini_extra_context = full_system[len(SYSTEM_PROMPT):]
-            gemini_contents, gemini_config = _build_gemini_call_args(gemini_cache_name, gemini_extra_context, full_system, image_parts, user_message)
-            gemini_stream = await gemini_client.aio.models.generate_content_stream(
-                model=selected_model,
-                contents=gemini_contents,
-                config=gemini_config
-            )
-            full_answer = ""
-            last_usage = None
-            try:
-                async for chunk in gemini_stream:
-                    if chunk.text:
-                        full_answer += chunk.text
-                        yield chunk.text
-                    if chunk.usage_metadata:
-                        last_usage = chunk.usage_metadata
-            finally:
-                # Same reasoning as the Anthropic branch below: log on the way out (including on
-                # an early client disconnect) rather than only on a clean finish. Gemini reports
-                # usage_metadata cumulatively on every streamed chunk, so the last chunk seen
-                # (even a partial stream) already holds the running totals -- no separate
-                # "final message" fetch needed the way Anthropic's SDK requires.
-                if last_usage:
-                    cache_hit_tokens = last_usage.cached_content_token_count or 0
-                    cache_miss_tokens = max(0, last_usage.prompt_token_count - cache_hit_tokens)
-                    cost = _gemini_cost(cache_miss_tokens, cache_hit_tokens, last_usage.candidates_token_count)
-                    try:
-                        await log_provider_usage("gemini-3.5-flash-lite", False, last_usage.prompt_token_count, last_usage.candidates_token_count, cost, "/chat", user_id)
-                    except Exception:
-                        pass
-                    try:
-                        await log_token_usage(user_id, last_usage.prompt_token_count + last_usage.candidates_token_count, ip)
-                    except Exception:
-                        pass
-                if full_answer:
-                    try:
-                        await log_media_doubt(user_id, ip, "image", media_files, full_answer)
-                    except Exception:
-                        pass
+            async for chunk in _stream_gemini_media(image_parts, "image", media_files, full_system, user_message, user_id, ip):
+                yield chunk
             return
         elif pdf:
             # Moved off Claude to Gemini 3.5 Flash-Lite -- same client/pattern as the images
             # branch above, confirmed working via a live standalone test (91% accuracy across
             # 3 real PDFs, ~10x cheaper input tokens than Claude Sonnet's pricing).
-            selected_model = "gemini-3.5-flash-lite"
-            print(f"MODEL SELECTED: {selected_model}", flush=True)
-            sys.stdout.flush()
             media_files = _hash_media_files(None, pdf)
             pdf_part = genai_types.Part.from_bytes(data=base64.b64decode(pdf), mime_type="application/pdf")
-            gemini_cache_name = await _get_gemini_system_cache()
-            gemini_extra_context = full_system[len(SYSTEM_PROMPT):]
-            gemini_contents, gemini_config = _build_gemini_call_args(gemini_cache_name, gemini_extra_context, full_system, [pdf_part], user_message)
-            gemini_stream = await gemini_client.aio.models.generate_content_stream(
-                model=selected_model,
-                contents=gemini_contents,
-                config=gemini_config
-            )
-            full_answer = ""
-            last_usage = None
-            try:
-                async for chunk in gemini_stream:
-                    if chunk.text:
-                        full_answer += chunk.text
-                        yield chunk.text
-                    if chunk.usage_metadata:
-                        last_usage = chunk.usage_metadata
-            finally:
-                # Same reasoning as the images branch above.
-                if last_usage:
-                    cache_hit_tokens = last_usage.cached_content_token_count or 0
-                    cache_miss_tokens = max(0, last_usage.prompt_token_count - cache_hit_tokens)
-                    cost = _gemini_cost(cache_miss_tokens, cache_hit_tokens, last_usage.candidates_token_count)
-                    try:
-                        await log_provider_usage("gemini-3.5-flash-lite", False, last_usage.prompt_token_count, last_usage.candidates_token_count, cost, "/chat", user_id)
-                    except Exception:
-                        pass
-                    try:
-                        await log_token_usage(user_id, last_usage.prompt_token_count + last_usage.candidates_token_count, ip)
-                    except Exception:
-                        pass
-                if full_answer:
-                    try:
-                        await log_media_doubt(user_id, ip, "pdf", media_files, full_answer)
-                    except Exception:
-                        pass
+            async for chunk in _stream_gemini_media([pdf_part], "pdf", media_files, full_system, user_message, user_id, ip):
+                yield chunk
             return
         else:
             is_peak = _is_deepseek_peak_hour()
