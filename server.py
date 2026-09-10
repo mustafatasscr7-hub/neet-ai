@@ -2385,6 +2385,20 @@ QWEN_FLASH_RATE = {"input": 0.05, "cache_hit": 0.01, "output": 0.40}
 # Gemini 3.5 Flash-Lite's standard (non-batch) tier -- the tier that actually applies to live
 # streaming /chat requests (fetched from ai.google.dev/gemini-api/docs/pricing on 2026-08-14).
 GEMINI_FLASH_LITE_RATE = {"input": 0.30, "output": 2.50}
+# Same pricing page, same date -- context caching is a DISTINCT, opt-in Gemini feature (unlike
+# DeepSeek/Qwen's automatic prompt caching, an explicit CachedContent resource must be created and
+# referenced by name). cached_input applies to cached_content_token_count (tokens served from an
+# active cache instead of resent fresh -- confirmed live via usage_metadata, a 90% discount off the
+# standard input rate). storage_per_hour is a SEPARATE, time-based cost for keeping a cache alive,
+# billed per token per hour regardless of how many requests actually hit it during that window --
+# see _get_gemini_system_cache for where this gets logged (once per cache creation, not per call).
+GEMINI_CACHED_INPUT_RATE = 0.03
+GEMINI_CACHE_STORAGE_RATE_PER_HOUR = 1.00
+# 1 hour -- no specific image/PDF call-volume data available to tune this further; long enough that
+# a cache created for one request is very likely still warm for the next one at any real traffic
+# level, short enough that an idle cache isn't accruing storage cost indefinitely. Refreshed
+# automatically on first use after expiry (see _get_gemini_system_cache), not on a timer.
+GEMINI_CACHE_TTL_SECONDS = 3600
 
 def _deepseek_cost(cache_miss_tokens: int, cache_hit_tokens: int, output_tokens: int, is_peak: bool) -> float:
     r = DEEPSEEK_RATES["peak" if is_peak else "off_peak"]
@@ -2393,8 +2407,123 @@ def _deepseek_cost(cache_miss_tokens: int, cache_hit_tokens: int, output_tokens:
 def _qwen_cost(cache_miss_tokens: int, cache_hit_tokens: int, output_tokens: int) -> float:
     return (cache_miss_tokens * QWEN_FLASH_RATE["input"] + cache_hit_tokens * QWEN_FLASH_RATE["cache_hit"] + output_tokens * QWEN_FLASH_RATE["output"]) / 1_000_000
 
-def _gemini_cost(input_tokens: int, output_tokens: int) -> float:
-    return (input_tokens * GEMINI_FLASH_LITE_RATE["input"] + output_tokens * GEMINI_FLASH_LITE_RATE["output"]) / 1_000_000
+def _gemini_cost(cache_miss_tokens: int, cache_hit_tokens: int, output_tokens: int) -> float:
+    return (cache_miss_tokens * GEMINI_FLASH_LITE_RATE["input"] + cache_hit_tokens * GEMINI_CACHED_INPUT_RATE + output_tokens * GEMINI_FLASH_LITE_RATE["output"]) / 1_000_000
+
+# SYSTEM_PROMPT is a fixed module-level constant, so this hash is fixed for the lifetime of the
+# running process -- computed once here rather than per-call. Exists so _get_gemini_system_cache can
+# defensively confirm a live cache still matches the CURRENT prompt rather than assuming it does
+# just because a cache object exists; see that function's docstring for what this actually guards
+# against in practice.
+SYSTEM_PROMPT_HASH = hashlib.sha256(SYSTEM_PROMPT.encode()).hexdigest()
+
+_gemini_cache_name: Optional[str] = None
+_gemini_cache_hash: Optional[str] = None
+_gemini_cache_expire_at: Optional[datetime] = None
+_gemini_cache_lock = asyncio.Lock()
+# Treat a cache as expired this long before Google's own expire_time, so an in-flight request can
+# never race a real expiry mid-call (start the call while "valid", have Google expire it before the
+# call actually completes).
+_GEMINI_CACHE_EXPIRY_BUFFER_SECONDS = 60
+
+async def _delete_gemini_cache_quietly(name: str):
+    # Best-effort only -- the old cache expires on its own TTL regardless, so a failed/slow delete
+    # here has no correctness impact, just a few extra minutes of avoidable storage cost.
+    try:
+        await gemini_client.aio.caches.delete(name=name)
+    except Exception:
+        pass
+
+async def _get_gemini_system_cache() -> Optional[str]:
+    """Returns the resource name of a live Gemini CachedContent holding exactly SYSTEM_PROMPT (and
+    nothing request-variable -- see the images/pdf branches in stream_response for how personalization/
+    language/format context gets layered back in via `contents` instead, since Gemini rejects a
+    request that sets both cached_content and system_instruction together). Returns None if no valid
+    cache is available right now and creating one just failed -- this is NOT treated as an error by
+    either caller, both of which fall back to sending system_instruction fresh on a None, exactly the
+    pre-caching behavior, so a Gemini caching outage degrades to "no caching" rather than breaking a
+    student's request.
+
+    Validity requires BOTH: not expired (tracked locally against real wall-clock time, with a buffer)
+    AND SYSTEM_PROMPT's hash still matching what was cached. The hash check exists for defensive
+    correctness -- in practice SYSTEM_PROMPT can't change without a process restart (which would
+    recompute SYSTEM_PROMPT_HASH fresh and start with no cache at all), so this can't actually fire
+    from a live prompt edit the way it might in a hot-reloadable setup, but the guarantee "this
+    process never serves a stale cached prompt version" is now explicit and testable rather than
+    merely assumed."""
+    global _gemini_cache_name, _gemini_cache_hash, _gemini_cache_expire_at
+
+    def _still_valid(now: datetime) -> bool:
+        return bool(
+            _gemini_cache_name
+            and _gemini_cache_hash == SYSTEM_PROMPT_HASH
+            and _gemini_cache_expire_at
+            and _gemini_cache_expire_at - timedelta(seconds=_GEMINI_CACHE_EXPIRY_BUFFER_SECONDS) > now
+        )
+
+    if _still_valid(datetime.now(timezone.utc)):
+        return _gemini_cache_name
+
+    # Thundering-herd guard: many concurrent image/PDF requests can all notice "no valid cache" at
+    # once (first-ever call, or right after an expiry) -- without this lock, each would independently
+    # create its own CachedContent, wasting real API calls and cache-storage cost. Only the first
+    # request past the gate actually creates one; everyone else re-checks and reuses it.
+    async with _gemini_cache_lock:
+        now = datetime.now(timezone.utc)
+        if _still_valid(now):
+            return _gemini_cache_name
+
+        stale_name = _gemini_cache_name
+        try:
+            cache = await gemini_client.aio.caches.create(
+                model="gemini-3.5-flash-lite",
+                config=genai_types.CreateCachedContentConfig(
+                    system_instruction=SYSTEM_PROMPT,
+                    ttl=f"{GEMINI_CACHE_TTL_SECONDS}s",
+                    display_name="neet-ai-system-prompt"
+                )
+            )
+        except Exception as e:
+            print(f"GEMINI CACHE CREATE FAILED, falling back to uncached calls: {e}", flush=True)
+            return None
+
+        _gemini_cache_name = cache.name
+        _gemini_cache_hash = SYSTEM_PROMPT_HASH
+        _gemini_cache_expire_at = cache.expire_time
+
+        cache_tokens = cache.usage_metadata.total_token_count if cache.usage_metadata else 0
+        storage_cost = cache_tokens * GEMINI_CACHE_STORAGE_RATE_PER_HOUR * (GEMINI_CACHE_TTL_SECONDS / 3600) / 1_000_000
+        try:
+            await log_provider_usage("gemini-3.5-flash-lite-cache-storage", False, cache_tokens, 0, storage_cost, "/gemini-cache-storage", "")
+        except Exception:
+            pass
+
+        if stale_name and stale_name != cache.name:
+            asyncio.create_task(_delete_gemini_cache_quietly(stale_name))
+
+        return cache.name
+
+_GEMINI_ADDENDUM_WRAPPER = "[ADDITIONAL SYSTEM INSTRUCTIONS -- follow exactly, these are not part of the student's message]\n{}\n[END ADDITIONAL SYSTEM INSTRUCTIONS]"
+
+def _build_gemini_call_args(cache_name: Optional[str], extra_context: str, full_system: str, media_parts: list, user_message):
+    """Shared by the images and PDF branches below. Gemini rejects cached_content combined with
+    system_instruction in the same request (confirmed live: 400 INVALID_ARGUMENT), so whichever
+    request-variable context normally lives in full_system (personalization, language, format mode)
+    has to travel a different way when a cache is in use -- prepended into `contents`, clearly
+    delineated so the model treats it as an instruction to follow rather than part of what the
+    student asked (confirmed live: a Hindi-only instruction sent this way still produced a fully
+    correct, fully Hindi answer, same as when it was part of system_instruction).
+    cache_name is None whenever _get_gemini_system_cache couldn't provide one (first-ever call,
+    mid-refresh, or a creation failure) -- falls back to sending full_system as system_instruction
+    exactly as before this feature existed, so a caching outage never blocks a real request."""
+    contents = list(media_parts) + [user_message]
+    if cache_name:
+        if extra_context.strip():
+            contents = [_GEMINI_ADDENDUM_WRAPPER.format(extra_context)] + contents
+        config = genai_types.GenerateContentConfig(cached_content=cache_name, max_output_tokens=1024)
+    else:
+        config = genai_types.GenerateContentConfig(system_instruction=full_system, max_output_tokens=1024)
+    return contents, config
 
 async def log_provider_usage(provider: str, peak_window: bool, input_tokens: int, output_tokens: int, cost: float, endpoint: str, user_id: str = ""):
     """Additive to log_token_usage() (which drives per-user daily budget enforcement, keyed by
@@ -3168,13 +3297,13 @@ IMPORTANT -- BE CONCISE:
                 )
                 for img in images
             ]
+            gemini_cache_name = await _get_gemini_system_cache()
+            gemini_extra_context = full_system[len(SYSTEM_PROMPT):]
+            gemini_contents, gemini_config = _build_gemini_call_args(gemini_cache_name, gemini_extra_context, full_system, image_parts, user_message)
             gemini_stream = await gemini_client.aio.models.generate_content_stream(
                 model=selected_model,
-                contents=image_parts + [user_message],
-                config=genai_types.GenerateContentConfig(
-                    system_instruction=full_system,
-                    max_output_tokens=1024
-                )
+                contents=gemini_contents,
+                config=gemini_config
             )
             full_answer = ""
             last_usage = None
@@ -3192,7 +3321,9 @@ IMPORTANT -- BE CONCISE:
                 # (even a partial stream) already holds the running totals -- no separate
                 # "final message" fetch needed the way Anthropic's SDK requires.
                 if last_usage:
-                    cost = _gemini_cost(last_usage.prompt_token_count, last_usage.candidates_token_count)
+                    cache_hit_tokens = last_usage.cached_content_token_count or 0
+                    cache_miss_tokens = max(0, last_usage.prompt_token_count - cache_hit_tokens)
+                    cost = _gemini_cost(cache_miss_tokens, cache_hit_tokens, last_usage.candidates_token_count)
                     try:
                         await log_provider_usage("gemini-3.5-flash-lite", False, last_usage.prompt_token_count, last_usage.candidates_token_count, cost, "/chat", user_id)
                     except Exception:
@@ -3216,13 +3347,13 @@ IMPORTANT -- BE CONCISE:
             sys.stdout.flush()
             media_files = _hash_media_files(None, pdf)
             pdf_part = genai_types.Part.from_bytes(data=base64.b64decode(pdf), mime_type="application/pdf")
+            gemini_cache_name = await _get_gemini_system_cache()
+            gemini_extra_context = full_system[len(SYSTEM_PROMPT):]
+            gemini_contents, gemini_config = _build_gemini_call_args(gemini_cache_name, gemini_extra_context, full_system, [pdf_part], user_message)
             gemini_stream = await gemini_client.aio.models.generate_content_stream(
                 model=selected_model,
-                contents=[pdf_part, user_message],
-                config=genai_types.GenerateContentConfig(
-                    system_instruction=full_system,
-                    max_output_tokens=1024
-                )
+                contents=gemini_contents,
+                config=gemini_config
             )
             full_answer = ""
             last_usage = None
@@ -3236,7 +3367,9 @@ IMPORTANT -- BE CONCISE:
             finally:
                 # Same reasoning as the images branch above.
                 if last_usage:
-                    cost = _gemini_cost(last_usage.prompt_token_count, last_usage.candidates_token_count)
+                    cache_hit_tokens = last_usage.cached_content_token_count or 0
+                    cache_miss_tokens = max(0, last_usage.prompt_token_count - cache_hit_tokens)
+                    cost = _gemini_cost(cache_miss_tokens, cache_hit_tokens, last_usage.candidates_token_count)
                     try:
                         await log_provider_usage("gemini-3.5-flash-lite", False, last_usage.prompt_token_count, last_usage.candidates_token_count, cost, "/chat", user_id)
                     except Exception:
