@@ -53,6 +53,13 @@
     /* Chart card */
     .chart-card { background: #111116; border: 1px solid #1e1e24; border-radius: 18px; padding: 24px 24px 12px; margin-bottom: 28px; }
     .chart-card-header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 18px; }
+    #chartContainer { position: relative; }
+    .chart-tooltip { position: absolute; z-index: 5; pointer-events: none; opacity: 0; transition: opacity 0.1s; background: #1a1a20; border: 1px solid #2a2a32; border-radius: 8px; padding: 6px 10px; font-size: 12px; white-space: nowrap; box-shadow: 0 4px 12px rgba(0,0,0,0.35); }
+    .chart-tooltip-date { color: #9a9aa5; margin-bottom: 2px; }
+    .chart-tooltip-score { color: #ececec; font-weight: 600; }
+    body.light-mode .chart-tooltip { background: #ffffff !important; border-color: #e5e5ea !important; box-shadow: 0 4px 12px rgba(0,0,0,0.12) !important; }
+    body.light-mode .chart-tooltip-date { color: #7a7a85 !important; }
+    body.light-mode .chart-tooltip-score { color: #0d0d0d !important; }
     .chart-title { font-size: 14px; font-weight: 700; color: #fff; }
     .chart-hint { font-size: 11.5px; color: #555; }
     .chart-empty { text-align: center; padding: 30px 0; color: #4a4a52; font-size: 13px; }
@@ -460,6 +467,37 @@
       return '#ef4444';
     }
 
+    // Module-level so showChartTooltip(evt, i) (fired via inline handlers on the SVG dots
+    // rebuilt below) can look up a point's real score/date by index -- the innerHTML rebuild
+    // each render means these can't be closures over the local `points` array.
+    let chartPoints = [];
+
+    function showChartTooltip(evt, i) {
+      const p = chartPoints[i];
+      const tooltip = document.getElementById('chartTooltip');
+      if (!p || !tooltip) return;
+      const container = document.getElementById('chartContainer');
+      const rect = container.getBoundingClientRect();
+      tooltip.innerHTML = `<div class="chart-tooltip-date">${formatDate(p.date)}</div><div class="chart-tooltip-score">${localizeNum(p.score)} / 720</div>`;
+      tooltip.style.opacity = '1';
+      // Measured AFTER setting content/opacity so offsetWidth/Height reflect this point's own
+      // tooltip text, then clamped to the container's own bounds -- otherwise the last point's
+      // tooltip (or the first, for the left edge) would render partway off the card.
+      const tw = tooltip.offsetWidth, th = tooltip.offsetHeight;
+      const pointX = evt.clientX - rect.left, pointY = evt.clientY - rect.top;
+      let left = pointX - tw / 2;
+      left = Math.max(4, Math.min(left, rect.width - tw - 4));
+      let top = pointY - th - 14; // default: above the cursor
+      if (top < 0) top = pointY + 14; // not enough room above (a tall point near the top) -> show below instead
+      tooltip.style.left = left.toFixed(0) + 'px';
+      tooltip.style.top = top.toFixed(0) + 'px';
+    }
+
+    function hideChartTooltip() {
+      const tooltip = document.getElementById('chartTooltip');
+      if (tooltip) tooltip.style.opacity = '0';
+    }
+
     function renderChart(resultsNewestFirst) {
       const chartCard = document.getElementById('chartCard');
       const holder = document.getElementById('chartContainer');
@@ -476,14 +514,19 @@
         const y = padTop + (height - padTop - padBottom) * (1 - Math.max(0, r.score) / maxScore);
         return { x, y, score: r.score, date: r.created_at };
       });
+      chartPoints = points;
 
       const linePath = points.map((p, i) => (i === 0 ? 'M' : 'L') + p.x.toFixed(1) + ',' + p.y.toFixed(1)).join(' ');
       const areaPath = `${linePath} L${points[points.length - 1].x.toFixed(1)},${height - padBottom} L${points[0].x.toFixed(1)},${height - padBottom} Z`;
 
-      const dots = points.map(p => `
-        <circle class="chart-dot" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="4" fill="#08080c" stroke="#4f8ef7" stroke-width="2">
-          <title>${formatDate(p.date)} — ${localizeNum(p.score)}/720</title>
-        </circle>
+      // Two circles per point: the small visible dot (purely decorative) plus a larger
+      // invisible one layered on top as the actual hover/tap target -- r=4 alone is a tiny,
+      // fiddly hit area (confirmed live: the previous SVG-native <title> tooltip technically
+      // worked but was easy to miss entirely for exactly this reason, on top of its own slow,
+      // easy-to-miss OS styling). Both carry the same handlers so hovering either registers.
+      const dots = points.map((p, i) => `
+        <circle class="chart-dot" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="4" fill="#08080c" stroke="#4f8ef7" stroke-width="2" style="pointer-events:none;"/>
+        <circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="12" fill="transparent" style="cursor:pointer;" onmouseenter="showChartTooltip(event, ${i})" onmousemove="showChartTooltip(event, ${i})" onmouseleave="hideChartTooltip()" onclick="showChartTooltip(event, ${i})"/>
       `).join('');
 
       const labels = points.map((p, i) => {
@@ -504,6 +547,7 @@
           ${dots}
           ${labels}
         </svg>
+        <div class="chart-tooltip" id="chartTooltip"></div>
       `;
     }
 
