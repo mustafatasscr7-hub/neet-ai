@@ -2603,15 +2603,32 @@ _MULTI_OBJECT_AGGREGATE_RE = re.compile(
     r"\b(two|three|four|both)\s+(" + "|".join(_MULTI_OBJECT_NOUNS) + r")s?\b", re.IGNORECASE
 )
 
+_HAS_NUMERIC_VALUE_RE = re.compile(r"\d")
+
 def _is_multi_object_numerical(text: str) -> bool:
     """Cheap, no-LLM-call gate for the narrow second-pass verification path below -- questions
     describing 2+ comparable objects/entities (two towers, two vehicles, two containers, etc.),
     the shape of problem where the borrowed-value trap above was observed. Deliberately NOT also
-    gated on "does this look numerical" -- an earlier version tried that (requiring a literal
-    "Final Answer:" line) and it silently let a real fabrication through, since the model doesn't
-    reliably use that exact literal format even when it did fabricate a number (seen live: the
-    wrong result stated only inside a "Key Points:" bullet). A missed fabrication is worse than an
-    occasional wasted verification call on a genuinely conceptual multi-object question."""
+    gated on "does this look numerical" via the ANSWER's format -- an earlier version tried that
+    (requiring a literal "Final Answer:" line in the model's OUTPUT) and it silently let a real
+    fabrication through, since the model doesn't reliably use that exact literal format even when
+    it did fabricate a number (seen live: the wrong result stated only inside a "Key Points:"
+    bullet). That's a different check than the digit requirement below, though -- this one looks
+    at the QUESTION's own text, not the answer's shape, and is a much more reliable signal: a real
+    borrowed-value trap always involves at least one stated numeric quantity to borrow from in the
+    first place.
+
+    Live-audit finding: a purely conceptual Biology question about water potential/plasmolysis
+    (no numbers anywhere in it) tripped this gate and got wrongly routed through the verifier
+    purely because it mentions "cell" twice -- _MULTI_OBJECT_NOUNS' "cell" entry means a battery/
+    galvanic cell for the physics/chemistry problems this was built for, but collides with
+    biological "cell" in wording like "a cell with higher water potential ... a cell with lower
+    water potential." The verifier then found no numeric value "stated for" either cell (there
+    being none to find) and declared the whole conceptual question unsolvable. Requiring at least
+    one digit in the question closes this off entirely -- a qualitative/conceptual doubt with zero
+    stated quantities can never be a borrowed-value trap, since there's nothing to borrow from."""
+    if not _HAS_NUMERIC_VALUE_RE.search(text):
+        return False
     if _MULTI_OBJECT_AGGREGATE_RE.search(text):
         return True
     lowered = text.lower()
