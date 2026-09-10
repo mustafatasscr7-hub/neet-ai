@@ -505,16 +505,27 @@
       chartCard.style.display = 'block';
 
       const data = [...resultsNewestFirst].reverse().slice(-12); // oldest -> newest, cap at last 12
-      const width = 880, height = 200, padTop = 16, padBottom = 30, padX = 10;
+      const width = 880, height = 200, padTop = 16, padBottom = 30, padX = 10, padLeft = 34;
       const maxScore = 720;
       const n = data.length;
+      const plotLeft = padX + padLeft, plotRight = width - padX;
 
       const points = data.map((r, i) => {
-        const x = padX + (n === 1 ? width / 2 : (i / (n - 1)) * (width - padX * 2));
+        const x = plotLeft + (n === 1 ? (plotRight - plotLeft) / 2 : (i / (n - 1)) * (plotRight - plotLeft));
         const y = padTop + (height - padTop - padBottom) * (1 - Math.max(0, r.score) / maxScore);
         return { x, y, score: r.score, date: r.created_at };
       });
       chartPoints = points;
+
+      // Y-axis: fixed 0/180/360/540/720 ticks (quarters of the real 720 max) rather than a
+      // data-driven scale -- the score's own ceiling is fixed and known, so a scale that moves
+      // with the data would make the same score look like a different height across renders.
+      const yTicks = [0, 180, 360, 540, 720];
+      const yGridlines = yTicks.map(score => {
+        const y = padTop + (height - padTop - padBottom) * (1 - score / maxScore);
+        return `<line x1="${plotLeft}" y1="${y.toFixed(1)}" x2="${plotRight}" y2="${y.toFixed(1)}" stroke="#ffffff" stroke-opacity="0.06" stroke-width="1"/>
+          <text x="${(plotLeft - 8).toFixed(1)}" y="${(y + 3.5).toFixed(1)}" font-size="10" fill="#555" text-anchor="end">${localizeNum(score)}</text>`;
+      }).join('');
 
       const linePath = points.map((p, i) => (i === 0 ? 'M' : 'L') + p.x.toFixed(1) + ',' + p.y.toFixed(1)).join(' ');
       const areaPath = `${linePath} L${points[points.length - 1].x.toFixed(1)},${height - padBottom} L${points[0].x.toFixed(1)},${height - padBottom} Z`;
@@ -542,6 +553,7 @@
               <stop offset="100%" stop-color="#4f8ef7" stop-opacity="0"/>
             </linearGradient>
           </defs>
+          ${yGridlines}
           <path d="${areaPath}" fill="url(#chartFill)"/>
           <path d="${linePath}" fill="none" stroke="#4f8ef7" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
           ${dots}
