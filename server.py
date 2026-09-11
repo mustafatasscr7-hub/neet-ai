@@ -3155,6 +3155,60 @@ MCQ_AMBIGUOUS_GUARD = (
     "one is correct."
 )
 
+# Cheap, no-LLM-call gate mirroring the study-aid branch's own phrasing examples (rule above),
+# used only to decide whether MNEMONIC_QUALITY_GUARD gets appended -- a false negative here just
+# means the existing rule-9 prompt text runs unreinforced (no regression), never a false-positive
+# risk of misapplying mnemonic-specific guidance to an unrelated doubt.
+_MNEMONIC_REQUEST_RE = re.compile(
+    r'\b(mnemonic|memory trick|recall trick|recall hook|revision hook|easy way to remember|'
+    r'how (?:do i|to) remember|trick to (?:remember|memorize)|way to memorize)\b',
+    re.IGNORECASE
+)
+
+def _is_mnemonic_request(text: str) -> bool:
+    return bool(_MNEMONIC_REQUEST_RE.search(text or ''))
+
+# Root-cause fix for a Qwen-specific quality gap found via cross-model verification of the
+# original mnemonic-quality-bar fix (rule 9 above, a5a8046): that fix's own testing was defeated
+# at the time by the (separately, already-fixed) Qwen dead-stop bug, so Qwen's real compliance was
+# never actually confirmed. Once tested for real (routing past the dead-stop via the same
+# diagnostic override technique used for the MCQ-ambiguous fix), Qwen hit MULTIPLE of rule 9's own
+# specifically-named banned patterns that DeepSeek never did across the same 8 topics: a bare
+# letter-string ("IPMAT" for mitosis, "M K S A K M C" for SI units) instead of a real word/phrase,
+# the exact self-referencing example rule 9 names verbatim ("SKELETON" for Skeletal muscle,
+# reproduced 2/2), and stacking 2-3 mnemonic attempts in one answer (mitosis, Krebs cycle) instead
+# of at most one. Also hit a related but distinct bug: wrongly triggering AMBIGUOUS/CLARIFY_TYPE:
+# format for a plain mnemonic request (taxonomic ranks) instead of answering via the study-aid
+# branch at all. DeepSeek showed none of these across the same 8 topics.
+#
+# Same proven-safe pattern as MCQ_AMBIGUOUS_GUARD above: appended at CALL TIME to the end of
+# full_system for requests matching _is_mnemonic_request, never edited into rule 9's own prompt
+# text (which is exactly the risky approach that backfired for the MCQ fix).
+#
+# Verified improvement, honestly partial -- re-tested the same 8 topics with this guard applied:
+# the AMBIGUOUS/format misfire (taxonomic ranks) is fully fixed (3/3), and bare-letter-string
+# violations dropped sharply (mitosis now correctly gives "I Passed My Anatomy Test" in 2/3, SI
+# units now leads with a real phrase in 3/3 instead of "M K S A K M C" as the final answer). But
+# two patterns proved resistant even with the exact banned example named verbatim in this prompt
+# text: Qwen still produced "SKELETON" for Skeletal muscle in 2/3 trials, and still stacked 2-3
+# mnemonic attempts for the Krebs cycle in 3/3 trials. Both are pre-existing, NOT Qwen-specific,
+# NOT newly introduced by this fix -- a5a8046's own commit already named these exact two shapes
+# (short 3-item lists self-referencing; blood-cell/multi-step topics stacking) as residual weak
+# spots "not fully solved by prompt tightening alone," present before this guard existed too.
+# Confirmed zero regression on topics that already worked (cranial nerves, WBC types, halogen
+# reactivity) across both models.
+MNEMONIC_QUALITY_GUARD = (
+    "\n\nIMPORTANT: this is a mnemonic/memory-trick request. Never treat it as topic- or "
+    "format-ambiguous, and never output AMBIGUOUS/CLARIFY_TYPE for it -- answer it directly per "
+    "the study-aid rules. The mnemonic itself must be a real, pronounceable word or natural "
+    "sentence -- NEVER a bare string of initials (e.g. \"IPMAT\" or \"M K S A K M C\" are NOT "
+    "acceptable, even if said aloud phonetically letter by letter). NEVER relabel a term using a "
+    "trivial variant of its own name (e.g. \"SKELETON\" for Skeletal muscle teaches nothing new). "
+    "Give AT MOST ONE mnemonic attempt -- never offer several alternatives in the same answer. If "
+    "no real one can be constructed that clears this bar, omit the mnemonic section entirely "
+    "rather than forcing a weak one."
+)
+
 # Deliberately broad per the audit's own examples, not narrowed in advance -- "however" and
 # "actually" alone are common in ordinary explanatory prose too (real false-positive risk), but
 # rather than guess at a tighter pattern up front, this ships as specified and gets measured
@@ -3584,6 +3638,12 @@ IMPORTANT -- BE CONCISE:
 - Never use filler transition phrases like "Let's break this down" or "To understand this, we
   need to first" -- start directly with the substantive content.""" if images else ""
         full_system = SYSTEM_PROMPT + name_context + style_context + lang_context + student_context + graph_context + conciseness_context
+        if _is_mnemonic_request(text):
+            # Applied here (before the images/pdf/else branch split) so it reaches whichever
+            # model actually serves the request, including Gemini for an image of a mnemonic
+            # request -- see MNEMONIC_QUALITY_GUARD's own comment for why this is appended at
+            # call time rather than edited into rule 9's own SYSTEM_PROMPT text.
+            full_system = full_system + MNEMONIC_QUALITY_GUARD
         if images:
             # See the gemini_client comment above for why images specifically moved off Claude.
             # Computed up front (before the call, not after) so it's already in hand even if the
