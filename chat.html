@@ -6150,6 +6150,33 @@ function plainTextFromMarkdown(text) {
       return SMALLTALK_KEYS.has(normalizeSmalltalk(text));
     }
 
+    // Broader than isSmalltalkFastPath above (which must stay an exact mirror of server.py's
+    // canned-reply set) -- this only decides which loading-indicator text to show, so a false
+    // positive/negative here is cosmetic, not a correctness bug. Real DOUBT_TYPE: conversational
+    // classification is an LLM judgment call made server-side and isn't known until the model's
+    // first line streams back, which is too late to pick the INITIAL indicator text -- by the time
+    // it arrives we're already past the "what should the spinner say" moment. This just catches
+    // the common greeting/small-talk shapes server.py's own prompt names as its own conversational
+    // examples ("hi", "wassup", "thanks", "bye", "ok"...), including Hinglish phrasing the exact-
+    // match SMALLTALK_KEYS set above doesn't cover (e.g. "kya haal chal"), so the rotating
+    // NCERT-flavored phrases never show for messages that were never going to search NCERT for.
+    const CASUAL_PATTERNS = [
+      /^(hi+|hey+|hello+|yo+|sup|oye)\b/,
+      /\b(kya\s*haal|kaisa\s*hai|kaise\s*ho|kya\s*chal\s*raha)\b/,
+      /\b(what'?s?\s*up|wassup|whatsup|how\s*(are|r)\s*(you|u)|how'?s\s*it\s*going|how\s*have\s*you\s*been)\b/,
+      /^(thanks?|thank\s*you|thx|ty)\b/,
+      /^(ok|okay|alright|cool|nice|great|awesome|lol|haha+)\b/,
+      /^(bye|goodbye|good\s*night|gn|see\s*you|see\s*ya|take\s*care)\b/,
+      /^(good\s*morning|good\s*afternoon|good\s*evening)\b/,
+      /\bwho\s*(are|r)\s*(you|u)\b/, /\bwhat\s*can\s*you\s*do\b/, /\bwhat\s*is\s*your\s*name\b/,
+    ];
+    function looksConversational(text) {
+      const normalized = (text || '').trim().toLowerCase();
+      if (!normalized) return false;
+      if (SMALLTALK_KEYS.has(normalizeSmalltalk(text))) return true;
+      return CASUAL_PATTERNS.some(re => re.test(normalized));
+    }
+
     // Shared by sendMessage / retryMessage / editMessage: calls /chat for questionText
     // (assumed to already be the last entry in currentConversation), streams the
     // response into a new AI bubble, and persists the updated conversation.
@@ -6186,11 +6213,12 @@ function plainTextFromMarkdown(text) {
         typingRow.innerHTML = '<div class="avatar ai"><img src="assets/logo.svg" alt="NEET-AI" width="32" height="32" /></div><div class="thinking-indicator"><span class="thinking-orb"></span><span class="thinking-text"></span></div>';
         chatWindow.appendChild(typingRow);
         const thinkingTextEl = typingRow.querySelector('.thinking-text');
-        if (isSmalltalkFastPath(questionText)) {
-          // Greeting/smalltalk doubts skip NCERT search and the model call entirely server-side
-          // (see server.py's _SMALLTALK_RESPONSES) and resolve almost instantly -- a rotating,
-          // RAG-flavored phrase like "Checking NCERT..." would be actively misleading here, so
-          // this shows one generic, brief phrase with no rotation instead.
+        if (looksConversational(questionText)) {
+          // Covers both the exact server.py canned-reply set (which resolves almost instantly)
+          // and broader greeting/small-talk phrasing that still goes to the real model but has
+          // nothing to look up -- a rotating, RAG-flavored phrase like "Checking NCERT..." would
+          // be actively misleading either way, so this shows one generic, brief phrase with no
+          // rotation instead.
           thinkingTextEl.textContent = t('chat', 'thinkingPhrase1');
         } else {
           // Cycles through a few NEET/study-themed phrases while the real answer is still being
