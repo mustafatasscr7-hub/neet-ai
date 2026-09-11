@@ -71,15 +71,93 @@ function applyTranslations() {
   });
 
   document.querySelectorAll('.lang-toggle').forEach(btn => {
-    // Icon itself is a static globe (standard language-switcher convention) --
-    // only the aria-label changes to reflect what the click will do.
-    btn.setAttribute('aria-label', lang === 'en' ? 'Switch to Hindi' : 'Switch to English');
+    // Icon itself is a static globe (standard language-switcher convention);
+    // the button now opens a language menu rather than toggling directly.
+    btn.setAttribute('aria-label', 'Select language');
+    btn.setAttribute('aria-haspopup', 'true');
   });
+
+  const openMenu = document.getElementById('langDropdownMenu');
+  if (openMenu) openMenu.remove();
 }
 
 function toggleLang() {
   setLang(getLang() === 'en' ? 'hi' : 'en');
 }
+
+// ---------- Language dropdown (opened by the .lang-toggle globe button) ----------
+// Self-contained here (styles injected once, menu appended to <body>) so every page that
+// includes i18n.js gets the same dropdown without needing sidebar.css, which only half of
+// them load. Mirrors sidebar.js's own openProfileSubmenu pattern: position:fixed, closed by
+// an outside click, closed on selection.
+(function injectLangDropdownStyles() {
+  const style = document.createElement('style');
+  style.textContent = `
+    .lang-dropdown-menu { position: fixed; min-width: 168px; background: #1e1e1e; border: 1px solid #2a2a2a; border-radius: 14px; padding: 6px; z-index: 9999; box-shadow: 0 12px 32px rgba(0,0,0,0.5); font-family: Inter, sans-serif; }
+    .lang-dropdown-option { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 12px; font-size: 13.5px; color: #ececec; cursor: pointer; border-radius: 8px; transition: background 0.15s; }
+    .lang-dropdown-option:hover { background: #2a2a2a; }
+    .lang-dropdown-option.active { color: #ffffff; font-weight: 600; }
+    .lang-dropdown-option.disabled { color: #6a6a72; cursor: not-allowed; }
+    .lang-dropdown-option.disabled:hover { background: transparent; }
+    .lang-dropdown-soon { font-size: 10.5px; color: #6a6a72; font-weight: 500; letter-spacing: 0.02em; }
+    body.light-mode .lang-dropdown-menu { background: #ffffff !important; border-color: #e0e0e5 !important; box-shadow: 0 8px 24px rgba(0,0,0,0.12) !important; }
+    body.light-mode .lang-dropdown-option { color: #333338 !important; }
+    body.light-mode .lang-dropdown-option:hover { background: #f0f0f3 !important; }
+    body.light-mode .lang-dropdown-option.active { color: #0d0d0d !important; }
+    body.light-mode .lang-dropdown-option.disabled { color: #a8a8b0 !important; }
+    body.light-mode .lang-dropdown-option.disabled:hover { background: transparent !important; }
+    body.light-mode .lang-dropdown-soon { color: #9a9aa5 !important; }
+  `;
+  document.head.appendChild(style);
+})();
+
+const LANG_CHECK_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>';
+
+// `extraCallback` lets a page re-render its own language-dependent content on selection
+// (e.g. diagram-library's renderDiagrams()) exactly as it used to when chained after the old
+// toggleLang() call — pages that instead listen for the `langchange` event need nothing here.
+function toggleLangMenu(event, btn, extraCallback) {
+  event.stopPropagation();
+  const existing = document.getElementById('langDropdownMenu');
+  if (existing) {
+    const wasForThisBtn = existing._anchorBtn === btn;
+    existing.remove();
+    if (wasForThisBtn) return;
+  }
+
+  const current = getLang();
+  const menu = document.createElement('div');
+  menu.id = 'langDropdownMenu';
+  menu.className = 'lang-dropdown-menu';
+  menu._anchorBtn = btn;
+  menu.innerHTML =
+    `<div class="lang-dropdown-option${current === 'en' ? ' active' : ''}" data-lang="en"><span>English</span>${current === 'en' ? LANG_CHECK_SVG : ''}</div>` +
+    `<div class="lang-dropdown-option${current === 'hi' ? ' active' : ''}" data-lang="hi"><span>हिंदी</span>${current === 'hi' ? LANG_CHECK_SVG : ''}</div>` +
+    `<div class="lang-dropdown-option disabled" title="Coming soon" aria-disabled="true"><span>Telugu</span><span class="lang-dropdown-soon">Coming soon</span></div>`;
+  document.body.appendChild(menu);
+
+  menu.querySelectorAll('.lang-dropdown-option[data-lang]').forEach(opt => {
+    opt.addEventListener('click', e => {
+      e.stopPropagation();
+      setLang(opt.dataset.lang);
+      if (extraCallback) extraCallback();
+      menu.remove();
+    });
+  });
+
+  const rect = btn.getBoundingClientRect();
+  const menuWidth = menu.offsetWidth;
+  let left = rect.right - menuWidth;
+  left = Math.max(8, Math.min(left, window.innerWidth - menuWidth - 8));
+  menu.style.left = left + 'px';
+  menu.style.top = (rect.bottom + 6) + 'px';
+}
+
+document.addEventListener('click', e => {
+  if (e.target.closest('#langDropdownMenu') || e.target.closest('.lang-toggle')) return;
+  const menu = document.getElementById('langDropdownMenu');
+  if (menu) menu.remove();
+});
 
 // ---------- Subject names ----------
 const SUBJECT_NAMES_HI = {
