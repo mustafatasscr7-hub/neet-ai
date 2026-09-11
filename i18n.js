@@ -71,7 +71,8 @@ function applyTranslations() {
   });
 
   document.querySelectorAll('.lang-toggle').forEach(btn => {
-    btn.textContent = lang === 'en' ? 'हिं' : 'EN';
+    // Icon itself is a static globe (standard language-switcher convention) --
+    // only the aria-label changes to reflect what the click will do.
     btn.setAttribute('aria-label', lang === 'en' ? 'Switch to Hindi' : 'Switch to English');
   });
 }

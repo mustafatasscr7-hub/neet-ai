@@ -33,7 +33,7 @@
     .btn-primary:hover { filter: brightness(1.08); transform: translateY(-1px); }
     .btn-outline { background: transparent; border: 1px solid #26262c; color: #999; }
     .btn-outline:hover { color: #ddd; border-color: #38383f; background: #131317; }
-    .lang-toggle { background: transparent; border: 1px solid #26262c; color: #999; padding: 9px 16px; border-radius: 10px; cursor: pointer; font-size: 13px; font-family: 'Inter', sans-serif; transition: all 0.2s; }
+    .lang-toggle { background: transparent; border: 1px solid #26262c; color: #999; padding: 9px 16px; border-radius: 10px; cursor: pointer; font-size: 13px; font-family: 'Inter', sans-serif; transition: all 0.2s; display: inline-flex; align-items: center; justify-content: center; }
     .lang-toggle:hover { color: #ddd; border-color: #38383f; }
 
     .container { max-width: 960px; margin: 0 auto; padding: 40px 24px 60px; position: relative; z-index: 1; }
@@ -402,7 +402,7 @@
       <span class="header-title">NEET<span class="brand-accent">-AI</span> <span data-i18n="scoreboard.headerTitle">Scoreboard</span></span>
     </div>
     <div style="display:flex;gap:10px;">
-      <button class="lang-toggle" onclick="toggleLang()">हिं</button>
+      <button class="lang-toggle" onclick="toggleLang()" aria-label="Switch language"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></button>
       <button class="btn btn-outline" onclick="window.location.href='./mocktest.html'" data-i18n="scoreboard.takeNewTest">Take New Test</button>
     </div>
   </div>
