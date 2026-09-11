@@ -3381,6 +3381,15 @@ for _k in ("ok", "okay", "alright"):
     _SMALLTALK_RESPONSES[_k] = "Sounds good — let me know if you've got a doubt!"
 for _k in ("bye", "goodbye", "good night"):
     _SMALLTALK_RESPONSES[_k] = "Bye! Come back anytime you've got a doubt — good luck with your prep!"
+# "How are you"/Hinglish "what's up" family -- previously fell through to the full RAG + model
+# pipeline (NCERT search, student context, diagram check, full system prompt) purely to have the
+# model write "DOUBT_TYPE: conversational" plus a one-line reply, costing several real seconds of
+# latency for zero actual retrieval or reasoning. Still exact-match only, same safety guarantee as
+# every other entry here (a real doubt never equals one of these strings verbatim).
+for _k in ("kya haal chal", "kya haal hai", "kya haal", "kaise ho", "kaisa hai",
+           "kya chal raha hai", "kya chal raha", "whats up", "wassup", "sup",
+           "how are you", "how r u", "hows it going", "how have you been"):
+    _SMALLTALK_RESPONSES[_k] = "I'm doing great, thanks for asking! What NEET topic are we working on today?"
 del _k
 
 async def stream_response(text: str, history: list = [], images: list = [], pdf: str = None, answer_style: str = "detailed", student_name: str = "", language: str = "en", user_id: str = "", personalize: bool = True, skip_cache: bool = False, ip: str = ""):
