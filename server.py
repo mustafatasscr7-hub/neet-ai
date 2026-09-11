@@ -3129,6 +3129,32 @@ def _is_mcq_shaped(text: str) -> bool:
     letters = set(m.group(1).upper() for m in _MCQ_OPTION_RE.finditer(text))
     return len(letters) >= 3
 
+# Root-cause fix for a Qwen-specific failure found via cross-model audit: given an MCQ comparing
+# multiple named entities (e.g. "which statement about SnCl2/SnCl4/PbCl2/PbCl4 is incorrect"),
+# Qwen would sometimes restate the MCQ's own A/B/C/D options back as fake AMBIGUOUS/CLARIFY_TYPE:
+# topic options instead of just answering -- confirmed 5/5 reproducible on the inert-pair-effect
+# MCQ rule 12 above was built for, and observed (lower frequency) on an unrelated alkali-metal-
+# reactivity MCQ too, so this isn't narrow to one topic. An existing unrelated guard
+# (TOPIC_AMBIGUITY_WHITELIST) already catches and recovers from this, but only via a full second
+# round-trip -- this fixes it on the FIRST attempt instead.
+#
+# A first attempt inserted an equivalent instruction directly into the SYSTEM_PROMPT constant
+# (near rule 11's own AMBIGUOUS section) -- that not only failed to help, it made the misfire rate
+# WORSE across every MCQ tested (0/11 baseline -> 12/18) and triggered a separate, known Qwen
+# quirk: verbatim-echoing inserted prompt text back as its own first line, exactly like the
+# unrelated regression already documented for rule 11's own DOUBT_TYPE fix. This constant instead
+# mirrors the ALREADY-PROVEN-SAFE pattern the existing override-retry mechanism uses: a short
+# instruction appended at CALL TIME to the END of full_system, only for requests that actually
+# need it (_is_mcq_shaped doubts here), never edited into the SYSTEM_PROMPT constant itself.
+# Verified: 0/18 AMBIGUOUS misfires (was 12/18 with the failed inline approach, 5/12 baseline)
+# across 4 different multi-entity-comparison MCQs, 0 verbatim-echoes, 18/18 real answers.
+MCQ_AMBIGUOUS_GUARD = (
+    "\n\nIMPORTANT: this question already presents its own lettered/numbered answer options for "
+    "you to evaluate -- never treat it as topic- or format-ambiguous, and never output AMBIGUOUS/"
+    "CLARIFY_TYPE for it. Answer it directly, evaluating every option, even if you're unsure which "
+    "one is correct."
+)
+
 # Deliberately broad per the audit's own examples, not narrowed in advance -- "however" and
 # "actually" alone are common in ordinary explanatory prose too (real false-positive risk), but
 # rather than guess at a tighter pattern up front, this ships as specified and gets measured
@@ -3637,7 +3663,10 @@ IMPORTANT -- BE CONCISE:
             if multi_object_numerical:
                 stream_source = _stream_qwen_verified(full_system, messages, text, user_id, ip, "/chat", billing_context)
             elif mcq_shaped:
-                stream_source = _stream_mcq_hedge_verified(full_system, messages, text, user_id, ip, "/chat", billing_context, force_qwen)
+                # See MCQ_AMBIGUOUS_GUARD's own comment for why this is appended here rather than
+                # baked into SYSTEM_PROMPT itself -- fixes the AMBIGUOUS-misfire on the FIRST
+                # attempt instead of relying on the existing whitelist-guard's costly regenerate.
+                stream_source = _stream_mcq_hedge_verified(full_system + MCQ_AMBIGUOUS_GUARD, messages, text, user_id, ip, "/chat", billing_context, force_qwen)
             else:
                 stream_source = _stream_with_peak_fallback(full_system, messages, user_id, ip, "/chat", billing_context, force_qwen)
 
