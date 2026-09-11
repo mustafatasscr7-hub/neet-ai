@@ -62,7 +62,6 @@
     body.light-mode .message-bubble.ai strong { color: #0d0d0d !important; }
     body.light-mode .message-bubble.ai li { color: #333333 !important; }
     body.light-mode .message-bubble.ai code { background: #e8e8e8 !important; }
-    body.light-mode .avatar.user { background: #e4e4ea !important; border-color: #d5d5dd !important; }
     body.light-mode .message-time { color: rgba(0,0,0,0.35) !important; }
     body.light-mode .logo-brand { color: #0d0d0d !important; }
 
@@ -822,7 +821,6 @@
     .message-row.user { flex-direction: row-reverse; }
     .avatar { width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 14px; flex-shrink: 0; margin-top: 2px; }
     .avatar.ai img { width: 100%; height: 100%; object-fit: contain; display: block; }
-    .avatar.user { background: #1e1e1e; border: 1px solid #2a2a2a; }
     .message-content { flex: 1; max-width: 680px; min-width: 0; }
     .message-content.user { display: flex; flex-direction: column; align-items: flex-end; width: fit-content; align-self: flex-end; }
     /* overflow-wrap:anywhere (not just break-word) because break-word only wraps a long token if
@@ -3988,12 +3986,15 @@ let selectedImages = [];
       const row = document.createElement('div');
       row.className = 'message-row ' + role;
       if (msgIndex !== undefined) row.dataset.msgIndex = msgIndex;
-      const avatar = document.createElement('div');
-      avatar.className = 'avatar ' + role;
+      // No avatar for user messages -- matches the reference chat UIs this was modeled after
+      // (e.g. Claude's), which show just the bubble with no person icon. The AI avatar (logo)
+      // is unaffected. .message-row's own `gap` only applies between actual flex children, so
+      // simply never creating this element for user rows leaves no leftover empty space.
+      let avatar = null;
       if (role === 'ai') {
+        avatar = document.createElement('div');
+        avatar.className = 'avatar ai';
         avatar.innerHTML = '<img src="assets/logo.svg" alt="NEET-AI" width="32" height="32" />';
-      } else {
-        avatar.textContent = '👤';
       }
       const contentWrapper = document.createElement('div');
       contentWrapper.className = 'message-content ' + role;
@@ -4120,7 +4121,7 @@ let selectedImages = [];
         contentWrapper.appendChild(buildActionsDiv('user', timeStr));
       }
     
-      row.appendChild(avatar);
+      if (avatar) row.appendChild(avatar);
       row.appendChild(contentWrapper);
       chatWindow.appendChild(row);
       scrollBottom();
@@ -6019,7 +6020,7 @@ function plainTextFromMarkdown(text) {
         imgRow.className = 'message-row user';
         imgRow.dataset.msgIndex = userIndex;
         const thumbs = selectedImages.map(img => `<img class="chat-img-thumb" src="${img.data}" style="max-width:200px;max-height:200px;border-radius:12px;border:1px solid #2a2a3a;display:block;cursor:zoom-in;"/>`).join('');
-       imgRow.innerHTML = `<div class="avatar user">👤</div><div class="message-content user"><div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;"><div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end;">${thumbs}</div>${text ? `<div class="message-bubble user">${text}</div>` : ''}</div></div>`;
+       imgRow.innerHTML = `<div class="message-content user"><div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;"><div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end;">${thumbs}</div>${text ? `<div class="message-bubble user">${text}</div>` : ''}</div></div>`;
         imgRow.querySelectorAll('.chat-img-thumb').forEach(el => { el.onclick = () => showImageLightbox(el.src); });
         chatWindow.appendChild(imgRow);
         scrollBottom();
