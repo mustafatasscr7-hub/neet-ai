@@ -3276,9 +3276,10 @@ _NCERT_CHAPTER_LINE_PREFIX = "📚 Chapter:"
 _CITATION_LOCK_BUFFER_CAP = 220
 
 async def _force_citation_when_no_retrieval(stream, has_retrieval: bool):
-    """Wraps a text-doubt's answer stream and deterministically strips whatever the model wrote
-    on the 📚 Chapter: line when search_ncert() found nothing for this doubt, rather than
-    trusting the model's own citation. Originally replaced it with a standard "Chapter: Not
+    """Wraps a doubt's answer stream (text -- DeepSeek/Qwen -- or image/PDF -- Gemini, both use
+    this same wrapper) and deterministically strips whatever the model wrote on the 📚 Chapter:
+    line when search_ncert() found nothing for this doubt, rather than trusting the model's own
+    citation. Originally replaced it with a standard "Chapter: Not
     available -- answering from general knowledge..." fallback sentence instead of removing it
     -- a live audit had found the model fabricating specific wrong citations otherwise (e.g.
     "NCERT Class X, Chapter 5" for osmosis, or claiming a real NCERT topic like the
@@ -3570,7 +3571,11 @@ IMPORTANT -- BE CONCISE:
                 )
                 for img in images
             ]
-            async for chunk in _stream_gemini_media(image_parts, "image", media_files, full_system, user_message, user_id, ip):
+            # Same no-fabrication guarantee the text branch below already has -- without this,
+            # an image doubt with no NCERT retrieval match could show a confidently wrong
+            # citation with nothing catching it, since this branch returns before ever reaching
+            # the text branch's own _force_citation_when_no_retrieval call.
+            async for chunk in _force_citation_when_no_retrieval(_stream_gemini_media(image_parts, "image", media_files, full_system, user_message, user_id, ip), bool(results)):
                 yield chunk
             return
         elif pdf:
@@ -3579,7 +3584,7 @@ IMPORTANT -- BE CONCISE:
             # 3 real PDFs, ~10x cheaper input tokens than Claude Sonnet's pricing).
             media_files = _hash_media_files(None, pdf)
             pdf_part = genai_types.Part.from_bytes(data=base64.b64decode(pdf), mime_type="application/pdf")
-            async for chunk in _stream_gemini_media([pdf_part], "pdf", media_files, full_system, user_message, user_id, ip):
+            async for chunk in _force_citation_when_no_retrieval(_stream_gemini_media([pdf_part], "pdf", media_files, full_system, user_message, user_id, ip), bool(results)):
                 yield chunk
             return
         else:
