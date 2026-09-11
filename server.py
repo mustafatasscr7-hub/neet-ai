@@ -3392,6 +3392,31 @@ for _k in ("kya haal chal", "kya haal hai", "kya haal", "kaise ho", "kaisa hai",
     _SMALLTALK_RESPONSES[_k] = "I'm doing great, thanks for asking! What NEET topic are we working on today?"
 del _k
 
+_GIBBERISH_MIN_LEN = 6
+_VOWEL_RE = re.compile(r"[aeiou]")
+
+def _looks_like_gibberish(text: str) -> bool:
+    """Conservative, purely structural check for a single random keyboard-mash token (e.g.
+    "ngnjgtjr") -- deliberately narrow, not a general nonsense detector, so it can never misfire
+    on a real doubt:
+      - only a single alphabetic token with no spaces/digits/punctuation ever reaches this check,
+        so a whole sentence, or a token like "SN1"/"pH7", is never even considered.
+      - length gated at _GIBBERISH_MIN_LEN so short real abbreviations (DNA, RNA, ATP, ...) are
+        exempt by construction, not by an exception list that would need maintaining.
+      - non-ASCII (e.g. Devanagari) is exempt too -- the vowel check below is Latin-alphabet-only
+        and would misclassify every real Hindi-script word as gibberish otherwise.
+      - flags on vowel RATIO rather than mere absence, so a real but consonant-heavy truncation
+        (e.g. "eubact", "ubacteriaa" -- both ~30-60% vowels) still clears this easily; almost no
+        real English/Hinglish word of this length sits below the 20% cutoff used here.
+    """
+    stripped = (text or "").strip()
+    if not stripped or not stripped.isascii() or not stripped.isalpha():
+        return False
+    if len(stripped) < _GIBBERISH_MIN_LEN:
+        return False
+    vowel_count = len(_VOWEL_RE.findall(stripped.lower()))
+    return (vowel_count / len(stripped)) < 0.2
+
 async def stream_response(text: str, history: list = [], images: list = [], pdf: str = None, answer_style: str = "detailed", student_name: str = "", language: str = "en", user_id: str = "", personalize: bool = True, skip_cache: bool = False, ip: str = ""):
     images = (images or [])[:3]
     # Fast path for exact-match greeting/smalltalk, before ANY of the expensive work below --
@@ -3408,6 +3433,11 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
         smalltalk_reply = _SMALLTALK_RESPONSES.get(_normalize_smalltalk(text))
         if smalltalk_reply is not None:
             yield f"DOUBT_TYPE: conversational\n\n{smalltalk_reply}"
+            return
+        # Same fast-path shape as smalltalk above, for the opposite reason: this clearly isn't a
+        # real doubt either, so there's nothing for NCERT retrieval or the model to do with it.
+        if _looks_like_gibberish(text):
+            yield "DOUBT_TYPE: conversational\n\nThat doesn't look like a real question — try asking about a NEET topic!"
             return
     import hashlib
     # Personalized answers are specific to this student and must never be served from —
