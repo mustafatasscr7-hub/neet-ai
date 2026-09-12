@@ -209,6 +209,12 @@
        same block as mocktest.html/pyqbank.html/personalised-test.html, kept identical so the
        feature looks and behaves the same everywhere a question appears. */
     .difficulty-badge { display: inline-block; padding: 1.5px 7px; border-radius: 999px; font-size: 10.5px; font-weight: 500; letter-spacing: 0; line-height: 1.5; }
+    /* Placeholder for a not-yet-classified PYQ (see showPYQModal/ensureDifficulties): sized to
+       roughly match "Moderate", the widest real label, so the swap-in once classification
+       resolves doesn't visibly shift surrounding layout. */
+    .difficulty-badge-pending { width: 46px; height: 14px; background: rgba(255,255,255,0.06); animation: diffBadgePulse 1.3s ease-in-out infinite; }
+    body.light-mode .difficulty-badge-pending { background: rgba(0,0,0,0.06); }
+    @keyframes diffBadgePulse { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
     .report-flag-btn { background: none; border: none; cursor: pointer; display: inline-flex; align-items: center; opacity: 0.2; padding: 2px 4px; margin-left: auto; font-size: 10px; font-weight: 500; color: inherit; transition: opacity 0.15s, color 0.15s; }
     .report-flag-btn:hover, .report-flag-btn:focus-visible { opacity: 1; color: #ef4444; text-decoration: underline; }
     .report-popup { position: fixed; z-index: 2000; background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 10px; padding: 12px; width: 220px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); font-size: 12px; }
@@ -2933,20 +2939,34 @@ let selectedImages = [];
 
     // Difficulty badge -- computed once by DeepSeek and cached permanently in the DB, never
     // recomputed. Soft-tag treatment: translucent fill of the color, full-strength color for text.
-    function difficultyBadgeHtml(difficulty) {
+    // pyqId is only ever passed by metaActionsHtml, which itself only ever runs when q.id is
+    // truthy (see its own call site) -- always present in practice, but the empty-string
+    // fallback keeps this safe to call standalone too.
+    function difficultyBadgeHtml(difficulty, pyqId) {
       const COLORS = { Easy: '52,182,115', Moderate: '201,144,47', Difficult: '217,100,90' };
-      if (!difficulty || !COLORS[difficulty]) return '';
-      const rgb = COLORS[difficulty];
-      return `<span class="difficulty-badge" style="background:rgba(${rgb},0.14);color:rgb(${rgb});border:1px solid rgba(${rgb},0.3);">${difficulty}</span>`;
+      if (difficulty && COLORS[difficulty]) {
+        const rgb = COLORS[difficulty];
+        return `<span class="difficulty-badge" style="background:rgba(${rgb},0.14);color:rgb(${rgb});border:1px solid rgba(${rgb},0.3);">${difficulty}</span>`;
+      }
+      // Not classified yet -- showPYQModal kicks off ensureDifficulties in the background rather
+      // than blocking the modal on it (see that function's own comment), so this placeholder pill
+      // stands in until patchPyqDifficultyBadges swaps it for the real badge, or quietly drops it
+      // if classification fails. Never blocks, never errors -- just shows nothing extra either way.
+      return pyqId ? `<span class="difficulty-badge difficulty-badge-pending" data-diff-pending="${pyqId}"></span>` : '';
     }
 
     function metaActionsHtml(difficulty, pyqId) {
-      return `<span style="margin-left:auto;display:inline-flex;align-items:center;gap:10px;">${difficultyBadgeHtml(difficulty)}${reportFlagBtnHtml(pyqId)}</span>`;
+      return `<span style="margin-left:auto;display:inline-flex;align-items:center;gap:10px;">${difficultyBadgeHtml(difficulty, pyqId)}${reportFlagBtnHtml(pyqId)}</span>`;
     }
 
-    // The on-display trigger: called right after a batch of questions is fetched, before first
-    // render. Already-classified questions cost zero DeepSeek calls -- the backend only
-    // classifies (and caches) the ones that come back with difficulty still null.
+    // The on-display trigger: called right after a batch of questions is fetched. Already-
+    // classified questions cost zero DeepSeek calls -- the backend only classifies (and caches)
+    // the ones that come back with difficulty still null. showPYQModal calls this WITHOUT
+    // awaiting it (see its own comment) so a live DeepSeek classify call never blocks the modal
+    // itself from appearing -- callers that do want to wait (mocktest.html, pyqbank.html, etc.,
+    // which render a results grid rather than a single on-demand modal) are unaffected, since
+    // this function's own contract -- resolve once `questions` is patched in place -- hasn't
+    // changed, only whether a given caller chooses to await it.
     async function ensureDifficulties(questions, table, idField = 'id') {
       const ids = [...new Set((questions || []).map(q => q[idField]).filter(Boolean).map(String))];
       if (!ids.length) return;
@@ -2963,6 +2983,27 @@ let selectedImages = [];
       } catch (e) {
         console.error('difficulty classify failed', e);
       }
+    }
+
+    // Swaps each pending placeholder pill (data-diff-pending="ID") for the real badge now sitting
+    // in `questions` (already patched in place by ensureDifficulties by the time this runs), or
+    // quietly removes it if classification failed -- an unrated question shows no badge, not a
+    // broken one, same as it always has for genuinely never-classified questions before this
+    // feature existed. querySelectorAll (not getElementById) because the same question can be
+    // showing in more than one place at once in principle, and because the PYQ modal may have
+    // already been closed by the time this resolves -- an empty NodeList is simply a no-op.
+    function patchPyqDifficultyBadges(questions) {
+      (questions || []).forEach(q => {
+        if (!q.id) return;
+        document.querySelectorAll(`[data-diff-pending="${q.id}"]`).forEach(el => {
+          // Explicit '' (not difficultyBadgeHtml(q.difficulty, q.id)) when still unclassified --
+          // that call would just re-emit another pending placeholder with the same data-attribute,
+          // leaving the pill pulsing forever on a genuine classify failure instead of degrading to
+          // no badge at all. outerHTML = '' removes the element cleanly, same end state
+          // difficultyBadgeHtml already produces for any other never-classified question.
+          el.outerHTML = q.difficulty ? difficultyBadgeHtml(q.difficulty, q.id) : '';
+        });
+      });
     }
 
     // Shared by the PYQ modal's option-click handler and its Show Solution button --
@@ -3220,7 +3261,15 @@ let selectedImages = [];
 
       // Works whether or not the match_pyq RPC's own column list already includes difficulty --
       // already-set values cost zero DeepSeek calls either way, this just fills in anything null.
-      await ensureDifficulties(questions, 'pyq');
+      // Deliberately NOT awaited: ~37% of the PYQ bank has no cached difficulty yet, and with 5
+      // results per search that means most real opens would otherwise block the entire modal on
+      // a live DeepSeek classify call (measured ~2s) before a student sees anything at all. The
+      // modal now renders immediately with whatever's already cached; each still-unclassified
+      // question gets a pulsing placeholder pill (difficultyBadgeHtml) that patchPyqDifficultyBadges
+      // swaps for the real badge -- or quietly drops, on failure -- once this resolves in the
+      // background. ensureDifficulties already fails open internally (try/catch, never throws),
+      // so there's nothing to catch here.
+      ensureDifficulties(questions, 'pyq').then(() => patchPyqDifficultyBadges(questions));
 
       const modal = document.createElement('div');
       modal.id = 'pyq-modal';
