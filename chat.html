@@ -3006,6 +3006,46 @@ let selectedImages = [];
       });
     }
 
+    // Builds a fully-wired "Previous Year Questions" button -- same fetch, same showPYQModal
+    // trigger, same button-state handling (loading/found/empty/error, always re-enabled) -- shared
+    // by every place a PYQ button appears: a fresh AI answer, switching between message versions,
+    // and the live-streaming completion handler. Previously each of those three had its own
+    // byte-for-byte copy of this ~25-line block, so a fix like the chapter-suffix or difficulty-
+    // blocking changes elsewhere in this file had to be manually mirrored into all three -- easy
+    // to silently miss one. searchText/chapterText are whatever each call site already had on hand
+    // (the student's own question text, and the answer's own citation-derived chapter, if any).
+    function createPyqButton(searchText, chapterText) {
+      const pyqBtn = document.createElement('button');
+      pyqBtn.className = 'pyq-btn';
+      pyqBtn.innerHTML = '📋 Previous Year Questions';
+      pyqBtn.onclick = async function() {
+        pyqBtn.disabled = true;
+        pyqBtn.innerHTML = '⏳ Searching PYQs...';
+        try {
+          const res = await fetch(`${API_BASE}/pyq`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: buildPyqSearchQuery(searchText, chapterText), chapter: chapterText || '' })
+          });
+          const data = await res.json();
+          if (data.pyqs && data.pyqs.length > 0) {
+            showPYQModal(data.pyqs, data.match_type);
+            pyqBtn.innerHTML = '📋 Previous Year Questions';
+          } else {
+            pyqBtn.innerHTML = '🔍 No PYQs found for this topic yet';
+          }
+        } catch(e) {
+          pyqBtn.innerHTML = '❌ Error loading';
+        } finally {
+          // Re-enable in every outcome (success, no-results, error) -- previously only the
+          // success branch reset this, so a "no results"/error click permanently disabled
+          // the button with no way to retry.
+          pyqBtn.disabled = false;
+        }
+      };
+      return pyqBtn;
+    }
+
     // Shared by the PYQ modal's option-click handler and its Show Solution button --
     // correct_answer is blank for a real chunk of the PYQ bank (never verified during
     // extraction). Resolves it for real via DeepSeek the first time anyone needs it for a given
@@ -4161,34 +4201,7 @@ let selectedImages = [];
             actionsRow.appendChild(diagramBtn);
           }
 
-          const pyqBtn = document.createElement('button');
-          pyqBtn.className = 'pyq-btn';
-          pyqBtn.innerHTML = '📋 Previous Year Questions';
-          pyqBtn.onclick = async function() {
-            pyqBtn.disabled = true;
-            pyqBtn.innerHTML = '⏳ Searching PYQs...';
-            try {
-              const res = await fetch(`${API_BASE}/pyq`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ text: buildPyqSearchQuery(userQuestion, chapterText), chapter: chapterText || '' })
-              });
-              const data = await res.json();
-              if (data.pyqs && data.pyqs.length > 0) {
-                showPYQModal(data.pyqs, data.match_type);
-                pyqBtn.innerHTML = '📋 Previous Year Questions';
-              } else {
-                pyqBtn.innerHTML = '🔍 No PYQs found for this topic yet';
-              }
-            } catch(e) {
-              pyqBtn.innerHTML = '❌ Error loading';
-            } finally {
-              // Re-enable in every outcome (success, no-results, error) -- previously only the
-              // success branch reset this, so a "no results"/error click permanently disabled
-              // the button with no way to retry.
-              pyqBtn.disabled = false;
-            }
-          };
+          const pyqBtn = createPyqButton(userQuestion, chapterText);
           actionsRow.appendChild(pyqBtn);
 
           bubble.appendChild(actionsRow);
@@ -4378,34 +4391,7 @@ function plainTextFromMarkdown(text) {
           diagramBtn.onclick = () => handleShowDiagramClick(diagramBtn, pyqSearchText, v.text);
           actionsRow.appendChild(diagramBtn);
         }
-        const pyqBtn = document.createElement('button');
-        pyqBtn.className = 'pyq-btn';
-        pyqBtn.innerHTML = '📋 Previous Year Questions';
-        pyqBtn.onclick = async function() {
-          pyqBtn.disabled = true;
-          pyqBtn.innerHTML = '⏳ Searching PYQs...';
-          try {
-            const res = await fetch(`${API_BASE}/pyq`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ text: buildPyqSearchQuery(pyqSearchText, chapterText), chapter: chapterText || '' })
-            });
-            const data = await res.json();
-            if (data.pyqs && data.pyqs.length > 0) {
-              showPYQModal(data.pyqs, data.match_type);
-              pyqBtn.innerHTML = '📋 Previous Year Questions';
-            } else {
-              pyqBtn.innerHTML = '🔍 No PYQs found for this topic yet';
-            }
-          } catch(e) {
-            pyqBtn.innerHTML = '❌ Error loading';
-          } finally {
-            // Re-enable in every outcome (success, no-results, error) -- previously only the
-            // success branch reset this, so a "no results"/error click permanently disabled
-            // the button with no way to retry.
-            pyqBtn.disabled = false;
-          }
-        };
+        const pyqBtn = createPyqButton(pyqSearchText, chapterText);
         actionsRow.appendChild(pyqBtn);
         bubble.appendChild(actionsRow);
         }
@@ -6776,34 +6762,7 @@ function plainTextFromMarkdown(text) {
           actionsRow.appendChild(diagramBtn);
         }
 
-        const pyqBtn = document.createElement('button');
-        pyqBtn.className = 'pyq-btn';
-        pyqBtn.innerHTML = '📋 Previous Year Questions';
-        pyqBtn.onclick = async function() {
-          pyqBtn.disabled = true;
-          pyqBtn.innerHTML = '⏳ Searching PYQs...';
-          try {
-            const res = await fetch(`${API_BASE}/pyq`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ text: buildPyqSearchQuery(pyqSearchText, chapterText), chapter: chapterText || '' })
-            });
-            const data = await res.json();
-            if (data.pyqs && data.pyqs.length > 0) {
-              showPYQModal(data.pyqs, data.match_type);
-              pyqBtn.innerHTML = '📋 Previous Year Questions';
-            } else {
-              pyqBtn.innerHTML = '🔍 No PYQs found for this topic yet';
-            }
-          } catch(e) {
-            pyqBtn.innerHTML = '❌ Error loading';
-          } finally {
-            // Re-enable in every outcome (success, no-results, error) -- previously only the
-            // success branch reset this, so a "no results"/error click permanently disabled
-            // the button with no way to retry.
-            pyqBtn.disabled = false;
-          }
-        };
+        const pyqBtn = createPyqButton(pyqSearchText, chapterText);
         actionsRow.appendChild(pyqBtn);
 
         bubble.appendChild(actionsRow);
