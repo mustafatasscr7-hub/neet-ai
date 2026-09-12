@@ -2017,13 +2017,27 @@ def _generate_space_merge_variants(text: str) -> list:
 # were NOT independently measured against real query data the way English NCERT was.
 _OFFTOPIC_GATE_MARGIN = 0.05
 
-async def _match_with_merge_fallback(query: str, embed_fn, search_fn, offtopic_gate_threshold: float = None):
+async def _match_with_merge_fallback(query: str, embed_fn, search_fn, offtopic_gate_threshold: float = None, variant_source: str = None, variant_transform=None):
     """embed_fn(text) -> embedding, sync or async (both handled via iscoroutine on the call
     result). search_fn(embedding) -> awaitable returning (results, raw_top_score): results is the
     already-threshold-and-label-filtered list exactly as before; raw_top_score is the best
     similarity score seen BEFORE the real threshold filter (None if literally no rows came back at
     all), used only for the off-topic pre-check gate below. Tries the raw query first; only on an
     empty result does it retry every single-adjacent-word-merge variant.
+
+    variant_source: text to generate merge variants FROM, if different from the query actually
+    embedded/searched -- defaults to `query` itself (every existing caller: NCERT English/Hindi).
+    search_pyq passes just the student-typed portion here, excluding the machine-appended chapter
+    suffix (see its own call site for why): a typo can only ever occur in text the student typed,
+    so generating merge variants across a suffix that's copied verbatim from the AI's own citation
+    line can never fix anything, only add pointless variants (and their embed+search cost) to the
+    batch below.
+
+    variant_transform: applied to each generated variant string right before it's embedded --
+    defaults to identity. search_pyq uses this to re-append the chapter suffix variant_source
+    just had stripped off, so every variant actually embedded/searched still carries the same
+    chapter context the raw query did; only which word-pairs are considered for merging shrinks,
+    never what gets searched once a candidate is chosen.
 
     Off-topic pre-check gate: if the raw query's own first attempt comes back empty AND its raw
     top score is below offtopic_gate_threshold, the retry loop is skipped entirely -- returns empty
@@ -2061,12 +2075,12 @@ async def _match_with_merge_fallback(query: str, embed_fn, search_fn, offtopic_g
     if offtopic_gate_threshold is not None and raw_top_score is not None and raw_top_score < offtopic_gate_threshold:
         return results
 
-    variants = _generate_space_merge_variants(query)
+    variants = _generate_space_merge_variants(variant_source if variant_source is not None else query)
     if not variants:
         return results
 
     async def _try_variant(variant):
-        v_embedding = await _embed(variant)
+        v_embedding = await _embed(variant_transform(variant) if variant_transform else variant)
         v_results, _ = await search_fn(v_embedding)
         return v_results
 
@@ -2273,6 +2287,23 @@ async def search_pyq(query: str, limit: int = 5, chapter: str = ""):
         "Authorization": f"Bearer {SUPABASE_KEY}",
         "Content-Type": "application/json"
     }
+    # chat.html's PYQ button sends `query` as buildPyqSearchQuery's own "{studentText} — {chapter}"
+    # concatenation (chapter copied verbatim from the answer's own citation line, never typed by
+    # the student) -- confirmed live this was inflating the merge-variant retry below to 11-17
+    # variants for realistic informal phrasing (a 7-word doubt + 4-word chapter name = 11 variants
+    # from an 11-word combined string, most of them merging word-pairs INSIDE the chapter name,
+    # which can never contain a typo since no student ever typed it). Recovering just the
+    # student-typed portion here bounds variant generation to only text that could plausibly have
+    # one, without changing what's actually embedded/searched -- see variant_transform below,
+    # which re-appends the same suffix to every variant before it's embedded.
+    student_portion = query
+    chapter_suffix = ""
+    if chapter:
+        suffix = f" — {chapter}"
+        if query.endswith(suffix):
+            student_portion = query[: -len(suffix)]
+            chapter_suffix = suffix
+
     async def _search_at(threshold, count):
         # match_threshold=0 (raw, DB-unfiltered) + real threshold applied in Python -- same single
         # round trip, but exposes the raw top score for the off-topic gate. Gate itself
@@ -2290,7 +2321,11 @@ async def search_pyq(query: str, limit: int = 5, chapter: str = ""):
             raw_top_score = rows[0]["similarity"] if rows else None
             real_results = [r for r in rows if r.get("similarity", 0) >= threshold][:count]
             return real_results, raw_top_score
-        return await _match_with_merge_fallback(query, get_embedding, _do, threshold - _OFFTOPIC_GATE_MARGIN)
+        return await _match_with_merge_fallback(
+            query, get_embedding, _do, threshold - _OFFTOPIC_GATE_MARGIN,
+            variant_source=student_portion,
+            variant_transform=(lambda v: v + chapter_suffix) if chapter_suffix else None,
+        )
 
     results = await _search_at(PYQ_MATCH_THRESHOLD, limit)
     if results:
