@@ -1502,3 +1502,15 @@ const TRANSLATIONS = {
 };
 
 document.addEventListener('DOMContentLoaded', applyTranslations);
+
+// The NEET-AI logo <img> was draggable like any ordinary image (browsers make <img> elements
+// draggable by default) -- on chat.html in particular it's re-created dynamically many times per
+// session (every AI message, every loading indicator, the welcome screen), so a one-time
+// querySelectorAll pass at page load would miss all of those. Event delegation on 'dragstart'
+// (which bubbles) catches every logo image instead -- present at load or added afterward, on
+// every page that loads this shared file -- with no per-element attribute needed anywhere.
+document.addEventListener('dragstart', e => {
+  if (e.target.tagName === 'IMG' && e.target.src.includes('logo.svg')) {
+    e.preventDefault();
+  }
+});
