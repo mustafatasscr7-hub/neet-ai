@@ -2235,6 +2235,33 @@ OFF_TOPIC_PYQ_TERMS = {
     "prime minister", "president", "chief minister", "election",
     "movie", "bollywood", "actor", "actress", "celebrity",
     "capital of",
+    # Real calibration data (2026-09-12): a broad sweep of everyday/chit-chat phrasing (sports,
+    # movies, travel, hobbies, general logistics) confirmed this ISN'T a broad gate-calibration
+    # failure -- most such queries already score too low to match anything, exactly as intended
+    # ("how to learn guitar", "best travel destinations", "tell me a joke", etc. all correctly
+    # returned nothing). The failures are narrow and specific: a query whose vocabulary happens to
+    # lexically or semantically overlap with a real PYQ's UNRELATED subject matter. "baking a
+    # chocolate cake" scored a raw 0.30-0.33 (real, unfiltered match_pyq score) purely off sharing
+    # the word "baking" with the real Chemistry PYQ "Baking soda or baking powder is:" -- a
+    # completely different sense of the word. "how to fix a flat tire" similarly matched a real
+    # Physics disc-rolling-on-an-incline problem via incidental rolling-motion/wheel semantic
+    # proximity, with zero literal word overlap at all. Crucially, tightening PYQ_FALLBACK_THRESHOLD
+    # or _OFFTOPIC_GATE_MARGIN CANNOT fix this without also rejecting genuine matches: a real,
+    # deliberately casual-phrased query in this same test ("how to wash clothes properly") scored
+    # 0.4496 -- ABOVE the primary exact threshold entirely -- by genuinely, correctly matching a
+    # real NEET Chemistry PYQ about detergents vs soap (surfactant chemistry is real NCERT content).
+    # That score is HIGHER than the color-blindness case (0.394) this session's own PYQ_FALLBACK_
+    # THRESHOLD comment already established as a real match worth keeping -- any threshold cutting
+    # out 0.30-0.33 baking/tire noise would cut out that 0.394 case first. Two similarly-scored
+    # "everyday phrasing" collisions ("how to cook rice" -> real rice-genetics PYQs, "tips for a
+    # good night sleep" -> real sleep-hormone/circadian-rhythm PYQs) were deliberately NOT added
+    # here despite also surfacing PYQ results for a casual query, because those matches are
+    # genuinely on-syllabus content (rice genetics, melatonin/circadian rhythm are real NCERT
+    # Biology topics) -- denylisting "rice" or "sleep" would risk rejecting a real student's actual
+    # doubt on those exact topics, the same failure mode this whole denylist exists to avoid.
+    # "cake"/"tire"/"tyre" have zero real NEET-syllabus overlap (confirmed against the live pyq
+    # table: no row contains any of these words), so they're safe to block outright.
+    "cake", "tire", "tyre",
 }
 
 # Word-boundary regex, not plain substring -- a bare "in" check silently flagged any query
