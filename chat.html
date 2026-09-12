@@ -511,6 +511,17 @@
       max-height: 0;
       pointer-events: none;
     }
+    /* Collapsed-sidebar icon tooltips -- appended to document.body by JS (see
+       initSidebarTooltips), never nested inside .sidebar, for the same reason the account
+       menu's flyouts are: .sidebar has overflow:hidden (needed so the collapsed icon rail
+       clips instead of scrolling), which silently clips anything positioned to extend past
+       the sidebar's own right edge -- exactly what a tooltip pointing at a 56px icon rail
+       needs to do. */
+    .sidebar-tooltip { position: fixed; transform: translateY(-50%); background: #1e1e1e; color: #ececec; padding: 6px 12px; border-radius: 999px; font-size: 12.5px; font-family: 'Inter', sans-serif; white-space: nowrap; display: flex; align-items: center; gap: 8px; pointer-events: none; opacity: 0; visibility: hidden; transition: opacity 0.12s ease; z-index: 9999; box-shadow: 0 4px 14px rgba(0,0,0,0.45); border: 1px solid #2a2a2a; }
+    .sidebar-tooltip.visible { opacity: 1; visibility: visible; }
+    .sidebar-tooltip-shortcut { color: #888; font-size: 11px; }
+    body.light-mode .sidebar-tooltip { background: #ffffff !important; color: #16161d !important; border-color: #e0e0e5 !important; box-shadow: 0 4px 14px rgba(0,0,0,0.12) !important; }
+    body.light-mode .sidebar-tooltip-shortcut { color: #9a9aa5 !important; }
     .logo { display: flex; align-items: center; gap: 10px; padding: 6px 12px; margin-bottom: 4px; }
     /* Was an inline style="justify-content:space-between" on the element itself -- moved into CSS
        because an inline style outranks every stylesheet rule regardless of specificity, permanently
@@ -1657,11 +1668,68 @@ function toggleSearchChats() {
       // Re-sync pinnedList/pinnedLabel's inline display with the new collapsed state --
       // see refreshPinnedSectionVisibility for why that inline style has to track it.
       if (typeof refreshPinnedSectionVisibility === 'function') refreshPinnedSectionVisibility();
+      hideSidebarTooltip();
     }
 
     (function initSidebarWidth() {
       document.querySelector('.sidebar').style.width = getSavedSidebarWidth() + 'px';
     })();
+
+    // Collapsed-sidebar icon tooltips (ChatGPT-style: label + keyboard shortcut where one
+    // exists), shown only while the sidebar is actually collapsed -- an expanded sidebar
+    // already shows each item's label as text, so a tooltip would be redundant there. The
+    // element is created once and repositioned/relabeled per hover rather than one tooltip
+    // per nav item, matching the single-shared-flyout pattern .item-menu already uses.
+    let sidebarTooltipEl = null;
+    function hideSidebarTooltip() {
+      if (sidebarTooltipEl) sidebarTooltipEl.classList.remove('visible');
+    }
+    (function initSidebarTooltips() {
+      const sidebar = document.querySelector('.sidebar');
+      sidebarTooltipEl = document.createElement('div');
+      sidebarTooltipEl.className = 'sidebar-tooltip';
+      sidebarTooltipEl.innerHTML = '<span class="sidebar-tooltip-label"></span><span class="sidebar-tooltip-shortcut"></span>';
+      document.body.appendChild(sidebarTooltipEl);
+      const labelEl = sidebarTooltipEl.querySelector('.sidebar-tooltip-label');
+      const shortcutEl = sidebarTooltipEl.querySelector('.sidebar-tooltip-shortcut');
+
+      const TOOLTIP_ITEMS = [
+        { id: 'newChatBtn', ns: 'chat', key: 'newChat' },
+        { id: 'navSearch', ns: 'chat', key: 'searchChats', shortcut: 'Ctrl+K' },
+        { id: 'navChats', ns: 'chat', key: 'chatsHeading' },
+        { id: 'navPYQ', ns: 'chat', key: 'pyqBank' },
+        { id: 'navSaved', ns: 'chat', key: 'savedQuestions' },
+        { id: 'navDiagramLibrary', ns: 'chat', key: 'diagramLibrary' },
+        { id: 'navMockTests', ns: 'chat', key: 'mockTests' },
+        { id: 'navScoreboard', ns: 'chat', key: 'scoreboard' },
+      ];
+      TOOLTIP_ITEMS.forEach(({ id, ns, key, shortcut }) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener('mouseenter', () => {
+          if (!sidebar.classList.contains('collapsed')) return;
+          labelEl.textContent = t(ns, key);
+          shortcutEl.textContent = shortcut || '';
+          shortcutEl.style.display = shortcut ? '' : 'none';
+          const rect = el.getBoundingClientRect();
+          sidebarTooltipEl.style.top = (rect.top + rect.height / 2) + 'px';
+          sidebarTooltipEl.style.left = (rect.right + 10) + 'px';
+          sidebarTooltipEl.classList.add('visible');
+        });
+        el.addEventListener('mouseleave', hideSidebarTooltip);
+        el.addEventListener('click', hideSidebarTooltip);
+      });
+    })();
+
+    // Ctrl+K / Cmd+K opens search -- makes the shortcut shown in navSearch's tooltip above
+    // actually real rather than decorative. preventDefault stops the browser's own default
+    // Ctrl+K behavior (e.g. Firefox's address-bar search) from firing alongside it.
+    document.addEventListener('keydown', e => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        toggleSearchChats();
+      }
+    });
 
     (function setupSidebarResize() {
       const handle = document.getElementById('sidebarResizeHandle');
