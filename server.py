@@ -2257,7 +2257,7 @@ PYQ_CHAPTER_FALLBACK_LIMIT = 6
 PYQ_CARD_COLUMNS = "id,subject,chapter,year,question,option_a,option_b,option_c,option_d,correct_answer,difficulty,diagram_url,option_a_diagram_url,option_b_diagram_url,option_c_diagram_url,option_d_diagram_url"
 
 async def _backfill_pyq_chapters(results: list, headers: dict) -> list:
-    """match_pyq (the RPC _search_at below calls into) doesn't select/return a chapter column at
+    """match_pyq (the RPC search_pyq below calls into) doesn't select/return a chapter column at
     all -- confirmed live against the real RPC response shape. Every question a student sees via
     chat.html's PYQ modal flows through this RPC, so its own "Save" button was always writing
     chapter=null to saved_questions, and Saved Questions had nothing to show for those rows (the
@@ -2294,8 +2294,8 @@ async def search_pyq(query: str, limit: int = 5, chapter: str = ""):
     # from an 11-word combined string, most of them merging word-pairs INSIDE the chapter name,
     # which can never contain a typo since no student ever typed it). Recovering just the
     # student-typed portion here bounds variant generation to only text that could plausibly have
-    # one, without changing what's actually embedded/searched -- see variant_transform below,
-    # which re-appends the same suffix to every variant before it's embedded.
+    # one, without changing what's actually embedded/searched -- see the chapter_suffix re-append
+    # below, which restores the same suffix to every variant before it's embedded.
     student_portion = query
     chapter_suffix = ""
     if chapter:
@@ -2304,38 +2304,82 @@ async def search_pyq(query: str, limit: int = 5, chapter: str = ""):
             student_portion = query[: -len(suffix)]
             chapter_suffix = suffix
 
-    async def _search_at(threshold, count):
-        # match_threshold=0 (raw, DB-unfiltered) + real threshold applied in Python -- same single
-        # round trip, but exposes the raw top score for the off-topic gate. Gate itself
-        # (threshold - _OFFTOPIC_GATE_MARGIN) is the same general principle validated for English
-        # NCERT, not independently re-measured for PYQ's own corpus/thresholds.
-        async def _do(embedding):
-            response = await async_client.post(
-                f"{SUPABASE_URL}/rest/v1/rpc/match_pyq",
-                headers=headers,
-                json={"query_embedding": embedding, "match_threshold": 0, "match_count": max(count, 10)}
-            )
-            if response.status_code != 200:
-                return [], None
-            rows = response.json()
-            raw_top_score = rows[0]["similarity"] if rows else None
-            real_results = [r for r in rows if r.get("similarity", 0) >= threshold][:count]
-            return real_results, raw_top_score
-        return await _match_with_merge_fallback(
-            query, get_embedding, _do, threshold - _OFFTOPIC_GATE_MARGIN,
-            variant_source=student_portion,
-            variant_transform=(lambda v: v + chapter_suffix) if chapter_suffix else None,
+    # match_threshold=0 (raw, DB-unfiltered) + both real thresholds applied in Python against the
+    # SAME row set -- previously the exact and "related" tiers were two fully independent
+    # _search_at() calls that each re-embedded and re-queried the identical query text (measured
+    # live: 6 embedding + 6 RPC calls, 2.1s, for a query whose real ceiling never clears the exact
+    # threshold). match_pyq's own ORDER BY already ranks by similarity desc, so fetching enough
+    # rows up front to cover the wider "related" limit means the exact tier's raw attempt already
+    # contains everything the related tier could ever need -- nothing here is ever fetched twice.
+    fetch_count = max(limit, PYQ_FALLBACK_LIMIT, 10)
+
+    async def _embed(text):
+        result = get_embedding(text)
+        return await result if asyncio.iscoroutine(result) else result
+
+    async def _raw_rows(embedding):
+        response = await async_client.post(
+            f"{SUPABASE_URL}/rest/v1/rpc/match_pyq",
+            headers=headers,
+            json={"query_embedding": embedding, "match_threshold": 0, "match_count": fetch_count}
         )
+        if response.status_code != 200:
+            return [], None
+        rows = response.json()
+        raw_top_score = rows[0]["similarity"] if rows else None
+        return rows, raw_top_score
 
-    results = await _search_at(PYQ_MATCH_THRESHOLD, limit)
-    if results:
-        return await _backfill_pyq_chapters(results, headers), "exact"
+    def _filter(rows, threshold, count):
+        return [r for r in rows if r.get("similarity", 0) >= threshold][:count]
 
-    # No real match even after the typo/spacing merge-variant fallback inside _search_at -- try
-    # once more at the relaxed "related, not exact" threshold before giving up entirely.
-    fallback_results = await _search_at(PYQ_FALLBACK_THRESHOLD, PYQ_FALLBACK_LIMIT)
-    if fallback_results:
-        return await _backfill_pyq_chapters(fallback_results, headers), "related"
+    embedding = await _embed(query)
+    rows, raw_top_score = await _raw_rows(embedding)
+
+    exact_results = _filter(rows, PYQ_MATCH_THRESHOLD, limit)
+    if exact_results:
+        return await _backfill_pyq_chapters(exact_results, headers), "exact"
+
+    # Real calibration data (see PYQ_FALLBACK_THRESHOLD's own comment above): a raw score already
+    # at/above the fallback threshold but below the exact one (0.30-0.4) is a genuine, capped
+    # relevance ceiling -- e.g. "what causes color blindness genetically" tops out at a real 0.394
+    # no matter how it's phrased -- not a merge-word typo the retry loop below could ever fix.
+    # Recognizing that here and returning the SAME raw response's fallback-filtered rows directly
+    # (zero extra network calls) instead of first burning a full merge-variant embed+RPC storm
+    # chasing a typo that isn't the real issue is a deliberate trade-off: a genuine typo'd query
+    # that would otherwise have been upgraded from "related" to "exact" by a merge variant no
+    # longer gets that chance in this band. Measured live: this specific query dropped from 6
+    # embeds + 6 RPCs (2.1s) to 1 embed + 1 RPC.
+    if raw_top_score is not None and raw_top_score >= PYQ_FALLBACK_THRESHOLD:
+        fallback_results = _filter(rows, PYQ_FALLBACK_THRESHOLD, PYQ_FALLBACK_LIMIT)
+        if fallback_results:
+            return await _backfill_pyq_chapters(fallback_results, headers), "related"
+
+    # Below the fallback threshold: gate on the same off-topic margin the fallback tier's own
+    # merge-variant retry always used (_OFFTOPIC_GATE_MARGIN below PYQ_FALLBACK_THRESHOLD) -- a
+    # score this low is unlikely to be a real match no matter how the query is re-split, so skip
+    # straight to the chapter-ilike tier rather than spending a merge-variant storm confirming
+    # that. Above this gate (but still below the fallback threshold itself), a real spacing/merge
+    # typo could plausibly be suppressing an otherwise-real match, so it's still worth retrying --
+    # same reasoning _match_with_merge_fallback already applies for NCERT, evaluated once here
+    # across both PYQ thresholds at once instead of duplicated per-tier.
+    offtopic_gate = PYQ_FALLBACK_THRESHOLD - _OFFTOPIC_GATE_MARGIN
+    if raw_top_score is None or raw_top_score >= offtopic_gate:
+        variants = _generate_space_merge_variants(student_portion)
+        if variants:
+            async def _try_variant(variant):
+                v_text = variant + chapter_suffix if chapter_suffix else variant
+                v_embedding = await _embed(v_text)
+                v_rows, _ = await _raw_rows(v_embedding)
+                return v_rows
+            variant_rows_list = await asyncio.gather(*[_try_variant(v) for v in variants])
+            for v_rows in variant_rows_list:
+                v_exact = _filter(v_rows, PYQ_MATCH_THRESHOLD, limit)
+                if v_exact:
+                    return await _backfill_pyq_chapters(v_exact, headers), "exact"
+            for v_rows in variant_rows_list:
+                v_related = _filter(v_rows, PYQ_FALLBACK_THRESHOLD, PYQ_FALLBACK_LIMIT)
+                if v_related:
+                    return await _backfill_pyq_chapters(v_related, headers), "related"
 
     # Both semantic tiers came up empty (either no embedded rows are close at all, or this
     # specific query embeds poorly -- e.g. a very short/generic doubt). Rather than a dead-end
