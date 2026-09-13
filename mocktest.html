@@ -142,13 +142,11 @@
     /* ===== LIGHT MODE ===== */
     /* Choose-your-test cards -- dark, muted panel matching the .subject-card/.class-card
        language used on pyqbank.html, in place of the old solid colour-block + glow. Colour is
-       now confined to a small icon badge (--color custom property, same radial-gradient-behind-
-       emoji treatment as pyqbank's .subject-icon-badge) and the hover border tint, not the whole
-       card surface. */
+       confined to the hover border tint, not the whole card surface (the decorative emoji icon
+       badge that used to sit above the title was removed -- no replacement icon requested). */
     .choose-test-card { flex: 1; min-width: 240px; background: #111; border: 1px solid #1e1e1e; color: #ececec; padding: 32px 24px; border-radius: 16px; cursor: pointer; font-family: Inter, sans-serif; transition: border-color 0.2s ease, background 0.2s ease, transform 0.15s ease; text-align: center; }
     .choose-test-card:hover { border-color: var(--color); background: #151515; transform: translateY(-2px); }
     .choose-test-card:active { transform: translateY(0) scale(0.98); }
-    .choose-test-icon-badge { width: 56px; height: 56px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 14px; background: radial-gradient(circle, var(--color)29, var(--color)08); font-size: 26px; }
     .choose-test-title { color: #ececec; }
     .choose-test-meta { color: #999; }
     .ctc-blue { --color: #4f8ef7; }
@@ -365,12 +363,10 @@
         <h1 class="choose-test-heading" style="font-size:26px;font-weight:800;margin-bottom:36px;" data-i18n="mocktest.chooseTest">Choose Your Test</h1>
         <div style="display:flex;gap:20px;flex-wrap:wrap;justify-content:center;">
           <button class="choose-test-card ctc-blue" onclick="startTest()">
-            <div class="choose-test-icon-badge">📝</div>
             <div class="choose-test-title" style="font-size:20px;font-weight:800;margin-bottom:6px;" data-i18n="mocktest.fullMockTest">Full Mock Test</div>
             <div class="choose-test-meta" style="font-size:12.5px;font-weight:400;" data-i18n="mocktest.fullMockMeta">180 Qs · 3h 20m · Max 720 marks</div>
           </button>
           <button class="choose-test-card ctc-purple" onclick="window.location.href='./personalised-test.html'">
-            <div class="choose-test-icon-badge">🎯</div>
             <div class="choose-test-title" style="font-size:20px;font-weight:800;margin-bottom:6px;" data-i18n="mocktest.personalisedTest">Personalised Test</div>
             <div class="choose-test-meta" style="font-size:12.5px;font-weight:400;" data-i18n="mocktest.personalisedMeta">Pick subject, chapter & count</div>
           </button>
@@ -623,7 +619,6 @@
       } catch(e) {
         document.getElementById('startScreen').innerHTML = `
           <div style="text-align:center;">
-            <div style="font-size:48px;margin-bottom:16px;">❌</div>
             <h2 style="font-size:20px;color:#ef4444;margin-bottom:8px;">Failed to load questions</h2>
             <p style="color:#555;font-size:13px;margin-bottom:24px;">Make sure the backend server is running.</p>
             <button onclick="window.location.reload()" style="background:#4f8ef7;border:none;color:white;padding:10px 24px;border-radius:8px;cursor:pointer;font-size:14px;">Try Again</button>

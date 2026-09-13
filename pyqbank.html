@@ -44,9 +44,7 @@
     .subject-card { background: linear-gradient(180deg, #131317, #101014); border: 1px solid #1e1e1e; border-radius: 18px; padding: 36px 24px; text-align: center; cursor: pointer; transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease; position: relative; overflow: hidden; }
     .subject-card:hover { border-color: var(--color); transform: translateY(-4px); }
     .subject-card:hover .subject-arrow { opacity: 1; transform: translateX(0); }
-    .subject-card:hover .subject-icon-badge { transform: scale(1.08); }
     .subject-card.active { border-color: var(--color); background: #161616; }
-    .subject-icon-badge { width: 64px; height: 64px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 16px; background: radial-gradient(circle, var(--color)29, var(--color)08); font-size: 30px; transition: transform 0.25s ease; }
     .subject-name { font-size: 17px; font-weight: 700; color: #ececec; margin-bottom: 10px; }
     .subject-count { font-size: 12px; color: #999; display: inline-flex; align-items: center; gap: 6px; background: #1a1a1a; padding: 4px 12px; border-radius: 20px; border: 1px solid #26262e; }
     .subject-count-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--color); flex-shrink: 0; }
@@ -445,9 +443,9 @@
     let reportOriginBtn = null;
 
     const subjectConfig = {
-      'Biology': { icon: '🔬', color: '#4ade80' },
-      'Physics': { icon: '⚡', color: '#4f8ef7' },
-      'Chemistry': { icon: '⚗️', color: '#f97316' }
+      'Biology': { color: '#4ade80' },
+      'Physics': { color: '#4f8ef7' },
+      'Chemistry': { color: '#f97316' }
     };
 
     const neetSyllabus = {
@@ -1095,7 +1093,6 @@ function handleBack() {
         <div class="subject-grid">
           ${Object.entries(subjectConfig).map(([name, cfg]) => `
             <div class="subject-card" style="--color:${cfg.color}" onclick="showClasses('${name}')">
-              <div class="subject-icon-badge">${cfg.icon}</div>
               <div class="subject-name">${subjectName(name)}</div>
               <div class="subject-count" id="count-${name}"><span class="subject-count-dot"></span>${t('pyqbank','clickToBrowse')}</div>
               <div class="subject-arrow">→</div>
@@ -1147,9 +1144,6 @@ function handleBack() {
       document.getElementById('mainContent').innerHTML = `
         ${buildPyqBreadcrumb(subject)}
         <div class="page-header-row">
-          <div class="page-icon-badge" style="background:radial-gradient(circle, ${cfg.color}29, ${cfg.color}08);">
-            <span style="font-size:20px;">${cfg.icon}</span>
-          </div>
           <div>
             <div class="page-title" style="margin-bottom:2px;">${subjectName(subject)}</div>
             <div class="page-subtitle" style="margin-bottom:0;" id="subjectTotalCount">${t('pyqbank','loadingQuestions')}</div>

@@ -46,7 +46,6 @@
     .summary-card { position: relative; background: #111116; border: 1px solid #1e1e24; border-radius: 16px; padding: 20px 18px; overflow: hidden; transition: transform 0.2s, border-color 0.2s; }
     .summary-card:hover { transform: translateY(-2px); border-color: #2a2a33; }
     .summary-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: var(--accent, #4f8ef7); opacity: 0.8; }
-    .summary-card-icon { font-size: 18px; margin-bottom: 10px; display: block; }
     .summary-card-value { font-size: 26px; font-weight: 800; color: #fff; margin-bottom: 3px; letter-spacing: -0.5px; }
     .summary-card-sub { font-size: 10.5px; color: #4a4a52; margin-bottom: 6px; }
     .summary-card-label { font-size: 11.5px; color: #7a7a85; font-weight: 500; }
@@ -179,7 +178,6 @@
     .score-pct { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 13px; font-weight: 700; color: #ececec; }
 
     .empty-state { text-align: center; padding: 70px 24px; color: #555; background: #111116; border: 1px solid #1e1e24; border-radius: 18px; }
-    .empty-state .empty-icon { font-size: 38px; margin-bottom: 14px; display: block; }
     .empty-state h3 { font-size: 18px; color: #ccc; margin-bottom: 8px; font-weight: 700; }
     .empty-state p { font-size: 13px; margin-bottom: 24px; }
 
@@ -413,10 +411,10 @@
     <div class="page-subtitle" data-i18n="scoreboard.pageSubtitle">All mock tests taken so far</div>
 
     <div class="summary-cards" id="summaryCards">
-      <div class="summary-card" style="--accent:#4f8ef7;"><span class="summary-card-icon">📝</span><div class="summary-card-value" id="totalTests">-</div><div class="summary-card-label" data-i18n="scoreboard.testsTaken">Tests Taken</div></div>
-      <div class="summary-card" style="--accent:#facc15;"><span class="summary-card-icon">🏆</span><div class="summary-card-value" id="bestScore">-</div><div class="summary-card-sub" id="bestScoreSub"></div><div class="summary-card-label" data-i18n="scoreboard.bestScore">Best Score</div></div>
-      <div class="summary-card" style="--accent:#a78bfa;"><span class="summary-card-icon">📊</span><div class="summary-card-value" id="avgScore">-</div><div class="summary-card-sub" id="avgScoreSub"></div><div class="summary-card-label" data-i18n="scoreboard.avgScore">Average Score</div></div>
-      <div class="summary-card" id="improvementCard" style="--accent:#4ade80;"><span class="summary-card-icon" id="improvementIcon">📈</span><div class="summary-card-value" id="improvement">-</div><div class="summary-card-label" data-i18n="scoreboard.improvement">Improvement</div></div>
+      <div class="summary-card" style="--accent:#4f8ef7;"><div class="summary-card-value" id="totalTests">-</div><div class="summary-card-label" data-i18n="scoreboard.testsTaken">Tests Taken</div></div>
+      <div class="summary-card" style="--accent:#facc15;"><div class="summary-card-value" id="bestScore">-</div><div class="summary-card-sub" id="bestScoreSub"></div><div class="summary-card-label" data-i18n="scoreboard.bestScore">Best Score</div></div>
+      <div class="summary-card" style="--accent:#a78bfa;"><div class="summary-card-value" id="avgScore">-</div><div class="summary-card-sub" id="avgScoreSub"></div><div class="summary-card-label" data-i18n="scoreboard.avgScore">Average Score</div></div>
+      <div class="summary-card" id="improvementCard" style="--accent:#4ade80;"><div class="summary-card-value" id="improvement">-</div><div class="summary-card-label" data-i18n="scoreboard.improvement">Improvement</div></div>
     </div>
 
     <div class="chart-card" id="chartCard" style="display:none;">
@@ -567,14 +565,14 @@
     async function loadScoreboard() {
       const { data: { session } } = await client.auth.getSession();
       if (!session) {
-        document.getElementById('testsList').innerHTML = `<div class="empty-state"><span class="empty-icon">🔒</span><h3>${t('scoreboard','notLoggedIn')}</h3><p>${t('scoreboard','loginToSeeHistory')}</p><button class="btn btn-primary" onclick="window.location.href='./login.html'">${t('scoreboard','logIn')}</button></div>`;
+        document.getElementById('testsList').innerHTML = `<div class="empty-state"><h3>${t('scoreboard','notLoggedIn')}</h3><p>${t('scoreboard','loginToSeeHistory')}</p><button class="btn btn-primary" onclick="window.location.href='./login.html'">${t('scoreboard','logIn')}</button></div>`;
         return;
       }
 
       const { data: results, error } = await client.from('mock_results').select('*').eq('user_id', session.user.id).order('created_at', { ascending: false });
 
       if (error || !results || results.length === 0) {
-        document.getElementById('testsList').innerHTML = `<div class="empty-state"><span class="empty-icon">📋</span><h3>${t('scoreboard','noTestsYet')}</h3><p>${t('scoreboard','takeFirstTest')}</p><button class="btn btn-primary" onclick="window.location.href='./mocktest.html'">${t('scoreboard','startMockTest')}</button></div>`;
+        document.getElementById('testsList').innerHTML = `<div class="empty-state"><h3>${t('scoreboard','noTestsYet')}</h3><p>${t('scoreboard','takeFirstTest')}</p><button class="btn btn-primary" onclick="window.location.href='./mocktest.html'">${t('scoreboard','startMockTest')}</button></div>`;
         document.getElementById('totalTests').textContent = localizeNum(0);
         document.getElementById('bestScore').textContent = '-';
         document.getElementById('avgScore').textContent = '-';
@@ -595,18 +593,14 @@
       document.getElementById('avgScoreSub').textContent = `/ ${localizeNum(720)}`;
 
       const improvementCard = document.getElementById('improvementCard');
-      const improvementIcon = document.getElementById('improvementIcon');
       if (improvement > 0) {
         improvementCard.style.setProperty('--accent', '#4ade80');
-        improvementIcon.textContent = '📈';
         document.getElementById('improvement').style.color = '#4ade80';
       } else if (improvement < 0) {
         improvementCard.style.setProperty('--accent', '#ef4444');
-        improvementIcon.textContent = '📉';
         document.getElementById('improvement').style.color = '#ef4444';
       } else {
         improvementCard.style.setProperty('--accent', '#666');
-        improvementIcon.textContent = '➖';
         document.getElementById('improvement').style.color = '#ececec';
       }
       document.getElementById('improvement').textContent = (improvement >= 0 ? '+' : '') + localizeNum(improvement);

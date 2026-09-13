@@ -29,7 +29,6 @@
 
     .catalog-wrap { max-width: 1000px; margin: 0 auto; width: 100%; }
     .catalog-header { margin-bottom: 28px; }
-    .setup-icon { font-size: 40px; margin-bottom: 12px; }
     .setup-title { font-size: 26px; font-weight: 700; color: #fff; margin-bottom: 6px; letter-spacing: -0.3px; }
     .setup-subtitle { font-size: 13px; color: #666; line-height: 1.6; }
 
@@ -72,7 +71,6 @@
 
     .subject-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
     .subject-card { background: #0d0d12; border: 1px solid #2a2a35; border-radius: 10px; padding: 16px 10px; text-align: center; cursor: pointer; transition: all 0.2s; color: #888; font-size: 13px; font-weight: 600; }
-    .subject-card .subject-emoji { font-size: 22px; display: block; margin-bottom: 6px; }
     .subject-card:hover { border-color: #4f8ef750; color: #ccc; }
     .subject-card.selected { border-color: var(--accent-color, #4f8ef7); background: var(--accent-color-bg, #4f8ef715); color: var(--accent-color, #4f8ef7); }
 
@@ -453,7 +451,6 @@
     <div class="catalog-body">
     <div class="catalog-wrap">
       <div class="catalog-header">
-        <div class="setup-icon">🎯</div>
         <div class="setup-title" data-i18n="personalisedTest.title">Personalised Test</div>
         <div class="setup-subtitle" data-i18n="personalisedTest.subtitle">Pick a ready-made test or build your own. Questions are drawn at random from NEET-AI's active question bank.</div>
       </div>
@@ -474,9 +471,9 @@
           <div class="catalog-card" style="--accent-color:#4f8ef7" onclick="window.location.href='./mocktest.html'">
             <div class="catalog-card-body">
               <span class="catalog-badge" style="color:#4f8ef7;background:#4f8ef718;border-color:#4f8ef740;" data-i18n="personalisedTest.tabFullMock">Full Mock</span>
-              <div class="catalog-card-title" data-i18n="personalisedTest.fullMockTitle">📝 Full NEET Mock Test</div>
+              <div class="catalog-card-title" data-i18n="personalisedTest.fullMockTitle">Full NEET Mock Test</div>
               <div class="catalog-card-desc" data-i18n="personalisedTest.fullMockDesc">All 3 subjects together, exact NEET pattern and timing.</div>
-              <div class="catalog-card-meta"><span data-i18n="personalisedTest.fullMockQCount">📖 180 Questions</span><span data-i18n="personalisedTest.fullMockTime">🕐 3h 20m</span></div>
+              <div class="catalog-card-meta"><span data-i18n="personalisedTest.fullMockQCount">180 Questions</span><span data-i18n="personalisedTest.fullMockTime">3h 20m</span></div>
               <div class="catalog-card-footer" data-i18n="personalisedTest.fullMockMarking">+4 correct · -1 wrong · Max 720 marks</div>
             </div>
           </div>
@@ -513,9 +510,9 @@
           <div class="setup-step">
             <div class="setup-step-label" data-i18n="personalisedTest.subjectLabel">Subject</div>
             <div class="subject-grid">
-              <div class="subject-card" data-subject="Biology" style="--accent-color:#4ade80;--accent-color-bg:#4ade8015;" onclick="toggleSubjectCard('Biology', this)"><span class="subject-emoji">🧬</span><span data-i18n="common.biology">Biology</span></div>
-              <div class="subject-card" data-subject="Physics" style="--accent-color:#4f8ef7;--accent-color-bg:#4f8ef715;" onclick="toggleSubjectCard('Physics', this)"><span class="subject-emoji">⚛️</span><span data-i18n="common.physics">Physics</span></div>
-              <div class="subject-card" data-subject="Chemistry" style="--accent-color:#f97316;--accent-color-bg:#f9731615;" onclick="toggleSubjectCard('Chemistry', this)"><span class="subject-emoji">🧪</span><span data-i18n="common.chemistry">Chemistry</span></div>
+              <div class="subject-card" data-subject="Biology" style="--accent-color:#4ade80;--accent-color-bg:#4ade8015;" onclick="toggleSubjectCard('Biology', this)"><span data-i18n="common.biology">Biology</span></div>
+              <div class="subject-card" data-subject="Physics" style="--accent-color:#4f8ef7;--accent-color-bg:#4f8ef715;" onclick="toggleSubjectCard('Physics', this)"><span data-i18n="common.physics">Physics</span></div>
+              <div class="subject-card" data-subject="Chemistry" style="--accent-color:#f97316;--accent-color-bg:#f9731615;" onclick="toggleSubjectCard('Chemistry', this)"><span data-i18n="common.chemistry">Chemistry</span></div>
             </div>
           </div>
 
@@ -613,7 +610,7 @@
       </div>
       <div style="display:flex;gap:10px;">
         <button class="btn btn-outline" onclick="window.location.reload()" data-i18n="personalisedTest.takeAnotherTest">Take Another Test</button>
-        <button class="btn btn-outline" onclick="window.location.href='./scoreboard.html'">📊 Scoreboard</button>
+        <button class="btn btn-outline" onclick="window.location.href='./scoreboard.html'">Scoreboard</button>
 
       </div>
     </div>
@@ -639,9 +636,9 @@
         <div class="section-title" data-i18n="personalisedTest.questionReview">Question Review</div>
         <div class="filter-tabs" id="filterTabs">
           <button class="filter-tab active" onclick="filterQuestions('all', this)" data-i18n="personalisedTest.all">All</button>
-          <button class="filter-tab" onclick="filterQuestions('correct', this)" data-i18n="personalisedTest.correctFilter">✅ Correct</button>
-          <button class="filter-tab" onclick="filterQuestions('wrong', this)" data-i18n="personalisedTest.wrongFilter">❌ Wrong</button>
-          <button class="filter-tab" onclick="filterQuestions('skipped', this)" data-i18n="personalisedTest.skippedFilter">⬜ Skipped</button>
+          <button class="filter-tab" onclick="filterQuestions('correct', this)" data-i18n="personalisedTest.correctFilter">Correct</button>
+          <button class="filter-tab" onclick="filterQuestions('wrong', this)" data-i18n="personalisedTest.wrongFilter">Wrong</button>
+          <button class="filter-tab" onclick="filterQuestions('skipped', this)" data-i18n="personalisedTest.skippedFilter">Skipped</button>
         </div>
         <div id="questionReview"></div>
       </div>
@@ -760,7 +757,7 @@
               </div>
               <div class="catalog-card-title">${escapeHtml(test.title)}</div>
               <div class="catalog-card-desc">${escapeHtml(test.description || '')}</div>
-              <div class="catalog-card-meta"><span>📖 ${localizeNum(test.question_count)} ${t('personalisedTest','questionsWord')}</span></div>
+              <div class="catalog-card-meta"><span>${localizeNum(test.question_count)} ${t('personalisedTest','questionsWord')}</span></div>
               <div class="catalog-card-footer">${t('personalisedTest','markingScheme').replace('{n}', localizeNum(test.question_count * 4))}</div>
             </div>
           </div>
@@ -918,7 +915,7 @@
             <div class="catalog-card-body">
               <span class="catalog-badge" style="color:${color};background:${color}18;border-color:${color}40;">${t('personalisedTest','chapterTestBadge')}</span>
               <div class="catalog-card-title">${escapeHtml(chapterName(ch.name))}</div>
-              <div class="catalog-card-meta"><span>📖 ${localizeNum(ch.count)} ${t('personalisedTest','questionsAvailable')}</span></div>
+              <div class="catalog-card-meta"><span>${localizeNum(ch.count)} ${t('personalisedTest','questionsAvailable')}</span></div>
               <div class="catalog-card-footer">${t('personalisedTest','markingScheme').replace('{n}', localizeNum(ch.count * 4))}</div>
             </div>
           </div>
