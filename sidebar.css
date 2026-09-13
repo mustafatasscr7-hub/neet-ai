@@ -187,3 +187,16 @@ body.light-mode #searchChatsInput::placeholder { color: #9a9aa5 !important; }
 @media (max-width: 640px) {
   .sidebar { position: fixed; top: 0; left: 0; bottom: 0; z-index: 200; box-shadow: 0 0 30px rgba(0,0,0,0.5); }
 }
+
+/* Collapsed-sidebar icon tooltips -- appended to document.body by sidebar.js (see
+   initSidebarTooltips there), never nested inside .sidebar, for the same reason the account
+   menu's flyouts are: .sidebar has overflow:hidden (needed so the collapsed icon rail clips
+   instead of scrolling), which silently clips anything positioned to extend past the sidebar's
+   own right edge -- exactly what a tooltip pointing at a 56px icon rail needs to do. Ported
+   verbatim from chat.html's own copy of these same rules, which was added there first and never
+   propagated to this shared file -- exactly the gap this file exists to prevent. */
+.sidebar-tooltip { position: fixed; transform: translateY(-50%); background: #1e1e1e; color: #ececec; padding: 6px 12px; border-radius: 999px; font-size: 12.5px; font-family: 'Inter', sans-serif; white-space: nowrap; display: flex; align-items: center; gap: 8px; pointer-events: none; opacity: 0; visibility: hidden; transition: opacity 0.12s ease; z-index: 9999; box-shadow: 0 4px 14px rgba(0,0,0,0.45); border: 1px solid #2a2a2a; }
+.sidebar-tooltip.visible { opacity: 1; visibility: visible; }
+.sidebar-tooltip-shortcut { color: #888; font-size: 11px; }
+body.light-mode .sidebar-tooltip { background: #ffffff !important; color: #16161d !important; border-color: #e0e0e5 !important; box-shadow: 0 4px 14px rgba(0,0,0,0.12) !important; }
+body.light-mode .sidebar-tooltip-shortcut { color: #9a9aa5 !important; }
