@@ -178,14 +178,16 @@
     body.light-mode .pyq-opt:hover { background: #eeeef1 !important; border-color: #c8c8d0 !important; color: #16161d !important; }
 
     /* Thin, hover-reveal scrollbar for the modal's own internal scroll -- was the bulky
-       default native scrollbar, always fully visible regardless of hover. */
-    .pyq-modal-box { scrollbar-width: thin; scrollbar-color: #3a3a5e transparent; }
-    .pyq-modal-box::-webkit-scrollbar { width: 6px; }
-    .pyq-modal-box::-webkit-scrollbar-track { background: transparent; }
-    .pyq-modal-box::-webkit-scrollbar-thumb { background: transparent; border-radius: 4px; }
-    .pyq-modal-box:hover::-webkit-scrollbar-thumb { background: #3a3a5e; }
-    body.light-mode .pyq-modal-box { scrollbar-color: #d5d5dd transparent !important; }
-    body.light-mode .pyq-modal-box:hover::-webkit-scrollbar-thumb { background: #d5d5dd !important; }
+       default native scrollbar, always fully visible regardless of hover. Targets
+       .pyq-modal-scroll (the inner content wrapper), not .pyq-modal-box itself -- the box no
+       longer scrolls directly, see its own comment at the showPYQModal call site for why. */
+    .pyq-modal-scroll { scrollbar-width: thin; scrollbar-color: #3a3a5e transparent; }
+    .pyq-modal-scroll::-webkit-scrollbar { width: 6px; }
+    .pyq-modal-scroll::-webkit-scrollbar-track { background: transparent; }
+    .pyq-modal-scroll::-webkit-scrollbar-thumb { background: transparent; border-radius: 4px; }
+    .pyq-modal-scroll:hover::-webkit-scrollbar-thumb { background: #3a3a5e; }
+    body.light-mode .pyq-modal-scroll { scrollbar-color: #d5d5dd transparent !important; }
+    body.light-mode .pyq-modal-scroll:hover::-webkit-scrollbar-thumb { background: #d5d5dd !important; }
 
     /* Show Solution / Save buttons inside each PYQ card. Previously styled with inline
        style.cssText, which meant no :hover was possible at all (an element's own inline style
@@ -387,7 +389,7 @@
 
     /* Settings modal scroll area -- thin, mostly-invisible thumb that only shows a subtle accent
        tint on hover, replacing the browser's default chunky scrollbar. Same reveal-on-hover idea
-       as .pyq-modal-box's scrollbar elsewhere in this file. */
+       as .pyq-modal-scroll's scrollbar elsewhere in this file. */
     #settingsContent { scrollbar-width: thin; scrollbar-color: transparent transparent; }
     #settingsContent::-webkit-scrollbar { width: 6px; }
     #settingsContent::-webkit-scrollbar-track { background: transparent; }
@@ -3317,7 +3319,12 @@ let selectedImages = [];
 
     const box = document.createElement('div');
       box.className = 'pyq-modal-box';
-      box.style.cssText = 'background:#1e1e2e;border-radius:12px;padding:24px;max-width:700px;width:90%;max-height:80vh;overflow-y:auto;overflow-x:hidden;color:#fff;';
+      // display:flex column + overflow:hidden here (not overflow-y:auto -- that moved to the new
+      // .pyq-modal-scroll wrapper below) is what keeps header a normal, non-scrolling flex child
+      // instead of something that scrolls away with the rest of the modal's content: the X button
+      // was only ever reachable at scroll-position 0 before, since header lived inside the same
+      // scrolling box as everything else.
+      box.style.cssText = 'background:#1e1e2e;border-radius:12px;max-width:700px;width:90%;max-height:80vh;display:flex;flex-direction:column;overflow:hidden;color:#fff;';
 
       // Detect dominant subject from questions
       const subjectCounts = {};
@@ -3326,7 +3333,9 @@ let selectedImages = [];
       let activeSubject = dominantSubject;
 
      const header = document.createElement('div');
-      header.style.cssText = 'display:flex;flex-direction:column;gap:4px;margin-bottom:16px;';
+      // padding here replaces box's own removed padding for this row specifically -- flex-shrink:0
+      // keeps this from ever being compressed by the scroll area below claiming space.
+      header.style.cssText = 'display:flex;flex-direction:column;gap:4px;padding:24px 24px 16px 24px;flex-shrink:0;';
       // matchType: 'exact' -- primary threshold search found a direct hit. 'related' -- the
       // relaxed "related, not exact" pass instead (see PYQ_FALLBACK_THRESHOLD in server.py).
       // 'chapter' -- neither semantic pass found anything, these are just every PYQ from the same
@@ -3361,6 +3370,17 @@ let selectedImages = [];
       closeBtn2.onclick = () => modal.remove();
       titleRow.appendChild(closeBtn2);
       box.appendChild(header);
+
+      // Everything below the header (subject tabs + question cards) scrolls inside this wrapper
+      // instead of box itself -- box is now just flex chrome around header (fixed) + this (the
+      // only part that scrolls), so the X button in header stays visible and clickable at any
+      // scroll position instead of scrolling away with the questions underneath it. flex:1 +
+      // min-height:0 is what actually lets a flex child scroll at all rather than growing to fit
+      // its content and pushing box past max-height.
+      const scrollArea = document.createElement('div');
+      scrollArea.className = 'pyq-modal-scroll';
+      scrollArea.style.cssText = 'overflow-y:auto;overflow-x:hidden;flex:1;min-height:0;padding:0 24px 24px 24px;';
+      box.appendChild(scrollArea);
 
       // Subject tabs
       const tabsDiv = document.createElement('div');
@@ -3631,10 +3651,10 @@ let selectedImages = [];
         tab.onclick = () => renderPYQQuestions(subject);
         tabsDiv.appendChild(tab);
       });
-      box.appendChild(tabsDiv);
+      scrollArea.appendChild(tabsDiv);
 
       const questionsDiv = document.createElement('div');
-      box.appendChild(questionsDiv);
+      scrollArea.appendChild(questionsDiv);
 
       
 
