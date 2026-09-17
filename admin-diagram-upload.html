@@ -67,6 +67,14 @@
   .batch-lang-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(115px, 1fr)); gap: 8px; }
   .batch-lang-col label.lang-tag { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: #4f8ef7; display: block; margin-bottom: 4px; }
   .batch-lang-col.hindi label.lang-tag { color: #f97316; }
+  /* Per-card EN/हि toggle -- each uploaded image is its own diagram row with its own required
+     English `name` column (see renderBatchGrid's own comment on why), and in practice each image
+     only ever carries labels baked into it in ONE language, so showing both field pairs at once
+     was pure double data entry. Toggling switches which single pair is shown/editable. */
+  .batch-lang-toggle { display: flex; gap: 2px; background: #1a1a1a; border-radius: 6px; padding: 2px; margin-bottom: 8px; width: fit-content; }
+  .batch-lang-toggle button { border: none; background: transparent; color: #888; font-size: 10px; font-weight: 700; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-family: 'Inter', sans-serif; transition: all 0.15s ease; }
+  .batch-lang-toggle button.active[data-lang="en"] { background: #4f8ef7; color: #fff; }
+  .batch-lang-toggle button.active[data-lang="hi"] { background: #f97316; color: #fff; }
   .batch-item input[type="text"] { font-size: 11px; padding: 5px 7px; width: 100%; margin-bottom: 5px; }
   .batch-lang-col input[type="text"]:last-child { margin-bottom: 0; }
   .batch-item .remove-btn { position: absolute; top: 4px; right: 4px; width: 20px; height: 20px; border-radius: 50%; background: rgba(0,0,0,0.75); border: 1px solid #3a3a3a; color: #ccc; font-size: 12px; line-height: 1; cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0; z-index: 1; }
@@ -348,7 +356,12 @@
       description: '',
       nameHi: '',
       descriptionHi: '',
-      importanceRating: 0
+      importanceRating: 0,
+      // Which single field pair is shown/required for this card -- see the .batch-lang-toggle
+      // CSS comment for why. Defaults to English: most uploads so far have been English-labeled
+      // (per this feature's own real usage), and it's the safer default either way since English
+      // `name` is the one column the diagrams table actually requires not-null.
+      cardLang: 'en'
     });
   }
 
@@ -392,18 +405,23 @@
       <div class="batch-item" id="batch-item-${item.id}">
         <button type="button" class="remove-btn" onclick="removeBatchItem(${item.id})" title="Remove">✕</button>
         <img class="batch-thumb" src="data:${item.mediaType};base64,${item.base64}" alt=""/>
-        <div class="batch-lang-grid">
-          <div class="batch-lang-col">
-            <label class="lang-tag">English</label>
-            <input type="text" value="${escapeHtml(item.name)}" placeholder="Name (required)" oninput="updateItemField(${item.id}, 'name', this.value)"/>
-            <input type="text" value="${escapeHtml(item.description)}" placeholder="Description (optional)" oninput="updateItemField(${item.id}, 'description', this.value)"/>
-          </div>
-          <div class="batch-lang-col hindi">
-            <label class="lang-tag">हिन्दी</label>
-            <input type="text" value="${escapeHtml(item.nameHi)}" placeholder="नाम (optional)" oninput="updateItemField(${item.id}, 'nameHi', this.value)"/>
-            <input type="text" value="${escapeHtml(item.descriptionHi)}" placeholder="विवरण (optional)" oninput="updateItemField(${item.id}, 'descriptionHi', this.value)"/>
-          </div>
+        <div class="batch-lang-toggle">
+          <button type="button" data-lang="en" class="${item.cardLang === 'en' ? 'active' : ''}" onclick="setItemLang(${item.id}, 'en')">EN</button>
+          <button type="button" data-lang="hi" class="${item.cardLang === 'hi' ? 'active' : ''}" onclick="setItemLang(${item.id}, 'hi')">हि</button>
         </div>
+        ${item.cardLang === 'hi' ? `
+        <div class="batch-lang-col hindi">
+          <label class="lang-tag">हिन्दी</label>
+          <input type="text" value="${escapeHtml(item.nameHi)}" placeholder="नाम (required)" oninput="updateItemField(${item.id}, 'nameHi', this.value)"/>
+          <input type="text" value="${escapeHtml(item.descriptionHi)}" placeholder="विवरण (optional)" oninput="updateItemField(${item.id}, 'descriptionHi', this.value)"/>
+        </div>
+        ` : `
+        <div class="batch-lang-col">
+          <label class="lang-tag">English</label>
+          <input type="text" value="${escapeHtml(item.name)}" placeholder="Name (required)" oninput="updateItemField(${item.id}, 'name', this.value)"/>
+          <input type="text" value="${escapeHtml(item.description)}" placeholder="Description (optional)" oninput="updateItemField(${item.id}, 'description', this.value)"/>
+        </div>
+        `}
         <div class="star-rating-input" title="Importance rating">
           ${[1, 2, 3, 4, 5].map(n => `<span class="star-choice ${n <= item.importanceRating ? 'star-filled' : ''}" onclick="setItemRating(${item.id}, ${n})">★</span>`).join('')}
         </div>
@@ -417,6 +435,18 @@
   function updateItemField(id, field, value) {
     const item = pendingImages.find(p => p.id === id);
     if (item) item[field] = value;
+  }
+
+  // Switching a card's language only changes which single field pair is shown/required for it --
+  // it does NOT touch any other card, and does not link/merge this image with any other upload.
+  // Each card always creates its own independent diagrams row (see uploadOneImage) regardless of
+  // language, same as before this toggle existed -- there was never an "existing row" for a
+  // batch-upload card to accidentally overwrite.
+  function setItemLang(id, lang) {
+    const item = pendingImages.find(p => p.id === id);
+    if (!item) return;
+    item.cardLang = lang;
+    renderBatchGrid();
   }
 
   // Clicking the currently-selected top star again clears the rating back to unrated (0/null) --
@@ -464,13 +494,23 @@
       if (uploadData.error) return { id: item.id, error: uploadData.error };
 
       setItemStatus(item.id, 'Saving...', '');
+      // The diagrams table has exactly one required text column -- `name` (English) -- with no
+      // separate "Hindi row" or second image slot (confirmed against create_diagrams_table.sql /
+      // add_diagrams_hindi_fields.sql: name_hi/description_hi are nullable columns on the SAME
+      // row as the required `name`, not a linked second row). A card toggled to Hindi has no
+      // English name at all by design, so its Hindi text is mirrored into `name` too -- this is
+      // what actually satisfies the not-null constraint, and it's also what makes
+      // diagram-library.html's own display fallback (`(lang==='hi' && d.name_hi) ? d.name_hi :
+      // d.name`) show something sensible to an English-mode viewer instead of a blank name.
+      const isHindiCard = item.cardLang === 'hi';
       const createRes = await fetch(`${API_BASE}/admin/diagrams-create`, {
         method: 'POST',
         headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           subject: shared.subject, class: shared.cls, chapter: shared.chapter,
-          subtopic: shared.subtopic, subtopic_hi: shared.subtopicHi, name: item.name.trim(),
-          description: item.description.trim() || null,
+          subtopic: shared.subtopic, subtopic_hi: shared.subtopicHi,
+          name: isHindiCard ? item.nameHi.trim() : item.name.trim(),
+          description: (isHindiCard ? item.descriptionHi.trim() : item.description.trim()) || null,
           name_hi: item.nameHi.trim() || null,
           description_hi: item.descriptionHi.trim() || null,
           image_url: uploadData.url,
@@ -500,9 +540,11 @@
       setUploadStatus('Subject, chapter, and at least one image are all required.', 'error');
       return;
     }
-    const unnamed = pendingImages.filter(p => !p.name.trim());
+    // Required field lives wherever the card's own toggle currently points -- nameHi for a
+    // Hindi-mode card, name for an English one -- matching uploadOneImage's own isHindiCard logic.
+    const unnamed = pendingImages.filter(p => !(p.cardLang === 'hi' ? p.nameHi : p.name).trim());
     if (unnamed.length > 0) {
-      setUploadStatus('Every image needs an English name -- fill in the blank one(s) below.', 'error');
+      setUploadStatus('Every image needs a name in its selected language -- fill in the blank one(s) below.', 'error');
       unnamed.forEach(p => setItemStatus(p.id, 'Name required', 'error'));
       return;
     }
