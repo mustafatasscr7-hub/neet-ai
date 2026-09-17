@@ -321,14 +321,30 @@
     return (filename || '').replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').trim();
   }
 
-  async function addPendingImage(file, filename) {
+  // Same allowlist /admin/diagram-upload validates against server-side -- used only as a
+  // fallback when a pasted image's File object has no usable name of its own (see
+  // addPendingImage below), so the synthesized filename still carries a real extension the
+  // server will actually accept, instead of blindly guessing .png regardless of the real type.
+  const EXT_BY_MEDIA_TYPE = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/svg+xml': 'svg' };
+
+  // displayName is ONLY the pre-filled English-name suggestion shown in the batch grid (the
+  // admin can freely rename it before uploading) -- it must never replace the real filename used
+  // for the server's extension check. Previously the paste handler below passed its "Pasted
+  // image N" label as BOTH filename and display name, which silently discarded the real pasted
+  // file's own name/extension -- meaning every paste (any image type, not just SVG) uploaded
+  // with an extensionless filename and was rejected by /admin/diagram-upload's allowlist check,
+  // 100% of the time. filename here is always derived from the real File object (or, if that
+  // itself has no name -- some browsers hand clipboard images an empty one -- a synthesized name
+  // using the correct extension for its actual media type).
+  async function addPendingImage(file, displayName) {
     const base64 = await fileToBase64(file);
+    const filename = file.name || `pasted-image-${Date.now()}.${EXT_BY_MEDIA_TYPE[file.type] || 'png'}`;
     pendingImages.push({
       id: nextPendingId++,
       base64,
       mediaType: file.type || 'image/png',
-      filename: filename || file.name || `pasted-image-${Date.now()}.png`,
-      name: deriveNameFromFilename(filename || file.name),
+      filename,
+      name: displayName || deriveNameFromFilename(filename),
       description: '',
       nameHi: '',
       descriptionHi: '',
@@ -340,7 +356,7 @@
     const files = Array.from(document.getElementById('imageFile').files || []);
     document.getElementById('imageFile').value = ''; // so re-picking the same file(s) later still fires change
     for (const file of files) {
-      await addPendingImage(file, file.name);
+      await addPendingImage(file); // no displayName override -- falls back to deriveNameFromFilename(file.name)
     }
     renderBatchGrid();
   }
@@ -349,7 +365,10 @@
   // normal text pasting anywhere else on the page (password field, name/description inputs)
   // is completely unaffected. Gated on the dashboard being visible so a paste before login
   // (over the password gate) does nothing. Adds one more item to the batch rather than
-  // replacing whatever's already pending.
+  // replacing whatever's already pending. Works for any image/* clipboard type, SVG included --
+  // real-world tested: copying an actual .svg file (e.g. Ctrl+C on it in Explorer) and pasting
+  // here delivers a real File with type "image/svg+xml" and its original filename intact, same
+  // as any other image type.
   document.addEventListener('paste', async function(e) {
     if (document.getElementById('dashboard').style.display !== 'block') return;
     const items = e.clipboardData && e.clipboardData.items;
