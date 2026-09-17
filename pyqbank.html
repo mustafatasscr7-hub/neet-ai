@@ -1494,7 +1494,7 @@ ${q.diagram_url ? `<img class="q-diagram-img" src="${q.diagram_url}">` : ''}
         const res = await fetch(`${API_BASE}/solve`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ pyq_id: q.id, question: q.question, option_a: q.option_a, option_b: q.option_b, option_c: q.option_c, option_d: q.option_d, correct_answer: resolvedAnswer, language: getLang(), user_id: session?.user?.id || '' })
+          body: JSON.stringify({ pyq_id: q.id, question: q.question, option_a: q.option_a, option_b: q.option_b, option_c: q.option_c, option_d: q.option_d, correct_answer: resolvedAnswer, language: getLang(), user_id: session?.user?.id || '', diagram_url: q.diagram_url || null, option_a_diagram_url: q.option_a_diagram_url || null, option_b_diagram_url: q.option_b_diagram_url || null, option_c_diagram_url: q.option_c_diagram_url || null, option_d_diagram_url: q.option_d_diagram_url || null })
         });
         if (res.status === 402) {
           clearInterval(thinkingInterval);

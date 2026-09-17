@@ -694,6 +694,16 @@ class SolveRequest(BaseModel):
     correct_answer: str = ""
     language: str = "en"
     user_id: str = ""
+    # Client already has these in memory (same PYQ row every diagram surface renders from) --
+    # sent straight through rather than /solve doing its own DB lookup by pyq_id, which would add
+    # a round trip to every single call including the ~92% of solves that have no diagram at all.
+    # Presence of any of these routes the request through stream_solve_response_with_diagram
+    # instead of the text-only path -- see /solve's own branch for why.
+    diagram_url: Optional[str] = None
+    option_a_diagram_url: Optional[str] = None
+    option_b_diagram_url: Optional[str] = None
+    option_c_diagram_url: Optional[str] = None
+    option_d_diagram_url: Optional[str] = None
 
 class MergeGuestUsageRequest(BaseModel):
     user_id: str
@@ -4049,12 +4059,23 @@ async def get_cached_pyq_solution(pyq_id: str, language: str):
         print(f"PYQ SOLUTION CACHE LOOKUP FAILED (pyq_id={pyq_id}): {e}", flush=True)
         return None
 
-async def stream_solve_response(pyq_id: str, cached_solution, question: str, option_a: str, option_b: str, option_c: str, option_d: str, correct_answer: str, language: str = "en", user_id: str = "", ip: str = ""):
-    if cached_solution is not None:
-        yield cached_solution
-        return
+def _solve_system_prompt(language: str, has_diagram: bool) -> str:
+    """Shared by both the text-only (DeepSeek/Qwen) and diagram-aware (Gemini) /solve paths --
+    same output format/rules either way, so a cached solution looks identical regardless of which
+    path generated it. Only the opening instruction differs: the diagram variant tells the model
+    to actually look at the attached image(s) rather than describe options it can't see -- see
+    stream_solve_response_with_diagram's own comment for why this exists at all (2026-09-17
+    diagram-dependent-PYQ audit: the text-only path was confidently fabricating descriptions of
+    diagram content it never received)."""
     lang_instruction = "\n5. Respond ONLY in Hindi (Devanagari script) — every word in Hindi, no English words or Hinglish mixing. The ONLY exceptions are LaTeX/KaTeX math notation, chemical formulas/symbols, and units, which stay exactly as-is." if language == "hi" else ""
-    solve_system = f"""You are a NEET exam expert. Solve the given NEET question step by step.
+    intro = (
+        "You are a NEET exam expert. Solve the given NEET question step by step. The attached "
+        "image(s) show the diagram(s) this question depends on -- base your answer on what is "
+        "actually visible in them, never assume or guess at content you can't see."
+        if has_diagram else
+        "You are a NEET exam expert. Solve the given NEET question step by step."
+    )
+    return f"""{intro}
 
 Format your response exactly like this:
 
@@ -4077,6 +4098,12 @@ Rules:
    - Display: $$formula$$ example: $$E = mc^2$$
    - Always write $H_2O$ not H₂O
    - Always write $v^2$ not v²{lang_instruction}"""
+
+async def stream_solve_response(pyq_id: str, cached_solution, question: str, option_a: str, option_b: str, option_c: str, option_d: str, correct_answer: str, language: str = "en", user_id: str = "", ip: str = ""):
+    if cached_solution is not None:
+        yield cached_solution
+        return
+    solve_system = _solve_system_prompt(language, has_diagram=False)
     solve_messages = [
         {"role": "user", "content": f"Solve this NEET question:\n\nQuestion: {question}\n\nA) {option_a}\nB) {option_b}\nC) {option_c}\nD) {option_d}\n\nCorrect Answer: {correct_answer}"}
     ]
@@ -4100,13 +4127,104 @@ Rules:
     except Exception as e:
         yield f"Error: {str(e)}"
 
+async def _fetch_gemini_image_part(url: str):
+    """Fetches a diagram's real bytes from its public Storage URL and wraps them as a Gemini
+    Part. mime_type comes from the actual response header, not guessed off the URL's extension --
+    works regardless of which format the diagram was uploaded in (PNG/JPG/WEBP/SVG, see the
+    2026-09-17 SVG-upload audit/fix)."""
+    resp = await async_client.get(url)
+    resp.raise_for_status()
+    mime = resp.headers.get("content-type", "image/png").split(";")[0].strip()
+    return genai_types.Part.from_bytes(data=resp.content, mime_type=mime)
+
+# 2026-09-17 diagram-dependent-PYQ audit: a PYQ with a stem diagram_url or per-option
+# option_x_diagram_url is frequently unanswerable from its text alone (per-option cases in
+# particular routinely have all four option fields blank -- the whole answer lives in the
+# images). Routed to stream_solve_response above regardless, the text-only model doesn't
+# hedge -- confirmed live it fabricates a specific, confident-sounding description of what a
+# given option's image supposedly shows, using real textbook knowledge to rationalize whichever
+# option correct_answer already says is right. This sends the actual diagram image(s) to Gemini
+# instead, same model _stream_gemini_media already uses for student-uploaded photos -- but NOT
+# through that shared function directly: _stream_gemini_media assumes its caller's full_system IS
+# (a superset of) the full chat SYSTEM_PROMPT, since it slices/caches against that exact constant
+# (_get_gemini_system_cache/_build_gemini_call_args). /solve's own system prompt is a completely
+# different, much shorter string (_solve_system_prompt), so reusing that machinery unchanged
+# would silently attach the wrong (chat-behavior) cached prompt instead of the solve format
+# instructions. The existing system-prompt cache doesn't help here anyway -- confirmed via the
+# same day's cost estimate: at ~150-200 tokens, solve_system is too short for caching's per-call
+# savings to outweigh the cache's own storage cost at any realistic /solve volume -- so this calls
+# Gemini directly with system_instruction set, no cache involved, same as _build_gemini_call_args'
+# own no-cache fallback path.
+async def stream_solve_response_with_diagram(req: SolveRequest, cached_solution, ip: str):
+    if cached_solution is not None:
+        yield cached_solution
+        return
+    solve_system_image = _solve_system_prompt(req.language, has_diagram=True)
+    option_diagram_urls = [req.option_a_diagram_url, req.option_b_diagram_url, req.option_c_diagram_url, req.option_d_diagram_url]
+    try:
+        media_parts = []
+        if any(option_diagram_urls):
+            # Per-option case: send whichever of the 4 option images actually exist, labeled in
+            # order -- a mixed question (some options text, some image) keeps its real text for
+            # the text-bearing options rather than papering over it with "(see attached image)".
+            for url in option_diagram_urls:
+                if url:
+                    media_parts.append(await _fetch_gemini_image_part(url))
+            opts = [req.option_a, req.option_b, req.option_c, req.option_d]
+            options_block = "\n".join(f"{letter}) {opt or '(see attached image)'}" for letter, opt in zip("ABCD", opts))
+            user_text = f"Solve this NEET question. The attached images are the answer options, in order (A, B, C, D) -- only the ones that are actually images are attached; others are given as text below.\n\nQuestion: {req.question}\n\n{options_block}\n\nCorrect Answer: {req.correct_answer}"
+        else:
+            media_parts.append(await _fetch_gemini_image_part(req.diagram_url))
+            user_text = f"Solve this NEET question using the attached diagram:\n\nQuestion: {req.question}\n\nA) {req.option_a}\nB) {req.option_b}\nC) {req.option_c}\nD) {req.option_d}\n\nCorrect Answer: {req.correct_answer}"
+
+        contents = [genai_types.Content(role="user", parts=media_parts + [genai_types.Part.from_text(text=user_text)])]
+        config = genai_types.GenerateContentConfig(system_instruction=solve_system_image, max_output_tokens=1024)
+        gemini_stream = await gemini_client.aio.models.generate_content_stream(
+            model="gemini-3.5-flash-lite", contents=contents, config=config
+        )
+        full_solution = ""
+        last_usage = None
+        async for chunk in gemini_stream:
+            if chunk.text:
+                full_solution += chunk.text
+                yield chunk.text
+            if chunk.usage_metadata:
+                last_usage = chunk.usage_metadata
+        if last_usage:
+            cost = _gemini_cost(last_usage.prompt_token_count, 0, last_usage.candidates_token_count)
+            try:
+                await log_provider_usage("gemini-3.5-flash-lite", False, last_usage.prompt_token_count, last_usage.candidates_token_count, cost, "/solve", req.user_id)
+            except Exception:
+                pass
+            try:
+                await log_token_usage(req.user_id, last_usage.prompt_token_count + last_usage.candidates_token_count, ip)
+            except Exception:
+                pass
+        # Same cache, same pyq_id+language key as the text-only path -- a cached diagram-solve is
+        # indistinguishable from a cached text-solve to any later reader (get_cached_pyq_solution
+        # doesn't know or care which path produced it), so every subsequent student who requests
+        # this PYQ's solution gets it for free regardless of which path they'd otherwise hit.
+        if req.pyq_id and full_solution:
+            await async_client.post(
+                f"{SUPABASE_URL}/rest/v1/pyq_solution_cache",
+                headers={**SOLVE_CACHE_HEADERS, "Content-Type": "application/json"},
+                json={"pyq_id": req.pyq_id, "language": req.language, "solution": full_solution}
+            )
+    except Exception as e:
+        yield f"Error: {str(e)}"
+
 @app.post("/solve")
 async def solve_question(req: SolveRequest, request: Request, _: None = Depends(rate_limiter(15, 60))):
     ip = _client_ip(request)
     await enforce_daily_budget(req.user_id, ip)
     cached_solution = await get_cached_pyq_solution(req.pyq_id, req.language)
+    has_diagram = bool(req.diagram_url or req.option_a_diagram_url or req.option_b_diagram_url or req.option_c_diagram_url or req.option_d_diagram_url)
+    generator = (
+        stream_solve_response_with_diagram(req, cached_solution, ip) if has_diagram
+        else stream_solve_response(req.pyq_id, cached_solution, req.question, req.option_a, req.option_b, req.option_c, req.option_d, req.correct_answer, req.language, req.user_id, ip)
+    )
     return StreamingResponse(
-        stream_solve_response(req.pyq_id, cached_solution, req.question, req.option_a, req.option_b, req.option_c, req.option_d, req.correct_answer, req.language, req.user_id, ip),
+        generator,
         media_type="text/plain",
         headers={"X-Cache": "HIT" if cached_solution is not None else "MISS"}
     )
