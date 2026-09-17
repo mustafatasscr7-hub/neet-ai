@@ -165,9 +165,9 @@
     </div>
 
     <div class="q-field">
-      <label>Images (PNG, JPG, WEBP) — select multiple to upload as a batch</label>
+      <label>Images (PNG, JPG, WEBP, SVG) — select multiple to upload as a batch</label>
       <div class="upload-row">
-        <input type="file" id="imageFile" accept="image/png,image/jpeg,image/webp" multiple onchange="onImageFileChange()"/>
+        <input type="file" id="imageFile" accept="image/png,image/jpeg,image/webp,image/svg+xml" multiple onchange="onImageFileChange()"/>
         <button type="button" class="scan-btn" id="uploadBtn" onclick="uploadDiagrams()" disabled>Upload</button>
       </div>
       <div class="paste-hint">or copy an image and press <kbd>Ctrl</kbd>+<kbd>V</kbd> to paste it -- each paste adds one more to the batch</div>

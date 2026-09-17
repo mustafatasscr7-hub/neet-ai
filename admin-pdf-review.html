@@ -1753,7 +1753,7 @@
       <div class="q-diagram-slot" id="diagram-slot-${b.id}" style="display:${b.has_diagram ? 'block' : 'none'}">
         <label style="font-size:10px;color:#666;text-transform:uppercase;letter-spacing:0.04em;display:block;margin-bottom:5px;">Question diagram</label>
         <div class="diag-paste-zone" tabindex="0" onpaste="handleDiagramPaste(event, '${b.id}')">
-          <input type="file" accept="image/*" id="diagram-file-${b.id}" onchange="uploadDiagram('${b.id}')"/>
+          <input type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" id="diagram-file-${b.id}" onchange="uploadDiagram('${b.id}')"/>
           <div class="diag-paste-hint">or click here and paste (Ctrl+V) an image</div>
         </div>
         <div class="diag-status" id="diagram-status-${b.id}"></div>
@@ -1767,7 +1767,7 @@
           <div>
             <label style="font-size:10px;color:#888;">Option ${opt.toUpperCase()}</label>
             <div class="diag-paste-zone" tabindex="0" onpaste="handleOptionDiagramPaste(event, '${b.id}', '${opt}')">
-              <input type="file" accept="image/*" id="opt-diagram-file-${opt}-${b.id}" onchange="uploadOptionDiagram('${b.id}', '${opt}')"/>
+              <input type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" id="opt-diagram-file-${opt}-${b.id}" onchange="uploadOptionDiagram('${b.id}', '${opt}')"/>
               <div class="diag-paste-hint">or click + paste (Ctrl+V)</div>
             </div>
             <div class="diag-status" id="opt-diagram-status-${opt}-${b.id}"></div>

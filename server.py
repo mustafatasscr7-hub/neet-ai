@@ -5991,14 +5991,29 @@ async def admin_pyq_classifier_data(subject: str, _: None = Depends(verify_admin
     except Exception as e:
         return {"error": str(e)}
 
+# Shared by both diagram-upload endpoints below. Real cross-endpoint audit (2026-09-17): SVG's
+# storage/display path was confirmed clean end-to-end (correct content-type, byte-identical
+# round-trip, renders correctly everywhere every other extension does -- every diagram surface in
+# this codebase loads images via a real <img> tag, which browsers never execute embedded SVG
+# scripts through, unlike inline-SVG injection or <object>/<iframe>). Supabase Storage's own
+# defaults (Content-Disposition: attachment, a sandboxing CSP) additionally block the one context
+# where an SVG's script COULD run (direct navigation to the raw storage URL) -- live-confirmed,
+# not assumed. So "svg" belongs on the same allowlist as the raster formats, not specially gated.
+ALLOWED_DIAGRAM_EXTENSIONS = {"png", "jpg", "jpeg", "webp", "svg"}
+
 @app.post("/admin/pyq-diagram-upload")
 async def admin_pyq_diagram_upload(body: DiagramUploadRequest, _: None = Depends(verify_admin_or_contractor_pdf)):
+    # Previously had NO file-type check at all -- any file (not just images) would upload
+    # successfully and get attached as a PYQ/mock-test diagram. Same allowlist as
+    # /admin/diagram-upload below, for consistency and to close that gap.
+    ext = body.filename.rsplit(".", 1)[-1].lower() if "." in body.filename else ""
+    if ext not in ALLOWED_DIAGRAM_EXTENSIONS or not body.media_type.startswith("image/"):
+        return {"error": "Only PNG, JPG, WEBP, and SVG images are allowed"}
     try:
         file_bytes = base64.b64decode(body.data)
     except Exception:
         return {"error": "Could not decode image data"}
     import uuid
-    ext = body.filename.rsplit(".", 1)[-1] if "." in body.filename else "png"
     path = f"{uuid.uuid4().hex}.{ext}"
     try:
         response = http_requests.post(
@@ -6017,7 +6032,6 @@ async def admin_pyq_diagram_upload(body: DiagramUploadRequest, _: None = Depends
         return {"error": str(e)}
 
 DIAGRAMS_BUCKET = "ncert-daigrams"  # bucket name as actually created in Supabase (matches the existing Q-Daigrams-BIO typo convention)
-ALLOWED_DIAGRAM_EXTENSIONS = {"png", "jpg", "jpeg", "webp"}
 
 # Reference diagrams (admin-diagram-upload.html) -- separate bucket from Q-Daigrams-BIO
 # since these are standalone NCERT-style reference images for future chat doubt-matching,
@@ -6028,7 +6042,7 @@ ALLOWED_DIAGRAM_EXTENSIONS = {"png", "jpg", "jpeg", "webp"}
 async def admin_diagram_upload(body: DiagramUploadRequest, _: None = Depends(verify_admin)):
     ext = body.filename.rsplit(".", 1)[-1].lower() if "." in body.filename else ""
     if ext not in ALLOWED_DIAGRAM_EXTENSIONS or not body.media_type.startswith("image/"):
-        return {"error": "Only PNG, JPG, and WEBP images are allowed"}
+        return {"error": "Only PNG, JPG, WEBP, and SVG images are allowed"}
     try:
         file_bytes = base64.b64decode(body.data)
     except Exception:
