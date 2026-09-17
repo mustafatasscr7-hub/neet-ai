@@ -412,8 +412,8 @@
         ${item.cardLang === 'hi' ? `
         <div class="batch-lang-col hindi">
           <label class="lang-tag">हिन्दी</label>
-          <input type="text" value="${escapeHtml(item.nameHi)}" placeholder="नाम (required)" oninput="updateItemField(${item.id}, 'nameHi', this.value)"/>
-          <input type="text" value="${escapeHtml(item.descriptionHi)}" placeholder="विवरण (optional)" oninput="updateItemField(${item.id}, 'descriptionHi', this.value)"/>
+          <input type="text" value="${escapeHtml(item.nameHi)}" placeholder="नाम (required)" oninput="updateItemField(${item.id}, 'nameHi', this.value)" onpaste="handleKrutiDevPaste(event, ${item.id}, 'nameHi')"/>
+          <input type="text" value="${escapeHtml(item.descriptionHi)}" placeholder="विवरण (optional)" oninput="updateItemField(${item.id}, 'descriptionHi', this.value)" onpaste="handleKrutiDevPaste(event, ${item.id}, 'descriptionHi')"/>
         </div>
         ` : `
         <div class="batch-lang-col">
@@ -435,6 +435,37 @@
   function updateItemField(id, field, value) {
     const item = pendingImages.find(p => p.id === id);
     if (item) item[field] = value;
+  }
+
+  // Auto-converts a pasted Kruti Dev (legacy non-Unicode Hindi font) string into real Unicode
+  // Devanagari the instant it's pasted into a Hindi field -- no button, no extra click. The
+  // paste event fires BEFORE the browser has actually inserted the pasted text into the input
+  // (event.target.value during the paste handler itself would still be the OLD, pre-paste
+  // value), so this defers reading it via setTimeout(0) -- same "let the browser finish its own
+  // default action first" technique the codebase already reaches for elsewhere with real DOM
+  // events. Fails open by design, per /admin/convert-krutidev's own contract: on any failure
+  // (network error, or the endpoint's own success:false) the pasted text is simply left exactly
+  // as the browser put it -- no popup, no rollback, still fully editable either way.
+  function handleKrutiDevPaste(event, id, field) {
+    const inputEl = event.target;
+    setTimeout(async () => {
+      const pastedValue = inputEl.value;
+      if (!pastedValue) return;
+      try {
+        const res = await fetch(`${API_BASE}/admin/convert-krutidev`, {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ text: pastedValue })
+        });
+        const data = await res.json();
+        if (data && data.success && data.converted) {
+          inputEl.value = data.converted;
+          updateItemField(id, field, data.converted);
+        }
+      } catch (e) {
+        // Network failure -- same fail-open outcome as success:false, text stays untouched.
+      }
+    }, 0);
   }
 
   // Switching a card's language only changes which single field pair is shown/required for it --

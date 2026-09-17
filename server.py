@@ -151,6 +151,7 @@ qwen_async_client = openai.AsyncOpenAI(api_key=QWEN_API_KEY, base_url="https://d
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 import requests as http_requests
 from process_pyq_vision import scan_pdf_bytes, scan_mock_test_pdf
+from utils.krutidev2unicode import kru2uni
 
 # Shared verbatim between SYSTEM_PROMPT (rule 12 below) and _VERIFY_MCQ_HEDGE_SYSTEM further down
 # -- kept as ONE constant specifically so the two can never drift out of sync the way they just
@@ -6182,6 +6183,25 @@ async def admin_diagram_upload(body: DiagramUploadRequest, _: None = Depends(ver
         return {"url": f"{SUPABASE_URL}/storage/v1/object/public/{DIAGRAMS_BUCKET}/{path}"}
     except Exception as e:
         return {"error": str(e)}
+
+class KrutiDevConvertRequest(BaseModel):
+    text: str
+
+# admin-diagram-upload.html only -- auto-converts a pasted Kruti Dev (legacy non-Unicode Hindi
+# font) string into real Unicode Devanagari the moment it lands in a Hindi field, so an admin
+# pasting from an old Kruti Dev-typed source doesn't have to retype it. kru2uni is a Python 3
+# port of LTRC IIIT-Hyderabad's kru2uni (github.com/ltrc/kru2uni, MIT-style academic license) --
+# vendored as-is except for the three Python 2->3 compatibility fixes noted in
+# utils/krutidev2unicode.py itself (ur'' string literal, bytes/str handling, return type).
+# Fails open by design: any exception (malformed input, a mapping edge case the library doesn't
+# handle) returns the ORIGINAL text unchanged with success=False, never a 500 -- the frontend's
+# own contract is "leave the pasted text untouched on failure", not surface an error.
+@app.post("/admin/convert-krutidev")
+async def admin_convert_krutidev(req: KrutiDevConvertRequest, _: None = Depends(verify_admin)):
+    try:
+        return {"converted": kru2uni(req.text), "success": True}
+    except Exception:
+        return {"converted": req.text, "success": False}
 
 # Student-submitted chat image attachments -- previously never persisted at all: the message
 # object saved to chats.messages only ever carried {role, text}, so an attached image displayed
