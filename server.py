@@ -796,6 +796,10 @@ class ChatImageUploadRequest(BaseModel):
     media_type: str = "image/png"
     user_id: str
 
+class ChatPdfUploadRequest(BaseModel):
+    data: str  # base64-encoded PDF bytes
+    user_id: str
+
 class DiagramCreate(BaseModel):
     subject: str
     class_: Optional[int] = Field(None, alias="class")
@@ -6380,6 +6384,43 @@ async def chat_image_upload(body: ChatImageUploadRequest, _: None = Depends(rate
         return {"url": f"{SUPABASE_URL}/storage/v1/object/public/{DIAGRAMS_BUCKET}/{path}"}
     except Exception as e:
         print(f"CHAT IMAGE UPLOAD ERROR (user_id={body.user_id}): {e}", flush=True)
+        return {"error": "Something went wrong. Please try again."}
+
+# Same gap as chat images above, but for PDFs: a student-attached PDF doubt was processed
+# in-memory for the model call and never persisted anywhere, so there was no URL to store on the
+# message object -- unlike an image, a PDF-based message had NO way to survive a page reload for
+# Retry/Edit (getResendAttachments's own session cache is the only thing that ever worked, and
+# only within the same browser session). Mirrors /chat-image-upload exactly: same bucket, same
+# chat-uploads/ prefix convention (under a pdfs/ subfolder), same trust model, same rate limiter
+# shape.
+MAX_CHAT_PDF_BYTES = 15 * 1024 * 1024
+@app.post("/chat-pdf-upload")
+async def chat_pdf_upload(body: ChatPdfUploadRequest, _: None = Depends(rate_limiter(10, 60))):
+    if not body.user_id:
+        return {"error": "Not logged in"}
+    try:
+        file_bytes = base64.b64decode(body.data)
+    except Exception:
+        return {"error": "Could not decode PDF data"}
+    if len(file_bytes) > MAX_CHAT_PDF_BYTES:
+        return {"error": "PDF too large"}
+    import uuid
+    path = f"chat-uploads/pdfs/{uuid.uuid4().hex}.pdf"
+    try:
+        response = http_requests.post(
+            f"{SUPABASE_URL}/storage/v1/object/{DIAGRAMS_BUCKET}/{path}",
+            headers={
+                "apikey": SUPABASE_SERVICE_KEY,
+                "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+                "Content-Type": "application/pdf"
+            },
+            data=file_bytes
+        )
+        if response.status_code >= 400:
+            return {"error": response.text}
+        return {"url": f"{SUPABASE_URL}/storage/v1/object/public/{DIAGRAMS_BUCKET}/{path}"}
+    except Exception as e:
+        print(f"CHAT PDF UPLOAD ERROR (user_id={body.user_id}): {e}", flush=True)
         return {"error": "Something went wrong. Please try again."}
 
 @app.post("/admin/diagrams-create")

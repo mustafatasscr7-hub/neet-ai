@@ -1803,6 +1803,9 @@ function togglePlusMenu() {
 let selectedImages = [];
     let selectedPDF = null;
     let selectedPDFName = null;
+    // Kicked off the moment a PDF is attached (see the pdfInput change handler below), same
+    // timing as each image's own entry.uploadPromise -- resolves to a Storage URL or null.
+    let selectedPDFUploadPromise = null;
 
     // Must match server.py's own IMAGE_ONLY_PLACEHOLDER_TEXT constant exactly -- sendMessage's
     // own questionForModel fallback already uses this literal; retryMessage needs the same
@@ -1811,42 +1814,58 @@ let selectedImages = [];
     const IMAGE_ONLY_PLACEHOLDER_TEXT = 'Describe this image and answer any NEET related content in it.';
 
     // Retry/Edit need to resend the ORIGINAL image/PDF bytes, not just whatever's visible on the
-    // message object -- .images there only ever holds Storage URLs (deliberately lightweight,
+    // message object -- .images/.pdf there only ever hold Storage URLs (deliberately lightweight,
     // since the whole currentConversation array gets persisted verbatim to chats.messages on
-    // every save; stashing raw base64 there would bloat every saved chat row), and a PDF has no
-    // persisted reference at all. This holds the raw base64 payload actually sent, but ONLY for
-    // the current browser session -- a WeakMap keyed by the message object itself, so entries
-    // vanish naturally once a message is edited away. See getResendAttachments for the fallback
-    // used when this cache is empty (e.g. after a reload).
+    // every save; stashing raw base64 there would bloat every saved chat row). This holds the raw
+    // base64 payload actually sent, but ONLY for the current browser session -- a WeakMap keyed
+    // by the message object itself, so entries vanish naturally once a message is edited away.
+    // See getResendAttachments for the fallback used when this cache is empty (e.g. after a
+    // reload) -- it re-fetches from the persisted Storage URL instead.
     const rawAttachmentCache = new WeakMap();
 
+    // Fetches a Storage URL and resolves it to a base64 data-URL body (no MIME prefix) -- shared
+    // by both the image and PDF fallback paths below, which only differ in what they do with the
+    // decoded result.
+    async function fetchUrlAsBase64(url) {
+      const res = await fetch(url);
+      const blob = await res.blob();
+      const dataUrl = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+      return dataUrl;
+    }
+
     // Shared by retryMessage/editMessage. Tries the current-session cache first (fast, no
-    // network, works even for a failed/guest upload); falls back to re-fetching from the
-    // persisted Storage URL for an image (the only thing that survives a reload); a PDF has no
-    // such fallback -- it was never uploaded anywhere -- so it simply can't be recovered after a
-    // reload, a pre-existing limitation this doesn't remove, just doesn't make any worse.
+    // network, works even for a failed/guest upload); falls back to re-fetching from each
+    // attachment's own persisted Storage URL otherwise (the only thing that survives a reload) --
+    // images and PDF are resolved independently of each other, not mutually exclusive, since a
+    // reload can leave either one (or both) needing the network fallback.
     async function getResendAttachments(userMsg) {
       const cached = rawAttachmentCache.get(userMsg);
       if (cached) return cached;
+      const result = { images: [], pdf: null };
       if (userMsg && userMsg.images && userMsg.images.length) {
         try {
-          const images = await Promise.all(userMsg.images.map(async (url) => {
-            const res = await fetch(url);
-            const blob = await res.blob();
-            const dataUrl = await new Promise((resolve, reject) => {
-              const reader = new FileReader();
-              reader.onload = () => resolve(reader.result);
-              reader.onerror = reject;
-              reader.readAsDataURL(blob);
-            });
+          result.images = await Promise.all(userMsg.images.map(async (url) => {
+            const dataUrl = await fetchUrlAsBase64(url);
             return { data: dataUrl.split(',')[1], type: dataUrl.split(';')[0].split(':')[1] };
           }));
-          return { images, pdf: null };
         } catch (e) {
-          return { images: [], pdf: null };
+          result.images = [];
         }
       }
-      return { images: [], pdf: null };
+      if (userMsg && userMsg.pdf) {
+        try {
+          const dataUrl = await fetchUrlAsBase64(userMsg.pdf);
+          result.pdf = dataUrl.split(',')[1];
+        } catch (e) {
+          result.pdf = null;
+        }
+      }
+      return result;
     }
 
     function isPro() {
@@ -1929,6 +1948,27 @@ let selectedImages = [];
       }
     }
 
+    // Mirrors uploadChatImageForPersistence exactly, for PDFs -- see /chat-pdf-upload's own
+    // comment in server.py for why this exists (a PDF-based doubt had no persisted reference at
+    // all, unlike images, so getResendAttachments's Storage-URL fallback had nothing to fall back
+    // to after a reload).
+    async function uploadChatPdfForPersistence(dataUrl) {
+      try {
+        const { data: { session } } = await client.auth.getSession();
+        if (!session) return null; // guest chats aren't persisted to Supabase at all -- nothing to upload for
+        const base64 = dataUrl.split(',')[1];
+        const res = await fetch(`${API_BASE}/chat-pdf-upload`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ data: base64, user_id: session.user.id })
+        });
+        const json = await res.json();
+        return json.url || null;
+      } catch (e) {
+        return null;
+      }
+    }
+
     async function addImageFiles(files) {
       const room = maxImages() - selectedImages.length;
       if (room <= 0) { renderAttachmentPreview(); return; }
@@ -1953,6 +1993,7 @@ let selectedImages = [];
       reader.onload = function(event) {
         selectedPDF = event.target.result;
         selectedPDFName = file.name;
+        selectedPDFUploadPromise = uploadChatPdfForPersistence(selectedPDF);
         renderAttachmentPreview();
       };
       reader.readAsDataURL(file);
@@ -2052,6 +2093,7 @@ let selectedImages = [];
     function removePdfAttachment() {
       selectedPDF = null;
       selectedPDFName = null;
+      selectedPDFUploadPromise = null;
       document.getElementById('pdfInput').value = '';
       renderAttachmentPreview();
     }
@@ -2060,6 +2102,7 @@ let selectedImages = [];
       selectedImages = [];
       selectedPDF = null;
       selectedPDFName = null;
+      selectedPDFUploadPromise = null;
       document.getElementById('imageInput').value = '';
       document.getElementById('pdfInput').value = '';
       renderAttachmentPreview();
@@ -4398,11 +4441,11 @@ function plainTextFromMarkdown(text) {
       const bubble = row.querySelector('.message-bubble');
       bubble.classList.add('regenerating');
 
-      // Previously dropped .images/.pdf entirely -- userMsg only ever carries a Storage URL (or,
-      // after a reload, nothing at all for a PDF), never the bytes a real vision call needs, so a
-      // naive resend here would silently fall through to a text-only model with nothing to
-      // answer from. getResendAttachments resolves the actual bytes to send, from the current-
-      // session cache or, for an image, a re-fetch of its persisted URL.
+      // Previously dropped .images/.pdf entirely -- userMsg only ever carries a Storage URL,
+      // never the bytes a real vision call needs, so a naive resend here would silently fall
+      // through to a text-only model with nothing to answer from. getResendAttachments resolves
+      // the actual bytes to send, from the current-session cache or, after a reload, a re-fetch
+      // of each attachment's own persisted Storage URL.
       const { images, pdf } = await getResendAttachments(userMsg);
 
       // Same quote-wrapping as a normal/edited send -- otherwise regenerating an answer to a
@@ -4567,14 +4610,16 @@ function plainTextFromMarkdown(text) {
 
         const newIndex = currentConversation.length;
         const newMsgObj = originalQuotedText ? { role: 'user', text: newText, quotedText: originalQuotedText } : { role: 'user', text: newText };
-        // Carries the ORIGINAL turn's attachment forward onto the edited one -- a persisted
-        // Storage URL (if the original image upload succeeded) so the edited turn still shows
+        // Carries the ORIGINAL turn's attachment(s) forward onto the edited one -- a persisted
+        // Storage URL (if the original image/PDF upload succeeded) so the edited turn still shows
         // its thumbnail and survives a later reload the same way a fresh send does, and the raw
         // bytes re-cached under this NEW object so a further retry/edit on this same turn keeps
-        // working without a second re-fetch. A PDF has no persisted URL to carry forward -- only
-        // the session cache, already covered by rawAttachmentCache.set below.
+        // working without a second re-fetch.
         if (originalUserMsg && originalUserMsg.images && originalUserMsg.images.length) {
           newMsgObj.images = originalUserMsg.images;
+        }
+        if (originalUserMsg && originalUserMsg.pdf) {
+          newMsgObj.pdf = originalUserMsg.pdf;
         }
         if (images.length > 0 || pdf) {
           rawAttachmentCache.set(newMsgObj, { images, pdf });
@@ -6256,6 +6301,9 @@ function plainTextFromMarkdown(text) {
         type: img.data.split(';')[0].split(':')[1]
       }));
       const pdfData = selectedPDF;
+      // Captured into a local before clearAttachments() below nulls the module-level variable --
+      // same reason imagesPayload/pdfData are captured up here rather than read again later.
+      const pdfUploadPromise = selectedPDFUploadPromise;
 
       // Retry/Edit resend these exact bytes later, for the current session, without needing a
       // network re-fetch -- see getResendAttachments's own comment for why this can't just live
@@ -6279,6 +6327,13 @@ function plainTextFromMarkdown(text) {
         const uploadedUrls = await Promise.all(selectedImages.map(img => img.uploadPromise));
         const validUrls = uploadedUrls.filter(Boolean);
         userMsgObj.images = validUrls.length > 0 ? validUrls : undefined;
+      }
+      // Same pattern as the image URL resolution just above, mirrored for the PDF -- this is what
+      // makes a PDF-based doubt survive a page reload for Retry/Edit (see getResendAttachments's
+      // PDF fallback), the same way userMsgObj.images already does for images.
+      if (pdfData) {
+        const pdfUrl = await pdfUploadPromise;
+        userMsgObj.pdf = pdfUrl || undefined;
       }
 
       // Captured into imagesPayload/pdfData/activeQuote above already, so clearing the compose-box
