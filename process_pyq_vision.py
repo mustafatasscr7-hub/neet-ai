@@ -156,6 +156,16 @@ backslashes to the student, not as rendered math. Example: source text "dimensio
 (mu0 epsilon0)^-1/2 are" should become "dimensions of $(\\mu_{{0}}\\varepsilon_{{0}})^{{-1/2}}$
 are", not left as plain "(mu0 epsilon0)^-1/2" or only partially wrapped.
 
+A numbered option (1./2./3./4.) may be split across several lines in this raw text -- e.g. a
+fraction's numerator on one line and its denominator on the next, or a two-term expression like
+"2Q/4πε0R - 2q/4πε0R" with each term on its own line. Treat ALL text between one option's own
+number and the start of the next option's number as belonging to that ONE option, however many
+lines it spans. Every MCQ question has exactly 4 options (1-4) -- never merge two different
+option numbers' content into a single option field, never split one option's own content across
+two different option fields, and never invent/fabricate an option's content from unrelated
+leftover text. If the raw text for one of the 4 options is genuinely missing or unrecoverable,
+leave that option_X field as an empty string rather than guessing or fabricating a value.
+
 For EACH complete question in this text, extract:
 - question (full question text, including any sub-statements A/B/C/D or i/ii/iii if part of the question) - do not include the marker itself in the question text
 - option_a, option_b, option_c, option_d (exact text of each option)
@@ -248,6 +258,156 @@ def _block_text_from_dict(block):
     line_texts = [_reconstruct_line_text(line) for line in block.get("lines", [])]
     return "\n".join(t for t in line_texts if t)
 
+# Matches a block whose ENTIRE text is just a numbered-option marker ("1.", "2.", ... "4.") and
+# nothing else -- see _reconstruct_fragmented_options below for why this specific shape is the
+# signal that a whole option list needs special handling.
+_BARE_OPTION_MARKER_RE = re.compile(r'^([1-4])\.\s*$')
+# Deliberately broader than _QUESTION_START_RE (which requires a literal "."/")" right after the
+# number, e.g. "4)") -- a real question's own stem frequently starts with just "NN " and no
+# punctuation at all (confirmed live, e.g. "55 An electric field exists..."), which the stricter
+# regex never matches. Used below only to find the next safe stopping point for an option zone,
+# never to identify question boundaries anywhere else.
+_ANY_NUMBER_START_RE = re.compile(r'^\d{1,3}\b')
+
+def _cluster_columns(items, x_key, threshold=8):
+    """Greedy 1D clustering of items into left-to-right columns by x-position."""
+    sorted_items = sorted(items, key=x_key)
+    clusters = []
+    for item in sorted_items:
+        x = x_key(item)
+        if clusters and x - x_key(clusters[-1][-1]) <= threshold:
+            clusters[-1].append(item)
+        else:
+            clusters.append([item])
+    return clusters
+
+def _reconstruct_fragmented_options(blocks, mid_x, page_width):
+    """Detects a numbered option list (1.-4.) whose markers PyMuPDF split into their own bare
+    blocks, separated from math content (fractions, operators) that got fragmented -- and
+    sometimes MERGED ACROSS DIFFERENT OPTIONS into one indivisible block -- by PyMuPDF's own
+    block-clustering. Confirmed via a real PDF (NEET Physics "Electrostatic Potential and
+    Capacitance", Q27: a thin spherical shell question with a fraction-heavy option list) where
+    this silently scrambled option values across all 4 options -- one option's value corrupted
+    (numerator/denominator from two different options merged), and the rest shifted, with a
+    fabricated leftover 4th option. A pure sort-order fix cannot recover this: once PyMuPDF's own
+    block boundaries have merged two different options' content into one block, that information
+    is already gone at the block level. The fix instead goes down to LINE-level bboxes (each line
+    keeps its own accurate position even when its parent block merged multiple options together),
+    assigns each content line to its NEAREST option marker by vertical distance, then reconstructs
+    each option's own reading order via left-to-right sub-column clustering (for side-by-side
+    fraction/operator/fraction layouts, e.g. "2Q/4pi*e0*R - 2q/4pi*e0*R") using each line's
+    CENTER-x rather than its left edge -- a narrow single-glyph numerator/operator (e.g. "q") sits
+    centered over its own wider denominator, not left-aligned with it, since real math
+    typesetting centers a fraction's parts around a shared midline.
+
+    Returns (excluded_block_ids, reconstructed_entries): the caller should skip normal block-level
+    handling for excluded_block_ids and add reconstructed_entries (x0, y0, text) in their place.
+    Returns (set(), []) when no fragmented option list is detected -- the overwhelmingly common
+    case, left completely untouched by this function."""
+    bare_markers = []
+    for b in blocks:
+        text = _block_text_from_dict(b).strip()
+        m = _BARE_OPTION_MARKER_RE.match(text)
+        if m:
+            bare_markers.append({"num": int(m.group(1)), "bbox": b["bbox"], "block": b})
+
+    # Must be a consistent x-column (all markers left-aligned to each other) and start at 1 to
+    # be confident this is a real, in-order option list, not a coincidental digit-period block.
+    bare_markers.sort(key=lambda m: m["bbox"][1])
+    groups = []
+    i = 0
+    while i < len(bare_markers):
+        run = [bare_markers[i]]
+        j = i + 1
+        while (j < len(bare_markers) and bare_markers[j]["num"] == run[-1]["num"] + 1
+               and abs(bare_markers[j]["bbox"][0] - run[0]["bbox"][0]) <= 3):
+            run.append(bare_markers[j])
+            j += 1
+        if run[0]["num"] == 1 and len(run) >= 2:
+            groups.append(run)
+        i = j
+
+    if not groups:
+        return set(), []
+
+    excluded_ids = set()
+    reconstructed_entries = []
+    for markers in groups:
+        marker_x0 = markers[0]["bbox"][0]
+        zone_x0 = marker_x0 - 2
+        # Never cross into the OTHER page-column -- otherwise a totally unrelated question's own
+        # option list sitting in the other column (same page, only coincidentally Y-overlapping)
+        # bleeds straight in.
+        zone_x1 = mid_x if marker_x0 < mid_x else page_width
+        # Small margin -- just enough to catch an option's own content starting a few points
+        # above its marker (a fraction's numerator commonly sits slightly above the marker's own
+        # baseline), without reaching far enough to also catch the previous option's tail or the
+        # question stem's own inline math sitting almost flush against it.
+        zone_y0 = markers[0]["bbox"][1] - 8
+        last_y1 = markers[-1]["bbox"][3]
+        # Bound the zone's bottom at whatever comes next in this same column (the next question's
+        # own stem, or another option list's own "1." for a short, closely-spaced option block) --
+        # a fixed trailing margin alone bled into whatever followed whenever options were short.
+        next_boundary_ys = [
+            b["bbox"][1] for b in blocks
+            if b["bbox"][1] > last_y1 and abs(b["bbox"][0] - marker_x0) <= 3
+            and _ANY_NUMBER_START_RE.match(_block_text_from_dict(b).strip())
+        ]
+        zone_y1 = (min(next_boundary_ys) - 2) if next_boundary_ys else (last_y1 + 15)
+
+        marker_block_ids = {id(m["block"]) for m in markers}
+        zone_block_ids = set(marker_block_ids)
+        content_lines = []
+        for b in blocks:
+            if id(b) in marker_block_ids:
+                continue
+            bx0, by0, bx1, by1 = b["bbox"]
+            if bx1 < zone_x0 or bx0 > zone_x1 or by0 > zone_y1 or by1 < zone_y0:
+                continue
+            block_contributed = False
+            for line in b.get("lines", []):
+                lx0, ly0, lx1, ly1 = line["bbox"]
+                # Compare the line's OWN top edge against the zone (not "does this line's bbox
+                # overlap at all") -- a line whose bbox straddles the boundary needs a clean,
+                # unambiguous side to land on, not a fuzzy overlap test.
+                if lx1 < zone_x0 or lx0 > zone_x1 or ly0 < zone_y0 or ly0 > zone_y1:
+                    continue
+                text = _reconstruct_line_text(line).strip()
+                if not text:
+                    continue
+                # Real math-fragment content here is always short (a bare number, operator, or
+                # short symbolic term) and sits to the right of the marker's own x-column --
+                # excludes the question stem's own prose wrapping into this same vertical band.
+                if lx0 < marker_x0 + 10 or len(text) > 20:
+                    continue
+                content_lines.append({"bbox": line["bbox"], "text": text})
+                block_contributed = True
+            if block_contributed:
+                zone_block_ids.add(id(b))
+
+        if not content_lines:
+            continue  # bare markers with no matching content -- leave this page's block-level path untouched
+
+        marker_y_centers = [(m["num"], (m["bbox"][1] + m["bbox"][3]) / 2) for m in markers]
+        by_num = {m["num"]: [] for m in markers}
+        for line in content_lines:
+            ly_center = (line["bbox"][1] + line["bbox"][3]) / 2
+            nearest_num = min(marker_y_centers, key=lambda mc: abs(mc[1] - ly_center))[0]
+            by_num[nearest_num].append(line)
+
+        for m in markers:
+            columns = _cluster_columns(by_num[m["num"]], x_key=lambda l: (l["bbox"][0] + l["bbox"][2]) / 2)
+            columns.sort(key=lambda col: min((l["bbox"][0] + l["bbox"][2]) / 2 for l in col))
+            parts = []
+            for col in columns:
+                parts.extend(l["text"] for l in sorted(col, key=lambda l: l["bbox"][1]))
+            option_text = f"{m['num']}. " + " ".join(parts)
+            reconstructed_entries.append((marker_x0, m["bbox"][1], option_text))
+
+        excluded_ids |= zone_block_ids
+
+    return excluded_ids, reconstructed_entries
+
 # A raster image narrower or shorter than this many pixels is near-certainly a repeated fill-
 # tile (table/answer-box shading), not real diagram content -- confirmed on a real PDF
 # (AIPMT_2015.pdf) where a 2x2px image was placed 9 times on one page, each placement previously
@@ -304,14 +464,18 @@ def extract_pages_text_and_diagrams(pdf_bytes):
             if min(xref_dims.get(xref, (0, 0))) >= _MIN_DIAGRAM_DIM
         }
         mid_x = page.rect.width / 2
+        page_blocks = [b for b in page.get_text("dict")["blocks"] if b.get("type") == 0]
+        excluded_block_ids, reconstructed_entries = _reconstruct_fragmented_options(page_blocks, mid_x, page.rect.width)
+
         text_entries = []  # (x0, y0, text)
-        for block in page.get_text("dict")["blocks"]:
-            if block.get("type") != 0:
+        for block in page_blocks:
+            if id(block) in excluded_block_ids:
                 continue
             block_text = _block_text_from_dict(block)
             if block_text.strip():
                 x0, y0 = block["bbox"][0], block["bbox"][1]
                 text_entries.append((x0, y0, block_text.strip()))
+        text_entries.extend(reconstructed_entries)
 
         # A one-time (non-repeating) image sitting ABOVE the first real question on the page -
         # e.g. a chapter-title banner - is a decorative header, not a per-question diagram.
@@ -695,6 +859,40 @@ def format_numbered_substatements(text):
 
 _EXTRACTED_TEXT_FIELDS = ("question", "option_a", "option_b", "option_c", "option_d")
 
+def _normalize_option_for_dedupe(text):
+    if not isinstance(text, str):
+        return ""
+    return re.sub(r'\s+', '', text.replace('$', '')).lower()
+
+def _flag_suspicious_mcq_options(q):
+    """Belt-and-suspenders check, not a fix on its own: doesn't correct anything, just makes a
+    bad result visible instead of silently saving it. Catches the two failure shapes the option-
+    list fragmentation bug (see _reconstruct_fragmented_options) actually produced on a real PDF
+    even before that fix existed -- two options merged into identical text, and an empty/missing
+    option left behind by the merge -- so a case _reconstruct_fragmented_options's own detection
+    doesn't cover (a different PDF's layout quirk, a genuinely low-confidence model guess) still
+    surfaces for manual review instead of saving straight through unflagged."""
+    if q.get("question_type") != "mcq":
+        return
+    opts = {label: q.get(f"option_{label}", "") for label in ("a", "b", "c", "d")}
+    empties = [label for label, val in opts.items() if not isinstance(val, str) or not val.strip()]
+    if empties:
+        q["needs_review"] = True
+        q["review_reason"] = f"Option(s) {', '.join(l.upper() for l in empties)} came back empty for an MCQ question -- extraction may have merged or dropped an option."
+        return
+    seen = {}
+    dupes = []
+    for label, val in opts.items():
+        norm = _normalize_option_for_dedupe(val)
+        if norm in seen:
+            dupes.append((seen[norm], label))
+        else:
+            seen[norm] = label
+    if dupes:
+        pairs = ", ".join(f"{a.upper()}/{b.upper()}" for a, b in dupes)
+        q["needs_review"] = True
+        q["review_reason"] = f"Option(s) {pairs} came back identical -- extraction may have scrambled this question's options, please review manually."
+
 def _parse_extraction_json(text, page_num):
     """Shared by both extraction paths (Gemini text-only and Claude Vision). Always runs the
     backslash fix BEFORE parsing rather than only as an exception fallback -- see
@@ -726,6 +924,7 @@ def _parse_extraction_json(text, page_num):
         # doesn't run on option_a-d too.
         if isinstance(q.get("question"), str):
             q["question"] = format_numbered_substatements(q["question"])
+        _flag_suspicious_mcq_options(q)
     return questions
 
 def extract_questions_from_text(page_text, page_num, subject="Biology", model=TEXT_MODEL):
@@ -823,8 +1022,20 @@ def scan_pdf_bytes(pdf_bytes, subject, max_workers=4):
                 "has_diagram": bool(q.get("has_diagram", False)),
                 "year": q.get("year"),
                 "source_tag": q.get("source_tag"),
-                "source_page": page_num
+                "source_page": page_num,
+                "needs_review": bool(q.get("needs_review", False)),
+                "review_reason": q.get("review_reason"),
             })
+            # Reuses the existing flagged_pages banner (already wired up in admin-pdf-review.html)
+            # rather than adding a new UI element -- a per-question review flag is exactly the
+            # same "something here needs a human look before trusting it" signal the banner
+            # already exists for, just with a question-level cause instead of a page-level one.
+            if q.get("needs_review"):
+                snippet = (q.get("question") or "")[:80]
+                flagged_pages.append({
+                    "page": page_num,
+                    "reason": f"“{snippet}...” -- {q.get('review_reason', 'flagged for manual review')}"
+                })
     flagged_pages.sort(key=lambda f: f["page"])
     return {"questions": questions, "pages_scanned": len(pages), "flagged_pages": flagged_pages}
 

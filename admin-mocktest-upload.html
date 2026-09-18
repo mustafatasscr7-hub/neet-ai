@@ -601,9 +601,13 @@
     const banner = document.getElementById('flaggedPagesBanner');
     if (!flaggedPages || flaggedPages.length === 0) { banner.style.display = 'none'; return; }
     banner.style.display = 'block';
-    banner.innerHTML = `<strong>${flaggedPages.length} page(s) skipped - extraction failed or possible scanned page:</strong><br>` +
+    // Covers two different causes under one banner: a whole page that was skipped (never sent
+    // for extraction, won't appear below at all) and a single already-extracted question below
+    // whose options look unreliable (e.g. two identical options) and are worth double-checking --
+    // the wording below has to stay true for both, not just the page-skip case this started as.
+    banner.innerHTML = `<strong>${flaggedPages.length} item(s) flagged for review:</strong><br>` +
       flaggedPages.map(f => `${escapeHtml(f.subject || '')} page ${f.page}: ${escapeHtml(f.reason)}`).join('<br>') +
-      `<br>These pages were NOT sent for question extraction and won't appear below - check them manually in the PDF and use "+ Add Missed Question" if needed.`;
+      `<br>A skipped page was NOT sent for extraction and won't appear below - check it manually and use "+ Add Missed Question" if needed. A flagged question IS already below - just double-check its options before saving.`;
   }
 
   // ---------------- Block rendering ----------------
