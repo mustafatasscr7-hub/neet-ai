@@ -5170,11 +5170,22 @@ async def get_personalised_test_questions(req: PersonalisedTestRequest, _: None 
         return {"error": "Invalid subject"}
     try:
         import random
-        count = max(1, min(int(req.count), 200))
+        # Lowered from 200 (scraping audit, 2026-09-19) -- no real personalised-test UI flow ever
+        # requested anywhere near that many in one call (the frontend's own preset buttons top out
+        # at 50, and its custom-count input is now capped to match -- see
+        # personalised-test.html's onCustomCountInput/customCountInput). 200 with select: "*" was
+        # needlessly returning far more than any legitimate use needed, including the (unused by
+        # the frontend) embedding vector column.
+        count = max(1, min(int(req.count), 50))
         headers = {
             "apikey": SUPABASE_KEY,
             "Authorization": f"Bearer {SUPABASE_KEY}"
         }
+        # Same explicit column list as /mock-test-questions' own `cols` -- confirmed against
+        # personalised-test.html (every place it reads a question field, including the
+        # save-report/mock-results-style review payloads) that these are the only ones ever used;
+        # trimmed off select: "*" 's everything-including-the-embedding-vector.
+        select_cols = "id,subject,chapter,year,question,option_a,option_b,option_c,option_d,correct_answer,difficulty,diagram_url,option_a_diagram_url,option_b_diagram_url,option_c_diagram_url,option_d_diagram_url"
         pool = []
         seen_subjects = set()
         for sel in req.selections:
@@ -5184,7 +5195,7 @@ async def get_personalised_test_questions(req: PersonalisedTestRequest, _: None 
             params = {
                 "subject": f"eq.{sel.subject}",
                 "is_active": "eq.true",
-                "select": "*",
+                "select": select_cols,
                 "limit": 1000
             }
             chapters = [c.strip() for c in sel.chapters if c and c.strip()]

@@ -549,7 +549,7 @@
               <button type="button" class="count-btn" onclick="selectCustomCount(this)" data-i18n="personalisedTest.custom">Custom</button>
             </div>
             <div id="customCountWrap">
-              <input type="number" id="customCountInput" min="1" max="200" placeholder="e.g. 30" oninput="onCustomCountInput(this)"/>
+              <input type="number" id="customCountInput" min="1" max="50" placeholder="e.g. 30" oninput="onCustomCountInput(this)"/>
             </div>
           </div>
 
@@ -1120,7 +1120,10 @@
     }
 
     function onCustomCountInput(el) {
-      const v = Math.max(1, Math.min(200, parseInt(el.value) || 1));
+      // Matches /personalised-test-questions' own server-side cap (lowered from 200 to 50,
+      // scraping audit 2026-09-19) -- without this the input let a student type e.g. 150 and the
+      // server would silently hand back only 50 with no explanation.
+      const v = Math.max(1, Math.min(50, parseInt(el.value) || 1));
       selectedCount = v;
     }
 
