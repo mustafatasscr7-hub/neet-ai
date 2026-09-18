@@ -1804,6 +1804,51 @@ let selectedImages = [];
     let selectedPDF = null;
     let selectedPDFName = null;
 
+    // Must match server.py's own IMAGE_ONLY_PLACEHOLDER_TEXT constant exactly -- sendMessage's
+    // own questionForModel fallback already uses this literal; retryMessage needs the same
+    // fallback (see its own comment) since userMsg.text for an image-only turn is the raw, often
+    // empty, typed caption, never this placeholder.
+    const IMAGE_ONLY_PLACEHOLDER_TEXT = 'Describe this image and answer any NEET related content in it.';
+
+    // Retry/Edit need to resend the ORIGINAL image/PDF bytes, not just whatever's visible on the
+    // message object -- .images there only ever holds Storage URLs (deliberately lightweight,
+    // since the whole currentConversation array gets persisted verbatim to chats.messages on
+    // every save; stashing raw base64 there would bloat every saved chat row), and a PDF has no
+    // persisted reference at all. This holds the raw base64 payload actually sent, but ONLY for
+    // the current browser session -- a WeakMap keyed by the message object itself, so entries
+    // vanish naturally once a message is edited away. See getResendAttachments for the fallback
+    // used when this cache is empty (e.g. after a reload).
+    const rawAttachmentCache = new WeakMap();
+
+    // Shared by retryMessage/editMessage. Tries the current-session cache first (fast, no
+    // network, works even for a failed/guest upload); falls back to re-fetching from the
+    // persisted Storage URL for an image (the only thing that survives a reload); a PDF has no
+    // such fallback -- it was never uploaded anywhere -- so it simply can't be recovered after a
+    // reload, a pre-existing limitation this doesn't remove, just doesn't make any worse.
+    async function getResendAttachments(userMsg) {
+      const cached = rawAttachmentCache.get(userMsg);
+      if (cached) return cached;
+      if (userMsg && userMsg.images && userMsg.images.length) {
+        try {
+          const images = await Promise.all(userMsg.images.map(async (url) => {
+            const res = await fetch(url);
+            const blob = await res.blob();
+            const dataUrl = await new Promise((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = () => resolve(reader.result);
+              reader.onerror = reject;
+              reader.readAsDataURL(blob);
+            });
+            return { data: dataUrl.split(',')[1], type: dataUrl.split(';')[0].split(':')[1] };
+          }));
+          return { images, pdf: null };
+        } catch (e) {
+          return { images: [], pdf: null };
+        }
+      }
+      return { images: [], pdf: null };
+    }
+
     function isPro() {
       // No self-serve billing yet -- plans are flipped manually via the admin endpoint -- but
       // once a user_plan row says otherwise, the UI should honor it. userPlan is kept in sync
@@ -4231,12 +4276,11 @@ let selectedImages = [];
         contentWrapper.appendChild(bubble);
         contentWrapper.appendChild(buildActionsDiv('ai', timeStr, msgObj));
       } else {
-        // An attached image used to vanish on reload -- the live send renders it straight from
-        // the in-memory base64 (imgRow in sendMessage), but userMsgObj itself never carried the
-        // image at all, so the text portion survived a page refresh while the image didn't (see
-        // sendMessage's upload-on-attach + userMsgObj.images for where this is now persisted).
-        // Same visual structure as that live imgRow: a wrapped row of thumbnails, right-aligned,
-        // above the text bubble.
+        // sendMessage renders a fresh image send through this exact same branch (seeding
+        // msgObj.images with local data URLs before calling this function, then swapping in the
+        // real Storage URLs afterward once upload finishes -- see its own comment), so a reload
+        // shows the identical thumbnail row + Copy/Edit actions a live send already had, instead
+        // of a separate reload-only rendering.
         if (msgObj && msgObj.images && msgObj.images.length) {
           const imgWrap = document.createElement('div');
           imgWrap.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end;margin-bottom:8px;';
@@ -4337,14 +4381,6 @@ function plainTextFromMarkdown(text) {
       if (isNaN(aiIndex) || aiIndex < 1) return;
       const userMsg = currentConversation[aiIndex - 1];
       if (!userMsg || userMsg.role !== 'user') return;
-      // Same quote-wrapping as a normal/edited send -- otherwise regenerating an answer to a
-      // quoted question silently drops the quote as context too, the same gap editMessage had.
-      let questionText = userMsg.text;
-      const retryStreamOptions = { skipCache: true };
-      if (userMsg.quotedText) {
-        questionText = `Regarding this part: "${userMsg.quotedText}"\n\nStudent asks: ${userMsg.text}`;
-        retryStreamOptions.pyqSearchText = userMsg.text;
-      }
 
       // In-place regenerate, matching Claude.ai's retry pattern: the row/bubble stay exactly
       // where they are -- no DOM removal, no new row appended elsewhere. The previous
@@ -4357,9 +4393,33 @@ function plainTextFromMarkdown(text) {
       // The old answer is dimmed, not cleared -- streamAIResponse only actually replaces it
       // once real new content starts arriving (see its ensureAiRow), so a failed/aborted retry
       // (network error, quota newly hit, Stop clicked) leaves the original answer intact rather
-      // than an empty bubble.
+      // than an empty bubble. Dimmed BEFORE the attachment resolution below (which can involve a
+      // real network re-fetch after a reload) so there's immediate feedback either way.
       const bubble = row.querySelector('.message-bubble');
       bubble.classList.add('regenerating');
+
+      // Previously dropped .images/.pdf entirely -- userMsg only ever carries a Storage URL (or,
+      // after a reload, nothing at all for a PDF), never the bytes a real vision call needs, so a
+      // naive resend here would silently fall through to a text-only model with nothing to
+      // answer from. getResendAttachments resolves the actual bytes to send, from the current-
+      // session cache or, for an image, a re-fetch of its persisted URL.
+      const { images, pdf } = await getResendAttachments(userMsg);
+
+      // Same quote-wrapping as a normal/edited send -- otherwise regenerating an answer to a
+      // quoted question silently drops the quote as context too, the same gap editMessage had.
+      // userMsg.text is the raw typed caption for an image-only turn -- always empty, since the
+      // actual placeholder sent to the model at send time (questionForModel/
+      // IMAGE_ONLY_PLACEHOLDER_TEXT) was never written back onto the stored message. Without this
+      // fallback, retrying an image-only doubt sent an empty-text request that fell through to
+      // the plain-text model with nothing to answer from -- the exact bug this fix is for.
+      let questionText = userMsg.text || ((images.length > 0 || pdf) ? IMAGE_ONLY_PLACEHOLDER_TEXT : '');
+      const retryStreamOptions = { skipCache: true };
+      if (images.length > 0) retryStreamOptions.images = images;
+      if (pdf) retryStreamOptions.pdf = pdf;
+      if (userMsg.quotedText) {
+        questionText = `Regarding this part: "${userMsg.quotedText}"\n\nStudent asks: ${userMsg.text}`;
+        retryStreamOptions.pyqSearchText = userMsg.text;
+      }
 
       retryStreamOptions.retryTarget = { row, bubble, aiIndex };
       await streamAIResponse(questionText, retryStreamOptions);
@@ -4447,9 +4507,13 @@ function plainTextFromMarkdown(text) {
       const userIndex = parseInt(row.dataset.msgIndex, 10);
       if (isNaN(userIndex)) return;
       const contentWrapper = row.querySelector('.message-content');
+      // Null for a captionless image-only message -- addMessageRow only ever appends the bubble
+      // element when there's real text (`if (text) { ...; contentWrapper.appendChild(bubble); }`),
+      // so an image sent with no caption has no .message-bubble in the DOM at all. Only reachable
+      // now that a live/reloaded image message actually has an Edit button to begin with.
       const bubble = contentWrapper.querySelector('.message-bubble');
       const actions = contentWrapper.querySelector('.message-actions');
-      const originalText = currentConversation[userIndex] ? currentConversation[userIndex].text : bubble.innerText;
+      const originalText = currentConversation[userIndex] ? currentConversation[userIndex].text : (bubble ? bubble.innerText : '');
       // Carried over unchanged, not exposed for editing/removal here -- editing is about
       // correcting the student's own follow-up wording, not the quoted source material they
       // selected from an earlier AI answer, and the persisted quote block itself already has no
@@ -4470,7 +4534,11 @@ function plainTextFromMarkdown(text) {
       cancelBtn.textContent = 'Cancel';
       cancelBtn.style.cssText = 'background:transparent;color:#999;border:1px solid #2a2a3a;border-radius:8px;padding:6px 14px;font-size:13px;cursor:pointer;';
       cancelBtn.onclick = function() {
-        editWrap.replaceWith(bubble, actions);
+        if (bubble) {
+          editWrap.replaceWith(bubble, actions);
+        } else {
+          editWrap.replaceWith(actions);
+        }
       };
 
       const saveBtn = document.createElement('button');
@@ -4480,6 +4548,14 @@ function plainTextFromMarkdown(text) {
         if (isStreaming) return;
         const newText = textarea.value.trim();
         if (!newText) return;
+
+        // Previously dropped .images/.pdf entirely -- the rebuilt message object carried only
+        // the edited text, so editing so much as a typo in an image doubt's caption silently
+        // lost the image for the rest of the conversation. Resolved BEFORE touching the DOM/
+        // currentConversation below (while the original row/object are still intact) -- see
+        // retryMessage's identical call for what this actually resolves and why.
+        const originalUserMsg = currentConversation[userIndex];
+        const { images, pdf } = await getResendAttachments(originalUserMsg);
 
         let node = row;
         while (node) {
@@ -4491,6 +4567,18 @@ function plainTextFromMarkdown(text) {
 
         const newIndex = currentConversation.length;
         const newMsgObj = originalQuotedText ? { role: 'user', text: newText, quotedText: originalQuotedText } : { role: 'user', text: newText };
+        // Carries the ORIGINAL turn's attachment forward onto the edited one -- a persisted
+        // Storage URL (if the original image upload succeeded) so the edited turn still shows
+        // its thumbnail and survives a later reload the same way a fresh send does, and the raw
+        // bytes re-cached under this NEW object so a further retry/edit on this same turn keeps
+        // working without a second re-fetch. A PDF has no persisted URL to carry forward -- only
+        // the session cache, already covered by rawAttachmentCache.set below.
+        if (originalUserMsg && originalUserMsg.images && originalUserMsg.images.length) {
+          newMsgObj.images = originalUserMsg.images;
+        }
+        if (images.length > 0 || pdf) {
+          rawAttachmentCache.set(newMsgObj, { images, pdf });
+        }
         addMessageRow('user', newText, undefined, newIndex, undefined, newMsgObj);
         currentConversation.push(newMsgObj);
         if (currentConversation.length === 1) pendingSidebarSave = saveToSidebar(newText);
@@ -4499,6 +4587,8 @@ function plainTextFromMarkdown(text) {
         // regenerated answer loses the quote as context too, not just its on-screen display.
         let questionForModel = newText;
         const streamOptions = { skipCache: false };
+        if (images.length > 0) streamOptions.images = images;
+        if (pdf) streamOptions.pdf = pdf;
         if (originalQuotedText) {
           questionForModel = `Regarding this part: "${originalQuotedText}"\n\nStudent asks: ${newText}`;
           streamOptions.pyqSearchText = newText;
@@ -4511,7 +4601,11 @@ function plainTextFromMarkdown(text) {
       editWrap.appendChild(textarea);
       editWrap.appendChild(controls);
 
-      bubble.replaceWith(editWrap);
+      if (bubble) {
+        bubble.replaceWith(editWrap);
+      } else {
+        contentWrapper.insertBefore(editWrap, actions);
+      }
       actions.remove();
       textarea.focus();
       textarea.style.height = 'auto';
@@ -6139,18 +6233,18 @@ function plainTextFromMarkdown(text) {
 
       const userIndex = currentConversation.length;
       const userMsgObj = activeQuote ? { role: 'user', text: text, quotedText: activeQuote } : { role: 'user', text: text };
+      // Renders through the SAME addMessageRow path a reload already uses (rather than a
+      // separate hand-rolled row), so a freshly-sent image message gets the normal Copy/Edit
+      // actions live too, not just after a reload -- previously this had NO action buttons at
+      // all, making the Retry/Edit fix below unreachable until the page was refreshed. Seeded
+      // with the local data URLs (not the eventual Storage URLs, which don't exist yet) purely so
+      // the thumbnails render immediately; addMessageRow snapshots them into the DOM once and
+      // isn't reactively bound, so overwriting userMsgObj.images with the real URLs further down
+      // (for persistence) doesn't change what's already on screen.
       if (selectedImages.length > 0) {
-        const imgRow = document.createElement('div');
-        imgRow.className = 'message-row user';
-        imgRow.dataset.msgIndex = userIndex;
-        const thumbs = selectedImages.map(img => `<img class="chat-img-thumb" src="${img.data}" style="max-width:200px;max-height:200px;border-radius:12px;border:1px solid #2a2a3a;display:block;cursor:zoom-in;"/>`).join('');
-       imgRow.innerHTML = `<div class="message-content user"><div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;"><div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end;">${thumbs}</div>${text ? `<div class="message-bubble user">${text}</div>` : ''}</div></div>`;
-        imgRow.querySelectorAll('.chat-img-thumb').forEach(el => { el.onclick = () => showImageLightbox(el.src); });
-        chatWindow.appendChild(imgRow);
-        scrollBottom();
-      } else {
-        addMessageRow('user', text, undefined, userIndex, undefined, userMsgObj);
+        userMsgObj.images = selectedImages.map(img => img.data);
       }
+      addMessageRow('user', text, undefined, userIndex, undefined, userMsgObj);
       input.value = '';
       input.style.height = 'auto';
 
@@ -6163,17 +6257,28 @@ function plainTextFromMarkdown(text) {
       }));
       const pdfData = selectedPDF;
 
+      // Retry/Edit resend these exact bytes later, for the current session, without needing a
+      // network re-fetch -- see getResendAttachments's own comment for why this can't just live
+      // on userMsgObj itself (that whole object gets persisted verbatim to chats.messages).
+      if (imagesPayload.length > 0 || pdfData) {
+        rawAttachmentCache.set(userMsgObj, { images: imagesPayload, pdf: pdfData ? pdfData.split(',')[1] : null });
+      }
+
       // Resolves the Storage URL(s) kicked off back when each image was attached (see
       // addImageFiles) -- by now they're almost always already settled, so this rarely adds real
       // wait, and it happens after the message has already rendered on screen either way. This is
       // what makes an image attachment persist across a page refresh: userMsgObj carries the real
       // URL, not just the text portion, so loadConversation/addMessageRow have something to
       // restore. A failed upload resolves to null and is filtered out rather than blocking the
-      // send -- that image just won't survive a refresh, same as before this fix existed.
+      // send -- that image just won't survive a refresh, same as before this fix existed. Always
+      // overwrites the local-data-URL placeholder set above (to undefined on total failure, not
+      // left as-is) so a failed upload never leaves raw base64 sitting in the object that gets
+      // saved to chats.messages -- rawAttachmentCache above is what keeps Retry working for this
+      // session regardless of whether the persisted URL ever materializes.
       if (selectedImages.length > 0) {
         const uploadedUrls = await Promise.all(selectedImages.map(img => img.uploadPromise));
         const validUrls = uploadedUrls.filter(Boolean);
-        if (validUrls.length > 0) userMsgObj.images = validUrls;
+        userMsgObj.images = validUrls.length > 0 ? validUrls : undefined;
       }
 
       // Captured into imagesPayload/pdfData/activeQuote above already, so clearing the compose-box
@@ -6192,7 +6297,7 @@ function plainTextFromMarkdown(text) {
       // When a quote is active, the model needs to see it as explicit context rather than just
       // the student's follow-up alone -- the PYQ search button, though, should still search on
       // just what the student actually asked, not the wrapped sentence.
-      let questionForModel = text || 'Describe this image and answer any NEET related content in it.';
+      let questionForModel = text || IMAGE_ONLY_PLACEHOLDER_TEXT;
       const streamOptions = {
         images: imagesPayload,
         pdf: pdfData ? pdfData.split(',')[1] : null
