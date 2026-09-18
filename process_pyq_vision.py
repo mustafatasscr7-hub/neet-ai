@@ -258,10 +258,28 @@ def _block_text_from_dict(block):
     line_texts = [_reconstruct_line_text(line) for line in block.get("lines", [])]
     return "\n".join(t for t in line_texts if t)
 
-# Matches a block whose ENTIRE text is just a numbered-option marker ("1.", "2.", ... "4.") and
+# Matches a LINE whose ENTIRE text is just a numbered-option marker ("1.", "2.", ... "4.") and
 # nothing else -- see _reconstruct_fragmented_options below for why this specific shape is the
 # signal that a whole option list needs special handling.
 _BARE_OPTION_MARKER_RE = re.compile(r'^([1-4])\.\s*$')
+# An option short enough to sit entirely on the same line as its own marker (e.g. "3. vd =
+# constant") needs no zone-reconstruction for its own text, but it still has to be recognized as
+# marker "3" for the sequence-continuity check below, or a genuinely fragmented neighbor (marker
+# "1"/"2"/"4") breaks its run the moment it hits this "gap" and silently loses every marker after
+# it (confirmed live: Current Electricity Q5, "vd ~ E" / "vd ~ 1/E" fragmented across two blocks,
+# "vd = constant" complete on one line -- without this, only options 1-2 ever got reconstructed
+# and 3-4 were left dangling, out of order, in the stem block's own leftover text).
+_SELF_CONTAINED_OPTION_RE = re.compile(r'^([1-4])\.\s+(\S.*)$')
+# A decimal number that happens to start with 1-4 ("2.5 x 10^6") looks IDENTICAL to a real
+# marker+answer under the regex above ("2." + " 5 x 10^6") -- confirmed live: Current Electricity
+# Q4's four mobility values all literally begin "2.5"/"2.5"/"2.25"/"2.25", so all four got
+# mis-tagged as bogus "marker 2" candidates, which then broke the REAL marker run for the
+# unrelated Q5 immediately below it (a mismatch of ANY kind stops the greedy adjacency scan, so
+# the real run past the false candidate was never found). Every genuine self-contained option
+# observed (units, words, symbols) contains at least one letter; every false decimal-continuation
+# case observed contains none -- used as a cheap, reliable filter rather than trying to parse "is
+# this really a new sentence" from a single line in isolation.
+_HAS_LETTER_RE = re.compile(r'[A-Za-zͰ-Ͽ]')
 # Deliberately broader than _QUESTION_START_RE (which requires a literal "."/")" right after the
 # number, e.g. "4)") -- a real question's own stem frequently starts with just "NN " and no
 # punctuation at all (confirmed live, e.g. "55 An electric field exists..."), which the stricter
@@ -282,56 +300,81 @@ def _cluster_columns(items, x_key, threshold=8):
     return clusters
 
 def _reconstruct_fragmented_options(blocks, mid_x, page_width):
-    """Detects a numbered option list (1.-4.) whose markers PyMuPDF split into their own bare
-    blocks, separated from math content (fractions, operators) that got fragmented -- and
-    sometimes MERGED ACROSS DIFFERENT OPTIONS into one indivisible block -- by PyMuPDF's own
-    block-clustering. Confirmed via a real PDF (NEET Physics "Electrostatic Potential and
-    Capacitance", Q27: a thin spherical shell question with a fraction-heavy option list) where
-    this silently scrambled option values across all 4 options -- one option's value corrupted
-    (numerator/denominator from two different options merged), and the rest shifted, with a
-    fabricated leftover 4th option. A pure sort-order fix cannot recover this: once PyMuPDF's own
-    block boundaries have merged two different options' content into one block, that information
-    is already gone at the block level. The fix instead goes down to LINE-level bboxes (each line
-    keeps its own accurate position even when its parent block merged multiple options together),
-    assigns each content line to its NEAREST option marker by vertical distance, then reconstructs
-    each option's own reading order via left-to-right sub-column clustering (for side-by-side
-    fraction/operator/fraction layouts, e.g. "2Q/4pi*e0*R - 2q/4pi*e0*R") using each line's
-    CENTER-x rather than its left edge -- a narrow single-glyph numerator/operator (e.g. "q") sits
-    centered over its own wider denominator, not left-aligned with it, since real math
-    typesetting centers a fraction's parts around a shared midline.
+    """Detects a numbered option list (1.-4.) whose markers PyMuPDF split away from math content
+    (fractions, operators) that got fragmented -- and sometimes MERGED ACROSS DIFFERENT OPTIONS
+    into one indivisible block -- by PyMuPDF's own block-clustering. Confirmed via a real PDF
+    (NEET Physics "Electrostatic Potential and Capacitance", Q27: a thin spherical shell question
+    with a fraction-heavy option list) where this silently scrambled option values across all 4
+    options -- one option's value corrupted (numerator/denominator from two different options
+    merged), and the rest shifted, with a fabricated leftover 4th option. A pure sort-order fix
+    cannot recover this: once PyMuPDF's own block boundaries have merged two different options'
+    content into one block, that information is already gone at the block level. The fix instead
+    goes down to LINE-level bboxes (each line keeps its own accurate position even when its
+    parent block merged multiple options together, or merged a marker onto the tail of the
+    question stem's own block -- confirmed live on Current Electricity, where PyMuPDF fused a
+    bare "1." marker onto the same block as the stem's last line), assigns each content line to
+    its NEAREST option marker by vertical distance, then reconstructs each option's own reading
+    order via left-to-right sub-column clustering (for side-by-side fraction/operator/fraction
+    layouts, e.g. "2Q/4pi*e0*R - 2q/4pi*e0*R") using each line's CENTER-x rather than its left
+    edge -- a narrow single-glyph numerator/operator (e.g. "q") sits centered over its own wider
+    denominator, not left-aligned with it, since real math typesetting centers a fraction's parts
+    around a shared midline.
 
-    Returns (excluded_block_ids, reconstructed_entries): the caller should skip normal block-level
-    handling for excluded_block_ids and add reconstructed_entries (x0, y0, text) in their place.
-    Returns (set(), []) when no fragmented option list is detected -- the overwhelmingly common
-    case, left completely untouched by this function."""
-    bare_markers = []
+    A marker can also be "self-contained" -- already carrying its own answer text on the same
+    line (e.g. "3. vd = constant") -- rather than "bare" (just "3." with the real content
+    fragmented elsewhere). Both are detected and merged into one marker sequence so a page mixing
+    both shapes in the same option list (confirmed live) still forms one continuous run.
+
+    Returns (excluded_block_ids, reconstructed_entries, modified_block_text): the caller should
+    skip normal block-level handling for excluded_block_ids, use modified_block_text in place of
+    a block's normal full text for any block id present in that dict (its own marker line(s)
+    stripped out, real stem text kept), and add reconstructed_entries (x0, y0, text) in their
+    place. Returns (set(), [], {}) when no fragmented option list is detected -- the
+    overwhelmingly common case, left completely untouched by this function."""
+    all_markers = []
     for b in blocks:
-        text = _block_text_from_dict(b).strip()
-        m = _BARE_OPTION_MARKER_RE.match(text)
-        if m:
-            bare_markers.append({"num": int(m.group(1)), "bbox": b["bbox"], "block": b})
+        for line in b.get("lines", []):
+            text = _reconstruct_line_text(line).strip()
+            m = _BARE_OPTION_MARKER_RE.match(text)
+            if m:
+                all_markers.append({"num": int(m.group(1)), "bbox": line["bbox"], "block": b, "line": line, "self_text": None})
+                continue
+            m2 = _SELF_CONTAINED_OPTION_RE.match(text)
+            if m2 and _HAS_LETTER_RE.search(m2.group(2)):
+                all_markers.append({"num": int(m2.group(1)), "bbox": line["bbox"], "block": b, "line": line, "self_text": m2.group(2)})
 
-    # Must be a consistent x-column (all markers left-aligned to each other) and start at 1 to
-    # be confident this is a real, in-order option list, not a coincidental digit-period block.
-    bare_markers.sort(key=lambda m: m["bbox"][1])
+    # Grouped PER PAGE-COLUMN, not by a single page-wide y0 sort -- on a real 2-column page,
+    # sorting every marker on the page together interleaves two DIFFERENT questions' markers
+    # (left column vs right column often share near-identical y0 ranges), which silently breaks
+    # the run-building the moment marker detection is done at line-level (an unrelated
+    # same-numbered marker from the other column landing between two real same-column markers in
+    # the sort derails the "next number, same x0" check). Must be a consistent x-column (all
+    # markers left-aligned to each other) and start at 1 to be confident this is a real, in-order
+    # option list, not a coincidental digit-period line.
     groups = []
-    i = 0
-    while i < len(bare_markers):
-        run = [bare_markers[i]]
-        j = i + 1
-        while (j < len(bare_markers) and bare_markers[j]["num"] == run[-1]["num"] + 1
-               and abs(bare_markers[j]["bbox"][0] - run[0]["bbox"][0]) <= 3):
-            run.append(bare_markers[j])
-            j += 1
-        if run[0]["num"] == 1 and len(run) >= 2:
-            groups.append(run)
-        i = j
+    for column_markers in (
+        sorted([m for m in all_markers if m["bbox"][0] < mid_x], key=lambda m: m["bbox"][1]),
+        sorted([m for m in all_markers if m["bbox"][0] >= mid_x], key=lambda m: m["bbox"][1]),
+    ):
+        i = 0
+        while i < len(column_markers):
+            run = [column_markers[i]]
+            j = i + 1
+            while (j < len(column_markers) and column_markers[j]["num"] == run[-1]["num"] + 1
+                   and abs(column_markers[j]["bbox"][0] - run[0]["bbox"][0]) <= 3):
+                run.append(column_markers[j])
+                j += 1
+            if run[0]["num"] == 1 and len(run) >= 2:
+                groups.append(run)
+            i = j
 
     if not groups:
-        return set(), []
+        return set(), [], {}
 
     excluded_ids = set()
     reconstructed_entries = []
+    modified_block_text = {}
+
     for markers in groups:
         marker_x0 = markers[0]["bbox"][0]
         zone_x0 = marker_x0 - 2
@@ -355,17 +398,34 @@ def _reconstruct_fragmented_options(blocks, mid_x, page_width):
         ]
         zone_y1 = (min(next_boundary_ys) - 2) if next_boundary_ys else (last_y1 + 15)
 
-        marker_block_ids = {id(m["block"]) for m in markers}
-        zone_block_ids = set(marker_block_ids)
+        marker_line_ids = {id(m["line"]) for m in markers}
+
+        # Handle each marker's parent block: fully exclude it if the block is ENTIRELY marker
+        # line(s), otherwise keep the block but with just the marker line(s) stripped out -- a
+        # marker fused onto the tail of the question stem's own block (confirmed live) must keep
+        # that block's real stem text, not lose it entirely.
+        parent_block_ids = {id(m["block"]) for m in markers}
+        for pb_id in parent_block_ids:
+            block = next(b for b in blocks if id(b) == pb_id)
+            remaining_lines = [l for l in block.get("lines", []) if id(l) not in marker_line_ids]
+            if remaining_lines:
+                kept_text = "\n".join(t for t in (_reconstruct_line_text(l) for l in remaining_lines) if t.strip())
+                if kept_text.strip():
+                    modified_block_text[pb_id] = kept_text
+                else:
+                    excluded_ids.add(pb_id)
+            else:
+                excluded_ids.add(pb_id)
+
         content_lines = []
         for b in blocks:
-            if id(b) in marker_block_ids:
-                continue
             bx0, by0, bx1, by1 = b["bbox"]
             if bx1 < zone_x0 or bx0 > zone_x1 or by0 > zone_y1 or by1 < zone_y0:
                 continue
             block_contributed = False
             for line in b.get("lines", []):
+                if id(line) in marker_line_ids:
+                    continue
                 lx0, ly0, lx1, ly1 = line["bbox"]
                 # Compare the line's OWN top edge against the zone (not "does this line's bbox
                 # overlap at all") -- a line whose bbox straddles the boundary needs a clean,
@@ -375,18 +435,26 @@ def _reconstruct_fragmented_options(blocks, mid_x, page_width):
                 text = _reconstruct_line_text(line).strip()
                 if not text:
                     continue
-                # Real math-fragment content here is always short (a bare number, operator, or
-                # short symbolic term) and sits to the right of the marker's own x-column --
-                # excludes the question stem's own prose wrapping into this same vertical band.
-                if lx0 < marker_x0 + 10 or len(text) > 20:
+                # Real math-fragment content sits to the right of the marker's own x-column and
+                # is short -- but "short" can't be as tight as a bare symbolic fragment
+                # ("4pi*e0*R"), since a legitimate single-line option can read like "VAB = 75 V ,
+                # VBC = 25 V" (23 chars, Current Electricity Q142) or a wrapped self-contained
+                # option's continuation line can run even longer (electrostatics Q62's "no excess
+                # charge in the static situation.", 41 chars) -- both confirmed live to need this
+                # raised well past the original 20-char cutoff. 50 was verified empirically (not
+                # just reasoned about) to still correctly exclude the original electrostatics
+                # Q27 regression case's own stem leak ("from the centre of the shell is:", 33
+                # chars) -- some other check in this zone, not the length cutoff alone, is what
+                # actually keeps that stem fragment out.
+                if lx0 < marker_x0 + 10 or len(text) > 50:
                     continue
                 content_lines.append({"bbox": line["bbox"], "text": text})
                 block_contributed = True
             if block_contributed:
-                zone_block_ids.add(id(b))
+                excluded_ids.add(id(b))
 
         if not content_lines:
-            continue  # bare markers with no matching content -- leave this page's block-level path untouched
+            continue  # markers with no matching zone content -- leave this page's block-level path untouched
 
         marker_y_centers = [(m["num"], (m["bbox"][1] + m["bbox"][3]) / 2) for m in markers]
         by_num = {m["num"]: [] for m in markers}
@@ -396,17 +464,24 @@ def _reconstruct_fragmented_options(blocks, mid_x, page_width):
             by_num[nearest_num].append(line)
 
         for m in markers:
+            # A self-contained marker's own line is already excluded from content_lines (via
+            # marker_line_ids), so it's never double-counted here -- but a self-contained option
+            # can still legitimately WRAP to a second line (a plain sentence continuation, not a
+            # stacked fraction), which this same nearest-marker zone-gathering also finds
+            # correctly (confirmed live: Current Electricity Q62's "1. The interior...can have" +
+            # its own next line "no excess charge in the static situation." both nearest-assign
+            # to marker 1) -- so self_text is simply prepended as the option's own first part
+            # rather than skipping zone-gathering entirely, which previously left any wrapped
+            # continuation stranded in the stem block's own leftover text instead of the option.
             columns = _cluster_columns(by_num[m["num"]], x_key=lambda l: (l["bbox"][0] + l["bbox"][2]) / 2)
             columns.sort(key=lambda col: min((l["bbox"][0] + l["bbox"][2]) / 2 for l in col))
-            parts = []
+            parts = [m["self_text"]] if m["self_text"] is not None else []
             for col in columns:
                 parts.extend(l["text"] for l in sorted(col, key=lambda l: l["bbox"][1]))
             option_text = f"{m['num']}. " + " ".join(parts)
             reconstructed_entries.append((marker_x0, m["bbox"][1], option_text))
 
-        excluded_ids |= zone_block_ids
-
-    return excluded_ids, reconstructed_entries
+    return excluded_ids, reconstructed_entries, modified_block_text
 
 # A raster image narrower or shorter than this many pixels is near-certainly a repeated fill-
 # tile (table/answer-box shading), not real diagram content -- confirmed on a real PDF
@@ -465,13 +540,16 @@ def extract_pages_text_and_diagrams(pdf_bytes):
         }
         mid_x = page.rect.width / 2
         page_blocks = [b for b in page.get_text("dict")["blocks"] if b.get("type") == 0]
-        excluded_block_ids, reconstructed_entries = _reconstruct_fragmented_options(page_blocks, mid_x, page.rect.width)
+        excluded_block_ids, reconstructed_entries, modified_block_text = _reconstruct_fragmented_options(page_blocks, mid_x, page.rect.width)
 
         text_entries = []  # (x0, y0, text)
         for block in page_blocks:
             if id(block) in excluded_block_ids:
                 continue
-            block_text = _block_text_from_dict(block)
+            # A block that had just its marker line(s) stripped out (see modified_block_text's
+            # docstring above) keeps its own real stem text here, sorted at its own normal
+            # position -- only the marker itself moved into reconstructed_entries.
+            block_text = modified_block_text.get(id(block), _block_text_from_dict(block))
             if block_text.strip():
                 x0, y0 = block["bbox"][0], block["bbox"][1]
                 text_entries.append((x0, y0, block_text.strip()))
