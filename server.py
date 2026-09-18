@@ -2767,6 +2767,48 @@ async def _get_gemini_system_cache() -> Optional[str]:
 
 _GEMINI_ADDENDUM_WRAPPER = "[ADDITIONAL SYSTEM INSTRUCTIONS -- follow exactly, these are not part of the student's message]\n{}\n[END ADDITIONAL SYSTEM INSTRUCTIONS]"
 
+_MEDIA_HISTORY_MAX_TURNS = 4
+_MEDIA_HISTORY_TURN_MAX_CHARS = 300
+
+def _format_recent_history_for_media(history: list) -> str:
+    """The images/pdf branches send Gemini a single flat user_message, not the multi-turn
+    `messages` array the text-only branches build from `history` (see _build_gemini_call_args's
+    own docstring for why -- Gemini's cached_content mode can't take a multi-turn `contents` list
+    the same way) -- so an image/PDF doubt previously reached the model with ZERO conversation
+    context: just the current media plus whatever caption this one turn happened to have, with no
+    way to know a bare image was arriving mid-conversation about a specific topic. Confirmed live
+    via a real reported case (media_doubt_log id=43 / chat "Dicotyledon Definition"): the student
+    asked "what is dicotyledon?", was told to describe which structure they wanted, then sent a
+    plant photo with an auto-filled generic caption (IMAGE_ONLY_PLACEHOLDER_TEXT) and no other
+    context -- the model, with no way to know "dicotyledon" was the live topic, answered as an
+    unrelated Beta vulgaris/bolting tangent instead of connecting the image to the conversation.
+
+    Folds the last few turns of plain TEXT back in as light context (never images -- a prior
+    turn's own image isn't re-sent here, only its caption/answer text) so the model can recognize
+    what topic thread a new image is arriving in, without turning this into a second full
+    transcript. Skips any turn with empty/whitespace-only text (e.g. an earlier image-only turn
+    with no caption) since it adds nothing to summarize. Returns '' when there's no usable history
+    at all, so the caller's user_message is completely unchanged for a genuinely fresh chat."""
+    if not history:
+        return ""
+    lines = []
+    for msg in history[-_MEDIA_HISTORY_MAX_TURNS:]:
+        text = (msg.get("text") or "").strip()
+        if not text:
+            continue
+        role_label = "Student" if msg.get("role") == "user" else "You (AI, previous turn)"
+        if len(text) > _MEDIA_HISTORY_TURN_MAX_CHARS:
+            text = text[:_MEDIA_HISTORY_TURN_MAX_CHARS] + "..."
+        lines.append(f"{role_label}: {text}")
+    if not lines:
+        return ""
+    return (
+        "[Recent conversation before this image/PDF, for context only -- use it to understand "
+        "what topic the student is likely asking about, but base your actual answer on what the "
+        "media itself genuinely shows, never just on what was already being discussed]\n"
+        + "\n".join(lines) + "\n\n"
+    )
+
 def _build_gemini_call_args(cache_name: Optional[str], extra_context: str, full_system: str, media_parts: list, user_message):
     """Shared by the images and PDF branches below. Gemini rejects cached_content combined with
     system_instruction in the same request (confirmed live: 400 INVALID_ARGUMENT), so whichever
@@ -3615,8 +3657,95 @@ def _looks_like_gibberish(text: str) -> bool:
     vowel_count = len(_VOWEL_RE.findall(stripped.lower()))
     return (vowel_count / len(stripped)) < 0.2
 
+# A text-only correction following a wrong image-based answer (e.g. "no this is a dicotyledon")
+# structurally has no way to make the AI look at the image again: it's plain text, so it routes to
+# DeepSeek/Qwen (no vision input at all in that call), and even the `messages` history those
+# branches build only keeps each past turn's *text* (server.py's own history-building loop reads
+# only msg["text"]) -- an image ever having been attached is silently dropped, not just unused.
+# Confirmed live via the real reported case: a wrong image answer followed by "this is a
+# dicotyledon" got a generic "sorry, can you redescribe it" instead of the AI re-examining the
+# actual photo. _detect_image_correction below + the redirect at the top of stream_response fixes
+# this by re-fetching the same image and re-routing through the normal vision path -- deliberately
+# conservative (see its own docstring) since a false positive here would silently answer the WRONG
+# question, worse than occasionally missing a real correction and answering as plain text instead.
+_IMAGE_CORRECTION_RE = re.compile(
+    r"\b(no[,.]?\s|actually\b|wrong\b|incorrect\b|mistak|not\s+(a|an|that|this)\b|"
+    r"this\s+is\s+(a|an)?\s*\w|that'?s\s+(not|wrong)|isn'?t\s+(that|this)|"
+    r"it'?s\s+(actually|not))",
+    re.IGNORECASE
+)
+_IMAGE_CORRECTION_MAX_CHARS = 150
+
+def _detect_image_correction(text: str, history: list, images: list, pdf) -> Optional[list]:
+    """Returns the list of image URL(s) to re-fetch if this message looks like a correction of
+    the immediately preceding image-based answer, else None. Requires ALL of:
+    - This message has no image/PDF of its own -- a genuinely new image already gets a real vision
+      call through the normal branch below; this is only for a plain-text follow-up.
+    - The immediately preceding history entry is the AI's own reply (i.e. nothing else happened
+      between the image and now -- not "immediately after" if any other exchange came between).
+    - The turn directly before THAT is a user turn that actually included an image (its Storage
+      URL(s), persisted by the client onto that turn's own history entry).
+    - This message is short -- a long message reads as a genuinely new, developed question, not a
+      quick correction.
+    - This message contains a common correction-style phrase (regex above) -- catches the real
+      reported case ("this is a dicotyledon") without matching arbitrary short questions that
+      happen to follow an image turn for unrelated reasons."""
+    if images or pdf:
+        return None
+    if len(history) < 2:
+        return None
+    prev_ai, prev_user = history[-1], history[-2]
+    if prev_ai.get("role") not in ("ai", "assistant"):
+        return None
+    if prev_user.get("role") != "user":
+        return None
+    image_urls = prev_user.get("images")
+    if not image_urls:
+        return None
+    stripped = (text or "").strip()
+    if not stripped or len(stripped) > _IMAGE_CORRECTION_MAX_CHARS:
+        return None
+    if not _IMAGE_CORRECTION_RE.search(stripped):
+        return None
+    return image_urls
+
+class _RefetchedImageAttachment:
+    """Duck-types the two fields of ImageAttachment (base64 `data` + `media_type`) that
+    stream_response's own images branch actually reads -- lets a re-fetched Storage image stand in
+    for a freshly-uploaded one so the correction redirect below can reuse that branch's existing,
+    already-correct handling (system prompt construction, media logging, the history-folding fix
+    above) instead of duplicating it."""
+    __slots__ = ("data", "media_type")
+    def __init__(self, data: str, media_type: str):
+        self.data = data
+        self.media_type = media_type
+
+async def _refetch_images_as_attachments(urls: list) -> list:
+    attachments = []
+    for url in (urls or [])[:3]:
+        resp = await async_client.get(url)
+        resp.raise_for_status()
+        mime = resp.headers.get("content-type", "image/png").split(";")[0].strip()
+        attachments.append(_RefetchedImageAttachment(base64.b64encode(resp.content).decode("ascii"), mime))
+    return attachments
+
 async def stream_response(text: str, history: list = [], images: list = [], pdf: str = None, answer_style: str = "detailed", student_name: str = "", language: str = "en", user_id: str = "", personalize: bool = True, skip_cache: bool = False, ip: str = ""):
     images = (images or [])[:3]
+
+    # See _detect_image_correction's own docstring. Re-fetch failure (deleted file, network
+    # blip) falls straight through to the normal flow below rather than raising -- the student
+    # still gets a real (text-only) answer to their message, not an error, just without the image
+    # re-examined; the empty `images` list here is what naturally lets that happen.
+    correction_image_urls = _detect_image_correction(text, history, images, pdf)
+    if correction_image_urls:
+        try:
+            refetched = await _refetch_images_as_attachments(correction_image_urls)
+        except Exception:
+            refetched = []
+        if refetched:
+            async for chunk in stream_response(text, history, refetched, None, answer_style, student_name, language, user_id, personalize, skip_cache, ip):
+                yield chunk
+            return
     # Fast path for exact-match greeting/smalltalk, before ANY of the expensive work below --
     # no embedding call, no NCERT/PYQ vector search, no model API call at all, just a canned reply
     # returned directly. Gated on no images/pdf (a greeting alongside an attachment isn't pure
@@ -3778,7 +3907,8 @@ IMPORTANT -- BE CONCISE:
             # an image doubt with no NCERT retrieval match could show a confidently wrong
             # citation with nothing catching it, since this branch returns before ever reaching
             # the text branch's own _force_citation_when_no_retrieval call.
-            async for chunk in _force_citation_when_no_retrieval(_stream_gemini_media(image_parts, "image", media_files, full_system, user_message, user_id, ip), bool(results)):
+            media_user_message = _format_recent_history_for_media(history) + user_message
+            async for chunk in _force_citation_when_no_retrieval(_stream_gemini_media(image_parts, "image", media_files, full_system, media_user_message, user_id, ip), bool(results)):
                 yield chunk
             return
         elif pdf:
@@ -3787,7 +3917,8 @@ IMPORTANT -- BE CONCISE:
             # 3 real PDFs, ~10x cheaper input tokens than Claude Sonnet's pricing).
             media_files = _hash_media_files(None, pdf)
             pdf_part = genai_types.Part.from_bytes(data=base64.b64decode(pdf), mime_type="application/pdf")
-            async for chunk in _force_citation_when_no_retrieval(_stream_gemini_media([pdf_part], "pdf", media_files, full_system, user_message, user_id, ip), bool(results)):
+            media_user_message = _format_recent_history_for_media(history) + user_message
+            async for chunk in _force_citation_when_no_retrieval(_stream_gemini_media([pdf_part], "pdf", media_files, full_system, media_user_message, user_id, ip), bool(results)):
                 yield chunk
             return
         else:
