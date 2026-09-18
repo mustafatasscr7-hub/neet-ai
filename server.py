@@ -18,6 +18,7 @@ import re
 from dotenv import load_dotenv
 import os
 import sys
+import sentry_sdk
 # Windows' default console codepage (cp1252) can't encode plenty of real content this app
 # handles -- Greek unit prefixes like μF, Hindi/Devanagari answers, etc. -- and an unhandled
 # UnicodeEncodeError from a bare print() crashes the request that triggered it. Only matters
@@ -27,6 +28,22 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 load_dotenv()
+
+# Free-tier Sentry project -- captures every unhandled exception across every endpoint
+# automatically (stack trace, request path/method, timing) via the FastAPI/Starlette
+# integrations sentry-sdk auto-enables once it detects both installed, no per-endpoint code
+# needed for this baseline. dsn=None (SENTRY_DSN unset, e.g. local dev) makes every SDK call a
+# documented no-op -- confirmed directly, not assumed -- so this is safe to leave in place
+# everywhere, including a machine with no Sentry project configured at all. traces_sample_rate=0
+# deliberately disables performance-transaction tracing (a separate, more limited quota on the
+# free tier from error events) -- this integration is about knowing when something breaks, not
+# profiling latency, which this codebase already does its own way (see the OpenAI warm-up timing
+# above). send_default_pii=False keeps student-identifying request data (cookies, IPs, request
+# bodies containing doubt text) out of events by default, since this is a minor-skewing
+# education product -- an event still carries enough (endpoint, stack trace, the tags/context set
+# explicitly by _alert_all_providers_down below) to actually debug from.
+SENTRY_DSN = os.getenv("SENTRY_DSN")
+sentry_sdk.init(dsn=SENTRY_DSN, traces_sample_rate=0.0, send_default_pii=False)
 
 # Reused across every request instead of opening a fresh connection per call. httpx's
 # connection pool keeps the underlying TCP/TLS connection to Supabase warm between calls --
@@ -68,6 +85,11 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 # but admin updates may fail under RLS until a real service_role key is added.
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", SUPABASE_KEY)
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "neetai-admin-2027")
+# Direct, real-time channel for the one alert that can't wait for someone to next open a Sentry
+# dashboard -- see _alert_all_providers_down below. Both unset (e.g. local dev, or before a bot is
+# set up) makes that alert's Telegram half a silent no-op, same fail-open shape as SENTRY_DSN above.
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 # Async client used for every real embedding call (get_embedding, the warm-up/keep-alive calls
 # below) -- migrated off a sync openai.OpenAI client specifically because the retry-compounding
@@ -2833,6 +2855,42 @@ def _build_gemini_call_args(cache_name: Optional[str], extra_context: str, full_
         config = genai_types.GenerateContentConfig(system_instruction=full_system, max_output_tokens=1024)
     return contents, config
 
+# The worst case this whole file's provider-routing logic can produce: every model option a given
+# request had has been exhausted and there's genuinely nothing left to answer with. Distinct from
+# Sentry's baseline auto-capture (point 1 above) two ways -- tagged/leveled so it's visually
+# unmissable next to routine errors instead of blending in, and ALSO pushed straight to Telegram
+# (when configured) since a dashboard someone checks later isn't fast enough for "students are
+# getting broken responses right now." Called from the exact points where each fallback chain
+# gives up (see _stream_with_peak_fallback and _stream_gemini_media below, and
+# stream_solve_response_with_diagram's own equivalent) -- never from the broad, pre-existing
+# per-endpoint catch-alls those functions feed into, so an unrelated bug elsewhere in the same
+# try block (a DB hiccup, a bad NCERT lookup) never gets mis-tagged as a provider outage.
+# Must never itself raise or meaningfully delay the caller -- this runs inside an except block
+# that's about to surface a real error to a student either way.
+async def _alert_all_providers_down(endpoint: str, error: Exception, user_id: str = ""):
+    print(f"ALL PROVIDERS DOWN on {endpoint} (user_id={user_id}): {error}", flush=True)
+    try:
+        with sentry_sdk.new_scope() as scope:
+            scope.set_tag("alert_priority", "critical")
+            scope.set_tag("failure_type", "all_providers_down")
+            scope.set_level("fatal")
+            scope.set_context("request", {"endpoint": endpoint, "user_id": user_id})
+            sentry_sdk.capture_exception(error)
+    except Exception as sentry_err:
+        print(f"SENTRY CAPTURE FAILED (non-fatal): {sentry_err}", flush=True)
+    if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
+        try:
+            await async_client.post(
+                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                json={
+                    "chat_id": TELEGRAM_CHAT_ID,
+                    "text": f"🔴 ALL AI PROVIDERS DOWN\nEndpoint: {endpoint}\nUser: {user_id or '(guest)'}\nError: {error}",
+                },
+                timeout=10.0,
+            )
+        except Exception as telegram_err:
+            print(f"TELEGRAM ALERT FAILED (non-fatal): {telegram_err}", flush=True)
+
 async def _stream_gemini_media(media_parts: list, doubt_type: str, media_files: list, full_system: str, user_message: str, user_id: str, ip: str):
     """Shared by stream_response's images and pdf branches -- previously ~90% identical inline code
     duplicated in both (cache lookup, the actual Gemini call, cost tracking, media-doubt logging),
@@ -2844,45 +2902,55 @@ async def _stream_gemini_media(media_parts: list, doubt_type: str, media_files: 
     selected_model = "gemini-3.5-flash-lite"
     print(f"MODEL SELECTED: {selected_model}", flush=True)
     sys.stdout.flush()
-    gemini_cache_name = await _get_gemini_system_cache()
-    gemini_extra_context = full_system[len(SYSTEM_PROMPT):]
-    gemini_contents, gemini_config = _build_gemini_call_args(gemini_cache_name, gemini_extra_context, full_system, media_parts, user_message)
-    gemini_stream = await gemini_client.aio.models.generate_content_stream(
-        model=selected_model,
-        contents=gemini_contents,
-        config=gemini_config
-    )
-    full_answer = ""
-    last_usage = None
+    # Gemini is the ONLY provider for an image/PDF doubt -- no DeepSeek/Qwen fallback exists for
+    # this request shape (there's no cheaper substitute that can see the attachment), so ANY
+    # exception escaping this whole function means every option this request had is exhausted.
+    # Wrapping the entire body (not just the streaming loop below) catches a failure at any stage
+    # -- cache lookup, the call itself, or mid-stream -- and re-raises unchanged so the existing
+    # per-endpoint catch-all in stream_response still does its normal job.
     try:
-        async for chunk in gemini_stream:
-            if chunk.text:
-                full_answer += chunk.text
-                yield chunk.text
-            if chunk.usage_metadata:
-                last_usage = chunk.usage_metadata
-    finally:
-        # Log on the way out (including on an early client disconnect) rather than only on a clean
-        # finish. Gemini reports usage_metadata cumulatively on every streamed chunk, so the last
-        # chunk seen (even a partial stream) already holds the running totals -- no separate "final
-        # message" fetch needed the way Anthropic's SDK requires.
-        if last_usage:
-            cache_hit_tokens = last_usage.cached_content_token_count or 0
-            cache_miss_tokens = max(0, last_usage.prompt_token_count - cache_hit_tokens)
-            cost = _gemini_cost(cache_miss_tokens, cache_hit_tokens, last_usage.candidates_token_count)
-            try:
-                await log_provider_usage("gemini-3.5-flash-lite", False, last_usage.prompt_token_count, last_usage.candidates_token_count, cost, "/chat", user_id)
-            except Exception:
-                pass
-            try:
-                await log_token_usage(user_id, last_usage.prompt_token_count + last_usage.candidates_token_count, ip)
-            except Exception:
-                pass
-        if full_answer:
-            try:
-                await log_media_doubt(user_id, ip, doubt_type, media_files, full_answer)
-            except Exception:
-                pass
+        gemini_cache_name = await _get_gemini_system_cache()
+        gemini_extra_context = full_system[len(SYSTEM_PROMPT):]
+        gemini_contents, gemini_config = _build_gemini_call_args(gemini_cache_name, gemini_extra_context, full_system, media_parts, user_message)
+        gemini_stream = await gemini_client.aio.models.generate_content_stream(
+            model=selected_model,
+            contents=gemini_contents,
+            config=gemini_config
+        )
+        full_answer = ""
+        last_usage = None
+        try:
+            async for chunk in gemini_stream:
+                if chunk.text:
+                    full_answer += chunk.text
+                    yield chunk.text
+                if chunk.usage_metadata:
+                    last_usage = chunk.usage_metadata
+        finally:
+            # Log on the way out (including on an early client disconnect) rather than only on a clean
+            # finish. Gemini reports usage_metadata cumulatively on every streamed chunk, so the last
+            # chunk seen (even a partial stream) already holds the running totals -- no separate "final
+            # message" fetch needed the way Anthropic's SDK requires.
+            if last_usage:
+                cache_hit_tokens = last_usage.cached_content_token_count or 0
+                cache_miss_tokens = max(0, last_usage.prompt_token_count - cache_hit_tokens)
+                cost = _gemini_cost(cache_miss_tokens, cache_hit_tokens, last_usage.candidates_token_count)
+                try:
+                    await log_provider_usage("gemini-3.5-flash-lite", False, last_usage.prompt_token_count, last_usage.candidates_token_count, cost, "/chat", user_id)
+                except Exception:
+                    pass
+                try:
+                    await log_token_usage(user_id, last_usage.prompt_token_count + last_usage.candidates_token_count, ip)
+                except Exception:
+                    pass
+            if full_answer:
+                try:
+                    await log_media_doubt(user_id, ip, doubt_type, media_files, full_answer)
+                except Exception:
+                    pass
+    except Exception as e:
+        await _alert_all_providers_down(f"/chat ({doubt_type})", e, user_id)
+        raise
 
 async def log_provider_usage(provider: str, peak_window: bool, input_tokens: int, output_tokens: int, cost: float, endpoint: str, user_id: str = ""):
     """Additive to log_token_usage() (which drives per-user daily budget enforcement, keyed by
@@ -3077,24 +3145,35 @@ async def _stream_with_peak_fallback(system: str, messages: list, user_id: str, 
     different model mid-response without duplicating or garbling what the student already saw,
     so the failure just propagates like any other mid-stream error in this file -- the caller's
     own try/except turns it into a yielded "Error: ..." message and correctly skips caching a
-    partial answer, exactly as it already does for a mid-stream DeepSeek failure."""
-    is_peak = _is_deepseek_peak_hour()
-    if force_qwen or is_peak:
-        sent_any = False
-        try:
-            async for chunk in _stream_qwen(system, messages, user_id, ip, endpoint, billing_context):
-                sent_any = True
+    partial answer, exactly as it already does for a mid-stream DeepSeek failure.
+
+    Whole body wrapped in one more try/except: DeepSeek is always the last resort here (whether
+    reached directly, off-peak, or as Qwen's own fallback) -- there's no third text provider to
+    try after it, so any exception escaping this function means text generation is genuinely
+    exhausted for this request (see _alert_all_providers_down). Re-raised unchanged so the
+    existing per-endpoint catch-all in stream_response/stream_solve_response still does its
+    normal job -- this only adds the alert, nothing about the failure itself changes."""
+    try:
+        is_peak = _is_deepseek_peak_hour()
+        if force_qwen or is_peak:
+            sent_any = False
+            try:
+                async for chunk in _stream_qwen(system, messages, user_id, ip, endpoint, billing_context):
+                    sent_any = True
+                    yield chunk
+                return
+            except Exception as e:
+                if sent_any:
+                    raise
+                print(f"QWEN UNAVAILABLE BEFORE FIRST TOKEN, FALLING BACK TO DEEPSEEK: {e}", flush=True)
+            async for chunk in _stream_deepseek(system, messages, user_id, ip, is_peak, endpoint, billing_context):
                 yield chunk
             return
-        except Exception as e:
-            if sent_any:
-                raise
-            print(f"QWEN UNAVAILABLE BEFORE FIRST TOKEN, FALLING BACK TO DEEPSEEK: {e}", flush=True)
-        async for chunk in _stream_deepseek(system, messages, user_id, ip, is_peak, endpoint, billing_context):
+        async for chunk in _stream_deepseek(system, messages, user_id, ip, False, endpoint, billing_context):
             yield chunk
-        return
-    async for chunk in _stream_deepseek(system, messages, user_id, ip, False, endpoint, billing_context):
-        yield chunk
+    except Exception as e:
+        await _alert_all_providers_down(endpoint, e, user_id)
+        raise
 
 # ---------- Second-pass verification for Qwen's "borrowed value" insufficient-data trap ----------
 # Live-tested failure: given a problem describing two comparable objects (e.g. two towers) where
@@ -4347,6 +4426,10 @@ async def stream_solve_response_with_diagram(req: SolveRequest, cached_solution,
                 json={"pyq_id": req.pyq_id, "language": req.language, "solution": full_solution}
             )
     except Exception as e:
+        # Gemini is the sole provider for a diagram-based /solve request (no DeepSeek/Qwen
+        # fallback exists here either, same reasoning as _stream_gemini_media) -- this is that
+        # path's own equivalent "fully exhausted" point.
+        await _alert_all_providers_down("/solve (diagram)", e, req.user_id)
         yield f"Error: {str(e)}"
 
 @app.post("/solve")
