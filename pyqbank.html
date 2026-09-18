@@ -437,6 +437,18 @@
     let currentChapterAllYears = [];
     let currentYearFilter = '';
     let currentQuestionIndex = 0;
+    // Per-chapter, per-year-filter "last viewed question index" memory, session-only (resets on
+    // page reload, like every other piece of state on this screen). Keyed by subject+chapter so
+    // switching chapters never bleeds one chapter's positions into another's; within a chapter,
+    // keyed by the year filter value ('' / "all years" included) so switching filters resumes
+    // exactly where you left off instead of always restarting at Q1.
+    let yearFilterMemory = {};
+    function yearMemoryKey(subject, chapter) { return subject + '||' + chapter; }
+    function getYearMemory(subject, chapter) {
+      const key = yearMemoryKey(subject, chapter);
+      if (!yearFilterMemory[key]) yearFilterMemory[key] = {};
+      return yearFilterMemory[key];
+    }
     // The flag button that opened the currently-open report popup -- submitReport's own btnEl
     // argument is the popup's Submit button (appended straight to document.body, not nested
     // inside the question card), so this is tracked separately to find the actual card afterward.
@@ -1232,6 +1244,12 @@ const { data, error } = await query;
       const i = currentQuestionIndex;
       const q = data[i];
 
+      // Single choke point for every way currentQuestionIndex can change (Next/Prev, year-filter
+      // switch, initial chapter load, a reported question getting spliced out) -- record it here
+      // rather than at each call site, so the year filter's memory always reflects what's actually
+      // on screen.
+      getYearMemory(subject, chapter)[currentYearFilter || 'all'] = i;
+
      const opts = ['a','b','c','d'].map(opt => {
         // Some questions have diagram-only options (no text at all, e.g. "which diagram is
         // correct") -- skipping whenever text is empty hid the option (and its diagram)
@@ -1398,22 +1416,18 @@ ${q.diagram_url ? `<img class="q-diagram-img" src="${q.diagram_url}">` : ''}
       
 
      async function filterByYear(year, subject, classNum, chapter) {
-  // Remembered by real question id (not just the numeric index) so the lookup below survives
-  // the new query returning its rows in a different order, not just a shorter/longer list.
-  const currentQuestionId = currentChapterQuestions[currentQuestionIndex] ? currentChapterQuestions[currentQuestionIndex].id : null;
   let query = client.from('pyq').select('*').eq('subject', subject).eq('chapter', chapter).eq('is_active', true);
   if (year) query = query.eq('year', parseInt(year));
   const { data } = await query;
   if (data && data.length > 0) {
     currentChapterQuestions = data;
     currentYearFilter = year;
-    // Stay on the same question if the new filter still includes it (e.g. switching from a
-    // single year back to "All Years" while mid-list shouldn't yank the student back to question
-    // 1). If the current question got filtered out, land on the closest equivalent position
-    // (same list index, clamped to the new -- possibly shorter -- list) rather than always
-    // restarting at 0.
-    const preservedIndex = currentQuestionId ? data.findIndex(q => q.id === currentQuestionId) : -1;
-    currentQuestionIndex = preservedIndex !== -1 ? preservedIndex : Math.min(currentQuestionIndex, data.length - 1);
+    // Resume wherever this filter was last left off in this chapter this session (defaulting to
+    // Q1 the first time a filter is opened), independently per filter -- not derived from matching
+    // the previously-shown question's id into the new list, which only worked when that exact
+    // question happened to also exist in the new filter.
+    const saved = getYearMemory(subject, chapter)[year || 'all'];
+    currentQuestionIndex = (typeof saved === 'number') ? Math.min(saved, data.length - 1) : 0;
     renderSingleQuestion(subject, classNum, chapter);
   }
 }
