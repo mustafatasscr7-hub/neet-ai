@@ -1150,13 +1150,13 @@
        requires showing/hiding anything else on the page. togglePlusMenu(btn) positions it above
        whichever "+" button (#plusBtn or #welcomePlusBtn) was actually clicked. -->
   <div id="plusMenu" style="display:none;position:fixed;background:#1e1e1e;border:1px solid #2a2a2a;border-radius:12px;padding:6px;width:200px;box-shadow:0 8px 24px rgba(0,0,0,0.6);z-index:1000;">
-    <div onclick="closePlusMenu();transitionFromWelcomeIfNeeded();document.getElementById('imageInput').click();" style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;cursor:pointer;font-size:13px;color:#ccc;" onmouseover="this.style.background='#2a2a2a'" onmouseout="this.style.background='transparent'">
+    <div onclick="closePlusMenu();document.getElementById('imageInput').click();" style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;cursor:pointer;font-size:13px;color:#ccc;" onmouseover="this.style.background='#2a2a2a'" onmouseout="this.style.background='transparent'">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg> <span data-i18n="chat.uploadImage">Upload Image</span>
     </div>
-    <div onclick="closePlusMenu();transitionFromWelcomeIfNeeded();document.getElementById('pdfInput').click();" style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;cursor:pointer;font-size:13px;color:#ccc;" onmouseover="this.style.background='#2a2a2a'" onmouseout="this.style.background='transparent'">
+    <div onclick="closePlusMenu();document.getElementById('pdfInput').click();" style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;cursor:pointer;font-size:13px;color:#ccc;" onmouseover="this.style.background='#2a2a2a'" onmouseout="this.style.background='transparent'">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg> <span data-i18n="chat.uploadPdf">Upload PDF</span>
     </div>
-    <div onclick="closePlusMenu();transitionFromWelcomeIfNeeded();addURL();" style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;cursor:pointer;font-size:13px;color:#ccc;" onmouseover="this.style.background='#2a2a2a'" onmouseout="this.style.background='transparent'">
+    <div onclick="closePlusMenu();addURL();" style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;cursor:pointer;font-size:13px;color:#ccc;" onmouseover="this.style.background='#2a2a2a'" onmouseout="this.style.background='transparent'">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg> <span data-i18n="chat.addUrl">Add Website URL</span>
     </div>
   </div>
@@ -1313,6 +1313,7 @@
           <img src="assets/logo.svg" alt="NEET-AI" class="welcome-logo" />
           <h2 id="welcomeGreeting">What do you want to learn today?</h2>
         </div>
+        <div id="welcome-attachment-preview-inner" style="display:none;width:100%;max-width:580px;"></div>
         <div class="welcome-search">
           <button id="welcomePlusBtn" onclick="togglePlusMenu(this)" style="background:transparent;border:none;color:#666;cursor:pointer;padding:6px;display:flex;align-items:center;flex-shrink:0;border-radius:8px;" title="Add attachment" data-i18n-title="chat.addAttachment">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
@@ -1819,19 +1820,6 @@ function toggleSearchChats() {
     function closePlusMenu() {
       document.getElementById('plusMenu').style.display = 'none';
     }
-    // Called by each plusMenu option (not by opening/closing the menu itself) -- actually
-    // attaching something is when the welcome screen should hand off to the real input area,
-    // same as handleWelcomePaste already does for a pasted image. A no-op once #welcome is
-    // already gone (the normal mid-conversation case), so every option can call this
-    // unconditionally without needing to know which screen opened the menu.
-    function transitionFromWelcomeIfNeeded() {
-      const welcome = document.getElementById('welcome');
-      if (!welcome) return;
-      const welcomeInputEl = document.getElementById('welcomeInput');
-      if (welcomeInputEl) input.value = welcomeInputEl.value;
-      welcome.remove();
-      inputArea.style.display = 'block';
-    }
 let selectedImages = [];
     let selectedPDF = null;
     let selectedPDFName = null;
@@ -2055,16 +2043,30 @@ let selectedImages = [];
       const files = getPastedImageFiles(e);
       if (files.length === 0) return;
       e.preventDefault();
-      transitionFromWelcomeIfNeeded();
+      // Same as the plusMenu's Upload Image option -- attaching something is not sending it, so
+      // this only adds the preview (see renderAttachmentPreview's own onWelcome branch) and never
+      // transitions off the welcome screen. Only sendMessage() does that, on an actual send.
       addImageFiles(files);
-      input.focus();
     }
 
+   // Renders into whichever attachment-preview container is actually on screen right now -- the
+   // welcome screen's own (#welcome-attachment-preview-inner, sitting above its single-line
+   // search bar) while #welcome is still present, or the real input bar's
+   // (#attachment-preview-inner, inside #inputArea) once it's gone. Same selectedImages/
+   // selectedPDF state either way; only WHERE it renders differs, so picking an attachment on the
+   // welcome screen shows up right there instead of in a hidden #inputArea the student can't see
+   // until they've actually sent something (see the plusMenu options and handleWelcomePaste,
+   // neither of which transitions off the welcome screen anymore -- only sendMessage() does, on
+   // an actual send). Also clears the OTHER container, defensive against a stale render sitting
+   // around from just before a transition.
    function renderAttachmentPreview() {
-      const container = document.getElementById('attachment-preview-inner');
+      const onWelcome = !!document.getElementById('welcome');
+      const container = document.getElementById(onWelcome ? 'welcome-attachment-preview-inner' : 'attachment-preview-inner');
+      const otherContainer = document.getElementById(onWelcome ? 'attachment-preview-inner' : 'welcome-attachment-preview-inner');
+      if (otherContainer) otherContainer.innerHTML = '';
       container.innerHTML = '';
-      if (selectedImages.length === 0 && !selectedPDF) return;
-      container.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 0;flex-wrap:wrap;';
+      if (selectedImages.length === 0 && !selectedPDF) { container.style.display = 'none'; return; }
+      container.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 0;flex-wrap:wrap;' + (onWelcome ? 'width:100%;max-width:580px;' : '');
 
       selectedImages.forEach((img, i) => {
         const wrap = document.createElement('div');
@@ -2126,8 +2128,12 @@ let selectedImages = [];
     function addURL() {
       const url = prompt('Enter website URL:');
       if (url) {
-        const current = document.getElementById('userInput').value;
-        document.getElementById('userInput').value = current + ' ' + url;
+        // Same onWelcome idiom as toggleVoice/renderAttachmentPreview -- write into whichever
+        // input is actually visible right now, not always the real (possibly still-hidden)
+        // #userInput. Adding a URL is exactly as much "not a send" as picking an image/PDF is.
+        const onWelcome = !!document.getElementById('welcome');
+        const activeInput = onWelcome ? document.getElementById('welcomeInput') : document.getElementById('userInput');
+        activeInput.value = activeInput.value + ' ' + url;
       }
     }
 
@@ -5983,7 +5989,7 @@ function plainTextFromMarkdown(text) {
       const welcome = document.createElement('div');
       welcome.className = 'welcome';
       welcome.id = 'welcome';
-      welcome.innerHTML = `<div class="welcome-greeting-row"><img src="assets/logo.svg" alt="NEET-AI" class="welcome-logo" /><h2 id="welcomeGreeting">${t('chat','welcomeHeading')}</h2></div><div class="welcome-search"><button id="welcomePlusBtn" onclick="togglePlusMenu(this)" style="background:transparent;border:none;color:#666;cursor:pointer;padding:6px;display:flex;align-items:center;flex-shrink:0;border-radius:8px;" title="Add attachment"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button><input type="text" id="welcomeInput" placeholder="${t('chat','askPlaceholder')}" /><button id="welcomeVoiceBtn" class="voice-btn" onclick="toggleVoice()" style="background:transparent;border:none;color:#666;cursor:pointer;padding:6px;display:flex;align-items:center;flex-shrink:0;border-radius:8px;" title="Voice input"><svg class="voice-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg></button><button class="welcome-send" id="welcomeSend"><svg viewBox="0 0 24 24"><path d="M4 12l1.41 1.41L11 7.83V20h2V7.83l5.59 5.58L20 12l-8-8-8 8z"/></svg></button></div><div class="input-hint">${t('chat','disclaimerMistakes')}</div>`;
+      welcome.innerHTML = `<div class="welcome-greeting-row"><img src="assets/logo.svg" alt="NEET-AI" class="welcome-logo" /><h2 id="welcomeGreeting">${t('chat','welcomeHeading')}</h2></div><div id="welcome-attachment-preview-inner" style="display:none;width:100%;max-width:580px;"></div><div class="welcome-search"><button id="welcomePlusBtn" onclick="togglePlusMenu(this)" style="background:transparent;border:none;color:#666;cursor:pointer;padding:6px;display:flex;align-items:center;flex-shrink:0;border-radius:8px;" title="Add attachment"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button><input type="text" id="welcomeInput" placeholder="${t('chat','askPlaceholder')}" /><button id="welcomeVoiceBtn" class="voice-btn" onclick="toggleVoice()" style="background:transparent;border:none;color:#666;cursor:pointer;padding:6px;display:flex;align-items:center;flex-shrink:0;border-radius:8px;" title="Voice input"><svg class="voice-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg></button><button class="welcome-send" id="welcomeSend"><svg viewBox="0 0 24 24"><path d="M4 12l1.41 1.41L11 7.83V20h2V7.83l5.59 5.58L20 12l-8-8-8 8z"/></svg></button></div><div class="input-hint">${t('chat','disclaimerMistakes')}</div>`;
       chatWindow.appendChild(welcome);
       renderWelcomeGreeting();
       document.getElementById('welcomeInput').addEventListener('keydown', function(e) {
