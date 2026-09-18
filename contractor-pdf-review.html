@@ -2011,13 +2011,47 @@
     }
   }
 
+  // Returns a Promise<File|null> -- a real pasted image FILE (unchanged behavior) takes priority;
+  // falling back to a text-kind clipboard item is why this is async now (DataTransferItem's
+  // getAsString is callback-based, getAsFile is not). The fallback exists because Gemini's own
+  // "copy" button (and copying SVG source out of a text editor) puts the raw SVG markup on the
+  // clipboard as TEXT (kind:"string", type text/plain or text/html), never as an actual file --
+  // the file-kind check below never even sees that, which is why paste silently did nothing for
+  // it. Scans any text item for something that looks like SVG markup and synthesizes an
+  // equivalent File from it, so it flows through the exact same upload path as a real pasted
+  // image file.
   function extractImageFromClipboard(event) {
     const items = event.clipboardData && event.clipboardData.items;
-    if (!items) return null;
+    if (!items) return Promise.resolve(null);
     for (const item of items) {
-      if (item.type && item.type.startsWith('image/')) return item.getAsFile();
+      if (item.kind === 'file' && item.type && item.type.startsWith('image/')) {
+        return Promise.resolve(item.getAsFile());
+      }
     }
-    return null;
+    const textItems = Array.from(items).filter(item => item.kind === 'string' && (item.type === 'text/plain' || item.type === 'text/html'));
+    if (textItems.length === 0) return Promise.resolve(null);
+    return new Promise((resolve) => {
+      let remaining = textItems.length;
+      let resolved = false;
+      const tryResolve = (file) => {
+        if (resolved) return;
+        if (file) { resolved = true; resolve(file); return; }
+        remaining--;
+        if (remaining === 0) resolve(null);
+      };
+      for (const item of textItems) {
+        item.getAsString((text) => {
+          const trimmed = (text || '').trim();
+          const looksLikeSvg = (trimmed.startsWith('<svg') || trimmed.startsWith('<?xml')) && trimmed.includes('<svg');
+          if (looksLikeSvg) {
+            const blob = new Blob([trimmed], { type: 'image/svg+xml' });
+            tryResolve(new File([blob], `pasted-diagram-${Date.now()}.svg`, { type: 'image/svg+xml' }));
+          } else {
+            tryResolve(null);
+          }
+        });
+      }
+    });
   }
 
   async function uploadDiagram(id) {
@@ -2032,7 +2066,7 @@
   }
 
   async function handleDiagramPaste(event, id) {
-    const file = extractImageFromClipboard(event);
+    const file = await extractImageFromClipboard(event);
     if (!file) return;
     event.preventDefault();
     await uploadImageFile(file, 'diagram-status-' + id, (url) => {
@@ -2074,7 +2108,7 @@
   }
 
   async function handleOptionDiagramPaste(event, id, opt) {
-    const file = extractImageFromClipboard(event);
+    const file = await extractImageFromClipboard(event);
     if (!file) return;
     event.preventDefault();
     await uploadImageFile(file, `opt-diagram-status-${opt}-${id}`, (url) => {
