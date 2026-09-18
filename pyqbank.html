@@ -12,6 +12,7 @@
   <link rel="stylesheet" href="./settings.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
   <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+  <script src="./math-format.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
   <style>
@@ -964,7 +965,7 @@
         // via a live PYQ: "$CoCl_{3}(NH_{3})_{5}$"). output:'html' drops the annotation entirely --
         // the visible glyphs come only from .katex-html, never from .katex-mathml, so this is a
         // no-op for what's actually on screen.
-        try { return '<div style="text-align:center;margin:8px 0;">' + katex.renderToString(math.trim(), { displayMode: true, throwOnError: false, output: 'html' }) + '</div>'; } catch(e) { return _; }
+        try { return '<div style="text-align:center;margin:8px 0;">' + katex.renderToString(addFracSpacing(math.trim()), { displayMode: true, throwOnError: false, output: 'html' }) + '</div>'; } catch(e) { return _; }
       });
       html = html.replace(/\$([^$\n]+)\$/g, function(_, math) {
         // Wrapped at 1.2em rather than sized via a competing CSS rule on .katex directly --
@@ -978,7 +979,7 @@
         // just tidy: without it, marked.parse (run on the line right after this) corrupts DOM
         // structure around any subscript/superscript whose raw TeX source has an odd underscore
         // count in it.
-        try { return '<span style="font-size:1.55em;">' + katex.renderToString(math.trim(), { displayMode: false, throwOnError: false, output: 'html' }) + '</span>'; } catch(e) { return _; }
+        try { return '<span style="font-size:1.55em;">' + katex.renderToString(addFracSpacing(math.trim()), { displayMode: false, throwOnError: false, output: 'html' }) + '</span>'; } catch(e) { return _; }
       });
       // breaks:true so a single newline in question/option text (e.g. one option per line)
       // renders as a real line break -- marked's default CommonMark behavior collapses a lone

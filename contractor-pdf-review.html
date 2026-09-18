@@ -8,6 +8,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
 <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script src="./math-format.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/mathlive@0.110.0/mathlive.min.js"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -1898,7 +1899,7 @@
       // block can't ever land inside the LaTeX source KaTeX parses.
       if (p.type === 'text') return escapeHtml(p.value).replace(/\n/g, '<br>');
       try {
-        return katex.renderToString(p.value, { displayMode: p.type === 'display', throwOnError: false });
+        return katex.renderToString(addFracSpacing(p.value), { displayMode: p.type === 'display', throwOnError: false });
       } catch (e) {
         return escapeHtml(p.type === 'display' ? '$$' + p.value + '$$' : '$' + p.value + '$');
       }

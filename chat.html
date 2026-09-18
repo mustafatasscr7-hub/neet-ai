@@ -15,6 +15,7 @@
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
   <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+  <script src="./math-format.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
   <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -2139,7 +2140,7 @@ let selectedImages = [];
       let html = escapeHtml(text);
       html = html.replace(/\$([^$\n]+)\$/g, function(_, math) {
         try {
-          return katex.renderToString(math.trim(), { displayMode: false, throwOnError: false });
+          return katex.renderToString(addFracSpacing(math.trim()), { displayMode: false, throwOnError: false });
         } catch(e) { return _; }
       });
       return html;
@@ -2393,7 +2394,7 @@ let selectedImages = [];
           // \Large REPLACES the chat-math-inline/-display CSS scaling for this one segment
           // rather than stacking with it -- rendering it natively bigger via KaTeX itself,
           // not via an em-scaled wrapper span.
-          const source = p.isLast ? '\\Large ' + p.value : p.value;
+          const source = p.isLast ? '\\Large ' + addFracSpacing(p.value) : addFracSpacing(p.value);
           // output:'html' -- this HTML ends up inside parseWithMath's own string, which runs
           // through marked.parse right after (see parseWithMath below for the full explanation of
           // why that makes KaTeX's default MathML <annotation> dangerous: marked's underscore-
@@ -2431,7 +2432,7 @@ let selectedImages = [];
           // shared verbatim with pyqbank.html/savedquestions.html/admin-pyq-preview.html). The
           // visible glyphs come only from .katex-html, never from .katex-mathml, so dropping the
           // annotation via output:'html' is a no-op for what's actually on screen.
-          return '<div class="chat-math-display" style="text-align:center;margin:12px 0;overflow-x:auto;">' + katex.renderToString(math.trim(), { displayMode: true, throwOnError: false, output: 'html' }) + '</div>';
+          return '<div class="chat-math-display" style="text-align:center;margin:12px 0;overflow-x:auto;">' + katex.renderToString(addFracSpacing(math.trim()), { displayMode: true, throwOnError: false, output: 'html' }) + '</div>';
         } catch(e) { return _; }
       });
       html = html.replace(/\$([^$\n]+)\$/g, function(_, math) {
@@ -2444,7 +2445,7 @@ let selectedImages = [];
           // em-based sizing then still correctly inherits and scales from. The actual size lives
           // in CSS (.chat-math-inline, scoped to .message-bubble.ai) rather than inline here, so
           // it applies uniformly and stays out of non-bubble contexts like the PYQ solve box.
-          return '<span class="chat-math-inline">' + katex.renderToString(math.trim(), { displayMode: false, throwOnError: false, output: 'html' }) + '</span>';
+          return '<span class="chat-math-inline">' + katex.renderToString(addFracSpacing(math.trim()), { displayMode: false, throwOnError: false, output: 'html' }) + '</span>';
         } catch(e) { return _; }
       });
       // breaks:true so a single newline in question/option text (e.g. one option per line)
