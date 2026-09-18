@@ -2128,9 +2128,14 @@ async def _match_with_merge_fallback(query: str, embed_fn, search_fn, offtopic_g
     return results
 
 async def search_ncert(query: str, limit: int = 3):
+    # Service-role key: ncert_content's anon SELECT policy was removed (scraping audit,
+    # 2026-09-19) since nothing in the frontend reads this table directly anymore -- only this
+    # function does, server-side. Both RPCs below run as their own SECURITY DEFINER regardless of
+    # caller (typical for a Supabase RPC), so this switch is defense-in-depth rather than the only
+    # thing keeping retrieval working -- confirmed live post-lockdown either way, not assumed.
     headers = {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "apikey": SUPABASE_SERVICE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
         "Content-Type": "application/json"
     }
     language = _detect_query_language(query)
@@ -4994,8 +4999,17 @@ async def list_diagrams(subject: str = "", class_num: int = 0, _: None = Depends
         print(f"LIST DIAGRAMS ERROR (subject={subject}, class_num={class_num}): {e}", flush=True)
         return {"error": "Something went wrong. Please try again."}
 
+# This endpoint and the 4 below it (mock-tests/{id}/questions, pyq-chapters,
+# personalised-test-questions, personalised-catalog-start) had no rate limiter of any kind before
+# -- found during the scraping audit (2026-09-19). 20/60 (30/60 for pyq-chapters, which returns
+# only chapter names + counts, not question content) is deliberately generous, well above any real
+# usage pattern for a "start a test" action a student hits at most a handful of times per session
+# -- this is a safety cap against a script hammering the endpoint, not a restriction on genuine
+# use. Content-volume theft (a patient, slow scraper staying under any per-minute cap) is a
+# separate, larger problem this doesn't attempt to solve -- see the audit for what's actually
+# needed there (pyqbank.html's own direct-to-Postgres read path, left parked on purpose).
 @app.get("/mock-test-questions")
-async def get_mock_test_questions():
+async def get_mock_test_questions(_: None = Depends(rate_limiter(20, 60))):
     try:
         import random
         headers = {
@@ -5073,7 +5087,7 @@ async def get_available_mock_tests(user_id: str = ""):
         return {"error": "Something went wrong. Please try again."}
 
 @app.get("/mock-tests/{mock_test_id}/questions")
-async def get_mock_test_questions_by_id(mock_test_id: int):
+async def get_mock_test_questions_by_id(mock_test_id: int, _: None = Depends(rate_limiter(20, 60))):
     try:
         headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
         # Double-gated on is_published, on top of the RLS policy already enforcing it --
@@ -5103,7 +5117,7 @@ async def get_mock_test_questions_by_id(mock_test_id: int):
         return {"error": "Something went wrong. Please try again."}
 
 @app.get("/pyq-chapters")
-async def get_pyq_chapters(subject: str):
+async def get_pyq_chapters(subject: str, _: None = Depends(rate_limiter(30, 60))):
     if subject not in ("Biology", "Physics", "Chemistry"):
         return {"error": "Invalid subject"}
     try:
@@ -5149,7 +5163,7 @@ async def get_pyq_chapters(subject: str):
         return {"error": "Something went wrong. Please try again."}
 
 @app.post("/personalised-test-questions")
-async def get_personalised_test_questions(req: PersonalisedTestRequest):
+async def get_personalised_test_questions(req: PersonalisedTestRequest, _: None = Depends(rate_limiter(20, 60))):
     if not req.selections:
         return {"error": "No subjects selected"}
     if any(sel.subject not in ("Biology", "Physics", "Chemistry") for sel in req.selections):
@@ -5194,9 +5208,11 @@ async def get_personalised_catalog(subject: str):
     if subject not in ("Biology", "Physics", "Chemistry"):
         return {"error": "Invalid subject"}
     try:
+        # Service-role key: personalised_test_sets' anon SELECT policy was removed (scraping
+        # audit, 2026-09-19) -- no frontend page reads this table directly, only this endpoint.
         headers = {
-            "apikey": SUPABASE_KEY,
-            "Authorization": f"Bearer {SUPABASE_KEY}"
+            "apikey": SUPABASE_SERVICE_KEY,
+            "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"
         }
         response = http_requests.get(
             f"{SUPABASE_URL}/rest/v1/personalised_test_sets",
@@ -5213,11 +5229,20 @@ async def get_personalised_catalog(subject: str):
         return {"error": "Something went wrong. Please try again."}
 
 @app.post("/personalised-catalog-start")
-async def start_personalised_catalog_test(req: PersonalisedCatalogStartRequest):
+async def start_personalised_catalog_test(req: PersonalisedCatalogStartRequest, _: None = Depends(rate_limiter(20, 60))):
     if req.subject not in ("Biology", "Physics", "Chemistry"):
         return {"error": "Invalid subject"}
     try:
+        # Service-role key, personalised_test_sets read only -- same lockdown reasoning as
+        # get_personalised_catalog above. Deliberately NOT applied to the pyq lookup below (still
+        # the plain anon key), since pyq's own anon-read RLS is an intentionally separate, parked
+        # decision (pyqbank.html still reads it directly) -- this fix doesn't touch that table's
+        # access at all, only personalised_test_sets'.
         headers = {
+            "apikey": SUPABASE_SERVICE_KEY,
+            "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"
+        }
+        pyq_headers = {
             "apikey": SUPABASE_KEY,
             "Authorization": f"Bearer {SUPABASE_KEY}"
         }
@@ -5238,7 +5263,7 @@ async def start_personalised_catalog_test(req: PersonalisedCatalogStartRequest):
         id_list = ",".join(str(i) for i in question_ids)
         questions_response = http_requests.get(
             f"{SUPABASE_URL}/rest/v1/pyq",
-            headers=headers,
+            headers=pyq_headers,
             params={
                 "id": f"in.({id_list})",
                 "is_active": "eq.true",
