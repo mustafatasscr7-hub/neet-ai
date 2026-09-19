@@ -5276,7 +5276,14 @@ async def get_personalised_test_questions(req: PersonalisedTestRequest, _: None 
             chapters = [c.strip() for c in sel.chapters if c and c.strip()]
             if chapters:
                 params["chapter"] = "in.(" + ",".join(chapters) + ")"
-            response = http_requests.get(
+            # await async_client, not the blocking http_requests (sync `requests`) this used to
+            # call -- same class of bug as /pyq-chapters' own fix (rate-limiter audit, 2026-09-20):
+            # a blocking call inside an async def handler ties up uvicorn's single event loop for
+            # its full duration, stalling every OTHER concurrent request to the server, not just
+            # this one. Up to 3 sequential blocking round trips per call here (one per selected
+            # subject), so this was actually the worse offender of the two despite being lower
+            # traffic than pyq-chapters.
+            response = await async_client.get(
                 f"{SUPABASE_URL}/rest/v1/pyq",
                 headers=headers,
                 params=params
@@ -5300,7 +5307,10 @@ async def get_personalised_catalog(subject: str):
             "apikey": SUPABASE_SERVICE_KEY,
             "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"
         }
-        response = http_requests.get(
+        # await async_client, not the blocking http_requests -- noticed directly adjacent to
+        # start_personalised_catalog_test's own identical fix (rate-limiter audit, 2026-09-20),
+        # same class of bug, same one-line fix.
+        response = await async_client.get(
             f"{SUPABASE_URL}/rest/v1/personalised_test_sets",
             headers=headers,
             params={
@@ -5328,7 +5338,12 @@ async def start_personalised_catalog_test(req: PersonalisedCatalogStartRequest, 
             "apikey": SUPABASE_SERVICE_KEY,
             "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"
         }
-        set_response = http_requests.get(
+        # await async_client, not the blocking http_requests (sync `requests`) both of these used
+        # to call -- same class of bug as /pyq-chapters and /personalised-test-questions' own
+        # fixes (rate-limiter audit, 2026-09-20): a blocking call inside an async def handler ties
+        # up uvicorn's single event loop for its full duration, stalling every OTHER concurrent
+        # request to the server, not just this one.
+        set_response = await async_client.get(
             f"{SUPABASE_URL}/rest/v1/personalised_test_sets",
             headers=headers,
             params={
@@ -5343,7 +5358,7 @@ async def start_personalised_catalog_test(req: PersonalisedCatalogStartRequest, 
             return {"error": "Test not found"}
         question_ids = rows[0]["question_ids"]
         id_list = ",".join(str(i) for i in question_ids)
-        questions_response = http_requests.get(
+        questions_response = await async_client.get(
             f"{SUPABASE_URL}/rest/v1/pyq",
             headers=headers,
             params={
