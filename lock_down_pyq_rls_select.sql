@@ -1,0 +1,22 @@
+-- Closes pyq's anon/authenticated SELECT policy (scraping audit, 2026-09-19 -> 09-20). pyq was
+-- the one table the earlier two rounds of this same audit deliberately left open for SELECT
+-- (see lock_down_pyq_rls.sql, which only ever locked down INSERT/UPDATE/DELETE) -- at the time,
+-- pyqbank.html queried this table directly from the browser (client.from('pyq').select('*')
+-- ...range(...)) for its whole subject -> chapter -> question browsing flow, so removing anon
+-- SELECT would have broken the page outright.
+--
+-- That's no longer true: pyqbank.html has been migrated to two new/updated server.py endpoints
+-- (GET /pyq-browse for the actual question rows, GET /pyq-chapters -- now also returning a
+-- `total` field -- for subject/chapter counts), both using the service-role key, which bypasses
+-- RLS regardless of this policy. Every OTHER server.py function that reads pyq (search_pyq,
+-- get_mock_test_questions, get_personalised_test_questions, start_personalised_catalog_test) was
+-- also switched off the anon key as part of this same change, specifically so this migration
+-- wouldn't silently break any of them the moment it runs.
+--
+-- RLS stays ENABLED (already was, from lock_down_pyq_rls.sql) -- this just drops the permissive
+-- SELECT policy, which makes the table default-deny for anon/authenticated (no matching policy =
+-- denied), same "no policy = no access" pattern already applied to ncert_content and
+-- personalised_test_sets. Safe to re-run -- DROP POLICY IF EXISTS avoids an error if this has
+-- already been applied.
+
+drop policy if exists "pyq_public_select" on public.pyq;

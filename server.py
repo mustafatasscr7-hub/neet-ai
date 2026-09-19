@@ -2351,9 +2351,13 @@ async def _backfill_pyq_chapters(results: list, headers: dict) -> list:
 async def search_pyq(query: str, limit: int = 5, chapter: str = ""):
     if _is_off_topic_pyq_query(query):
         return [], "none"
+    # Service-role key: pyq's own anon SELECT policy was removed (scraping audit, 2026-09-19 ->
+    # 09-20) -- this function's own direct pyq reads (_backfill_pyq_chapters, the chapter-fallback
+    # lookup below) needed switching regardless of whether match_pyq itself (an RPC, typically
+    # SECURITY DEFINER and so unaffected by SELECT policy either way) would have kept working.
     headers = {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "apikey": SUPABASE_SERVICE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
         "Content-Type": "application/json"
     }
     # chat.html's PYQ button sends `query` as buildPyqSearchQuery's own "{studentText} — {chapter}"
@@ -5005,16 +5009,19 @@ async def list_diagrams(subject: str = "", class_num: int = 0, _: None = Depends
 # only chapter names + counts, not question content) is deliberately generous, well above any real
 # usage pattern for a "start a test" action a student hits at most a handful of times per session
 # -- this is a safety cap against a script hammering the endpoint, not a restriction on genuine
-# use. Content-volume theft (a patient, slow scraper staying under any per-minute cap) is a
-# separate, larger problem this doesn't attempt to solve -- see the audit for what's actually
-# needed there (pyqbank.html's own direct-to-Postgres read path, left parked on purpose).
+# use. Content-volume theft (a patient, slow scraper staying under any per-minute cap) was a
+# separate, larger problem this alone didn't solve -- pyqbank.html's own direct-to-Postgres read
+# path was the real gap there, closed 2026-09-20 (see /pyq-browse and /pyq-chapters's own `total`
+# field, plus the pyq RLS lockdown migration -- every server.py reader of pyq, this one included,
+# is now on the service-role key rather than anon, which is why this switched too even though it
+# was never itself the anon-read path).
 @app.get("/mock-test-questions")
 async def get_mock_test_questions(_: None = Depends(rate_limiter(20, 60))):
     try:
         import random
         headers = {
-            "apikey": SUPABASE_KEY,
-            "Authorization": f"Bearer {SUPABASE_KEY}"
+            "apikey": SUPABASE_SERVICE_KEY,
+            "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"
         }
         # select=* used to also pull each row's `embedding` vector (used only by match_pyq's
         # server-side similarity search, never by the mock-test frontend) -- that alone made
@@ -5121,10 +5128,38 @@ async def get_pyq_chapters(subject: str, _: None = Depends(rate_limiter(30, 60))
     if subject not in ("Biology", "Physics", "Chemistry"):
         return {"error": "Invalid subject"}
     try:
+        # Service-role key: pyq's own anon SELECT policy was removed (scraping audit, 2026-09-19
+        # -> 09-20) -- this was one of several server.py readers still on the anon key even though
+        # nothing about it required anon access specifically. See the pyq RLS lockdown migration
+        # for the full list of readers switched at the same time.
         headers = {
-            "apikey": SUPABASE_KEY,
-            "Authorization": f"Bearer {SUPABASE_KEY}"
+            "apikey": SUPABASE_SERVICE_KEY,
+            "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"
         }
+        # total: a plain exact count (same query pyqbank.html's own showSubjects/showClasses used
+        # to run directly against Supabase before being routed through this endpoint) -- NOT
+        # derived from summing the chapter counts below, since a row can have is_active=true with
+        # a null chapter (counted here, excluded from every chapter's own bucket) -- summing would
+        # silently undercount by however many such rows exist.
+        #
+        # await async_client, not the blocking http_requests (sync `requests`) this used to call --
+        # found live (2026-09-20) once pyqbank.html started routing its own landing screen through
+        # this endpoint (3 concurrent calls, one per subject, via Promise.all): with uvicorn run
+        # single-process/single-event-loop (see the identical fix already applied to
+        # /admin/pyq-stats' own fetch_page for the same reason), a blocking call here ties up the
+        # ONLY event loop for its full duration, so those 3 "concurrent" calls actually queued up
+        # behind each other's blocking I/O and the whole page load stalled out past a 30s timeout
+        # in real testing. Previously only /admin/pyq-chapters (an admin-only, far lower-traffic
+        # tool) called this pattern, which is presumably why it was never caught before.
+        total_resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/pyq",
+            headers={**headers, "Prefer": "count=exact"},
+            params={"subject": f"eq.{subject}", "is_active": "eq.true", "select": "id", "limit": 1}
+        )
+        content_range = total_resp.headers.get("content-range", "")
+        tail = content_range.split("/")[-1] if "/" in content_range else ""
+        total = int(tail) if tail.isdigit() else 0
+
         # A fixed "limit": 2000 here used to silently truncate and undercount once a subject grew
         # past it -- confirmed for real: Biology sits at 2087 active rows and Chemistry at 3385
         # (Physics, at 512, never showed the bug), so the old single-request version was quietly
@@ -5135,7 +5170,7 @@ async def get_pyq_chapters(subject: str, _: None = Depends(rate_limiter(30, 60))
         page_size = 1000
         offset = 0
         while True:
-            response = http_requests.get(
+            response = await async_client.get(
                 f"{SUPABASE_URL}/rest/v1/pyq",
                 headers={**headers, "Range": f"{offset}-{offset + page_size - 1}"},
                 params={
@@ -5157,9 +5192,46 @@ async def get_pyq_chapters(subject: str, _: None = Depends(rate_limiter(30, 60))
                 break
             offset += page_size
         chapters = [{"name": ch, "count": counts[ch]} for ch in sorted(counts.keys())]
-        return {"chapters": chapters}
+        # total added 2026-09-20 (pyqbank.html scraping-audit migration) -- purely additive, every
+        # existing caller (personalised-test.html) only ever read .chapters and is unaffected.
+        return {"chapters": chapters, "total": total}
     except Exception as e:
         print(f"PYQ CHAPTERS ERROR (subject={subject}): {e}", flush=True)
+        return {"error": "Something went wrong. Please try again."}
+
+# Replaces pyqbank.html's own direct client.from('pyq').select('*')...eq(...) calls (scraping
+# audit, 2026-09-19 -> 09-20) -- the whole reason this endpoint exists. chapter is REQUIRED
+# (never optional, even though the underlying query could technically run without it) -- a
+# subject-wide dump with no chapter scope is exactly the kind of large, single-call payload this
+# whole audit is about avoiding; every real caller (showQuestions/filterByYear in pyqbank.html)
+# already always has a specific chapter in hand by the time it needs actual question rows, so this
+# costs nothing for genuine use and closes off this endpoint ever becoming a fresh bulk-read path
+# itself. year is optional, matching the year-filter dropdown on the chapter's own question view.
+@app.get("/pyq-browse")
+async def pyq_browse(subject: str, chapter: str, year: int = None, _: None = Depends(rate_limiter(30, 60))):
+    if subject not in ("Biology", "Physics", "Chemistry"):
+        return {"error": "Invalid subject"}
+    if not chapter.strip():
+        return {"error": "chapter is required"}
+    try:
+        headers = {
+            "apikey": SUPABASE_SERVICE_KEY,
+            "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"
+        }
+        params = {
+            "subject": f"eq.{subject}",
+            "chapter": f"eq.{chapter}",
+            "is_active": "eq.true",
+            "select": PYQ_CARD_COLUMNS,
+        }
+        if year is not None:
+            params["year"] = f"eq.{year}"
+        response = await async_client.get(f"{SUPABASE_URL}/rest/v1/pyq", headers=headers, params=params)
+        if response.status_code >= 400:
+            return {"error": response.text}
+        return {"questions": response.json()}
+    except Exception as e:
+        print(f"PYQ BROWSE ERROR (subject={subject}, chapter={chapter}, year={year}): {e}", flush=True)
         return {"error": "Something went wrong. Please try again."}
 
 @app.post("/personalised-test-questions")
@@ -5177,9 +5249,12 @@ async def get_personalised_test_questions(req: PersonalisedTestRequest, _: None 
         # needlessly returning far more than any legitimate use needed, including the (unused by
         # the frontend) embedding vector column.
         count = max(1, min(int(req.count), 50))
+        # Service-role key: pyq's own anon SELECT policy was removed (scraping audit, 2026-09-19
+        # -> 09-20) -- this was left on the anon key when the count/select trim above shipped
+        # (RLS was still open at the time), switched now along with every other server.py reader.
         headers = {
-            "apikey": SUPABASE_KEY,
-            "Authorization": f"Bearer {SUPABASE_KEY}"
+            "apikey": SUPABASE_SERVICE_KEY,
+            "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"
         }
         # Same explicit column list as /mock-test-questions' own `cols` -- confirmed against
         # personalised-test.html (every place it reads a question field, including the
@@ -5244,18 +5319,14 @@ async def start_personalised_catalog_test(req: PersonalisedCatalogStartRequest, 
     if req.subject not in ("Biology", "Physics", "Chemistry"):
         return {"error": "Invalid subject"}
     try:
-        # Service-role key, personalised_test_sets read only -- same lockdown reasoning as
-        # get_personalised_catalog above. Deliberately NOT applied to the pyq lookup below (still
-        # the plain anon key), since pyq's own anon-read RLS is an intentionally separate, parked
-        # decision (pyqbank.html still reads it directly) -- this fix doesn't touch that table's
-        # access at all, only personalised_test_sets'.
+        # Service-role key for both reads below -- personalised_test_sets and pyq. Originally only
+        # personalised_test_sets was switched here (pyq's own anon-read RLS was still an
+        # intentionally separate, parked decision at the time, since pyqbank.html read it directly
+        # too) -- now that pyq's anon SELECT has also been removed (2026-09-20), both use the same
+        # headers, so the separate pyq_headers variable this used to need is gone.
         headers = {
             "apikey": SUPABASE_SERVICE_KEY,
             "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"
-        }
-        pyq_headers = {
-            "apikey": SUPABASE_KEY,
-            "Authorization": f"Bearer {SUPABASE_KEY}"
         }
         set_response = http_requests.get(
             f"{SUPABASE_URL}/rest/v1/personalised_test_sets",
@@ -5274,7 +5345,7 @@ async def start_personalised_catalog_test(req: PersonalisedCatalogStartRequest, 
         id_list = ",".join(str(i) for i in question_ids)
         questions_response = http_requests.get(
             f"{SUPABASE_URL}/rest/v1/pyq",
-            headers=pyq_headers,
+            headers=headers,
             params={
                 "id": f"in.({id_list})",
                 "is_active": "eq.true",
