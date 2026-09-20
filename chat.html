@@ -3819,7 +3819,7 @@ let selectedImages = [];
       container.appendChild(skeleton);
 
       const img = document.createElement('img');
-      img.alt = diagram.name || 'Diagram';
+      img.alt = diagramDisplayName(diagram);
       img.style.cssText = `max-width:100%;max-height:${maxHeight};display:none;border-radius:6px;opacity:0;transform:scale(0.98);transition:opacity 0.35s ease,transform 0.35s ease;${onClick ? 'cursor:pointer;' : ''}`;
       if (onClick) img.onclick = onClick;
 
@@ -3893,7 +3893,7 @@ let selectedImages = [];
       const title = document.createElement('h3');
       title.className = 'diagram-modal-title';
       title.style.cssText = 'margin:0;color:#a78bfa;font-size:15px;';
-      title.textContent = diagram.name || 'Diagram';
+      title.textContent = diagramDisplayName(diagram);
       header.appendChild(title);
 
       // Right-side group (report + close) kept together via its own flex container, not just
@@ -3925,11 +3925,12 @@ let selectedImages = [];
       imgFrame.appendChild(buildDiagramImage(diagram, { maxHeight: '65vh' }));
       box.appendChild(imgFrame);
 
-      if (diagram.description) {
+      const modalDesc = diagramDisplayDescription(diagram);
+      if (modalDesc) {
         const caption = document.createElement('p');
         caption.className = 'diagram-modal-caption';
         caption.style.cssText = 'margin:14px 0 0;color:#c4c4c4;font-size:13px;line-height:1.6;text-align:center;width:100%;';
-        caption.textContent = diagram.description;
+        caption.textContent = modalDesc;
         box.appendChild(caption);
       }
 
@@ -3990,6 +3991,24 @@ let selectedImages = [];
     // cover is now unreachable, because that similarity range no longer exists.
     const DIAGRAM_HIGH_CONFIDENCE_THRESHOLD = 0.50;
 
+    // Mirrors server.py's DEVANAGARI_RE (search_ncert's own language gate) -- no equivalent
+    // existed anywhere in this file before the diagram language-awareness fix (2026-09-20).
+    function isHindiText(text) {
+      return /[ऀ-ॿ]/.test(text || '');
+    }
+
+    // diagram.name/description picks the field the Show Diagram flow should actually render:
+    // name_hi/description_hi when the triggering doubt was in Hindi AND the matched diagram has
+    // that field filled in, English otherwise. Every current diagram has null name_hi/
+    // description_hi (pyq_diagram_hindi_content_gap memory) so this falls through to English for
+    // all of them today -- the fallback is what makes that safe rather than showing a blank title.
+    function diagramDisplayName(diagram) {
+      return (diagram.isHindiQuery && diagram.name_hi) ? diagram.name_hi : (diagram.name || 'Diagram');
+    }
+    function diagramDisplayDescription(diagram) {
+      return (diagram.isHindiQuery && diagram.description_hi) ? diagram.description_hi : diagram.description;
+    }
+
     async function fetchDiagramMatch(doubtText, answerText) {
       try {
         const res = await fetch(`${API_BASE}/diagram-match`, {
@@ -3997,7 +4016,13 @@ let selectedImages = [];
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text: doubtText, answer: answerText })
         });
-        return await res.json();
+        const data = await res.json();
+        // Stamped here (once, where doubtText is in hand) rather than re-derived at each render
+        // site -- survives JSON round-trips through conversation-history save/reload same as any
+        // other field on this object, and `prefetched` reuse (handleShowDiagramClick) carries it
+        // along for free since it's just passing the same object through.
+        if (data && data.matched) data.isHindiQuery = isHindiText(doubtText);
+        return data;
       } catch (e) {
         return null;
       }
@@ -4032,11 +4057,12 @@ let selectedImages = [];
       const stars = buildDiagramStars(diagram.importance_rating);
       if (stars) wrap.appendChild(stars);
       wrap.appendChild(buildDiagramImage(diagram, { maxHeight: '400px', onClick: () => showDiagramModal(diagram) }));
-      if (diagram.description) {
+      const inlineDesc = diagramDisplayDescription(diagram);
+      if (inlineDesc) {
         const caption = document.createElement('p');
         caption.className = 'inline-diagram-caption';
         caption.style.cssText = 'margin:10px 0 0;color:#c4c4c4;font-size:12px;line-height:1.6;text-align:center;width:100%;';
-        caption.textContent = diagram.description;
+        caption.textContent = inlineDesc;
         wrap.appendChild(caption);
       }
       if (diagram.diagram_id) {

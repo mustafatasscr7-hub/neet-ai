@@ -4968,7 +4968,11 @@ async def diagram_match(req: DiagramMatchRequest, _: None = Depends(rate_limiter
         # similarity is already computed by match_diagrams for its own threshold filter above --
         # exposing it here doesn't touch the matching logic itself, it just lets the caller (the
         # frontend's confidence-tier split) see the same number the RPC already had.
-        return {"matched": True, "diagram_id": top["id"], "image_url": top["image_url"], "name": top.get("name"), "description": top.get("description"), "importance_rating": top.get("importance_rating"), "similarity": top.get("similarity")}
+        # name_hi/description_hi passed through as-is (null on every diagram today -- see
+        # pyq_diagram_hindi_content_gap memory) so chat.html's Show Diagram flow can pick the
+        # right field for the triggering question's language once real Hindi content exists,
+        # instead of only ever having the English name/description available to it at all.
+        return {"matched": True, "diagram_id": top["id"], "image_url": top["image_url"], "name": top.get("name"), "description": top.get("description"), "name_hi": top.get("name_hi"), "description_hi": top.get("description_hi"), "importance_rating": top.get("importance_rating"), "similarity": top.get("similarity")}
     except Exception:
         return {"matched": False}
 
