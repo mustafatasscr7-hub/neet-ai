@@ -650,6 +650,7 @@
   <script src="./theme.js"></script>
   <script src="./i18n.js"></script>
   <script src="./confirm-modal.js"></script>
+  <script src="./shortcuts.js"></script>
   <script>
     const API_BASE = 'https://neet-ai-production.up.railway.app';
     const SUPABASE_URL = 'https://hvhnfttrfouajlyhvunq.supabase.co';
@@ -2052,6 +2053,56 @@
       const btn = document.getElementById('review-save-' + i);
       if (btn) { btn.textContent = '✅ Saved'; btn.style.borderColor = '#4ade80'; btn.style.color = '#4ade80'; btn.disabled = true; }
     }
+
+    // Keyboard shortcuts for the question-taking screen only (keyboard-shortcuts audit/rollout,
+    // 2026-09-20) -- deliberately NOT active on #setupScreen (subject/chapter/count picker) or
+    // #resultsScreen (post-test review), both of which reuse some of these same keys' letters for
+    // other things (typing a custom question count, etc). #testScreen's own display is the single
+    // source of truth for which of the three screens is showing -- 'flex' only while a test is
+    // actually in progress (see startTest() and submitTest() above), so gating on that alone
+    // correctly excludes both the other screens without needing to check them individually.
+    // Letter aliases only cover A and D -- see mocktest.html's identical constant for why B/C are
+    // deliberately excluded (they'd shadow this same screen's Save/Clear shortcuts below).
+    const PTEST_OPTION_KEYS = { '1': 'a', '2': 'b', '3': 'c', '4': 'd', 'a': 'a', 'd': 'd' };
+    window.PAGE_SHORTCUTS = [
+      { keys: '1-4', desc: 'Select answer option (A/D also work)' },
+      { keys: '→', desc: 'Next question' },
+      { keys: '←', desc: 'Previous question' },
+      { keys: 'M', desc: 'Mark for review' },
+      { keys: 'C', desc: 'Clear answer' },
+      { keys: 'B', desc: 'Save question' },
+    ];
+    document.addEventListener('keydown', function (e) {
+      if (isTypingTarget(document.activeElement)) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const testScreen = document.getElementById('testScreen');
+      if (!testScreen || testScreen.style.display !== 'flex') return;
+      if (!questions.length || !questions[currentIndex]) return;
+
+      if (e.key === 'ArrowRight') { e.preventDefault(); goTo(currentIndex + 1); return; }
+      if (e.key === 'ArrowLeft') { e.preventDefault(); goTo(currentIndex - 1); return; }
+
+      const lower = e.key.toLowerCase();
+      if (PTEST_OPTION_KEYS.hasOwnProperty(lower)) {
+        // Same "only select an option that's actually rendered" guard as mocktest.html's own
+        // handler -- see that file's comment for why blindly selecting a non-existent option is
+        // a real scoring bug, not just a cosmetic no-op.
+        const opt = PTEST_OPTION_KEYS[lower];
+        const q = questions[currentIndex];
+        if (q['option_' + opt] || q['option_' + opt + '_diagram_url']) {
+          e.preventDefault();
+          selectAnswer(opt);
+        }
+        return;
+      }
+      if (lower === 'm') { e.preventDefault(); toggleMark(); return; }
+      if (lower === 'c') { e.preventDefault(); clearAnswer(); return; }
+      if (lower === 'b') {
+        e.preventDefault();
+        if (!savedQuestions.has(currentIndex)) saveQuestionFromTest(currentIndex);
+        return;
+      }
+    });
   </script>
 </body>
 </html>

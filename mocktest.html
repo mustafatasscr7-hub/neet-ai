@@ -425,6 +425,7 @@
   <script src="./theme.js"></script>
   <script src="./i18n.js"></script>
   <script src="./confirm-modal.js"></script>
+  <script src="./shortcuts.js"></script>
   <script>
     // Used by submitReport() below -- unlike pyqbank.html/personalised-test.html, this file
     // never declared these at module scope (every other fetch here hardcodes its full URL
@@ -1393,6 +1394,61 @@ async function saveQuestionFromMock(index) {
     // crash, refresh, or closed tab. See checkForResumableMockTest's own comment for why this is
     // a resume-or-discard choice rather than a silent auto-resume.
     checkForResumableMockTest();
+
+    // Keyboard shortcuts for the question-taking screen (keyboard-shortcuts audit/rollout,
+    // 2026-09-20). Gated on #startScreenOverlay being hidden -- that overlay sits on top of the
+    // real test UI (header/questionArea/qnav-panel) until a test has actually started (see
+    // startTest()/loadQuestions() above setting its display to 'none') and covers both the
+    // catalog/choose-test screen and the mid-load progress screen, so these must do nothing on
+    // either -- plus questions.length as a second guard for the instant right after the overlay
+    // hides but before the first renderQuestion() call has actually populated the array.
+    // Letter aliases only cover A and D -- B and C are deliberately excluded here even though
+    // they're valid option letters, because they collide with this same screen's Save (B) and
+    // Clear (C) shortcuts below. Found live via the Playwright test for this rollout: pressing
+    // "c" to clear an answer was instead selecting option C, since the option-select branch ran
+    // first and silently shadowed Clear/Save every time. Digits 1-4 already cover all four
+    // options unambiguously, so this loses nothing -- B/C as letters just aren't needed.
+    const MOCKTEST_OPTION_KEYS = { '1': 'a', '2': 'b', '3': 'c', '4': 'd', 'a': 'a', 'd': 'd' };
+    window.PAGE_SHORTCUTS = [
+      { keys: '1-4', desc: 'Select answer option (A/D also work)' },
+      { keys: '→', desc: 'Next question' },
+      { keys: '←', desc: 'Previous question' },
+      { keys: 'M', desc: 'Mark for review' },
+      { keys: 'C', desc: 'Clear answer' },
+      { keys: 'B', desc: 'Save question' },
+    ];
+    document.addEventListener('keydown', function (e) {
+      if (isTypingTarget(document.activeElement)) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const overlay = document.getElementById('startScreenOverlay');
+      if (!overlay || overlay.style.display !== 'none') return;
+      if (!questions.length || !questions[currentIndex]) return;
+
+      if (e.key === 'ArrowRight') { e.preventDefault(); goTo(currentIndex + 1, 1); return; }
+      if (e.key === 'ArrowLeft') { e.preventDefault(); goTo(currentIndex - 1, -1); return; }
+
+      const lower = e.key.toLowerCase();
+      if (MOCKTEST_OPTION_KEYS.hasOwnProperty(lower)) {
+        // Only ever selects an option that's actually rendered -- a question with fewer than 4
+        // real options (option_d missing, say) must not let "4" silently record a phantom answer
+        // that scores as wrong instead of the skip it actually is, the same way clicking where
+        // that option would be does nothing today (renderQuestion only draws options that exist).
+        const opt = MOCKTEST_OPTION_KEYS[lower];
+        const q = questions[currentIndex];
+        if (q['option_' + opt] || q['option_' + opt + '_diagram_url']) {
+          e.preventDefault();
+          selectAnswer(opt);
+        }
+        return;
+      }
+      if (lower === 'm') { e.preventDefault(); toggleMark(); return; }
+      if (lower === 'c') { e.preventDefault(); clearAnswer(); return; }
+      if (lower === 'b') {
+        e.preventDefault();
+        if (!savedQuestions.has(currentIndex)) saveQuestionFromMock(currentIndex);
+        return;
+      }
+    });
   </script>
   <script src="./sidebar.js"></script>
   <script src="./settings.js"></script>

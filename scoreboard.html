@@ -435,6 +435,7 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="./theme.js"></script>
   <script src="./i18n.js"></script>
+  <script src="./shortcuts.js"></script>
   <script>
     const SUPABASE_URL = 'https://hvhnfttrfouajlyhvunq.supabase.co';
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh2aG5mdHRyZm91YWpseWh2dW5xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg5NDI1NTIsImV4cCI6MjA5NDUxODU1Mn0.8RaSu5yiTpQCEUGKrFO2y6oiRXSqdBehIz933j9Z7WA';
@@ -1136,6 +1137,53 @@
     }
 
     loadScoreboard();
+
+    // Keyboard shortcuts (keyboard-shortcuts audit/rollout, 2026-09-20). This page has no single
+    // "current" test or question the way pyqbank.html/mocktest.html do -- every past test's own
+    // Correct/Wrong/Skipped buttons and every individual question's Show Explanation button are
+    // all visible on screen at once in a scrollable list, so both shortcuts below act on whichever
+    // one the mouse is currently over (delegated on #testsList, which loadScoreboard() only ever
+    // clears and rebuilds the *contents* of, never replaces itself, so this listener survives
+    // every reload/re-render). "1/2/3" only fires while hovering a test card (maps to that card's
+    // own Correct/Wrong/Skipped, in that order); "S" only fires while hovering a specific review
+    // question row, and only does anything if that row actually has a Show Explanation button
+    // (wrong answers only -- correct/skipped questions never render one, same as clicking there
+    // today does nothing).
+    let hoveredTestCard = null;
+    let hoveredReviewQuestion = null;
+    const testsListEl = document.getElementById('testsList');
+    testsListEl.addEventListener('mouseover', function(e) {
+      const q = e.target.closest('.review-question-card');
+      if (q) { hoveredReviewQuestion = q; return; }
+      const card = e.target.closest('.test-card-wrap');
+      if (card) hoveredTestCard = card;
+    });
+    testsListEl.addEventListener('mouseout', function(e) {
+      const q = e.target.closest('.review-question-card');
+      if (q && q === hoveredReviewQuestion && !q.contains(e.relatedTarget)) hoveredReviewQuestion = null;
+      const card = e.target.closest('.test-card-wrap');
+      if (card && card === hoveredTestCard && !card.contains(e.relatedTarget)) hoveredTestCard = null;
+    });
+
+    window.PAGE_SHORTCUTS = [
+      { keys: '1-3', desc: 'Expand Correct/Wrong/Skipped (hovered test)' },
+      { keys: 'S', desc: 'Show/hide explanation (hovered question)' },
+    ];
+    document.addEventListener('keydown', function(e) {
+      if (isTypingTarget(document.activeElement)) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+      if ((e.key === 's' || e.key === 'S') && hoveredReviewQuestion) {
+        const btn = hoveredReviewQuestion.querySelector('.sol-btn');
+        if (btn) { e.preventDefault(); btn.click(); }
+        return;
+      }
+      if ((e.key === '1' || e.key === '2' || e.key === '3') && hoveredTestCard) {
+        const cats = ['correct', 'wrong', 'skipped'];
+        const btn = hoveredTestCard.querySelector('.review-cat-btn.' + cats[parseInt(e.key, 10) - 1]);
+        if (btn) { e.preventDefault(); btn.click(); }
+      }
+    });
   </script>
   <script src="./confirm-modal.js"></script>
   <script src="./sidebar.js"></script>

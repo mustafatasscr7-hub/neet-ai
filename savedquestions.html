@@ -319,6 +319,7 @@
   <script src="./theme.js"></script>
   <script src="./i18n.js"></script>
   <script src="./confirm-modal.js"></script>
+  <script src="./shortcuts.js"></script>
   <script>
     const SUPABASE_URL = 'https://hvhnfttrfouajlyhvunq.supabase.co';
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh2aG5mdHRyZm91YWpseWh2dW5xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg5NDI1NTIsImV4cCI6MjA5NDUxODU1Mn0.8RaSu5yiTpQCEUGKrFO2y6oiRXSqdBehIz933j9Z7WA';
@@ -969,6 +970,47 @@
     }
 
     loadSavedQuestions();
+
+    // Keyboard shortcuts (keyboard-shortcuts audit/rollout, 2026-09-20). Unlike pyqbank.html/
+    // mocktest.html, this page shows every saved question as a scrollable list rather than one at
+    // a time, so "S" (show/hide solution) has no single obvious target -- resolved by tracking
+    // whichever .question-card the mouse is currently over (delegated mouseover/mouseout on the
+    // list container, since cards are re-rendered wholesale on every filter change) and acting on
+    // that one, mirroring how a student would naturally be looking at exactly one card at a time
+    // while reading down the list. 1-7 map to the filter tabs in their on-page left-to-right
+    // order (All, Biology, Physics, Chemistry, From Question Bank, From Mock Test, Mistake
+    // Journal) -- confirmed fixed at 7 static tabs in this file's own markup, not
+    // dynamically generated, so hardcoding the count here is safe.
+    let hoveredQuestionCard = null;
+    document.getElementById('questionsList').addEventListener('mouseover', function(e) {
+      const card = e.target.closest('.question-card');
+      if (card) hoveredQuestionCard = card;
+    });
+    document.getElementById('questionsList').addEventListener('mouseout', function(e) {
+      const card = e.target.closest('.question-card');
+      if (card && card === hoveredQuestionCard && !card.contains(e.relatedTarget)) hoveredQuestionCard = null;
+    });
+
+    window.PAGE_SHORTCUTS = [
+      { keys: 'S', desc: 'Show/hide solution (hovered card)' },
+      { keys: '1-7', desc: 'Switch filter tab' },
+    ];
+    document.addEventListener('keydown', function(e) {
+      if (isTypingTarget(document.activeElement)) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+      if (e.key === 's' || e.key === 'S') {
+        if (!hoveredQuestionCard) return;
+        e.preventDefault();
+        hoveredQuestionCard.querySelector('.q-actions .sol-btn')?.click();
+        return;
+      }
+      const tabIndex = parseInt(e.key, 10);
+      if (tabIndex >= 1 && tabIndex <= 7 && String(tabIndex) === e.key) {
+        const tabs = document.querySelectorAll('.filter-tab');
+        if (tabs[tabIndex - 1]) { e.preventDefault(); tabs[tabIndex - 1].click(); }
+      }
+    });
   </script>
   <script src="./sidebar.js"></script>
   <script src="./settings.js"></script>

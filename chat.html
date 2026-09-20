@@ -1384,6 +1384,7 @@
   <script src="./theme.js"></script>
   <script src="./i18n.js"></script>
   <script src="./confirm-modal.js"></script>
+  <script src="./shortcuts.js"></script>
   <script>
     const SUPABASE_URL = 'https://hvhnfttrfouajlyhvunq.supabase.co'
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh2aG5mdHRyZm91YWpseWh2dW5xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg5NDI1NTIsImV4cCI6MjA5NDUxODU1Mn0.8RaSu5yiTpQCEUGKrFO2y6oiRXSqdBehIz933j9Z7WA'
@@ -1745,6 +1746,34 @@ function toggleSearchChats() {
         toggleSearchChats();
       }
     });
+
+    // New chat / focus doubt input (keyboard-shortcuts audit/rollout, 2026-09-20). Ctrl+Shift+O
+    // matches the binding most chat apps already use for "new conversation" -- picked specifically
+    // to avoid Ctrl+N (browser new window) and Ctrl+T (new tab), both reserved. "/" is guarded by
+    // isTypingTarget (shortcuts.js) same as every other shortcut in this rollout, so it only ever
+    // focuses the input from OUTSIDE it -- once focus actually lands there, a literal "/" types
+    // normally and can go on to open the existing slash-command menu exactly as it already does,
+    // this never intercepts that.
+    document.addEventListener('keydown', e => {
+      if (isTypingTarget(document.activeElement)) return;
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'o') {
+        e.preventDefault();
+        document.getElementById('newChatBtn').click();
+        return;
+      }
+      if (e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        focusMessageInput();
+      }
+    });
+
+    window.PAGE_SHORTCUTS = [
+      { keys: 'Enter', desc: 'Send message' },
+      { keys: '/', desc: 'Focus doubt input' },
+      { keys: 'Ctrl+Shift+O', desc: 'New chat' },
+      { keys: 'Ctrl+K', desc: 'Search chats' },
+      { keys: 'Escape', desc: 'Close diagram / popup' },
+    ];
 
     (function setupSidebarResize() {
       const handle = document.getElementById('sidebarResizeHandle');
@@ -3871,6 +3900,20 @@ let selectedImages = [];
     // No lightbox/expanded-image pattern existed anywhere in this file before -- built fresh,
     // structurally following showPYQModal's own construction pattern (createElement + inline
     // cssText) so it fits the existing visual style rather than introducing a new one.
+    // Escape-to-close (keyboard-shortcuts audit/rollout, 2026-09-20) -- this modal had no keyboard
+    // dismissal at all before, unlike its sibling showImageLightbox above (_imageLightboxEscHandler),
+    // which this mirrors: the listener is only attached while the modal is actually open and
+    // removed the instant it closes via any path, so it can never fire against a stale/removed
+    // element or leak once the modal is gone.
+    function _diagramModalEscHandler(e) {
+      if (e.key === 'Escape') closeDiagramModal();
+    }
+    function closeDiagramModal() {
+      const modal = document.getElementById('diagram-modal');
+      if (modal) modal.remove();
+      document.removeEventListener('keydown', _diagramModalEscHandler);
+    }
+
     function showDiagramModal(diagram) {
       const existing = document.getElementById('diagram-modal');
       if (existing) existing.remove();
@@ -3878,7 +3921,7 @@ let selectedImages = [];
       const modal = document.createElement('div');
       modal.id = 'diagram-modal';
       modal.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.75);z-index:1000;display:flex;align-items:center;justify-content:center;';
-      modal.onclick = function(e) { if (e.target === modal) modal.remove(); };
+      modal.onclick = function(e) { if (e.target === modal) closeDiagramModal(); };
 
       const box = document.createElement('div');
       box.className = 'diagram-modal-box';
@@ -3911,7 +3954,7 @@ let selectedImages = [];
       closeBtn.className = 'diagram-modal-close';
       closeBtn.textContent = '✕';
       closeBtn.style.cssText = 'background:none;border:none;color:#888;font-size:20px;cursor:pointer;flex-shrink:0;';
-      closeBtn.onclick = () => modal.remove();
+      closeBtn.onclick = closeDiagramModal;
       rightGroup.appendChild(closeBtn);
       header.appendChild(rightGroup);
       box.appendChild(header);
@@ -3936,6 +3979,7 @@ let selectedImages = [];
 
       modal.appendChild(box);
       document.body.appendChild(modal);
+      document.addEventListener('keydown', _diagramModalEscHandler);
     }
 
     // Lightbox for a student's own submitted image attachment (as opposed to showDiagramModal

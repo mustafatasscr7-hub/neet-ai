@@ -424,6 +424,7 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="./theme.js"></script>
   <script src="./i18n.js"></script>
+  <script src="./shortcuts.js"></script>
   <script>
     const SUPABASE_URL = 'https://hvhnfttrfouajlyhvunq.supabase.co';
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh2aG5mdHRyZm91YWpseWh2dW5xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg5NDI1NTIsImV4cCI6MjA5NDUxODU1Mn0.8RaSu5yiTpQCEUGKrFO2y6oiRXSqdBehIz933j9Z7WA';
@@ -1788,6 +1789,33 @@ ${q.diagram_url ? `<img class="q-diagram-img" src="${q.diagram_url}">` : ''}
     if (e.key === 'Escape' && pyqSelectionPopup.classList.contains('visible')) hidePyqSelectionPopup();
   });
   window.addEventListener('scroll', hidePyqSelectionPopup, true);
+
+  // Keyboard shortcuts for the single-question view (keyboard-shortcuts audit/rollout,
+  // 2026-09-20) -- gated on a .question-card actually being on screen, since #mainContent is
+  // wholesale-replaced across every screen this page has (subject grid, class/chapter list,
+  // single question) and none of the others should respond to these at all. Next/Prev reuse
+  // nextQuestion()/prevQuestion() directly (they already no-op at either boundary, same as their
+  // buttons being disabled there); Show Solution/Save click the real buttons rather than
+  // reconstructing toggleSolution()/saveQuestion()'s arguments by hand, since both are handed a
+  // full question JSON object baked into the button's own onclick at render time.
+  window.PAGE_SHORTCUTS = [
+    { keys: '→', desc: 'Next question' },
+    { keys: '←', desc: 'Previous question' },
+    { keys: 'S', desc: 'Show/hide solution' },
+    { keys: 'B', desc: 'Save/bookmark question' },
+  ];
+  document.addEventListener('keydown', function(e) {
+    if (isTypingTarget(document.activeElement)) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (!document.querySelector('.question-card')) return;
+
+    if (e.key === 'ArrowRight') { e.preventDefault(); nextQuestion(selectedSubject, selectedClass, selectedChapter); return; }
+    if (e.key === 'ArrowLeft') { e.preventDefault(); prevQuestion(selectedSubject, selectedClass, selectedChapter); return; }
+
+    const lower = e.key.toLowerCase();
+    if (lower === 's') { e.preventDefault(); document.querySelector('.q-actions .sol-btn')?.click(); return; }
+    if (lower === 'b') { e.preventDefault(); document.querySelector('.q-actions .sol-btn-orange')?.click(); return; }
+  });
 
   </script>
   <script src="./confirm-modal.js"></script>
