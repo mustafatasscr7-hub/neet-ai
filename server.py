@@ -822,6 +822,11 @@ class AdminPyqBulkUpdate(BaseModel):
 class ClassifyDifficultyRequest(BaseModel):
     table: str  # "pyq" or "mock_test_questions" -- the only two tables difficulty exists on
     ids: List[str]
+    # Optional purely for cost-attribution logging (see log_provider_usage in the endpoint below)
+    # -- never required, never blocks the page from loading if the client doesn't send it.
+    # log_provider_usage's own "user_id or None" already turns "" into a null column, same as
+    # every other endpoint that logs provider usage without a hard user_id requirement.
+    user_id: str = ""
 
 class SetUserPlanRequest(BaseModel):
     user_id: str
@@ -6154,11 +6159,18 @@ async def admin_pyq_delete(pyq_id: str, _: None = Depends(verify_admin)):
 
 def classify_difficulty(question: str, option_a: str, option_b: str, option_c: str, option_d: str,
                          chapter: str = None, source_tag: str = None):
-    """Single DeepSeek call classifying one question's difficulty. Returns (label, tokens_used)
-    where label is exactly 'Easy'/'Moderate'/'Difficult', or (None, tokens_used) if the model's
-    reply can't be parsed cleanly -- callers must leave the DB column null in that case rather
-    than cache a bad value, so it gets retried on the next display/backfill pass instead of
-    permanently sticking with a wrong guess."""
+    """Single DeepSeek call classifying one question's difficulty. Returns
+    (label, cache_miss_tokens, cache_hit_tokens, output_tokens) where label is exactly
+    'Easy'/'Moderate'/'Difficult', or (None, cache_miss_tokens, cache_hit_tokens, output_tokens)
+    if the model's reply can't be parsed cleanly -- callers must leave the DB column null in that
+    case rather than cache a bad value, so it gets retried on the next display/backfill pass
+    instead of permanently sticking with a wrong guess. On a hard failure (the DeepSeek call
+    itself raises) this is (None, 0, 0, 0) -- nothing was spent, nothing to log.
+
+    The three separate token counts (not one combined total) are what the caller needs to log
+    real per-call cost via log_provider_usage/_deepseek_cost, the same shape _stream_deepseek
+    already uses -- this function itself has no endpoint/user_id context to log with, so it just
+    hands the real numbers back rather than logging anything itself."""
     context_lines = [f"Question: {question}", f"(A) {option_a}", f"(B) {option_b}",
                       f"(C) {option_c}", f"(D) {option_d}"]
     if chapter:
@@ -6187,15 +6199,21 @@ def classify_difficulty(question: str, option_a: str, option_b: str, option_c: s
             messages=[{"role": "user", "content": "\n".join(context_lines)}]
         )
         raw = response.content[0].text.strip()
-        tokens = response.usage.input_tokens + response.usage.output_tokens
+        usage = response.usage
+        # Same cache-miss/cache-hit split _stream_deepseek already computes from this same SDK's
+        # Usage object -- cache_creation counts as a miss (billed at the full input rate, not the
+        # cache-read discount), only cache_read is the actual cheaper hit.
+        cache_miss_tokens = usage.input_tokens + (usage.cache_creation_input_tokens or 0)
+        cache_hit_tokens = usage.cache_read_input_tokens or 0
+        output_tokens = usage.output_tokens
         for label in ("Easy", "Moderate", "Difficult"):
             if label.lower() in raw.lower():
-                return label, tokens
+                return label, cache_miss_tokens, cache_hit_tokens, output_tokens
         print(f"DIFFICULTY CLASSIFY: unparseable reply {raw!r}")
-        return None, tokens
+        return None, cache_miss_tokens, cache_hit_tokens, output_tokens
     except Exception as e:
         print(f"DIFFICULTY CLASSIFY ERROR: {e}")
-        return None, 0
+        return None, 0, 0, 0
 
 ALLOWED_DIFFICULTY_TABLES = {"pyq", "mock_test_questions"}
 
@@ -6244,7 +6262,21 @@ async def classify_difficulty_endpoint(req: ClassifyDifficultyRequest, _: None =
                 for row in to_classify
             }
             classified = await asyncio.gather(*futures.values())
-            for row_id, (label, _tokens) in zip(futures.keys(), classified):
+            # Real cost per call actually made -- logged here (never inside classify_difficulty
+            # itself, which has no endpoint/user_id context) so every genuine DeepSeek call is
+            # visible in provider_usage_log, regardless of whether the reply parsed cleanly. No
+            # budget/cap check here on purpose: this is a one-time cost per question, bounded by
+            # the size of the question bank, not a per-student risk -- see the endpoint's own
+            # docstring. is_peak computed once for the whole batch (real-time clock, not worth
+            # re-checking per call a few hundred ms apart).
+            is_peak = _is_deepseek_peak_hour()
+            for row_id, (label, cache_miss, cache_hit, output_tokens) in zip(futures.keys(), classified):
+                if cache_miss or cache_hit or output_tokens:
+                    cost = _deepseek_cost(cache_miss, cache_hit, output_tokens, is_peak)
+                    try:
+                        await log_provider_usage("deepseek-v4-flash", is_peak, cache_miss + cache_hit, output_tokens, cost, "/classify-difficulty", req.user_id)
+                    except Exception:
+                        pass
                 if label:
                     result[row_id] = label
                     try:
@@ -6300,8 +6332,20 @@ async def admin_backfill_difficulty(table: str = "pyq", limit: int = 200, _: Non
     classified_count = 0
     failed_count = 0
     total_tokens = 0
-    for row, (label, tokens) in zip(rows, classified):
-        total_tokens += tokens
+    # Same real per-call logging as /classify-difficulty above -- previously this only returned
+    # tokens_used in the response body (visible to whoever triggered the sweep, nowhere else);
+    # now every real call also lands in provider_usage_log for actual cost analytics. No user_id
+    # here -- this is an admin-gated sweep, not a specific student's request, so it logs as null
+    # (same "" -> None handling log_provider_usage already does).
+    is_peak = _is_deepseek_peak_hour()
+    for row, (label, cache_miss, cache_hit, output_tokens) in zip(rows, classified):
+        total_tokens += cache_miss + cache_hit + output_tokens
+        if cache_miss or cache_hit or output_tokens:
+            cost = _deepseek_cost(cache_miss, cache_hit, output_tokens, is_peak)
+            try:
+                await log_provider_usage("deepseek-v4-flash", is_peak, cache_miss + cache_hit, output_tokens, cost, "/classify-difficulty", "")
+            except Exception:
+                pass
         if label:
             try:
                 save_resp = await async_client.patch(
