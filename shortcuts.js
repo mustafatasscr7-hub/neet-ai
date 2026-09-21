@@ -47,9 +47,61 @@ function isTypingTarget(el) {
       'body.light-mode .shortcuts-modal-desc { color: #3a3a42 !important; }' +
       'body.light-mode .shortcuts-modal-row { border-color: #e3e3ea !important; }' +
       'body.light-mode .shortcuts-modal-key { background: #f2f2f5 !important; border-color: #d5d5dd !important; color: #16161d !important; }' +
-      'body.light-mode .shortcuts-modal-hint { color: #8a8a92 !important; }';
+      'body.light-mode .shortcuts-modal-hint { color: #8a8a92 !important; }' +
+      // Per-button hover hint (keyboard-shortcuts discoverability pass, 2026-09-22) -- same pill
+      // shape/colors/shadow as chat.html/sidebar.js's own .sidebar-tooltip (the site's existing
+      // "label + shortcut" hover convention), deliberately reused rather than inventing a second
+      // one; kept as its own class since .sidebar-tooltip's hover listeners are hardcoded to a
+      // fixed nav-item list and gated on the sidebar being collapsed, neither of which applies
+      // here. Positioned above the hovered element via `bottom` (not `top`), so showing it never
+      // needs this tooltip's own height measured first -- avoids a one-frame jump/flicker.
+      '.action-hint-tooltip { position: fixed; transform: translateX(-50%); background: #1e1e1e; color: #ececec; padding: 6px 12px; border-radius: 999px; font-size: 12px; font-family: "Inter", sans-serif; white-space: nowrap; pointer-events: none; opacity: 0; visibility: hidden; transition: opacity 0.12s ease; z-index: 9999; box-shadow: 0 4px 14px rgba(0,0,0,0.45); border: 1px solid #2a2a2a; }' +
+      '.action-hint-tooltip.visible { opacity: 1; visibility: visible; }' +
+      'body.light-mode .action-hint-tooltip { background: #ffffff !important; color: #16161d !important; border-color: #e0e0e5 !important; box-shadow: 0 4px 14px rgba(0,0,0,0.12) !important; }';
     document.head.appendChild(style);
   }
+
+  // Delegated on document (not bound per-button) specifically because most of the buttons this
+  // labels -- Prev/Next, Show Solution, Mark/Clear, Save -- are rebuilt via innerHTML on every
+  // question change across mocktest.html/personalised-test.html/pyqbank.html/savedquestions.html/
+  // scoreboard.html, which would silently drop a directly-bound listener on every re-render. A
+  // page only needs to add a plain `data-hint="Show/hide solution (S)"` attribute to a button's
+  // own HTML (in its template string or static markup) -- no JS wiring required beyond that.
+  var hintTooltipEl = null;
+  function ensureHintTooltipEl() {
+    if (hintTooltipEl) return hintTooltipEl;
+    hintTooltipEl = document.createElement('div');
+    hintTooltipEl.className = 'action-hint-tooltip';
+    document.body.appendChild(hintTooltipEl);
+    return hintTooltipEl;
+  }
+  document.addEventListener('mouseover', function (e) {
+    var el = e.target.closest && e.target.closest('[data-hint]');
+    if (!el) return;
+    var tip = ensureHintTooltipEl();
+    tip.textContent = el.getAttribute('data-hint');
+    var rect = el.getBoundingClientRect();
+    tip.style.left = (rect.left + rect.width / 2) + 'px';
+    // `bottom` anchors the pill's own bottom edge 8px above the button, growing upward as its
+    // (unmeasured) content sets its height -- unlike `top`, this needs no pre-render height check.
+    tip.style.bottom = (window.innerHeight - rect.top + 8) + 'px';
+    tip.classList.add('visible');
+  });
+  document.addEventListener('mouseout', function (e) {
+    var el = e.target.closest && e.target.closest('[data-hint]');
+    if (!el) return;
+    // Only hide when the pointer actually left the hinted element (not just moved between its
+    // own children) -- relatedTarget is the element the pointer entered next.
+    if (el.contains(e.relatedTarget)) return;
+    if (hintTooltipEl) hintTooltipEl.classList.remove('visible');
+  });
+  // A click (e.g. selecting an option, hitting Save) should dismiss the hint immediately rather
+  // than leaving it floating over whatever replaces the button underneath it.
+  document.addEventListener('click', function (e) {
+    if (e.target.closest && e.target.closest('[data-hint]') && hintTooltipEl) {
+      hintTooltipEl.classList.remove('visible');
+    }
+  });
 
   function closeShortcutsModal() {
     var existing = document.getElementById('shortcutsModalOverlay');

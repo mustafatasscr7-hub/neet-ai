@@ -1303,13 +1303,13 @@ document.getElementById('mainContent').innerHTML = `
 ${q.diagram_url ? `<img class="q-diagram-img" src="${q.diagram_url}">` : ''}
           <div class="q-options">${opts}</div>
           <div class="q-actions">
-            <button class="sol-btn" onclick="toggleSolution(this, '${q.id}', ${JSON.stringify(q).replace(/"/g, '&quot;')})">${t('pyqbank','showSolution')}</button>
-            <button class="sol-btn sol-btn-orange" onclick="saveQuestion(${JSON.stringify(q).replace(/"/g, '&quot;')}, 'PYQ Bank', this)">${t('pyqbank','save')}</button>
+            <button class="sol-btn" data-hint="Show/hide solution (S)" onclick="toggleSolution(this, '${q.id}', ${JSON.stringify(q).replace(/"/g, '&quot;')})">${t('pyqbank','showSolution')}</button>
+            <button class="sol-btn sol-btn-orange" data-hint="Save question (B)" onclick="saveQuestion(${JSON.stringify(q).replace(/"/g, '&quot;')}, 'PYQ Bank', this)">${t('pyqbank','save')}</button>
           </div>
           <div class="sol-div" id="sol-${q.id}"></div>
           <div style="display:flex;justify-content:space-between;margin-top:20px;">
-            <button class="sol-btn sol-btn-neutral" ${i === 0 ? 'disabled' : ''} onclick="prevQuestion('${subject}', ${classNum}, '${chapterEscaped}')">${t('pyqbank','prev')}</button>
-            <button class="sol-btn sol-btn-neutral" ${i === data.length - 1 ? 'disabled' : ''} onclick="nextQuestion('${subject}', ${classNum}, '${chapterEscaped}')">${t('pyqbank','next')}</button>
+            <button class="sol-btn sol-btn-neutral" data-hint="Previous question (←)" ${i === 0 ? 'disabled' : ''} onclick="prevQuestion('${subject}', ${classNum}, '${chapterEscaped}')">${t('pyqbank','prev')}</button>
+            <button class="sol-btn sol-btn-neutral" data-hint="Next question (→)" ${i === data.length - 1 ? 'disabled' : ''} onclick="nextQuestion('${subject}', ${classNum}, '${chapterEscaped}')">${t('pyqbank','next')}</button>
           </div>
         </div>
       `;
