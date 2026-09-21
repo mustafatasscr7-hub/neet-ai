@@ -992,6 +992,15 @@
     .quoted-context-box .quote-dismiss { position: absolute; top: 4px; right: 5px; background: transparent; border: none; color: #666; cursor: pointer; font-size: 12px; line-height: 1; padding: 2px; opacity: 0.7; }
     .quoted-context-box .quote-dismiss:hover { opacity: 1; color: #ccc; }
     body.light-mode .quoted-context-box { background: rgba(0,0,0,0.04) !important; color: #777 !important; }
+    /* "Explain simply" quotes get a distinct accent so multiple stacked quote boxes (multi-quote
+       support, 2026-09-22) are visually distinguishable by mode at a glance, not just by text. */
+    .quoted-context-box.quoted-context-explain { border-left-color: #a78bfa; }
+    .quoted-context-box .quote-mode-label { color: #a78bfa; font-weight: 600; }
+    body.light-mode .quoted-context-box .quote-mode-label { color: #7c3aed !important; }
+    /* #quotedContextPreview now holds a stack of independent quote boxes (previously exactly
+       one) -- wrap so a lot of short quotes flow onto new lines instead of forcing the compose
+       box wider than the input itself. */
+    #quotedContextPreview { display: flex; flex-wrap: wrap; gap: 0; }
     /* Persisted copy shown above a sent message (see addMessageRow) -- no dismiss button, so
        drop the right-padding that box normally reserves for it. */
     .quoted-context-sent { padding: 8px 10px; }
@@ -4432,16 +4441,12 @@ let selectedImages = [];
         // student's own short follow-up with zero context about what it was even about. Persist
         // it onto the message object (see sendMessage/loadConversation) and render it here as a
         // small quoted block above the student's own text, same visual language as the
-        // pre-send preview (.quoted-context-box) minus its dismiss button.
-        if (msgObj && msgObj.quotedText) {
-          const quoteBox = document.createElement('div');
-          quoteBox.className = 'quoted-context-box quoted-context-sent';
-          const quoteTextEl = document.createElement('div');
-          quoteTextEl.className = 'quote-text';
-          quoteTextEl.textContent = msgObj.quotedText;
-          quoteBox.appendChild(quoteTextEl);
-          contentWrapper.appendChild(quoteBox);
-        }
+        // pre-send preview (.quoted-context-box) minus its dismiss button. getMsgQuotes handles
+        // both a fresh multi-quote send (msgObj.quotedTexts) and an OLD single-quote message
+        // already sitting in real chat history (msgObj.quotedText) uniformly.
+        getMsgQuotes(msgObj).forEach(function(q) {
+          contentWrapper.appendChild(buildQuoteBoxEl(q, false));
+        });
         // Skips an empty bubble entirely when there's no caption text (an image-only send) --
         // matches the live imgRow's own `${text ? ... : ''}` conditional, which the reload path
         // never mirrored before.
@@ -4552,8 +4557,9 @@ function plainTextFromMarkdown(text) {
       const retryStreamOptions = { skipCache: true };
       if (images.length > 0) retryStreamOptions.images = images;
       if (pdf) retryStreamOptions.pdf = pdf;
-      if (userMsg.quotedText) {
-        questionText = `Regarding this part: "${userMsg.quotedText}"\n\nStudent asks: ${userMsg.text}`;
+      const retryQuotes = getMsgQuotes(userMsg);
+      if (retryQuotes.length) {
+        questionText = buildQuestionWithQuotes(retryQuotes, userMsg.text);
         retryStreamOptions.pyqSearchText = userMsg.text;
       }
 
@@ -4653,8 +4659,8 @@ function plainTextFromMarkdown(text) {
       // Carried over unchanged, not exposed for editing/removal here -- editing is about
       // correcting the student's own follow-up wording, not the quoted source material they
       // selected from an earlier AI answer, and the persisted quote block itself already has no
-      // interaction affordance anywhere else once sent (see addMessageRow's quotedText render).
-      const originalQuotedText = currentConversation[userIndex] ? currentConversation[userIndex].quotedText : undefined;
+      // interaction affordance anywhere else once sent (see addMessageRow's getMsgQuotes render).
+      const originalQuotes = getMsgQuotes(currentConversation[userIndex]);
 
       const editWrap = document.createElement('div');
       editWrap.style.cssText = 'display:flex;flex-direction:column;align-items:flex-end;gap:8px;width:100%;';
@@ -4702,7 +4708,7 @@ function plainTextFromMarkdown(text) {
         currentConversation = currentConversation.slice(0, userIndex);
 
         const newIndex = currentConversation.length;
-        const newMsgObj = originalQuotedText ? { role: 'user', text: newText, quotedText: originalQuotedText } : { role: 'user', text: newText };
+        const newMsgObj = originalQuotes.length ? { role: 'user', text: newText, quotedTexts: originalQuotes.map(function(q) { return { text: q.text, mode: q.mode }; }) } : { role: 'user', text: newText };
         // Carries the ORIGINAL turn's attachment(s) forward onto the edited one -- a persisted
         // Storage URL (if the original image/PDF upload succeeded) so the edited turn still shows
         // its thumbnail and survives a later reload the same way a fresh send does, and the raw
@@ -4727,8 +4733,8 @@ function plainTextFromMarkdown(text) {
         const streamOptions = { skipCache: false };
         if (images.length > 0) streamOptions.images = images;
         if (pdf) streamOptions.pdf = pdf;
-        if (originalQuotedText) {
-          questionForModel = `Regarding this part: "${originalQuotedText}"\n\nStudent asks: ${newText}`;
+        if (originalQuotes.length) {
+          questionForModel = buildQuestionWithQuotes(originalQuotes, newText);
           streamOptions.pyqSearchText = newText;
         }
         await streamAIResponse(questionForModel, streamOptions);
@@ -4781,40 +4787,98 @@ function plainTextFromMarkdown(text) {
       if (sel) sel.removeAllRanges();
     }
 
-    // Quoted-context block shown above the input box after "Ask about this" -- separate from
-    // the input's own value (unlike the old behavior, which just wrote a prefixed string into
-    // the textarea). Cleared on send or via its own dismiss button.
-    let quotedContext = null;
+    // Quoted-context blocks shown above the input box after "Ask about this" / "Explain simply"
+    // -- separate from the input's own value (the old "Explain simply" behavior wrote a prefixed
+    // string straight into the textarea instead of using this mechanism at all; fixed to route
+    // through here too, 2026-09-22). Multiple can be pending at once (previously a single
+    // `quotedContext` string that a second selection just overwrote, silently dropping the
+    // first) -- each carries its own id (for independent dismiss) and mode ('ask' or 'explain',
+    // from which toolbar button created it). Cleared on send or via each box's own dismiss
+    // button.
+    let quotedContexts = [];
+    let quotedContextIdCounter = 0;
+
+    // Normalizes a message object's quote data to this same {id?, text, mode} array shape,
+    // regardless of whether it's a live pending quote (has an id) or a persisted sent message.
+    // Real chat history already has rows saved under the OLD single `quotedText` string field
+    // (from before this multi-quote change) -- those are always treated as one 'ask'-mode quote,
+    // matching exactly what they always meant under the old behavior. Every read site (history
+    // render, retry, edit-carry-forward) goes through this so none of them need their own
+    // old-vs-new shape handling.
+    function getMsgQuotes(msgObj) {
+      if (!msgObj) return [];
+      if (Array.isArray(msgObj.quotedTexts)) return msgObj.quotedTexts;
+      if (msgObj.quotedText) return [{ text: msgObj.quotedText, mode: 'ask' }];
+      return [];
+    }
+
+    // Same wrapping sendMessage/retryMessage/editMessage all need to give the model explicit
+    // context for whatever was quoted -- one shared builder instead of three near-identical
+    // copies, so the per-mode wording only ever has to change in one place. 'explain' quotes get
+    // an instruction to simplify; 'ask' quotes keep the original neutral framing.
+    function buildQuotedPreamble(quotes) {
+      return quotes.map(function(q) {
+        return q.mode === 'explain'
+          ? 'Please explain this part in simple, easy-to-understand terms: "' + q.text + '"'
+          : 'Regarding this part: "' + q.text + '"';
+      }).join('\n\n');
+    }
+    function buildQuestionWithQuotes(quotes, text) {
+      if (!quotes || !quotes.length) return text;
+      return buildQuotedPreamble(quotes) + '\n\nStudent asks: ' + text;
+    }
+
+    // Shared between the live compose-box preview (dismissible) and a sent message's permanent
+    // history render (addMessageRow, not dismissible) -- same visual language either way, just
+    // with or without the "remove" button.
+    function buildQuoteBoxEl(quote, dismissible) {
+      const wrap = document.createElement('div');
+      wrap.className = 'quoted-context-box' + (dismissible ? '' : ' quoted-context-sent') + (quote.mode === 'explain' ? ' quoted-context-explain' : '');
+      const textEl = document.createElement('div');
+      textEl.className = 'quote-text';
+      if (quote.mode === 'explain') {
+        const label = document.createElement('span');
+        label.className = 'quote-mode-label';
+        label.textContent = 'Explain simply — ';
+        textEl.appendChild(label);
+      }
+      textEl.appendChild(document.createTextNode(quote.text));
+      wrap.appendChild(textEl);
+      if (dismissible) {
+        const dismiss = document.createElement('button');
+        dismiss.type = 'button';
+        dismiss.className = 'quote-dismiss';
+        dismiss.title = 'Remove quote';
+        dismiss.textContent = '✕';
+        dismiss.onclick = function() { removeQuotedContext(quote.id); };
+        wrap.appendChild(dismiss);
+      }
+      return wrap;
+    }
 
     function renderQuotedContextPreview() {
       const box = document.getElementById('quotedContextPreview');
       box.innerHTML = '';
-      if (!quotedContext) { box.style.display = 'none'; return; }
-      box.style.display = 'block';
-      const wrap = document.createElement('div');
-      wrap.className = 'quoted-context-box';
-      const textEl = document.createElement('div');
-      textEl.className = 'quote-text';
-      textEl.textContent = quotedContext;
-      const dismiss = document.createElement('button');
-      dismiss.type = 'button';
-      dismiss.className = 'quote-dismiss';
-      dismiss.title = 'Remove quote';
-      dismiss.textContent = '✕';
-      dismiss.onclick = clearQuotedContext;
-      wrap.appendChild(textEl);
-      wrap.appendChild(dismiss);
-      box.appendChild(wrap);
+      if (!quotedContexts.length) { box.style.display = 'none'; return; }
+      box.style.display = 'flex';
+      quotedContexts.forEach(function(q) { box.appendChild(buildQuoteBoxEl(q, true)); });
     }
 
-    function setQuotedContext(text) {
-      quotedContext = text;
+    // Appends rather than replaces -- the actual "only one at a time" fix. Both toolbar buttons
+    // call this now, "ask"/"explain" only differing in the `mode` they pass.
+    function addQuotedContext(text, mode) {
+      quotedContexts.push({ id: ++quotedContextIdCounter, text: text, mode: mode });
       renderQuotedContextPreview();
       input.focus();
     }
 
+    function removeQuotedContext(id) {
+      quotedContexts = quotedContexts.filter(function(q) { return q.id !== id; });
+      renderQuotedContextPreview();
+    }
+
     function clearQuotedContext() {
-      quotedContext = null;
+      quotedContexts = [];
       renderQuotedContextPreview();
     }
 
@@ -4898,12 +4962,13 @@ function plainTextFromMarkdown(text) {
       if (btn.dataset.action === 'copy') {
         navigator.clipboard.writeText(selectedText);
       } else if (btn.dataset.action === 'ask') {
-        setQuotedContext(selectedText);
+        addQuotedContext(selectedText, 'ask');
       } else if (btn.dataset.action === 'explain') {
-        input.value = `Explain this in simpler terms: ${selectedText}`;
-        input.focus();
-        input.style.height = 'auto';
-        input.style.height = Math.min(input.scrollHeight, 160) + 'px';
+        // Same reference-bubble mechanism as "Ask about this" now, not a raw insert into the
+        // textarea (the old behavior here) -- only the mode differs, which is what tells
+        // buildQuotedPreamble to phrase this one as a simplify-it instruction instead of a
+        // neutral "regarding this part" framing when the message is actually sent.
+        addQuotedContext(selectedText, 'explain');
       }
 
       selection.removeAllRanges();
@@ -6319,8 +6384,8 @@ function plainTextFromMarkdown(text) {
  async function sendMessage() {
       if (isStreaming) return;
       let text = input.value.trim();
-      const activeQuote = quotedContext;
-      if (!text && activeQuote) text = 'Please explain this.';
+      const activeQuotes = quotedContexts.slice();
+      if (!text && activeQuotes.length > 0) text = 'Please explain this.';
       if (!text && selectedImages.length === 0 && !selectedPDF) return;
 
       // Slash commands -- recognized here regardless of whether they arrived via the dropdown
@@ -6370,7 +6435,7 @@ function plainTextFromMarkdown(text) {
       inputArea.style.display = 'block';
 
       const userIndex = currentConversation.length;
-      const userMsgObj = activeQuote ? { role: 'user', text: text, quotedText: activeQuote } : { role: 'user', text: text };
+      const userMsgObj = activeQuotes.length ? { role: 'user', text: text, quotedTexts: activeQuotes.map(function(q) { return { text: q.text, mode: q.mode }; }) } : { role: 'user', text: text };
       // Renders through the SAME addMessageRow path a reload already uses (rather than a
       // separate hand-rolled row), so a freshly-sent image message gets the normal Copy/Edit
       // actions live too, not just after a reload -- previously this had NO action buttons at
@@ -6429,7 +6494,7 @@ function plainTextFromMarkdown(text) {
         userMsgObj.pdf = pdfUrl || undefined;
       }
 
-      // Captured into imagesPayload/pdfData/activeQuote above already, so clearing the compose-box
+      // Captured into imagesPayload/pdfData/activeQuotes above already, so clearing the compose-box
       // UI state (attachment thumbnail, quoted-context box) here is safe -- and it needs to happen
       // here, before the request even goes out, not after streamAIResponse resolves below. That
       // await doesn't return until the ENTIRE response has finished streaming, so the previous
@@ -6450,8 +6515,8 @@ function plainTextFromMarkdown(text) {
         images: imagesPayload,
         pdf: pdfData ? pdfData.split(',')[1] : null
       };
-      if (activeQuote) {
-        questionForModel = `Regarding this part: "${activeQuote}"\n\nStudent asks: ${text}`;
+      if (activeQuotes.length) {
+        questionForModel = buildQuestionWithQuotes(activeQuotes, text);
         streamOptions.pyqSearchText = text;
       }
       await streamAIResponse(questionForModel, streamOptions);
