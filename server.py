@@ -2667,25 +2667,101 @@ def _is_denylisted_clarify_doubt(text: str) -> bool:
 # Checking the model's claim against the whitelist directly (instead of enumerating every possible
 # hallucinated term one at a time, the way FALSE_POSITIVE_CLARIFY_WORDS had to for "reflex") means
 # this backstop already covers any FUTURE hallucinated term too, not just this one.
-TOPIC_AMBIGUITY_WHITELIST = {
-    "resistance", "प्रतिरोध",
-    "cycle", "चक्र",
-    "potential", "विभव",
-    "diffusion", "विसरण",
-    "current", "धारा",
-    "valence", "संयोजकता",
-    "biomolecules", "जैव अणु",
-    "thermodynamics", "ऊष्मागतिकी",
-    "coordination", "समन्वय",
-    "classification", "वर्गीकरण",
-    "respiration", "श्वसन",
-    "transport", "परिवहन",
-    "reproduction", "जनन", "प्रजनन",
-    "inheritance", "genetics", "वंशागति", "आनुवंशिकी",
-    "isomerism", "समावयवता",
-    "power", "शक्ति", "क्षमता",
-    "oxidation", "reduction", "ऑक्सीकरण", "अपचयन",
+# Single source of truth for TOPIC AMBIGUITY (2026-09-21, replacing a flat TOPIC_AMBIGUITY_WHITELIST
+# set that had already drifted out of sync with SYSTEM_PROMPT's own word list once -- see the
+# _is_legitimate_topic_ambiguity fix earlier this same day). Each entry groups every English/Hindi
+# spelling of one ambiguous term with the real OPTION lines for its distinct meanings, so
+# TOPIC_AMBIGUITY_WHITELIST (membership) and the deterministic clarify response built below (see
+# _deterministic_topic_ambiguity_response) both derive from the SAME data instead of two lists
+# that can silently disagree. "inheritance"/"genetics" and "oxidation"/"reduction" are two English
+# words apiece sharing one meaning set, same as they did as separate flat entries before.
+TOPIC_AMBIGUITY_MEANINGS = {
+    "resistance": {
+        "variants": {"resistance", "प्रतिरोध"},
+        "options": ["Electrical resistance (Physics)", "Peripheral resistance (Biology)"],
+    },
+    "cycle": {
+        "variants": {"cycle", "चक्र"},
+        "options": ["Cell cycle (Biology, Class 11)", "Krebs cycle (Biology, Class 11)",
+                     "Menstrual cycle (Biology, Class 12)", "Nitrogen cycle (Biology, Class 12)"],
+    },
+    "potential": {
+        "variants": {"potential", "विभव"},
+        "options": ["Electric potential (Physics, Electrostatic Potential and Capacitance)",
+                     "Potential energy (Physics, Work, Energy and Power / Gravitation)",
+                     "Action potential / resting potential (Biology, Neural Control and Coordination)"],
+    },
+    "diffusion": {
+        "variants": {"diffusion", "विसरण"},
+        "options": ["Passive transport across membranes (Biology)", "Diffusion of gases/molecules (Physics-Chemistry)"],
+    },
+    "current": {
+        "variants": {"current", "धारा"},
+        "options": ["Electric current (Physics)", "Blood flow / transpiration stream (Biology)"],
+    },
+    "valence": {
+        "variants": {"valence", "संयोजकता"},
+        "options": ["Valence electrons (Chemistry)", "Valency / combining capacity (Chemistry)"],
+    },
+    "biomolecules": {
+        "variants": {"biomolecules", "जैव अणु"},
+        "options": ["Biomolecules as cell components — carbohydrates, proteins, lipids, nucleic acids (Biology, Class 11)",
+                     "Biomolecules — structure, classification and reactions (Chemistry, Class 12)"],
+    },
+    "thermodynamics": {
+        "variants": {"thermodynamics", "ऊष्मागतिकी"},
+        "options": ["Enthalpy, entropy, Gibbs free energy (Chemistry, Class 11)",
+                     "Heat engines, PV diagrams, laws of thermodynamics (Physics, Class 11)"],
+    },
+    "coordination": {
+        "variants": {"coordination", "समन्वय"},
+        "options": ["Coordination compounds — complex ions, ligands (Chemistry, Class 12)",
+                     "Chemical coordination and integration — endocrine system, hormones (Biology, Class 11)",
+                     "Neural control and coordination — nervous system (Biology, Class 11)"],
+    },
+    "classification": {
+        "variants": {"classification", "वर्गीकरण"},
+        "options": ["Biological classification — taxonomy, five-kingdom system (Biology, Class 11)",
+                     "Classification of elements and periodicity (Chemistry, Class 11)"],
+    },
+    "respiration": {
+        "variants": {"respiration", "श्वसन"},
+        "options": ["Cellular respiration — glycolysis, Krebs cycle, electron transport chain (Biology, Respiration in Plants)",
+                     "Breathing — the mechanical process (Biology, Breathing and Exchange of Gases)"],
+    },
+    "transport": {
+        "variants": {"transport", "परिवहन"},
+        "options": ["Transport in Plants — water and mineral movement (Biology, Class 11)",
+                     "Body Fluids and Circulation — blood/circulatory transport (Biology, Class 11)"],
+    },
+    "reproduction": {
+        "variants": {"reproduction", "जनन", "प्रजनन"},
+        "options": ["Human Reproduction (Biology, Class 12)", "Sexual Reproduction in Flowering Plants (Biology, Class 12)"],
+    },
+    "inheritance": {
+        "variants": {"inheritance", "genetics", "वंशागति", "आनुवंशिकी"},
+        "options": ["Principles of Inheritance and Variation — classical/Mendelian genetics (Biology, Class 12)",
+                     "Molecular Basis of Inheritance — DNA replication, transcription (Biology, Class 12)"],
+    },
+    "isomerism": {
+        "variants": {"isomerism", "समावयवता"},
+        "options": ["Isomerism in organic compounds — structural/stereoisomerism (Chemistry)",
+                     "Isomerism in coordination compounds — geometrical/optical (Chemistry, Class 12)"],
+    },
+    "power": {
+        "variants": {"power", "शक्ति", "क्षमता"},
+        "options": ["Mechanical power — rate of doing work (Physics, Work, Energy and Power)",
+                     "Power of a lens (Physics, Ray Optics and Optical Instruments)"],
+    },
+    "oxidation": {
+        "variants": {"oxidation", "reduction", "ऑक्सीकरण", "अपचयन"},
+        "options": ["Electron-transfer / oxidation-number rules (Chemistry, Redox Reactions)",
+                     "Organic oxidation/reduction reactions (Chemistry, Aldehydes, Ketones and Carboxylic Acids)",
+                     "Biological oxidation — NADH, electron transport (Biology, Respiration in Plants)"],
+    },
 }
+
+TOPIC_AMBIGUITY_WHITELIST = set().union(*(entry["variants"] for entry in TOPIC_AMBIGUITY_MEANINGS.values()))
 
 def _is_legitimate_topic_ambiguity(text: str) -> bool:
     """Same matching strategy as _is_denylisted_clarify_doubt above, for the same reason:
@@ -2698,6 +2774,49 @@ def _is_legitimate_topic_ambiguity(text: str) -> bool:
     here), not a longer question that merely mentions one. See _fuzzy_word_match."""
     normalized = text.strip()
     return _fuzzy_word_match(normalized, TOPIC_AMBIGUITY_WHITELIST)
+
+# Deterministic construction of the CLARIFY_TYPE: topic response itself, bypassing the model
+# entirely for TOPIC AMBIGUITY (added 2026-09-21). Confirmed live that even with a word correctly
+# present in both the SYSTEM_PROMPT text and TOPIC_AMBIGUITY_WHITELIST, the model doesn't reliably
+# choose to output AMBIGUOUS: yes for it -- fresh 10-run tests found "respiration" 5/10,
+# "current" 4/10, "reduction" 5/10 (biomolecules happened to be 10/10 in that same run, which
+# itself shows the inconsistency: rate varies by word AND by when you ask, plausibly tied to
+# which provider is actually serving the request at that moment, not a fixed property of the
+# word). Since _is_legitimate_topic_ambiguity is already a fully deterministic, mechanical check
+# on the SAME bare-word/short-phrase text this whole rule is scoped to, there's no need to ask an
+# LLM to make this specific yes/no call at all -- constructing the clarify response directly is
+# both more reliable AND cheaper/faster (skips the model round-trip entirely) than any amount of
+# prompt tuning could be for a decision this mechanical.
+def _resolve_topic_ambiguity_options(text: str):
+    """Returns the OPTION list for the whitelist entry `text` matches (exact, case-insensitive,
+    or fuzzy per _fuzzy_word_match's own cutoff), or None if it matches none. Mirrors
+    _is_legitimate_topic_ambiguity's own matching so this only ever returns non-None exactly when
+    that function would return True -- the two must agree, since this is only ever called after
+    that check already passed."""
+    normalized = text.strip()
+    lower = normalized.lower()
+    for entry in TOPIC_AMBIGUITY_MEANINGS.values():
+        if normalized in entry["variants"] or lower in entry["variants"]:
+            return entry["options"]
+    close = difflib.get_close_matches(lower, TOPIC_AMBIGUITY_WHITELIST, n=1, cutoff=0.86)
+    if close:
+        matched_variant = close[0]
+        for entry in TOPIC_AMBIGUITY_MEANINGS.values():
+            if matched_variant in entry["variants"]:
+                return entry["options"]
+    return None
+
+def _deterministic_topic_ambiguity_response(text: str):
+    """Builds the exact same AMBIGUOUS: yes / CLARIFY_TYPE: topic / QUESTION: / OPTION: shape
+    rule 11 specifies, entirely server-side -- returns None if `text` doesn't resolve to a real
+    whitelist entry (caller must still gate on _is_legitimate_topic_ambiguity itself; this never
+    invents a response for a word it doesn't recognize)."""
+    options = _resolve_topic_ambiguity_options(text)
+    if not options:
+        return None
+    lines = ["AMBIGUOUS: yes", "CLARIFY_TYPE: topic", f'QUESTION: What do you mean by "{text.strip()}"?']
+    lines.extend(f"OPTION: {opt}" for opt in options)
+    return "\n".join(lines)
 
 # Deterministic last-resort system prompt for stream_response's own override-retry safety net
 # (see the "invalid_clarify" branch below): when a doubt has already failed
@@ -3937,6 +4056,19 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
         if _looks_like_gibberish(text):
             yield "DOUBT_TYPE: conversational\n\nThat doesn't look like a real question — try asking about a NEET topic!"
             return
+        # TOPIC AMBIGUITY, constructed deterministically instead of asked of the model (added
+        # 2026-09-21 -- see _deterministic_topic_ambiguity_response's own comment for why). Same
+        # fast-path shape and reasoning as smalltalk/gibberish above: no embedding call, no NCERT
+        # search, no model call at all for a doubt this mechanical to classify. Explicitly checked
+        # against the denylist too, even though the two sets are disjoint by construction (no word
+        # is ever in both TOPIC_AMBIGUITY_WHITELIST and FALSE_POSITIVE_CLARIFY_WORDS) -- a
+        # defensive belt-and-suspenders check costs nothing here and this is exactly the kind of
+        # path where "should never happen" has already been wrong once today.
+        if not _is_denylisted_clarify_doubt(text):
+            deterministic_ambiguity = _deterministic_topic_ambiguity_response(text)
+            if deterministic_ambiguity is not None:
+                yield deterministic_ambiguity
+                return
     import hashlib
     # Personalized answers are specific to this student and must never be served from —
     # or written to — the shared answer cache, which is keyed only on question text.
