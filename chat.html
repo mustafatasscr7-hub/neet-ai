@@ -478,6 +478,14 @@
     .sidebar.collapsed .sidebar-resize-handle { display: none; }
     @media (hover: none) { .sidebar-resize-handle { display: none; } }
     .sidebar.collapsed .new-chat-btn { justify-content: center; padding: 10px 0; gap: 0; width: 100%; }
+    /* The always-visible "Ctrl+Shift+O" inline hint (shortcuts.js's [data-shortcut]::after,
+       see #newChatBtn's markup) assumes room next to a text label -- the collapsed 56px icon
+       rail has none, so the hint text overlapped/garbled against the icon and the rest of the
+       sidebar. Icon-only buttons shouldn't carry an inline text label at all; the collapsed-
+       sidebar hover tooltip below (initSidebarTooltips' newChatBtn entry, now including this
+       same shortcut) is the fallback for this state instead. Scoped to #newChatBtn specifically,
+       not every [data-shortcut] -- no other sidebar button currently has one. */
+    .sidebar.collapsed #newChatBtn[data-shortcut]::after { content: none; }
     .sidebar.collapsed .nav-item { justify-content: center; padding: 10px 0; gap: 0; }
     .sidebar.collapsed .profile-btn { justify-content: center; padding: 10px 0; gap: 0; }
     .sidebar.collapsed .logo { display: flex; justify-content: center; padding: 10px 0; gap: 0; }
@@ -1761,7 +1769,7 @@ function toggleSearchChats() {
       const shortcutEl = sidebarTooltipEl.querySelector('.sidebar-tooltip-shortcut');
 
       const TOOLTIP_ITEMS = [
-        { id: 'newChatBtn', ns: 'chat', key: 'newChat' },
+        { id: 'newChatBtn', ns: 'chat', key: 'newChat', shortcut: 'Ctrl+Shift+O' },
         { id: 'navSearch', ns: 'chat', key: 'searchChats', shortcut: 'Ctrl+K' },
         { id: 'navChats', ns: 'chat', key: 'chatsHeading' },
         { id: 'navPYQ', ns: 'chat', key: 'pyqBank' },
