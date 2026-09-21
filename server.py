@@ -4712,22 +4712,40 @@ async def stream_solve_response_with_diagram(req: SolveRequest, cached_solution,
         )
         full_solution = ""
         last_usage = None
-        async for chunk in gemini_stream:
-            if chunk.text:
-                full_solution += chunk.text
-                yield chunk.text
-            if chunk.usage_metadata:
-                last_usage = chunk.usage_metadata
-        if last_usage:
-            cost = _gemini_cost(last_usage.prompt_token_count, 0, last_usage.candidates_token_count)
-            try:
-                await log_provider_usage("gemini-3.5-flash-lite", False, last_usage.prompt_token_count, last_usage.candidates_token_count, cost, "/solve", req.user_id)
-            except Exception:
-                pass
-            try:
-                await log_token_usage(req.user_id, last_usage.prompt_token_count + last_usage.candidates_token_count, ip)
-            except Exception:
-                pass
+        try:
+            async for chunk in gemini_stream:
+                if chunk.text:
+                    full_solution += chunk.text
+                    yield chunk.text
+                if chunk.usage_metadata:
+                    last_usage = chunk.usage_metadata
+        finally:
+            # Log on the way out (including on an early client disconnect) rather than only on a
+            # clean finish -- same intent as _stream_gemini_media's own fix for the identical bug
+            # (see its comment), but NOT a plain `await` the way that one does it: confirmed live
+            # via a real mid-stream-disconnect test that a plain await here still loses the row --
+            # a client disconnect can cancel the request's own asyncio Task, and that cancellation
+            # can interrupt an in-progress `await` sitting in this finally block before the
+            # Supabase POST actually completes, even though the finally block itself did start
+            # running (the PROVIDER USAGE print line fires; the row never lands). asyncio.create_
+            # task detaches the write from this task entirely -- it keeps running on the event
+            # loop independently, so it finishes even after this generator has been torn down.
+            # log_provider_usage/log_token_usage already swallow their own failures internally
+            # (see their own try/except), so nothing here needs to await or catch anything.
+            # No caching on this path (see this function's own top comment for why), so this is a
+            # flat cost, not the cache-split _stream_gemini_media computes.
+            if last_usage:
+                cost = _gemini_cost(last_usage.prompt_token_count, 0, last_usage.candidates_token_count)
+                asyncio.create_task(log_provider_usage("gemini-3.5-flash-lite", False, last_usage.prompt_token_count, last_usage.candidates_token_count, cost, "/solve", req.user_id))
+                asyncio.create_task(log_token_usage(req.user_id, last_usage.prompt_token_count + last_usage.candidates_token_count, ip))
+        # Deliberately NOT inside the finally above, unlike _stream_gemini_media's analogous
+        # log_media_doubt call -- that's a pure audit-trail log, safe to record even a partial
+        # answer. pyq_solution_cache is the opposite: a SHARED cache served verbatim to every
+        # future student who requests this same PYQ's solution (see its own comment below), so
+        # caching a truncated mid-disconnect answer here would actively serve a broken solution to
+        # everyone else afterward. Only reached on a clean finish, same as before this fix -- a
+        # disconnect naturally skips it, same as it already did.
+        #
         # Same cache, same pyq_id+language key as the text-only path -- a cached diagram-solve is
         # indistinguishable from a cached text-solve to any later reader (get_cached_pyq_solution
         # doesn't know or care which path produced it), so every subsequent student who requests
