@@ -157,10 +157,8 @@
     body.light-mode .pyq-item { border-color: #ececf0 !important; color: #55555f !important; }
     body.light-mode .action-btn { color: #8a8a94 !important; }
     body.light-mode .action-btn:hover { background: #ececf0 !important; color: #222228 !important; }
-    body.light-mode .action-btn.feedback-btn.voted-up { color: #16a34a !important; }
-    body.light-mode .action-btn.feedback-btn.voted-up:hover { color: #16a34a !important; }
-    body.light-mode .action-btn.feedback-btn.voted-down { color: #dc2626 !important; }
-    body.light-mode .action-btn.feedback-btn.voted-down:hover { color: #dc2626 !important; }
+    body.light-mode .action-btn.feedback-btn.voted-up, body.light-mode .action-btn.feedback-btn.voted-down { background: #ececf0 !important; color: #222228 !important; }
+    body.light-mode .action-btn.feedback-btn.voted-up:hover, body.light-mode .action-btn.feedback-btn.voted-down:hover { background: #ececf0 !important; color: #222228 !important; }
     body.light-mode .muted-text { color: #7a7a85 !important; }
 
     /* PYQ modal (opened from chat via "Previous Year Questions") */
@@ -1091,16 +1089,13 @@
     .action-btn.speaking { color: #4f8ef7; }
     .action-btn.speaking:hover { color: #4f8ef7; }
     body.light-mode .action-btn.speaking { color: #4f8ef7 !important; }
-    /* Thumbs up/down response feedback (2026-09-21) -- stays filled/highlighted once clicked,
-       same "selected state persists" treatment as .action-btn.speaking above. Up reuses the app's
-       existing success green (saved/correct states elsewhere), down its existing error red
-       (delete/wrong states) rather than introducing new colors for this feature. */
-    .action-btn.feedback-btn.voted-up { color: #4ade80; }
-    .action-btn.feedback-btn.voted-up:hover { color: #4ade80; }
-    .action-btn.feedback-btn.voted-up svg { fill: #4ade8033; }
-    .action-btn.feedback-btn.voted-down { color: #ef4444; }
-    .action-btn.feedback-btn.voted-down:hover { color: #ef4444; }
-    .action-btn.feedback-btn.voted-down svg { fill: #ef444433; }
+    /* Thumbs up/down response feedback (2026-09-21) -- stays highlighted once clicked. Originally
+       used green/red (up/down), but that's a status-color system this app doesn't otherwise use
+       for this kind of state -- reworked to the same neutral background+icon treatment
+       .action-btn:hover already uses elsewhere (a permanent "pressed" look), so up vs. down reads
+       from the icon shape alone, not color. */
+    .action-btn.feedback-btn.voted-up, .action-btn.feedback-btn.voted-down { background: #1a1a1a; color: #ccc; }
+    .action-btn.feedback-btn.voted-up:hover, .action-btn.feedback-btn.voted-down:hover { background: #1a1a1a; color: #ccc; }
     .feedback-comment-box { display: flex; align-items: center; gap: 6px; margin-top: 6px; width: fit-content; max-width: 100%; opacity: 1; transition: opacity 0.4s ease; }
     .feedback-comment-box.fading { opacity: 0; }
     /* Transient confirmation/error shown in place of the input after Send, matching copyMessage's
