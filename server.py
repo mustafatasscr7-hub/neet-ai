@@ -4186,7 +4186,28 @@ IMPORTANT -- BE CONCISE:
 - Keep the Quick Recall line to one short sentence.
 - Never use filler transition phrases like "Let's break this down" or "To understand this, we
   need to first" -- start directly with the substantive content.""" if images else ""
-        full_system = SYSTEM_PROMPT + name_context + style_context + lang_context + student_context + graph_context + conciseness_context
+        # Gemini's image/PDF doubt flow was jumping straight into explaining the underlying
+        # concept for a photographed MCQ without ever stating which option is actually correct --
+        # the one thing a student photographing an MCQ needs first. This override is conditional
+        # on the MODEL's OWN recognition of multiple-choice options in what it's looking at (there's
+        # no reliable way to detect that from Python before the image has even been read), so a
+        # non-MCQ image/PDF doubt still gets the full normal answer format below, untouched.
+        # Scoped to images/pdf only -- this never reaches DeepSeek/Qwen's text-doubt SYSTEM_PROMPT,
+        # so a student typing/pasting an MCQ as plain text is unaffected. Deliberately starts the
+        # literal word "Answer:" (matching the format the rest of this prompt already uses for
+        # that section) so _force_citation_when_no_retrieval's own "Answer:" passthrough check
+        # resolves it immediately rather than buffering it as an unrecognized shape.
+        mcq_context = """
+
+IMPORTANT -- MULTIPLE-CHOICE QUESTION OVERRIDE:
+If the question shown includes multiple-choice options (e.g. labeled A/B/C/D, 1/2/3/4, or similar),
+ignore every other formatting instruction above. Your ENTIRE response must be ONLY the correct
+option, stated immediately as the very first thing, in this exact shape:
+Answer: <letter>) <the option's text or value>
+Do not add NEET Importance, a Chapter line, an explanation, Key Points, or a Quick Recall line --
+nothing before or after the Answer line. If there are no multiple-choice options in the question,
+ignore this entire instruction and answer normally per the format above.""" if (images or pdf) else ""
+        full_system = SYSTEM_PROMPT + name_context + style_context + lang_context + student_context + graph_context + conciseness_context + mcq_context
         if _is_mnemonic_request(text):
             # Applied here (before the images/pdf/else branch split) so it reaches whichever
             # model actually serves the request, including Gemini for an image of a mnemonic
