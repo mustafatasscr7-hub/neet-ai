@@ -1072,14 +1072,22 @@
     .pyq-results { margin-top: 12px; border-top: 1px solid #1e1e1e; padding-top: 12px; }
     .pyq-item { padding: 8px 0; border-bottom: 1px solid #1a1a1a; font-size: 13px; color: #aaa; line-height: 1.5; }
    .pyq-year { color: #4f8ef7; font-weight: 600; margin-right: 8px; }
- .message-actions { display: flex; align-items: center; gap: 4px; margin-top: 6px; opacity: 0; transition: opacity 0.2s; width: fit-content; }
-    /* Matches Claude.ai's own pattern: hover-to-reveal on every message EXCEPT the most recent
-       one, which stays permanently visible (see markLatestMessageRow's MutationObserver below --
-       .is-latest tracks whichever .message-row is currently last in #chatWindow, and moves to the
-       new one automatically as messages are added). */
-    .message-row:hover .message-actions { opacity: 1; }
-    .message-content:hover .message-actions { opacity: 1; }
-    .message-row.is-latest .message-actions { opacity: 1; }
+ .message-actions { display: flex; align-items: center; gap: 4px; margin-top: 6px; width: fit-content; }
+    /* Hover-to-reveal applies to .message-action-buttons (the actual icon controls -- Copy,
+       thumbs, Retry, etc.) only, not to .message-actions itself -- .message-time is a direct
+       child of .message-actions, outside that wrapper, so it stays permanently visible instead of
+       disappearing along with the buttons. Previously opacity:0 sat on .message-actions directly,
+       which took the timestamp down with it: only the hovered row, or whichever row .is-latest
+       currently tracks, ever showed a time, exactly the "one message has a time, the next two
+       don't" symptom this was reported as. Matches Claude.ai's own pattern for the buttons
+       themselves: hover-to-reveal on every message except the most recent one, which stays
+       permanently visible (see markLatestMessageRow's MutationObserver below -- .is-latest tracks
+       whichever .message-row is currently last in #chatWindow, and moves to the new one
+       automatically as messages are added). */
+    .message-action-buttons { display: flex; align-items: center; gap: 4px; opacity: 0; transition: opacity 0.2s; }
+    .message-row:hover .message-action-buttons { opacity: 1; }
+    .message-content:hover .message-action-buttons { opacity: 1; }
+    .message-row.is-latest .message-action-buttons { opacity: 1; }
 .message-time { font-size: 11px; font-weight: 500; color: rgba(255,255,255,0.35); padding: 0 4px; align-self: center; user-select: none; }
   
     .action-btn { background: transparent; border: none; color: #666; cursor: pointer; padding: 4px 6px; border-radius: 6px; display: flex; align-items: center; justify-content: center; transition: all 0.2s; }
@@ -2482,8 +2490,9 @@ let selectedImages = [];
       if (welcome) welcome.remove();
       inputArea.style.display = 'block';
       const userIndex = currentConversation.length;
-      addMessageRow('user', text, undefined, userIndex);
-      currentConversation.push({ role: 'user', text });
+      const userMsgObj = { role: 'user', text, time: new Date().toISOString() };
+      addMessageRow('user', text, undefined, userIndex, undefined, userMsgObj);
+      currentConversation.push(userMsgObj);
       streamAIResponse(text, options);
     }
 
@@ -2499,8 +2508,9 @@ let selectedImages = [];
 
       const userText = 'Show me the diagram';
       const userIndex = currentConversation.length;
-      addMessageRow('user', userText, undefined, userIndex);
-      currentConversation.push({ role: 'user', text: userText });
+      const userMsgObj = { role: 'user', text: userText, time: new Date().toISOString() };
+      addMessageRow('user', userText, undefined, userIndex, undefined, userMsgObj);
+      currentConversation.push(userMsgObj);
 
       const aiIndex = currentConversation.length;
       const aiRow = document.createElement('div');
@@ -2526,10 +2536,11 @@ let selectedImages = [];
         textArea.innerHTML = parseWithMath(escapeHtml(fallbackText));
       }
 
-      const aiTimeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const aiNow = new Date();
+      const aiTimeStr = aiNow.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       aiRow.querySelector('.message-content').appendChild(buildActionsDiv('ai', aiTimeStr));
 
-      currentConversation.push({ role: 'ai', text: fallbackText, diagram: savedDiagram });
+      currentConversation.push({ role: 'ai', text: fallbackText, diagram: savedDiagram, time: aiNow.toISOString() });
 
       if (pendingSidebarSave) {
         await pendingSidebarSave;
@@ -4366,8 +4377,9 @@ let selectedImages = [];
         ` : '';
         const feedback = msg ? msg.feedback : null;
         actions.innerHTML = `
-          ${versionNavHtml}
           <span class="message-time">${timeStr}</span>
+          <div class="message-action-buttons">
+          ${versionNavHtml}
           <button class="action-btn" title="Copy" onclick="copyMessage(this)">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
           </button>
@@ -4384,18 +4396,21 @@ let selectedImages = [];
           <button class="action-btn" title="Retry" onclick="retryMessage(this)">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.95"/></svg>
           </button>
+          </div>
         `;
       } else {
         actions.style.justifyContent = 'flex-end';
         actions.style.alignSelf = 'flex-end';
         actions.innerHTML = `
+          <span class="message-time">${timeStr}</span>
+          <div class="message-action-buttons">
           <button class="action-btn" title="Copy" onclick="copyMessage(this)">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
           </button>
           <button class="action-btn" title="Edit" onclick="editMessage(this)">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
           </button>
-          <span class="message-time">${timeStr}</span>
+          </div>
         `;
       }
       return actions;
@@ -4420,8 +4435,16 @@ let selectedImages = [];
       contentWrapper.style.flexDirection = 'column';
       const bubble = document.createElement('div');
       bubble.className = 'message-bubble ' + role;
-     // Generate timestamp once
-      const now = new Date();
+     // Prefer the message's OWN stored send/creation time (msgObj.time, an ISO string set once
+      // when the message was first created -- see sendMessage/streamAIResponse) over "now". Every
+      // call site that renders from real history (a reload, a chat switch) passes the actual
+      // saved message object here, so without this a reload showed every single message stamped
+      // with the CURRENT time (the moment of the reload) instead of when it was actually sent --
+      // the storage half of the "timestamps not accurate" bug this fixes. Falls back to "now" only
+      // for a genuinely fresh live send/response (nothing stored yet, this IS the creation moment)
+      // and for old messages saved before this field existed (no worse than the previous behavior
+      // for those, same self-healing backward-compat pattern as ensureVersions elsewhere here).
+      const now = (msgObj && msgObj.time) ? new Date(msgObj.time) : new Date();
       const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
       if (role === 'ai') {
@@ -4903,7 +4926,7 @@ function plainTextFromMarkdown(text) {
         currentConversation = currentConversation.slice(0, userIndex);
 
         const newIndex = currentConversation.length;
-        const newMsgObj = originalQuotes.length ? { role: 'user', text: newText, quotedTexts: originalQuotes.map(function(q) { return { text: q.text, mode: q.mode }; }) } : { role: 'user', text: newText };
+        const newMsgObj = originalQuotes.length ? { role: 'user', text: newText, time: new Date().toISOString(), quotedTexts: originalQuotes.map(function(q) { return { text: q.text, mode: q.mode }; }) } : { role: 'user', text: newText, time: new Date().toISOString() };
         // Carries the ORIGINAL turn's attachment(s) forward onto the edited one -- a persisted
         // Storage URL (if the original image/PDF upload succeeded) so the edited turn still shows
         // its thumbnail and survives a later reload the same way a fresh send does, and the raw
@@ -5428,8 +5451,9 @@ function plainTextFromMarkdown(text) {
       inputArea.style.display = 'block';
       const instructionText = 'Explain your previous answer in simpler, easier-to-understand terms.';
       const userIndex = currentConversation.length;
-      addMessageRow('user', instructionText, undefined, userIndex);
-      currentConversation.push({ role: 'user', text: instructionText });
+      const userMsgObj = { role: 'user', text: instructionText, time: new Date().toISOString() };
+      addMessageRow('user', instructionText, undefined, userIndex, undefined, userMsgObj);
+      currentConversation.push(userMsgObj);
       streamAIResponse(instructionText, { pyqSearchText: originalTopicText || instructionText });
     }
 
@@ -6630,7 +6654,7 @@ function plainTextFromMarkdown(text) {
       inputArea.style.display = 'block';
 
       const userIndex = currentConversation.length;
-      const userMsgObj = activeQuotes.length ? { role: 'user', text: text, quotedTexts: activeQuotes.map(function(q) { return { text: q.text, mode: q.mode }; }) } : { role: 'user', text: text };
+      const userMsgObj = activeQuotes.length ? { role: 'user', text: text, time: new Date().toISOString(), quotedTexts: activeQuotes.map(function(q) { return { text: q.text, mode: q.mode }; }) } : { role: 'user', text: text, time: new Date().toISOString() };
       // Renders through the SAME addMessageRow path a reload already uses (rather than a
       // separate hand-rolled row), so a freshly-sent image message gets the normal Copy/Edit
       // actions live too, not just after a reload -- previously this had NO action buttons at
@@ -7234,11 +7258,11 @@ function plainTextFromMarkdown(text) {
             // slot outright rather than appending to versions -- and since clarify turns never
             // get an actions row, any stale Retry/version-nav row from the answer it replaced
             // must go with it (nothing left that's retriable in place here).
-            currentConversation[aiIndex] = { role: 'ai', text: fullText };
+            currentConversation[aiIndex] = { role: 'ai', text: fullText, time: new Date().toISOString() };
             const oldActions = aiRow.querySelector('.message-actions');
             if (oldActions) oldActions.remove();
           } else {
-            currentConversation.push({ role: 'ai', text: fullText });
+            currentConversation.push({ role: 'ai', text: fullText, time: new Date().toISOString() });
           }
 
           if (pendingSidebarSave) {
@@ -7314,7 +7338,8 @@ function plainTextFromMarkdown(text) {
           });
         }
 
-        const aiTimeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const aiNow = new Date();
+        const aiTimeStr = aiNow.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         // Save the matched diagram alongside the text when auto-embedded, or a reload/switch
         // (loadConversation/loadConversationFromSupabase -> addMessageRow) has nothing to restore
         // it from and silently falls back to the button -- previously the diagram lived only in
@@ -7347,16 +7372,22 @@ function plainTextFromMarkdown(text) {
             // "Something went wrong" row right underneath the answer that had just rendered
             // successfully. Starting fresh as the first version is exactly what the non-retry
             // branch below already does for a brand-new message -- there's nothing to version.
-            aiMsg = { role: 'ai', text: newVersion.text, diagram: newVersion.diagram, versions: [newVersion], activeVersionIndex: 0 };
+            aiMsg = { role: 'ai', text: newVersion.text, diagram: newVersion.diagram, versions: [newVersion], activeVersionIndex: 0, time: aiNow.toISOString() };
             currentConversation[aiIndex] = aiMsg;
           }
           // The existing actions row (copy/retry/share/version-nav) already lives in
           // .message-content from this row's original generation -- replace it in place with
           // one reflecting the new version count instead of appending a second row alongside it.
+          // Reuses the ORIGINAL stored time (aiMsg.time, from this row's first version, untouched
+          // above) rather than aiNow -- a retry changes the answer's TEXT, not when this message
+          // slot was first created, matching the version-nav's own "same message, new version"
+          // framing. oldActions' displayed string is just a same-render-pass fallback for the
+          // instant before this rebuild, not a second source of truth.
           const oldActions = aiRow.querySelector('.message-actions');
-          oldActions.replaceWith(buildActionsDiv('ai', oldActions.querySelector('.message-time')?.textContent || aiTimeStr, aiMsg));
+          const keepTimeStr = aiMsg.time ? new Date(aiMsg.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : (oldActions.querySelector('.message-time')?.textContent || aiTimeStr);
+          oldActions.replaceWith(buildActionsDiv('ai', keepTimeStr, aiMsg));
         } else {
-          aiMsg = { role: 'ai', text: newVersion.text, diagram: newVersion.diagram, versions: [newVersion], activeVersionIndex: 0 };
+          aiMsg = { role: 'ai', text: newVersion.text, diagram: newVersion.diagram, versions: [newVersion], activeVersionIndex: 0, time: aiNow.toISOString() };
           currentConversation.push(aiMsg);
           aiRow.querySelector('.message-content').appendChild(buildActionsDiv('ai', aiTimeStr, aiMsg));
         }
