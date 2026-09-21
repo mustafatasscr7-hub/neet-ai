@@ -28,13 +28,13 @@ function toggleSidebar() {
   hideSidebarTooltip();
 }
 
-// Collapsed-sidebar icon tooltips (ChatGPT-style: label + keyboard shortcut where one exists),
-// shown only while the sidebar is actually collapsed -- ported verbatim from chat.html's own
-// copy of this same feature, which was added there first and never propagated to this shared
-// file (the exact gap this file exists to prevent -- see its own top comment). Called from
-// initSidebar() below rather than as a bare top-level IIFE like chat.html's version, since this
-// file is written to work regardless of where its own <script> tag sits relative to the sidebar
-// markup (see the document.readyState check at the bottom of this file).
+// Collapsed-sidebar icon tooltips -- just each item's own label (identifying an icon-only button,
+// not a keyboard-shortcut hint), shown only while the sidebar is actually collapsed -- ported
+// verbatim from chat.html's own copy of this same feature, which was added there first and never
+// propagated to this shared file (the exact gap this file exists to prevent -- see its own top
+// comment). Called from initSidebar() below rather than as a bare top-level IIFE like chat.html's
+// version, since this file is written to work regardless of where its own <script> tag sits
+// relative to the sidebar markup (see the document.readyState check at the bottom of this file).
 let sidebarTooltipEl = null;
 function hideSidebarTooltip() {
   if (sidebarTooltipEl) sidebarTooltipEl.classList.remove('visible');
@@ -44,14 +44,13 @@ function initSidebarTooltips() {
   if (!sidebar) return;
   sidebarTooltipEl = document.createElement('div');
   sidebarTooltipEl.className = 'sidebar-tooltip';
-  sidebarTooltipEl.innerHTML = '<span class="sidebar-tooltip-label"></span><span class="sidebar-tooltip-shortcut"></span>';
+  sidebarTooltipEl.innerHTML = '<span class="sidebar-tooltip-label"></span>';
   document.body.appendChild(sidebarTooltipEl);
   const labelEl = sidebarTooltipEl.querySelector('.sidebar-tooltip-label');
-  const shortcutEl = sidebarTooltipEl.querySelector('.sidebar-tooltip-shortcut');
 
   const TOOLTIP_ITEMS = [
     { id: 'newChatBtn', ns: 'chat', key: 'newChat' },
-    { id: 'navSearch', ns: 'chat', key: 'searchChats', shortcut: 'Ctrl+K' },
+    { id: 'navSearch', ns: 'chat', key: 'searchChats' },
     { id: 'navChats', ns: 'chat', key: 'chatsHeading' },
     { id: 'navPYQ', ns: 'chat', key: 'pyqBank' },
     { id: 'navSaved', ns: 'chat', key: 'savedQuestions' },
@@ -59,14 +58,12 @@ function initSidebarTooltips() {
     { id: 'navMockTests', ns: 'chat', key: 'mockTests' },
     { id: 'navScoreboard', ns: 'chat', key: 'scoreboard' },
   ];
-  TOOLTIP_ITEMS.forEach(({ id, ns, key, shortcut }) => {
+  TOOLTIP_ITEMS.forEach(({ id, ns, key }) => {
     const el = document.getElementById(id);
     if (!el) return;
     el.addEventListener('mouseenter', () => {
       if (!sidebar.classList.contains('collapsed')) return;
       labelEl.textContent = t(ns, key);
-      shortcutEl.textContent = shortcut || '';
-      shortcutEl.style.display = shortcut ? '' : 'none';
       const rect = el.getBoundingClientRect();
       sidebarTooltipEl.style.top = (rect.top + rect.height / 2) + 'px';
       sidebarTooltipEl.style.left = (rect.right + 10) + 'px';

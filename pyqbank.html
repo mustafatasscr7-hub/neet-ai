@@ -1303,8 +1303,8 @@ document.getElementById('mainContent').innerHTML = `
 ${q.diagram_url ? `<img class="q-diagram-img" src="${q.diagram_url}">` : ''}
           <div class="q-options">${opts}</div>
           <div class="q-actions">
-            <button class="sol-btn" data-shortcut="S" onclick="toggleSolution(this, '${q.id}', ${JSON.stringify(q).replace(/"/g, '&quot;')})">${t('pyqbank','showSolution')}</button>
-            <button class="sol-btn sol-btn-orange" data-shortcut="B" onclick="saveQuestion(${JSON.stringify(q).replace(/"/g, '&quot;')}, 'PYQ Bank', this)">${t('pyqbank','save')}</button>
+            <button class="sol-btn" onclick="toggleSolution(this, '${q.id}', ${JSON.stringify(q).replace(/"/g, '&quot;')})">${t('pyqbank','showSolution')}</button>
+            <button class="sol-btn sol-btn-orange" onclick="saveQuestion(${JSON.stringify(q).replace(/"/g, '&quot;')}, 'PYQ Bank', this)">${t('pyqbank','save')}</button>
           </div>
           <div class="sol-div" id="sol-${q.id}"></div>
           <div style="display:flex;justify-content:space-between;margin-top:20px;">

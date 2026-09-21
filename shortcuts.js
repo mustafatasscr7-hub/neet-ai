@@ -47,26 +47,7 @@ function isTypingTarget(el) {
       'body.light-mode .shortcuts-modal-desc { color: #3a3a42 !important; }' +
       'body.light-mode .shortcuts-modal-row { border-color: #e3e3ea !important; }' +
       'body.light-mode .shortcuts-modal-key { background: #f2f2f5 !important; border-color: #d5d5dd !important; color: #16161d !important; }' +
-      'body.light-mode .shortcuts-modal-hint { color: #8a8a92 !important; }' +
-      // Inline, always-visible shortcut label (keyboard-shortcuts discoverability pass,
-      // 2026-09-22 -- replaces an earlier hover-tooltip version of this same feature, removed
-      // because a second popup box on hover wasn't the wanted pattern). Same "label, then a
-      // smaller muted key" language as sidebar.js's own collapsed-sidebar tooltip
-      // (.sidebar-tooltip-shortcut: dim gray, smaller size), baked directly into the button
-      // instead of a separate popup.
-      //
-      // Rendered via a CSS ::after on a `data-shortcut="M"` ATTRIBUTE, deliberately not a child
-      // <span> -- most of these buttons (Show Solution, Save, Mark for Review, filter tabs...)
-      // already do `btn.textContent = '...'` somewhere in their own existing click handler to
-      // update their label (toggling "Show"/"Hide", "Save"/"Saved", etc; confirmed live across
-      // pyqbank.html/savedquestions.html/scoreboard.html/mocktest.html). textContent replaces
-      // ALL child nodes, so a child span would get silently wiped the first time any of those
-      // ran -- an attribute is untouched by that, since it isn't a child node at all. A page adds
-      // this by putting `data-shortcut="M"` on the button itself, in its template string/markup
-      // -- no JS wiring needed either way, which is also why the delegated hover listeners this
-      // replaced are gone entirely.
-      '[data-shortcut]::after { content: attr(data-shortcut); color: #888; font-size: 11px; font-weight: 400; margin-left: 6px; }' +
-      'body.light-mode [data-shortcut]::after { color: #9a9aa5 !important; }';
+      'body.light-mode .shortcuts-modal-hint { color: #8a8a92 !important; }';
     document.head.appendChild(style);
   }
 

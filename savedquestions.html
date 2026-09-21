@@ -300,13 +300,13 @@
     <div class="page-subtitle" data-i18n="savedquestions.pageSubtitle">Questions you bookmarked from Question Bank and Mock Tests</div>
 
     <div class="filter-tabs">
-      <button class="filter-tab active" data-shortcut="1" onclick="filterBy('all', this)" data-i18n="savedquestions.all">All</button>
-      <button class="filter-tab" data-shortcut="2" onclick="filterBy('Biology', this)"><span data-i18n="common.biology">Biology</span></button>
-      <button class="filter-tab" data-shortcut="3" onclick="filterBy('Physics', this)"><span data-i18n="common.physics">Physics</span></button>
-      <button class="filter-tab" data-shortcut="4" onclick="filterBy('Chemistry', this)"><span data-i18n="common.chemistry">Chemistry</span></button>
-      <button class="filter-tab" data-shortcut="5" onclick="filterBy('PYQ Bank', this)" data-i18n="savedquestions.fromPyqBank">From Question Bank</button>
-      <button class="filter-tab" data-shortcut="6" onclick="filterBy('Mock Test', this)" data-i18n="savedquestions.fromMockTest">From Mock Test</button>
-      <button class="filter-tab" data-shortcut="7" onclick="filterBy('Mistake Journal', this)" data-i18n="savedquestions.mistakeJournal">Mistake Journal</button>
+      <button class="filter-tab active" onclick="filterBy('all', this)" data-i18n="savedquestions.all">All</button>
+      <button class="filter-tab" onclick="filterBy('Biology', this)"><span data-i18n="common.biology">Biology</span></button>
+      <button class="filter-tab" onclick="filterBy('Physics', this)"><span data-i18n="common.physics">Physics</span></button>
+      <button class="filter-tab" onclick="filterBy('Chemistry', this)"><span data-i18n="common.chemistry">Chemistry</span></button>
+      <button class="filter-tab" onclick="filterBy('PYQ Bank', this)" data-i18n="savedquestions.fromPyqBank">From Question Bank</button>
+      <button class="filter-tab" onclick="filterBy('Mock Test', this)" data-i18n="savedquestions.fromMockTest">From Mock Test</button>
+      <button class="filter-tab" onclick="filterBy('Mistake Journal', this)" data-i18n="savedquestions.mistakeJournal">Mistake Journal</button>
     </div>
 
     <div id="questionsList">
@@ -850,7 +850,7 @@
             ${q.diagram_url ? `<img class="q-diagram-img" src="${escapeHtml(q.diagram_url)}">` : ''}
             <div class="q-options">${opts}</div>
             <div class="q-actions">
-              <button class="sol-btn" data-shortcut="S" onclick="toggleSolution(this, '${q.id}', ${JSON.stringify(q).replace(/"/g, '&quot;')})">${t('pyqbank','showSolution')}</button>
+              <button class="sol-btn" onclick="toggleSolution(this, '${q.id}', ${JSON.stringify(q).replace(/"/g, '&quot;')})">${t('pyqbank','showSolution')}</button>
               <button class="del-btn" onclick="deleteQuestion('${q.id}')">${t('savedquestions','remove')}</button>
             </div>
             <div class="sol-div" id="sol-${q.id}"></div>

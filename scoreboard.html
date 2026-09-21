@@ -658,9 +658,9 @@
         const catRow = document.createElement('div');
         catRow.className = 'review-cat-row';
         catRow.innerHTML = `
-          <button class="review-cat-btn correct" id="review-cat-btn-${i}-correct" data-shortcut="1" onclick="toggleReviewCategory(${i}, 'correct')">${t('scoreboard','correctWord')} (${localizeNum(r.correct)})</button>
-          <button class="review-cat-btn wrong" id="review-cat-btn-${i}-wrong" data-shortcut="2" onclick="toggleReviewCategory(${i}, 'wrong')">${t('scoreboard','wrongWord')} (${localizeNum(r.wrong)})</button>
-          <button class="review-cat-btn skipped" id="review-cat-btn-${i}-skipped" data-shortcut="3" onclick="toggleReviewCategory(${i}, 'skipped')">${t('scoreboard','skippedWord')} (${localizeNum(r.skipped)})</button>
+          <button class="review-cat-btn correct" id="review-cat-btn-${i}-correct" onclick="toggleReviewCategory(${i}, 'correct')">${t('scoreboard','correctWord')} (${localizeNum(r.correct)})</button>
+          <button class="review-cat-btn wrong" id="review-cat-btn-${i}-wrong" onclick="toggleReviewCategory(${i}, 'wrong')">${t('scoreboard','wrongWord')} (${localizeNum(r.wrong)})</button>
+          <button class="review-cat-btn skipped" id="review-cat-btn-${i}-skipped" onclick="toggleReviewCategory(${i}, 'skipped')">${t('scoreboard','skippedWord')} (${localizeNum(r.skipped)})</button>
         `;
         wrap.appendChild(catRow);
 
@@ -988,7 +988,7 @@
         // attribute -- avoids the quote-escaping fragility of embedding a full question object
         // (with LaTeX backslashes, quoted phrases, etc) as inline HTML.
         const explanationHtml = q.status === 'wrong'
-          ? `<button class="sol-btn" id="sol-btn-${i}-${qIdx}" data-shortcut="S" onclick="toggleExplanation(${i}, '${category}', ${qIdx}, this)">${t('scoreboard', 'showExplanation')}</button>
+          ? `<button class="sol-btn" id="sol-btn-${i}-${qIdx}" onclick="toggleExplanation(${i}, '${category}', ${qIdx}, this)">${t('scoreboard', 'showExplanation')}</button>
              <div class="sol-div" id="sol-div-${i}-${qIdx}"></div>`
           : '';
 

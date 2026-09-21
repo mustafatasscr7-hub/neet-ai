@@ -478,14 +478,6 @@
     .sidebar.collapsed .sidebar-resize-handle { display: none; }
     @media (hover: none) { .sidebar-resize-handle { display: none; } }
     .sidebar.collapsed .new-chat-btn { justify-content: center; padding: 10px 0; gap: 0; width: 100%; }
-    /* The always-visible "Ctrl+Shift+O" inline hint (shortcuts.js's [data-shortcut]::after,
-       see #newChatBtn's markup) assumes room next to a text label -- the collapsed 56px icon
-       rail has none, so the hint text overlapped/garbled against the icon and the rest of the
-       sidebar. Icon-only buttons shouldn't carry an inline text label at all; the collapsed-
-       sidebar hover tooltip below (initSidebarTooltips' newChatBtn entry, now including this
-       same shortcut) is the fallback for this state instead. Scoped to #newChatBtn specifically,
-       not every [data-shortcut] -- no other sidebar button currently has one. */
-    .sidebar.collapsed #newChatBtn[data-shortcut]::after { content: none; }
     .sidebar.collapsed .nav-item { justify-content: center; padding: 10px 0; gap: 0; }
     .sidebar.collapsed .profile-btn { justify-content: center; padding: 10px 0; gap: 0; }
     .sidebar.collapsed .logo { display: flex; justify-content: center; padding: 10px 0; gap: 0; }
@@ -538,9 +530,7 @@
        needs to do. */
     .sidebar-tooltip { position: fixed; transform: translateY(-50%); background: #1e1e1e; color: #ececec; padding: 6px 12px; border-radius: 999px; font-size: 12.5px; font-family: 'Inter', sans-serif; white-space: nowrap; display: flex; align-items: center; gap: 8px; pointer-events: none; opacity: 0; visibility: hidden; transition: opacity 0.12s ease; z-index: 9999; box-shadow: 0 4px 14px rgba(0,0,0,0.45); border: 1px solid #2a2a2a; }
     .sidebar-tooltip.visible { opacity: 1; visibility: visible; }
-    .sidebar-tooltip-shortcut { color: #888; font-size: 11px; }
     body.light-mode .sidebar-tooltip { background: #ffffff !important; color: #16161d !important; border-color: #e0e0e5 !important; box-shadow: 0 4px 14px rgba(0,0,0,0.12) !important; }
-    body.light-mode .sidebar-tooltip-shortcut { color: #9a9aa5 !important; }
     .logo { display: flex; align-items: center; gap: 10px; padding: 6px 12px; margin-bottom: 4px; }
     /* Was an inline style="justify-content:space-between" on the element itself -- moved into CSS
        because an inline style outranks every stylesheet rule regardless of specificity, permanently
@@ -1231,7 +1221,7 @@
       </button>
     </div>
 
-   <button class="new-chat-btn" id="newChatBtn" data-shortcut="Ctrl+Shift+O">
+   <button class="new-chat-btn" id="newChatBtn">
       <span class="icon">+</span>
       <span class="new-chat-text" data-i18n="chat.newChat">New Chat</span>
     </button>
@@ -1750,11 +1740,12 @@ function toggleSearchChats() {
       document.querySelector('.sidebar').style.width = getSavedSidebarWidth() + 'px';
     })();
 
-    // Collapsed-sidebar icon tooltips (ChatGPT-style: label + keyboard shortcut where one
-    // exists), shown only while the sidebar is actually collapsed -- an expanded sidebar
-    // already shows each item's label as text, so a tooltip would be redundant there. The
-    // element is created once and repositioned/relabeled per hover rather than one tooltip
-    // per nav item, matching the single-shared-flyout pattern .item-menu already uses.
+    // Collapsed-sidebar icon tooltips -- just each item's own label (identifying an icon-only
+    // button, not a keyboard-shortcut hint), shown only while the sidebar is actually collapsed --
+    // an expanded sidebar already shows each item's label as text, so a tooltip would be
+    // redundant there. The element is created once and repositioned/relabeled per hover rather
+    // than one tooltip per nav item, matching the single-shared-flyout pattern .item-menu already
+    // uses.
     let sidebarTooltipEl = null;
     function hideSidebarTooltip() {
       if (sidebarTooltipEl) sidebarTooltipEl.classList.remove('visible');
@@ -1763,14 +1754,13 @@ function toggleSearchChats() {
       const sidebar = document.querySelector('.sidebar');
       sidebarTooltipEl = document.createElement('div');
       sidebarTooltipEl.className = 'sidebar-tooltip';
-      sidebarTooltipEl.innerHTML = '<span class="sidebar-tooltip-label"></span><span class="sidebar-tooltip-shortcut"></span>';
+      sidebarTooltipEl.innerHTML = '<span class="sidebar-tooltip-label"></span>';
       document.body.appendChild(sidebarTooltipEl);
       const labelEl = sidebarTooltipEl.querySelector('.sidebar-tooltip-label');
-      const shortcutEl = sidebarTooltipEl.querySelector('.sidebar-tooltip-shortcut');
 
       const TOOLTIP_ITEMS = [
-        { id: 'newChatBtn', ns: 'chat', key: 'newChat', shortcut: 'Ctrl+Shift+O' },
-        { id: 'navSearch', ns: 'chat', key: 'searchChats', shortcut: 'Ctrl+K' },
+        { id: 'newChatBtn', ns: 'chat', key: 'newChat' },
+        { id: 'navSearch', ns: 'chat', key: 'searchChats' },
         { id: 'navChats', ns: 'chat', key: 'chatsHeading' },
         { id: 'navPYQ', ns: 'chat', key: 'pyqBank' },
         { id: 'navSaved', ns: 'chat', key: 'savedQuestions' },
@@ -1778,14 +1768,12 @@ function toggleSearchChats() {
         { id: 'navMockTests', ns: 'chat', key: 'mockTests' },
         { id: 'navScoreboard', ns: 'chat', key: 'scoreboard' },
       ];
-      TOOLTIP_ITEMS.forEach(({ id, ns, key, shortcut }) => {
+      TOOLTIP_ITEMS.forEach(({ id, ns, key }) => {
         const el = document.getElementById(id);
         if (!el) return;
         el.addEventListener('mouseenter', () => {
           if (!sidebar.classList.contains('collapsed')) return;
           labelEl.textContent = t(ns, key);
-          shortcutEl.textContent = shortcut || '';
-          shortcutEl.style.display = shortcut ? '' : 'none';
           const rect = el.getBoundingClientRect();
           sidebarTooltipEl.style.top = (rect.top + rect.height / 2) + 'px';
           sidebarTooltipEl.style.left = (rect.right + 10) + 'px';
@@ -4015,7 +4003,6 @@ let selectedImages = [];
       const closeBtn = document.createElement('button');
       closeBtn.className = 'diagram-modal-close';
       closeBtn.textContent = '✕';
-      closeBtn.setAttribute('data-shortcut', 'Esc');
       closeBtn.style.cssText = 'background:none;border:none;color:#888;font-size:20px;cursor:pointer;flex-shrink:0;';
       closeBtn.onclick = closeDiagramModal;
       rightGroup.appendChild(closeBtn);
