@@ -157,6 +157,10 @@
     body.light-mode .pyq-item { border-color: #ececf0 !important; color: #55555f !important; }
     body.light-mode .action-btn { color: #8a8a94 !important; }
     body.light-mode .action-btn:hover { background: #ececf0 !important; color: #222228 !important; }
+    body.light-mode .action-btn.feedback-btn.voted-up { color: #16a34a !important; }
+    body.light-mode .action-btn.feedback-btn.voted-up:hover { color: #16a34a !important; }
+    body.light-mode .action-btn.feedback-btn.voted-down { color: #dc2626 !important; }
+    body.light-mode .action-btn.feedback-btn.voted-down:hover { color: #dc2626 !important; }
     body.light-mode .muted-text { color: #7a7a85 !important; }
 
     /* PYQ modal (opened from chat via "Previous Year Questions") */
@@ -1084,6 +1088,28 @@
     .action-btn.speaking { color: #4f8ef7; }
     .action-btn.speaking:hover { color: #4f8ef7; }
     body.light-mode .action-btn.speaking { color: #4f8ef7 !important; }
+    /* Thumbs up/down response feedback (2026-09-21) -- stays filled/highlighted once clicked,
+       same "selected state persists" treatment as .action-btn.speaking above. Up reuses the app's
+       existing success green (saved/correct states elsewhere), down its existing error red
+       (delete/wrong states) rather than introducing new colors for this feature. */
+    .action-btn.feedback-btn.voted-up { color: #4ade80; }
+    .action-btn.feedback-btn.voted-up:hover { color: #4ade80; }
+    .action-btn.feedback-btn.voted-up svg { fill: #4ade8033; }
+    .action-btn.feedback-btn.voted-down { color: #ef4444; }
+    .action-btn.feedback-btn.voted-down:hover { color: #ef4444; }
+    .action-btn.feedback-btn.voted-down svg { fill: #ef444433; }
+    .feedback-comment-box { display: flex; align-items: center; gap: 6px; margin-top: 6px; width: fit-content; max-width: 100%; }
+    .feedback-comment-input { background: #1a1a1a; border: 1px solid #2a2a2a; color: #ddd; font-family: 'Inter', sans-serif; font-size: 12px; padding: 6px 10px; border-radius: 8px; width: 220px; max-width: 60vw; }
+    .feedback-comment-input::placeholder { color: #666; }
+    .feedback-comment-input:focus { outline: none; border-color: #4f8ef7; }
+    .feedback-comment-send { background: transparent; border: none; color: #4f8ef7; cursor: pointer; font-size: 12px; font-weight: 600; font-family: 'Inter', sans-serif; padding: 4px 6px; }
+    .feedback-comment-send:hover { text-decoration: underline; }
+    .feedback-comment-close { background: transparent; border: none; color: #666; cursor: pointer; font-size: 12px; padding: 4px 6px; }
+    .feedback-comment-close:hover { color: #ccc; }
+    body.light-mode .feedback-comment-input { background: #f4f4f6 !important; border-color: #dedee4 !important; color: #16161d !important; }
+    body.light-mode .feedback-comment-input::placeholder { color: #9a9aa5 !important; }
+    body.light-mode .feedback-comment-close { color: #8a8a94 !important; }
+    body.light-mode .feedback-comment-close:hover { color: #222228 !important; }
     /* Retry regenerates in place: the previous answer stays visible but dimmed (never removed)
        until real new content actually arrives, so a failed/aborted retry always has something
        correct to fall back to instead of an empty bubble. */
@@ -4329,11 +4355,18 @@ let selectedImages = [];
             <button class="version-nav-btn" title="Next version" onclick="switchVersion(this,1)" ${msg.activeVersionIndex === msg.versions.length - 1 ? 'disabled' : ''}>›</button>
           </span>
         ` : '';
+        const feedback = msg ? msg.feedback : null;
         actions.innerHTML = `
           ${versionNavHtml}
           <span class="message-time">${timeStr}</span>
           <button class="action-btn" title="Copy" onclick="copyMessage(this)">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          </button>
+          <button class="action-btn feedback-btn feedback-up ${feedback === 'up' ? 'voted-up' : ''}" title="Good response" onclick="rateMessage(this, 'up')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2h0a3.13 3.13 0 0 1 3 3.88Z"/></svg>
+          </button>
+          <button class="action-btn feedback-btn feedback-down ${feedback === 'down' ? 'voted-down' : ''}" title="Bad response" onclick="rateMessage(this, 'down')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L13 22h0a3.13 3.13 0 0 1-3-3.88Z"/></svg>
           </button>
           ${readAloudBtnHtml}
           <button class="action-btn" title="Share" onclick="shareMessage(this)">
@@ -4520,8 +4553,130 @@ function plainTextFromMarkdown(text) {
     // first retry instead of throwing.
     function ensureVersions(msg) {
       if (msg.versions) return;
-      msg.versions = [{ text: msg.text, diagram: msg.diagram }];
+      msg.versions = [{ text: msg.text, diagram: msg.diagram, feedback: msg.feedback, feedbackId: msg.feedbackId }];
       msg.activeVersionIndex = 0;
+    }
+
+    // Thumbs up/down on an AI response (feedback capture, 2026-09-21). The selected/highlighted
+    // state and the row's own response_feedback id are stored directly on the message object
+    // (msg.feedback/msg.feedbackId) and ride along with the rest of currentConversation into
+    // chats.messages via persistConversationSilently -- the exact same mechanism retry versions
+    // already use -- so the filled-in icon survives a reload. When the message has multiple
+    // versions (retried at least once), feedback is mirrored onto the ACTIVE version object too
+    // (see switchVersion/ensureVersions) so switching versions shows that version's own vote
+    // rather than leaking one version's feedback onto another's different content.
+    //
+    // response_feedback itself is a separate, append-only log (question/answer text snapshot,
+    // rating, optional comment) nothing else reads back -- a simple review table, not a feature.
+    // Written directly from here with the page's own anon-key client (RLS scopes each student to
+    // their own rows), matching saved_questions' existing client-direct pattern rather than adding
+    // a new FastAPI endpoint for something this small.
+    async function rateMessage(btn, rating) {
+      const { data: { session } } = await client.auth.getSession();
+      if (!session) { alert('Please log in to rate responses.'); return; }
+      const row = btn.closest('.message-row');
+      const msgIndex = parseInt(row.dataset.msgIndex, 10);
+      const msg = !isNaN(msgIndex) ? currentConversation[msgIndex] : undefined;
+      if (!msg) return;
+      const actions = row.querySelector('.message-actions');
+      const upBtn = actions.querySelector('.feedback-up');
+      const downBtn = actions.querySelector('.feedback-down');
+
+      function syncActiveVersion() {
+        if (msg.versions) {
+          const v = msg.versions[msg.activeVersionIndex];
+          if (v) { v.feedback = msg.feedback; v.feedbackId = msg.feedbackId; }
+        }
+      }
+
+      if (msg.feedback === rating) {
+        // Same button clicked again -- toggle off.
+        const oldId = msg.feedbackId;
+        msg.feedback = null;
+        msg.feedbackId = null;
+        syncActiveVersion();
+        upBtn.classList.remove('voted-up');
+        downBtn.classList.remove('voted-down');
+        closeFeedbackCommentBox(row);
+        persistConversationSilently();
+        if (oldId) client.from('response_feedback').delete().eq('id', oldId).eq('user_id', session.user.id).then(() => {});
+        return;
+      }
+
+      msg.feedback = rating;
+      syncActiveVersion();
+      upBtn.classList.toggle('voted-up', rating === 'up');
+      downBtn.classList.toggle('voted-down', rating === 'down');
+      persistConversationSilently();
+
+      const userMsg = msgIndex > 0 ? currentConversation[msgIndex - 1] : null;
+      const conv = conversations.find(c => c.id === currentId || c.supabaseId === currentId);
+      const chatId = conv ? (conv.supabaseId || null) : null;
+
+      if (msg.feedbackId) {
+        // Switching an existing up<->down vote -- update the same row in place.
+        client.from('response_feedback').update({ rating }).eq('id', msg.feedbackId).eq('user_id', session.user.id).then(() => {});
+      } else {
+        const { data, error } = await client.from('response_feedback').insert({
+          user_id: session.user.id,
+          chat_id: chatId,
+          msg_index: msgIndex,
+          question_text: userMsg ? userMsg.text : null,
+          answer_text: msg.text,
+          rating: rating
+        }).select('id').single();
+        if (!error && data) {
+          msg.feedbackId = data.id;
+          syncActiveVersion();
+          persistConversationSilently();
+        } else {
+          // Best-effort feature, but don't leave the icon looking "voted" when nothing was
+          // actually recorded -- roll the optimistic UI state back, same as saveQuestion's own
+          // "Failed, retry" revert on a failed insert elsewhere in this file.
+          msg.feedback = null;
+          syncActiveVersion();
+          upBtn.classList.remove('voted-up');
+          downBtn.classList.remove('voted-down');
+          persistConversationSilently();
+          return;
+        }
+      }
+
+      if (rating === 'down') showFeedbackCommentBox(row, msg, session);
+      else closeFeedbackCommentBox(row);
+    }
+
+    // Small optional "what was wrong?" box shown under a fresh thumbs-down -- never required to
+    // submit the vote itself (already recorded by the time this appears), only adds detail to the
+    // same response_feedback row if the student bothers to type something.
+    function showFeedbackCommentBox(row, msg, session) {
+      closeFeedbackCommentBox(row);
+      const wrap = document.createElement('div');
+      wrap.className = 'feedback-comment-box';
+      wrap.innerHTML = `
+        <input type="text" class="feedback-comment-input" placeholder="What was wrong? (optional)" maxlength="500" />
+        <button class="feedback-comment-send">Send</button>
+        <button class="feedback-comment-close" title="Dismiss">✕</button>
+      `;
+      const actions = row.querySelector('.message-actions');
+      actions.insertAdjacentElement('afterend', wrap);
+      const input = wrap.querySelector('.feedback-comment-input');
+      const submit = () => {
+        const text = input.value.trim().slice(0, 500);
+        if (text && msg.feedbackId) {
+          client.from('response_feedback').update({ comment: text }).eq('id', msg.feedbackId).eq('user_id', session.user.id).then(() => {});
+        }
+        wrap.remove();
+      };
+      wrap.querySelector('.feedback-comment-send').onclick = submit;
+      wrap.querySelector('.feedback-comment-close').onclick = () => wrap.remove();
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+      input.focus();
+    }
+
+    function closeFeedbackCommentBox(row) {
+      const existing = row.querySelector('.feedback-comment-box');
+      if (existing) existing.remove();
     }
 
     async function retryMessage(btn) {
@@ -4531,6 +4686,7 @@ function plainTextFromMarkdown(text) {
       if (isNaN(aiIndex) || aiIndex < 1) return;
       const userMsg = currentConversation[aiIndex - 1];
       if (!userMsg || userMsg.role !== 'user') return;
+      closeFeedbackCommentBox(row);
 
       // In-place regenerate, matching Claude.ai's retry pattern: the row/bubble stay exactly
       // where they are -- no DOM removal, no new row appended elsewhere. The previous
@@ -4592,6 +4748,11 @@ function plainTextFromMarkdown(text) {
       const v = msg.versions[newIndex];
       msg.text = v.text;
       msg.diagram = v.diagram;
+      // Each version keeps its own vote -- switching must show THIS version's feedback, not
+      // whichever version happened to be on screen when the student last clicked thumbs up/down.
+      msg.feedback = v.feedback || null;
+      msg.feedbackId = v.feedbackId || null;
+      closeFeedbackCommentBox(row);
 
       const userMsg = currentConversation[aiIndex - 1];
       const pyqSearchText = (userMsg && userMsg.role === 'user') ? userMsg.text : v.text;
@@ -7148,6 +7309,10 @@ function plainTextFromMarkdown(text) {
             aiMsg.activeVersionIndex = aiMsg.versions.length - 1;
             aiMsg.text = newVersion.text;
             aiMsg.diagram = newVersion.diagram;
+            // A retry is genuinely new content -- newVersion carries no feedback of its own, so
+            // this correctly clears any vote/highlight left over from the version being replaced.
+            aiMsg.feedback = null;
+            aiMsg.feedbackId = null;
           } else {
             // currentConversation[aiIndex] was never actually written -- happens when retrying a
             // response that failed/errored before it got recorded (its row still exists and is
