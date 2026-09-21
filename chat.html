@@ -1190,7 +1190,7 @@
       </button>
     </div>
 
-   <button class="new-chat-btn" id="newChatBtn" data-hint="New chat (Ctrl+Shift+O)">
+   <button class="new-chat-btn" id="newChatBtn" data-shortcut="Ctrl+Shift+O">
       <span class="icon">+</span>
       <span class="new-chat-text" data-i18n="chat.newChat">New Chat</span>
     </button>
@@ -3971,7 +3971,7 @@ let selectedImages = [];
       const closeBtn = document.createElement('button');
       closeBtn.className = 'diagram-modal-close';
       closeBtn.textContent = '✕';
-      closeBtn.setAttribute('data-hint', 'Close (Esc)');
+      closeBtn.setAttribute('data-shortcut', 'Esc');
       closeBtn.style.cssText = 'background:none;border:none;color:#888;font-size:20px;cursor:pointer;flex-shrink:0;';
       closeBtn.onclick = closeDiagramModal;
       rightGroup.appendChild(closeBtn);
