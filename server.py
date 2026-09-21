@@ -2699,6 +2699,35 @@ def _is_legitimate_topic_ambiguity(text: str) -> bool:
     normalized = text.strip()
     return _fuzzy_word_match(normalized, TOPIC_AMBIGUITY_WHITELIST)
 
+# Deterministic last-resort system prompt for stream_response's own override-retry safety net
+# (see the "invalid_clarify" branch below): when a doubt has already failed
+# _is_denylisted_clarify_doubt/_is_legitimate_topic_ambiguity ONCE, the existing fix was to
+# append a "do not output AMBIGUOUS" instruction to the END of the full, unmodified system
+# prompt -- but rule 11's own AMBIGUOUS/CLARIFY_TYPE template and its emphatic "you MUST trigger
+# it, full stop" wording are still sitting right there in the same context, competing with a
+# short note tacked on afterward. Confirmed live (2026-09-21): that retry itself produces
+# AMBIGUOUS: yes again in a real, non-trivial fraction of cases for "reflex" specifically -- the
+# override wasn't reliably winning that competition. Removing the whole rule (not just adding a
+# contradicting note on top of it) is a structurally stronger fix: with no AMBIGUOUS/CLARIFY_TYPE
+# template anywhere in context, there's nothing left to imitate.
+#
+# Built by slicing rule 11 (TOPIC AMBIGUITY + FORMAT AMBIGUITY) out of SYSTEM_PROMPT by its own
+# start/end marker text, not a hardcoded copy of the rule's body -- so this never goes stale if
+# rule 11's own wording changes later; only these two marker strings need to keep matching.
+_RULE_11_START_MARKER = "11. BEFORE writing VISUAL_INTENT"
+_RULE_11_END_MARKER = "12. NAMED WORKED EXAMPLE"
+_rule_11_start_idx = SYSTEM_PROMPT.index(_RULE_11_START_MARKER)
+_rule_11_end_idx = SYSTEM_PROMPT.index(_RULE_11_END_MARKER)
+SYSTEM_PROMPT_NO_CLARIFY = (
+    SYSTEM_PROMPT[:_rule_11_start_idx]
+    + "11. This doubt has already been confirmed, by a separate server-side check, to NOT be "
+      "genuinely ambiguous -- regardless of anything you might otherwise think about it, do NOT "
+      "output AMBIGUOUS, CLARIFY_TYPE, QUESTION, or OPTION under any circumstances for this "
+      "doubt; those output formats do not apply here. Skip straight to VISUAL_INTENT (rule 10) "
+      "and answer normally, exactly like any other real academic doubt.\n\n"
+    + SYSTEM_PROMPT[_rule_11_end_idx:]
+)
+
 # chat.html's streamAIResponse sends this exact string as `text` when an image doubt has no
 # real typed question (`text || 'Describe this image...'`) -- must stay in sync with that
 # literal. A placeholder like this has no real topic for NCERT search to match against, so
@@ -4289,9 +4318,66 @@ IMPORTANT -- BE CONCISE:
                     full_answer = ""
                     billing_context = {"bill": True}
                     override_stream = _stream_with_peak_fallback(override_system, messages, user_id, ip, "/chat", billing_context, force_qwen)
-                async for text_chunk in _force_citation_when_no_retrieval(override_stream, bool(results)):
-                    full_answer += text_chunk
-                    yield text_chunk
+                if override_reason == "invalid_clarify":
+                    # Hard server-side re-validation of the retry itself (added 2026-09-21) --
+                    # the override above still only relies on the model actually obeying "do not
+                    # output AMBIGUOUS", and confirmed live that this doesn't reliably hold: for
+                    # the denylisted term "reflex" specifically, 6 of 8 real trials came back
+                    # AMBIGUOUS: yes again on THIS retry, streamed straight to the student with no
+                    # further check. Buffer just the retry's first line, the same way checkpoint 0
+                    # does for the original attempt above; if it's STILL "AMBIGUOUS: yes", discard
+                    # it unseen (never yield a second bad clarify attempt either) and fall through
+                    # to one more retry using SYSTEM_PROMPT_NO_CLARIFY -- which has rule 11's
+                    # entire AMBIGUOUS/CLARIFY_TYPE template removed from context rather than just
+                    # told not to use it, so there's nothing left in the prompt to imitate. This is
+                    # deliberately a stronger fix than a third contradicting instruction stacked on
+                    # top of the same full prompt would be, per the same reasoning this whole retry
+                    # exists for in the first place.
+                    wrapped_retry = _force_citation_when_no_retrieval(override_stream, bool(results))
+                    retry_iter = wrapped_retry.__aiter__()
+                    retry_pending = ""
+                    retry_invalid = False
+                    retry_checked = False
+                    async for retry_chunk in retry_iter:
+                        retry_pending += retry_chunk
+                        # Substring match over a real window, not an exact match on only the
+                        # first line -- confirmed live this matters: one real retry came back
+                        # "DOUBT_TYPE: ambiguous\n\nAMBIGUOUS: yes\nCLARIFY_TYPE: topic\n...", a
+                        # malformed leading line that pushed the actual AMBIGUOUS: yes past the
+                        # first newline. An exact-first-line check missed this outright (the first
+                        # line wasn't literally "AMBIGUOUS: yes", so it looked "valid" and the
+                        # whole thing streamed straight through). Waiting for real content to
+                        # accumulate before deciding closes that gap.
+                        if retry_pending.count("\n") >= 2 or len(retry_pending) >= 120:
+                            retry_invalid = "AMBIGUOUS: yes" in retry_pending
+                            retry_checked = True
+                            break
+                    if not retry_checked:
+                        # Stream ended before the window filled (a short reply) -- check whatever
+                        # survived rather than defaulting to "valid" unchecked.
+                        retry_invalid = "AMBIGUOUS: yes" in retry_pending
+                    if retry_invalid:
+                        final_system = full_system.replace(SYSTEM_PROMPT, SYSTEM_PROMPT_NO_CLARIFY, 1)
+                        full_answer = ""
+                        billing_context = {"bill": True}
+                        final_stream = _stream_with_peak_fallback(final_system, messages, user_id, ip, "/chat", billing_context, force_qwen)
+                        async for text_chunk in _force_citation_when_no_retrieval(final_stream, bool(results)):
+                            full_answer += text_chunk
+                            yield text_chunk
+                    else:
+                        # Not invalid -- flush the buffered first line, then the rest of the
+                        # stream, exactly like the unbuffered pass-through below does for the
+                        # empty_conversational case.
+                        if retry_pending:
+                            full_answer += retry_pending
+                            yield retry_pending
+                        async for text_chunk in retry_iter:
+                            full_answer += text_chunk
+                            yield text_chunk
+                else:
+                    async for text_chunk in _force_citation_when_no_retrieval(override_stream, bool(results)):
+                        full_answer += text_chunk
+                        yield text_chunk
             if not images and not pdf and use_shared_cache:
                 await async_client.post(
                     f"{SUPABASE_URL}/rest/v1/answer_cache",
