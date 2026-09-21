@@ -1103,11 +1103,11 @@
     /* Transient confirmation/error shown in place of the input after Send, matching copyMessage's
        own "swap for ~2s, then revert" pattern -- the closest existing lightweight-notification
        style in this file (there's no separate toast/snackbar system here). */
-    .feedback-comment-status { font-size: 12px; font-family: 'Inter', sans-serif; padding: 6px 2px; }
-    .feedback-comment-status-ok { color: #4ade80; }
-    .feedback-comment-status-error { color: #ef4444; }
-    body.light-mode .feedback-comment-status-ok { color: #16a34a !important; }
-    body.light-mode .feedback-comment-status-error { color: #dc2626 !important; }
+    /* Neutral/muted, not a red/green status-color system -- same gray already used for secondary
+       text elsewhere (.action-btn, .message-time), success vs. failure told apart by wording
+       (and the checkmark) alone. */
+    .feedback-comment-status { font-size: 12px; font-family: 'Inter', sans-serif; padding: 6px 2px; color: #888; }
+    body.light-mode .feedback-comment-status { color: #8a8a94 !important; }
     .feedback-comment-input { background: #1a1a1a; border: 1px solid #2a2a2a; color: #ddd; font-family: 'Inter', sans-serif; font-size: 12px; padding: 6px 10px; border-radius: 8px; width: 220px; max-width: 60vw; }
     .feedback-comment-input::placeholder { color: #666; }
     .feedback-comment-input:focus { outline: none; border-color: #4f8ef7; }
@@ -4686,10 +4686,10 @@ function plainTextFromMarkdown(text) {
         if (error) {
           // Don't pretend it worked -- show it failed and let the student try Send again
           // rather than silently closing as if the comment had been saved.
-          wrap.innerHTML = '<span class="feedback-comment-status feedback-comment-status-error">Couldn’t send, try again</span>';
+          wrap.innerHTML = '<span class="feedback-comment-status">Couldn’t send, try again</span>';
           setTimeout(() => { wrap.classList.add('fading'); setTimeout(() => wrap.remove(), 400); }, 2500);
         } else {
-          wrap.innerHTML = '<span class="feedback-comment-status feedback-comment-status-ok">✓ Feedback sent</span>';
+          wrap.innerHTML = '<span class="feedback-comment-status">✓ Feedback sent</span>';
           setTimeout(() => { wrap.classList.add('fading'); setTimeout(() => wrap.remove(), 400); }, 2000);
         }
       };
