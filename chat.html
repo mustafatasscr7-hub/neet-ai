@@ -1098,7 +1098,16 @@
     .action-btn.feedback-btn.voted-down { color: #ef4444; }
     .action-btn.feedback-btn.voted-down:hover { color: #ef4444; }
     .action-btn.feedback-btn.voted-down svg { fill: #ef444433; }
-    .feedback-comment-box { display: flex; align-items: center; gap: 6px; margin-top: 6px; width: fit-content; max-width: 100%; }
+    .feedback-comment-box { display: flex; align-items: center; gap: 6px; margin-top: 6px; width: fit-content; max-width: 100%; opacity: 1; transition: opacity 0.4s ease; }
+    .feedback-comment-box.fading { opacity: 0; }
+    /* Transient confirmation/error shown in place of the input after Send, matching copyMessage's
+       own "swap for ~2s, then revert" pattern -- the closest existing lightweight-notification
+       style in this file (there's no separate toast/snackbar system here). */
+    .feedback-comment-status { font-size: 12px; font-family: 'Inter', sans-serif; padding: 6px 2px; }
+    .feedback-comment-status-ok { color: #4ade80; }
+    .feedback-comment-status-error { color: #ef4444; }
+    body.light-mode .feedback-comment-status-ok { color: #16a34a !important; }
+    body.light-mode .feedback-comment-status-error { color: #dc2626 !important; }
     .feedback-comment-input { background: #1a1a1a; border: 1px solid #2a2a2a; color: #ddd; font-family: 'Inter', sans-serif; font-size: 12px; padding: 6px 10px; border-radius: 8px; width: 220px; max-width: 60vw; }
     .feedback-comment-input::placeholder { color: #666; }
     .feedback-comment-input:focus { outline: none; border-color: #4f8ef7; }
@@ -4661,15 +4670,31 @@ function plainTextFromMarkdown(text) {
       const actions = row.querySelector('.message-actions');
       actions.insertAdjacentElement('afterend', wrap);
       const input = wrap.querySelector('.feedback-comment-input');
-      const submit = () => {
+      const sendBtn = wrap.querySelector('.feedback-comment-send');
+      const closeBtn = wrap.querySelector('.feedback-comment-close');
+
+      const submit = async () => {
         const text = input.value.trim().slice(0, 500);
-        if (text && msg.feedbackId) {
-          client.from('response_feedback').update({ comment: text }).eq('id', msg.feedbackId).eq('user_id', session.user.id).then(() => {});
+        // Nothing typed -- there's no new comment to confirm, just close like Dismiss does
+        // (the vote itself was already recorded before this box even appeared).
+        if (!text || !msg.feedbackId) { wrap.remove(); return; }
+        input.disabled = true;
+        sendBtn.disabled = true;
+        closeBtn.disabled = true;
+        sendBtn.textContent = 'Sending…';
+        const { error } = await client.from('response_feedback').update({ comment: text }).eq('id', msg.feedbackId).eq('user_id', session.user.id);
+        if (error) {
+          // Don't pretend it worked -- show it failed and let the student try Send again
+          // rather than silently closing as if the comment had been saved.
+          wrap.innerHTML = '<span class="feedback-comment-status feedback-comment-status-error">Couldn’t send, try again</span>';
+          setTimeout(() => { wrap.classList.add('fading'); setTimeout(() => wrap.remove(), 400); }, 2500);
+        } else {
+          wrap.innerHTML = '<span class="feedback-comment-status feedback-comment-status-ok">✓ Feedback sent</span>';
+          setTimeout(() => { wrap.classList.add('fading'); setTimeout(() => wrap.remove(), 400); }, 2000);
         }
-        wrap.remove();
       };
-      wrap.querySelector('.feedback-comment-send').onclick = submit;
-      wrap.querySelector('.feedback-comment-close').onclick = () => wrap.remove();
+      sendBtn.onclick = submit;
+      closeBtn.onclick = () => wrap.remove();
       input.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
       input.focus();
     }
