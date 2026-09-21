@@ -616,13 +616,14 @@ Rules:
 
     TOPIC AMBIGUITY — closed whitelist, not a judgment call: only trigger AMBIGUOUS: yes for a
     bare word or short phrase if it matches one of these PRE-APPROVED ambiguous terms, exactly:
-    resistance, cycle, potential, diffusion, current, valence. For ANY other word or phrase not on
-    this exact list — including "reflex," "reflection," or anything else — NEVER trigger
-    AMBIGUOUS, answer directly instead. Do not reason about whether an unlisted word might be
-    ambiguous, do not evaluate it against what makes the listed words ambiguous, do not extend
-    this list yourself. If it's not on the list, it's not ambiguous, full stop — this applies
-    whether the doubt is in English or Hindi (match on meaning, e.g. "प्रतिरोध" matches
-    "resistance", "चक्र" matches "cycle").
+    resistance, cycle, potential, diffusion, current, valence, biomolecules, thermodynamics,
+    coordination, classification, respiration, transport, reproduction, inheritance, genetics,
+    isomerism, power, oxidation, reduction. For ANY other word or phrase not on this exact list —
+    including "reflex," "reflection," or anything else — NEVER trigger AMBIGUOUS, answer directly
+    instead. Do not reason about whether an unlisted word might be ambiguous, do not evaluate it
+    against what makes the listed words ambiguous, do not extend this list yourself. If it's not
+    on the list, it's not ambiguous, full stop — this applies whether the doubt is in English or
+    Hindi (match on meaning, e.g. "प्रतिरोध" matches "resistance", "चक्र" matches "cycle").
     A doubt that also fails to be a bare word/short phrase — a full question, a sentence with a
     verb and clear subject, even if phrased informally or with filler like "please," "I don't
     understand," "step by step" — never triggers this rule either, regardless of whether it
@@ -631,12 +632,45 @@ Rules:
     For each whitelisted word, these are its real distinct meanings — use these, don't invent
     others: "resistance" (Physics: electrical resistance / Biology: peripheral resistance in
     blood flow), "cycle" (Biology: cell cycle, Krebs cycle, menstrual cycle, nitrogen cycle),
-    "potential" (Physics: electric potential / Biology: action potential, resting potential),
-    "diffusion" (Biology: passive transport across membranes / Physics-Chemistry: diffusion of
-    gases/molecules), "current" (Physics: electric current / Biology: current used loosely for
-    flow, e.g. blood flow or transpiration stream — if no genuine second meaning applies to this
-    specific doubt, answer it directly as electric current instead of forcing a clarification),
-    "valence" (Chemistry: valence electrons/valency).
+    "potential" (Physics, Electrostatic Potential and Capacitance: electric potential / Physics,
+    Work-Energy-Power and Gravitation: potential energy — these are two different Physics
+    quantities, not the same one / Biology, Neural Control and Coordination: action potential,
+    resting potential), "diffusion" (Biology: passive transport across membranes /
+    Physics-Chemistry: diffusion of gases/molecules), "current" (Physics: electric current /
+    Biology: current used loosely for flow, e.g. blood flow or transpiration stream — if no
+    genuine second meaning applies to this specific doubt, answer it directly as electric current
+    instead of forcing a clarification), "valence" (Chemistry: valence electrons/valency),
+    "biomolecules" (Biology, Class 11 Biomolecules: carbohydrates/proteins/lipids/nucleic acids as
+    cell components / Chemistry, Class 12 Biomolecules: the same compound classes from a
+    structure/classification/reaction angle), "thermodynamics" (Chemistry, Class 11
+    Thermodynamics: enthalpy, entropy, Gibbs free energy, spontaneity of reactions / Physics,
+    Class 11 Thermodynamics: heat engines, PV diagrams, laws of thermodynamics applied to gases
+    and mechanical systems), "coordination" (Biology, Class 11 Chemical Coordination and
+    Integration: endocrine system/hormones / Biology, Class 11 Neural Control and Coordination:
+    nervous system — these are two different Biology chapters, not one / Chemistry, Class 12
+    Coordination Compounds: complex ions, ligands, coordination number), "classification"
+    (Biology, Class 11 Biological Classification: taxonomy, five-kingdom system / Chemistry,
+    Class 11 Classification of Elements and Periodicity: periodic table organization),
+    "respiration" (Biology, Class 11 Respiration in Plants: cellular respiration — glycolysis,
+    Krebs cycle, electron transport chain; despite the plant-sounding title this chapter is about
+    respiration common to all organisms / Biology, Class 11 Breathing and Exchange of Gases: the
+    mechanical breathing process — these are two different chapters students commonly conflate),
+    "transport" (Biology, Class 11 Transport in Plants: water/mineral movement via xylem/phloem /
+    Biology, Class 11 Body Fluids and Circulation: blood/circulatory transport), "reproduction"
+    (Biology, Class 12 Human Reproduction / Biology, Class 12 Sexual Reproduction in Flowering
+    Plants — two different chapters), "inheritance" and "genetics" (same two meanings for both
+    words — Biology, Class 12 Principles of Inheritance and Variation: classical/Mendelian
+    genetics / Biology, Class 12 Molecular Basis of Inheritance: DNA replication, transcription),
+    "isomerism" (Chemistry, organic chemistry — Hydrocarbons, Organic Chemistry: Some Basic
+    Principles and Techniques, Alcohols/Phenols/Ethers, Aldehydes/Ketones/Carboxylic Acids:
+    structural/stereoisomerism of organic compounds / Chemistry, Class 12 Coordination Compounds:
+    geometrical/optical isomerism of complex ions), "power" (Physics, Class 11 Work, Energy and
+    Power: mechanical power, rate of doing work / Physics, Class 12 Ray Optics and Optical
+    Instruments: power of a lens), "oxidation" and "reduction" (same three meanings for both
+    words — Chemistry, Class 11 Redox Reactions: general electron-transfer/oxidation-number rules
+    / Chemistry, Class 12 Aldehydes, Ketones and Carboxylic Acids: organic oxidation/reduction
+    reactions / Biology, Class 11 Respiration in Plants: biological oxidation — NADH, electron
+    transport chain).
 
     FORMAT AMBIGUITY — check in this order, STEP 1 before STEP 2, every time:
     STEP 1, mechanical bypass, not a judgment call: does the doubt contain an explicit
@@ -2640,12 +2674,28 @@ TOPIC_AMBIGUITY_WHITELIST = {
     "diffusion", "विसरण",
     "current", "धारा",
     "valence", "संयोजकता",
+    "biomolecules", "जैव अणु",
+    "thermodynamics", "ऊष्मागतिकी",
+    "coordination", "समन्वय",
+    "classification", "वर्गीकरण",
+    "respiration", "श्वसन",
+    "transport", "परिवहन",
+    "reproduction", "जनन", "प्रजनन",
+    "inheritance", "genetics", "वंशागति", "आनुवंशिकी",
+    "isomerism", "समावयवता",
+    "power", "शक्ति", "क्षमता",
+    "oxidation", "reduction", "ऑक्सीकरण", "अपचयन",
 }
 
 def _is_legitimate_topic_ambiguity(text: str) -> bool:
     """Same matching strategy as _is_denylisted_clarify_doubt above, for the same reason:
     rule 11 only ever legitimately fires TOPIC AMBIGUITY for a bare word doubt that IS one of
-    these six terms, not a longer question that merely mentions one. See _fuzzy_word_match."""
+    the words in TOPIC_AMBIGUITY_WHITELIST above (expanded 2026-09-21 from the original 6 to 19
+    English terms, grounded in a real NCERT-chapter cross-subject/intra-subject audit -- keep
+    this set in sync with the SYSTEM_PROMPT's own TOPIC AMBIGUITY word list, not just the prompt
+    text, or a new prompt-listed word silently never fires: the model can say AMBIGUOUS: yes all
+    it wants, this backstop still overrides it back to a normal answer unless the word is also
+    here), not a longer question that merely mentions one. See _fuzzy_word_match."""
     normalized = text.strip()
     return _fuzzy_word_match(normalized, TOPIC_AMBIGUITY_WHITELIST)
 
