@@ -6902,7 +6902,12 @@ function plainTextFromMarkdown(text) {
         const { data: { session } } = await client.auth.getSession();
         const requestBody = {
           text: questionText,
-          history: currentConversation.slice(0, -1),
+          // Trimmed to the last 2 exchanges (4 messages) before sending -- the server enforces
+          // this same cap authoritatively on its own (_TEXT_HISTORY_MAX_TURNS in stream_response,
+          // and the image/PDF path was already capped identically via _MEDIA_HISTORY_MAX_TURNS),
+          // so this is purely to avoid sending an ever-growing, mostly-discarded payload over the
+          // wire as a session gets longer -- not a second source of truth for the actual limit.
+          history: currentConversation.slice(0, -1).slice(-4),
           answer_style: localStorage.getItem('answerStyle') || 'detailed',
           student_name: document.querySelector('.profile-name')?.textContent || '',
           language: getLang(),

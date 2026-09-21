@@ -4024,6 +4024,16 @@ async def _refetch_images_as_attachments(urls: list) -> list:
         attachments.append(_RefetchedImageAttachment(base64.b64encode(resp.content).decode("ascii"), mime))
     return attachments
 
+# Text-doubt (DeepSeek/Qwen) conversation history was previously appended with NO cap at all --
+# chat.html sends the ENTIRE currentConversation as `history` on every /chat request (see its own
+# `history: currentConversation.slice(0, -1)`), and the loop that builds `messages` from it below
+# used to iterate over the whole thing. Cost/tokens-per-request grew unbounded with session
+# length, eating into the daily token cap disproportionately for longer sessions. 4 messages = the
+# last 2 exchanges (2 user + 2 assistant) -- same "last N raw history items" shape as
+# _MEDIA_HISTORY_MAX_TURNS above, just a separate constant since the image/PDF path already has
+# its own independent cap via that one and this one is scoped to the text path only.
+_TEXT_HISTORY_MAX_TURNS = 4
+
 async def stream_response(text: str, history: list = [], images: list = [], pdf: str = None, answer_style: str = "detailed", student_name: str = "", language: str = "en", user_id: str = "", personalize: bool = True, skip_cache: bool = False, ip: str = ""):
     images = (images or [])[:3]
 
@@ -4134,7 +4144,11 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
         user_message += "\n\n[A relevant NCERT diagram exists for this topic -- this is the ONLY signal that tells you whether offering a format-clarification (rule 11) is honest to offer. If this note is absent, a diagram is not available, so never offer to show one.]"
 
     messages = []
-    for msg in history:
+    # Sliced here only, for building this text-path `messages` array -- deliberately NOT
+    # reassigning `history` itself, which _detect_image_correction above and
+    # _format_recent_history_for_media in the images/pdf branches below still need the real,
+    # untruncated value for (that one already has its own separate cap, unaffected by this).
+    for msg in history[-_TEXT_HISTORY_MAX_TURNS:]:
         role = "user" if msg["role"] == "user" else "assistant"
         messages.append({"role": role, "content": msg["text"]})
 
