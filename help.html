@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Help &amp; FAQ — NEET-AI</title>
+  <link rel="icon" href="assets/favicon.ico" sizes="any" />
+  <link rel="icon" type="image/svg+xml" href="assets/logo.svg" />
+  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="./sidebar.css">
+  <link rel="stylesheet" href="./settings.css">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Inter', sans-serif; background: #0d0d0d; color: #ececec; min-height: 100vh; user-select: none; -webkit-user-select: none; }
+    .faq-question, .faq-answer, input, textarea {
+      user-select: text; -webkit-user-select: text;
+    }
+    .header { padding: 14px 24px; border-bottom: 1px solid #1a1a1a; display: flex; align-items: center; justify-content: space-between; background: #0d0d0d; position: sticky; top: 0; z-index: 10; }
+    .header-title { font-size: 15px; font-weight: 700; color: #fff; }
+    .header-title span { color: #4f8ef7; }
+
+    .container { max-width: 760px; margin: 0 auto; padding: 16px 24px 60px; }
+
+    .page-header-row { display: flex; align-items: center; gap: 14px; margin-bottom: 32px; }
+    .page-icon-badge { width: 40px; height: 40px; border-radius: 10px; background: #4f8ef7; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .page-icon-badge svg { width: 20px; height: 20px; }
+    .page-title { font-size: 22px; font-weight: 700; color: #fff; margin-bottom: 4px; }
+    .page-subtitle { font-size: 13px; color: #555; }
+
+    .faq-section { margin-bottom: 32px; }
+    .faq-section-heading { font-size: 13px; font-weight: 700; color: #4f8ef7; text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 12px; }
+
+    /* Same card language as diagram-library.html's .diagram-card / pyqbank.html's .question-card
+       (dark #111 panel, #1e1e1e border, subtle hover) so this reads as the same app, not a
+       bolted-on help widget. */
+    .faq-item { background: #111; border: 1px solid #1e1e1e; border-radius: 10px; margin-bottom: 8px; overflow: hidden; transition: border-color 0.2s ease; }
+    .faq-item:hover { border-color: #2a2a35; }
+    .faq-item.open { border-color: #4f8ef750; }
+    .faq-question { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; cursor: pointer; font-size: 14px; font-weight: 600; color: #ececec; }
+    .faq-chevron { flex-shrink: 0; width: 16px; height: 16px; color: #666; transition: transform 0.2s ease; }
+    .faq-item.open .faq-chevron { transform: rotate(180deg); color: #4f8ef7; }
+    .faq-answer-wrap { max-height: 0; overflow: hidden; transition: max-height 0.25s ease; }
+    .faq-item.open .faq-answer-wrap { max-height: 300px; }
+    .faq-answer { padding: 0 16px 16px; font-size: 13.5px; color: #999; line-height: 1.6; }
+    .faq-answer a { color: #4f8ef7; text-decoration: none; }
+    .faq-answer a:hover { text-decoration: underline; }
+
+    .faq-contact { font-size: 13.5px; color: #999; line-height: 1.6; }
+    .faq-contact a { color: #4f8ef7; text-decoration: none; }
+    .faq-contact a:hover { text-decoration: underline; }
+
+    /* Smooth fade-in on page load */
+    body { animation: pageFadeIn 0.22s ease; }
+    @keyframes pageFadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+    /* ===== LIGHT MODE ===== */
+    body.light-mode { background: #f5f5f5 !important; color: #0d0d0d !important; }
+    body.light-mode .header { background: #ffffff !important; border-color: #e3e3ea !important; }
+    body.light-mode .header-title { color: #0d0d0d !important; }
+    body.light-mode .page-title { color: #0d0d0d !important; }
+    body.light-mode .page-subtitle { color: #7a7a85 !important; }
+    body.light-mode .faq-section-heading { color: #2f6fd8 !important; }
+    body.light-mode .faq-item { background: #ffffff !important; border-color: #e3e3ea !important; box-shadow: 0 1px 3px rgba(0,0,0,0.04) !important; }
+    body.light-mode .faq-item.open { border-color: #4f8ef750 !important; }
+    body.light-mode .faq-question { color: #0d0d0d !important; }
+    body.light-mode .faq-chevron { color: #9a9aa5 !important; }
+    body.light-mode .faq-item.open .faq-chevron { color: #4f8ef7 !important; }
+    body.light-mode .faq-answer { color: #55555f !important; }
+    body.light-mode .faq-contact { color: #55555f !important; }
+  </style>
+</head>
+<body class="page-with-sidebar-layout">
+
+  <div class="sidebar">
+    <div class="sidebar-resize-handle" id="sidebarResizeHandle"></div>
+    <div class="logo">
+      <div class="logo-icon">
+        <img src="assets/logo.svg" alt="NEET-AI" width="24" height="24" />
+      </div>
+      <button onclick="toggleSidebar()" style="background:transparent;border:none;color:#666;cursor:pointer;padding:4px;border-radius:6px;display:flex;align-items:center;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg>
+      </button>
+    </div>
+
+    <button class="new-chat-btn" id="newChatBtn" onclick="window.location.href='./chat.html'">
+      <span class="icon">+</span>
+      <span data-i18n="chat.newChat">New Chat</span>
+    </button>
+
+    <div class="sidebar-nav">
+      <div class="nav-item" id="navSearch" onclick="toggleSearchChats()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <span data-i18n="chat.searchChats">Search chats</span>
+      </div>
+      <div id="searchChatsBox" style="display:none;padding:4px 8px;">
+        <input id="searchChatsInput" type="text" placeholder="Search chats..." data-i18n-placeholder="chat.searchPlaceholder" style="width:100%;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;padding:8px 12px;color:#ececec;font-size:13px;font-family:Inter,sans-serif;outline:none;" />
+      </div>
+      <div class="nav-item" id="navChats" onclick="window.location.href='./chat.html'">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        <span data-i18n="chat.chatsHeading">Chats</span>
+      </div>
+      <div class="nav-item" id="navPYQ" onclick="window.location.href='./pyqbank.html'">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+        <span data-i18n="chat.pyqBank">Question Bank</span>
+      </div>
+      <div class="nav-item" id="navSaved" onclick="window.location.href='./savedquestions.html'">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+        <span data-i18n="chat.savedQuestions">Saved Questions</span>
+      </div>
+      <div class="nav-item" id="navDiagramLibrary" onclick="window.location.href='./diagram-library.html'">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+        <span data-i18n="chat.diagramLibrary">Diagram Library</span>
+      </div>
+      <div class="nav-item" id="navMockTests" onclick="window.location.href='./mocktest.html'">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+        <span data-i18n="chat.mockTests">Mock Tests</span>
+      </div>
+      <div class="nav-item" id="navScoreboard" onclick="window.location.href='./scoreboard.html'">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 20V10"/><path d="M12 20V4"/><path d="M6 20v-6"/></svg>
+        <span data-i18n="chat.scoreboard">Scoreboard</span>
+      </div>
+    </div>
+    <div class="sidebar-divider"></div>
+    <div class="sidebar-scroll-area">
+      <div class="sidebar-label" id="pinnedLabel" style="display:none;" data-i18n="chat.pinned">Pinned</div>
+      <div class="history-list" id="pinnedList" style="display:none;"></div>
+      <div class="sidebar-label" data-i18n="chat.recent">Recent</div>
+      <div class="history-list" id="historyList"></div>
+    </div>
+
+    <div class="sidebar-bottom">
+      <div class="profile-menu" id="profileMenu" style="display:none">
+        <div class="profile-menu-email" id="profileMenuEmail" style="display:none"></div>
+        <div class="profile-menu-item" id="myPlanMenuItem" style="display:none;" onclick="alert('Coming soon!')"><span class="item-menu-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></span><span data-i18n="chat.myPlan">My Plan</span></div>
+        <div class="profile-menu-item" id="upgradePlanMenuItem" onclick="window.open('./pricing.html','_blank')"><span class="item-menu-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg></span><span data-i18n="chat.upgradePlan">Upgrade Plan</span></div>
+        <div class="profile-menu-item" onclick="document.getElementById('profileMenu').style.display='none';openSettings();"><span class="item-menu-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span><span data-i18n="chat.settings">Settings</span></div>
+        <div class="profile-menu-item" onclick="event.stopPropagation(); openProfileSubmenu('language', this)">
+          <span class="item-menu-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></span>
+          <span data-i18n="chat.language">Language</span>
+          <span class="profile-menu-chevron"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></span>
+        </div>
+        <div class="profile-menu-item" onclick="event.stopPropagation(); openProfileSubmenu('learnMore', this)">
+          <span class="item-menu-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg></span>
+          <span data-i18n="chat.learnMore">Learn More</span>
+          <span class="profile-menu-chevron"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></span>
+        </div>
+        <div class="profile-menu-divider"></div>
+        <div class="profile-menu-item logout" id="logoutBtn"><span class="item-menu-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></span><span data-i18n="chat.logout">Log out</span></div>
+      </div>
+
+      <div class="profile-btn" id="profileSection" style="display:none" onclick="event.stopPropagation(); const m=document.getElementById('profileMenu'); const willOpen=(m.style.display==='none'||m.style.display===''); if (willOpen) positionProfileMenu(); m.style.display=willOpen?'block':'none';">
+        <div class="profile-avatar">S</div>
+        <div class="profile-info">
+          <div class="profile-name">Student</div>
+          <div class="profile-plan">Free Plan</div>
+        </div>
+        <svg viewBox="0 0 24 24" class="profile-more" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>
+        </svg>
+      </div>
+
+      <div class="guest-menu" id="guestMenu" style="display:none;flex-direction:column;gap:1px;margin-bottom:6px;">
+        <div class="nav-item" onclick="window.location.href='./pricing.html'">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41L13.42 20.58a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
+          <span data-i18n="chat.seePricing">See plans and pricing</span>
+        </div>
+        <div class="nav-item" onclick="openSettings()">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          <span data-i18n="chat.settingsLabel">Settings</span>
+        </div>
+        <div class="nav-item active" id="navHelp">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          <span data-i18n="chat.help">Help</span>
+        </div>
+        <div class="sidebar-divider" style="margin:6px 0;"></div>
+      </div>
+
+      <div class="guest-avatar-btn" id="guestAvatarBtn" style="display:none;" onclick="window.location.href='./login.html'" title="Log in" data-i18n-title="chat.login">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+      </div>
+
+      <div class="login-nudge" id="loginNudge" style="display:none">
+        <div class="nudge-text">
+          <strong data-i18n="chat.guestTitle">Get answers tailored to you</strong>
+          <span data-i18n="chat.guestSubtitle">Log in to save chats and track progress.</span>
+        </div>
+        <button class="nudge-login-btn" onclick="window.location.href='./login.html'" data-i18n="chat.login">Log in</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="page-main-content">
+  <div class="header">
+    <div style="display:flex;align-items:center;gap:16px;">
+      <span class="header-title">NEET<span>-AI</span> Help &amp; FAQ</span>
+    </div>
+  </div>
+
+  <div class="container">
+    <div class="page-header-row">
+      <div class="page-icon-badge">
+        <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      </div>
+      <div>
+        <div class="page-title">Help &amp; FAQ</div>
+        <div class="page-subtitle">Answers to common questions about NEET-AI</div>
+      </div>
+    </div>
+
+    <div id="faqRoot"></div>
+
+    <div class="faq-section">
+      <div class="faq-section-heading">Need further help?</div>
+      <div class="faq-contact">Reach out at <a href="mailto:mustafatasscr7@gmail.com">mustafatasscr7@gmail.com</a> and we'll get back to you.</div>
+    </div>
+  </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="./theme.js"></script>
+  <script src="./i18n.js"></script>
+  <script>
+    // Needed for sidebar.js/settings.js's own auth-state checks (client.auth.getSession(), etc)
+    // -- every other page that loads those two shared scripts defines this first; help.html has
+    // no auth-gated functionality of its own, but omitting this throws a ReferenceError the
+    // moment sidebar.js runs, since it's a bare global reference, not an optional one.
+    const SUPABASE_URL = 'https://hvhnfttrfouajlyhvunq.supabase.co';
+    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh2aG5mdHRyZm91YWpseWh2dW5xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg5NDI1NTIsImV4cCI6MjA5NDUxODU1Mn0.8RaSu5yiTpQCEUGKrFO2y6oiRXSqdBehIz933j9Z7WA';
+    const { createClient } = supabase;
+    const client = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+    // Plain content data, not data-i18n -- this FAQ text is English-only for now, matching
+    // privacy.html/terms.html's own precedent (the other informational, non-product pages in this
+    // app), rather than the rest of the product UI which is bilingual via the dictionary.
+    const FAQ_SECTIONS = [
+      {
+        heading: 'Getting Started',
+        items: [
+          { q: 'How do I create an account?', a: 'Sign up with your email address. A phone number can optionally be added to your profile.' },
+          { q: 'Is NEET-AI free to use?', a: 'Yes — every account starts with free usage. For continued or expanded access, Pro and Max plans are available.' },
+        ]
+      },
+      {
+        heading: 'Using NEET-AI',
+        items: [
+          { q: 'How reliable are the answers?', a: 'Content is built to align closely with the NCERT syllabus. NEET-AI is designed to support your preparation, not replace your textbooks or teachers — we recommend cross-checking anything critical, especially closer to exams.' },
+          { q: 'Can I ask questions in Hindi?', a: 'Yes. Text, image, and PDF-based doubts are all supported in Hindi.' },
+          { q: 'Can I upload a photo of a question instead of typing it?', a: 'Yes — simply upload an image or PDF, and ask your doubt directly.' },
+        ]
+      },
+      {
+        heading: 'Features',
+        items: [
+          { q: 'What subjects does NEET-AI cover?', a: 'Biology, Physics, and Chemistry.' },
+          { q: 'What is the Question Bank?', a: 'A collection of previous years\' NEET questions, filterable by subject, chapter, and year.' },
+          { q: 'What is the Diagram Library?', a: 'A curated set of important diagrams you can browse and ask follow-up questions about directly.' },
+        ]
+      },
+      {
+        heading: 'Account & Privacy',
+        items: [
+          { q: 'Is my data secure?', a: 'Please refer to our <a href="./privacy.html">Privacy Policy</a> for full details.' },
+          { q: 'Can I request my account or data be deleted?', a: 'Yes — contact us and we\'ll process your request.' },
+        ]
+      },
+    ];
+
+    function renderFaq() {
+      const root = document.getElementById('faqRoot');
+      root.innerHTML = FAQ_SECTIONS.map((section, si) => `
+        <div class="faq-section">
+          <div class="faq-section-heading">${section.heading}</div>
+          ${section.items.map((item, ii) => `
+            <div class="faq-item" id="faq-${si}-${ii}">
+              <div class="faq-question" onclick="toggleFaqItem(${si}, ${ii})">
+                <span>${item.q}</span>
+                <svg class="faq-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+              </div>
+              <div class="faq-answer-wrap">
+                <div class="faq-answer">${item.a}</div>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      `).join('');
+    }
+
+    // Collapsed by default, per spec -- toggling one item doesn't affect any other, so several
+    // can be open at once (a plain expand/collapse list, not a single-open accordion).
+    function toggleFaqItem(si, ii) {
+      document.getElementById(`faq-${si}-${ii}`).classList.toggle('open');
+    }
+
+    renderFaq();
+  </script>
+  <script src="./confirm-modal.js"></script>
+  <script src="./sidebar.js"></script>
+  <script src="./settings.js"></script>
+</body>
+</html>
