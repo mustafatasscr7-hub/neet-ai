@@ -6381,10 +6381,16 @@ async def admin_backfill_difficulty(table: str = "pyq", limit: int = 200, _: Non
 # Every click after that (any student, any time) is a pure DB read, no DeepSeek call.
 
 def solve_correct_answer(question: str, option_a: str, option_b: str, option_c: str, option_d: str):
-    """Single DeepSeek call determining which option is correct. Returns (letter, tokens_used)
-    where letter is exactly 'a'/'b'/'c'/'d', or (None, tokens_used) if the reply can't be parsed
-    -- caller must leave correct_answer blank in that case so it's retried next time rather than
-    permanently caching a wrong guess."""
+    """Single DeepSeek call determining which option is correct. Returns
+    (letter, cache_miss_tokens, cache_hit_tokens, output_tokens) where letter is exactly
+    'a'/'b'/'c'/'d', or (None, cache_miss_tokens, cache_hit_tokens, output_tokens) if the reply
+    can't be parsed -- caller must leave correct_answer blank in that case so it's retried next
+    time rather than permanently caching a wrong guess. On a hard failure (the DeepSeek call
+    itself raises) this is (None, 0, 0, 0) -- nothing was spent, nothing to log.
+
+    Same shape as classify_difficulty() (see its own comment) -- three separate token counts, not
+    one combined total, so the caller can log real per-call cost via log_provider_usage/
+    _deepseek_cost. This function itself has no endpoint/user_id context to log with."""
     try:
         response = deepseek_client.messages.create(
             model="deepseek-v4-flash",
@@ -6399,18 +6405,25 @@ def solve_correct_answer(question: str, option_a: str, option_b: str, option_c: 
             messages=[{"role": "user", "content": f"Question: {question}\n(A) {option_a}\n(B) {option_b}\n(C) {option_c}\n(D) {option_d}"}]
         )
         raw = response.content[0].text.strip().upper()
-        tokens = response.usage.input_tokens + response.usage.output_tokens
+        usage = response.usage
+        cache_miss_tokens = usage.input_tokens + (usage.cache_creation_input_tokens or 0)
+        cache_hit_tokens = usage.cache_read_input_tokens or 0
+        output_tokens = usage.output_tokens
         for letter in ("A", "B", "C", "D"):
             if letter in raw:
-                return letter.lower(), tokens
+                return letter.lower(), cache_miss_tokens, cache_hit_tokens, output_tokens
         print(f"SOLVE ANSWER: unparseable reply {raw!r}")
-        return None, tokens
+        return None, cache_miss_tokens, cache_hit_tokens, output_tokens
     except Exception as e:
         print(f"SOLVE ANSWER ERROR: {e}")
-        return None, 0
+        return None, 0, 0, 0
 
 class EnsureCorrectAnswerRequest(BaseModel):
     pyq_id: str
+    # Optional purely for cost-attribution logging (see log_provider_usage in the endpoint below)
+    # -- never required, never blocks the request if the client doesn't send it. Same "" -> None
+    # handling as ClassifyDifficultyRequest.user_id.
+    user_id: str = ""
 
 @app.post("/ensure-correct-answer")
 async def ensure_correct_answer_endpoint(req: EnsureCorrectAnswerRequest, _: None = Depends(rate_limiter(30, 60))):
@@ -6435,10 +6448,21 @@ async def ensure_correct_answer_endpoint(req: EnsureCorrectAnswerRequest, _: Non
         return {"correct_answer": row["correct_answer"]}
 
     loop = asyncio.get_event_loop()
-    label, _tokens = await loop.run_in_executor(
+    label, cache_miss, cache_hit, output_tokens = await loop.run_in_executor(
         None, solve_correct_answer, row["question"], row.get("option_a", ""),
         row.get("option_b", ""), row.get("option_c", ""), row.get("option_d", "")
     )
+    # Real cost logged regardless of whether the reply parsed cleanly -- a real DeepSeek call was
+    # made either way, and this must run before the "could not determine" early return below or
+    # an unparseable reply's spend would go right back to being unlogged. No budget/cap check on
+    # purpose: one-time cost per question, bounded by question-bank size, not a per-student risk.
+    if cache_miss or cache_hit or output_tokens:
+        is_peak = _is_deepseek_peak_hour()
+        cost = _deepseek_cost(cache_miss, cache_hit, output_tokens, is_peak)
+        try:
+            await log_provider_usage("deepseek-v4-flash", is_peak, cache_miss + cache_hit, output_tokens, cost, "/ensure-correct-answer", req.user_id)
+        except Exception:
+            pass
     if not label:
         return {"error": "Could not determine the answer"}
 
@@ -6493,8 +6517,19 @@ async def admin_pyq_backfill_correct_answer(limit: int = 200, _: None = Depends(
     resolved_count = 0
     failed_count = 0
     total_tokens = 0
-    for row, (label, tokens) in zip(rows, solved):
-        total_tokens += tokens
+    # Same real per-call logging as /ensure-correct-answer above -- previously this only returned
+    # tokens_used in the response body, never a table. No user_id -- admin-gated sweep, not a
+    # specific student's request, so it logs as null (same "" -> None handling log_provider_usage
+    # already does).
+    is_peak = _is_deepseek_peak_hour()
+    for row, (label, cache_miss, cache_hit, output_tokens) in zip(rows, solved):
+        total_tokens += cache_miss + cache_hit + output_tokens
+        if cache_miss or cache_hit or output_tokens:
+            cost = _deepseek_cost(cache_miss, cache_hit, output_tokens, is_peak)
+            try:
+                await log_provider_usage("deepseek-v4-flash", is_peak, cache_miss + cache_hit, output_tokens, cost, "/ensure-correct-answer", "")
+            except Exception:
+                pass
         if label:
             try:
                 save_resp = await async_client.patch(
