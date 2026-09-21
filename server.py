@@ -4193,20 +4193,30 @@ IMPORTANT -- BE CONCISE:
         # no reliable way to detect that from Python before the image has even been read), so a
         # non-MCQ image/PDF doubt still gets the full normal answer format below, untouched.
         # Scoped to images/pdf only -- this never reaches DeepSeek/Qwen's text-doubt SYSTEM_PROMPT,
-        # so a student typing/pasting an MCQ as plain text is unaffected. Deliberately starts the
-        # literal word "Answer:" (matching the format the rest of this prompt already uses for
-        # that section) so _force_citation_when_no_retrieval's own "Answer:" passthrough check
-        # resolves it immediately rather than buffering it as an unrecognized shape.
+        # so a student typing/pasting an MCQ as plain text is unaffected.
+        #
+        # v1 of this (commit 8145551) suppressed the explanation entirely -- just the answer,
+        # nothing else. That overshot: the explanation is still wanted, just after the answer
+        # instead of after paragraphs of buildup. This version keeps the full normal format
+        # (VISUAL_INTENT, NEET Importance, Chapter, Key Points, Quick Recall all unchanged) and
+        # only changes what the Answer: section's own first line says -- it now doubles as the
+        # section heading AND the answer statement ("Answer: C) Mitochondria", not a bare
+        # "Answer:" header followed by one), with the same explanation as before immediately
+        # after it. Still starts with the literal word "Answer:" either way, so
+        # _force_citation_when_no_retrieval's own "Answer:" passthrough check still resolves it
+        # immediately rather than buffering it as an unrecognized shape.
         mcq_context = """
 
-IMPORTANT -- MULTIPLE-CHOICE QUESTION OVERRIDE:
+IMPORTANT -- MULTIPLE-CHOICE QUESTION ANSWER-FIRST RULE:
 If the question shown includes multiple-choice options (e.g. labeled A/B/C/D, 1/2/3/4, or similar),
-ignore every other formatting instruction above. Your ENTIRE response must be ONLY the correct
-option, stated immediately as the very first thing, in this exact shape:
+follow the exact same format as always (VISUAL_INTENT, NEET Importance, Chapter, Key Points, Quick
+Recall all still required, same length and depth as any other answer) with ONE change: the Answer:
+section must open with the correct option stated inline in its own heading line, in this exact
+shape, instead of a bare "Answer:" header:
 Answer: <letter>) <the option's text or value>
-Do not add NEET Importance, a Chapter line, an explanation, Key Points, or a Quick Recall line --
-nothing before or after the Answer line. If there are no multiple-choice options in the question,
-ignore this entire instruction and answer normally per the format above.""" if (images or pdf) else ""
+Then continue directly into the full explanation on the lines after it, exactly as you normally
+would -- do not shorten, skip, or omit anything else. If there are no multiple-choice options in
+the question, ignore this instruction entirely and use the plain "Answer:" header as usual.""" if (images or pdf) else ""
         full_system = SYSTEM_PROMPT + name_context + style_context + lang_context + student_context + graph_context + conciseness_context + mcq_context
         if _is_mnemonic_request(text):
             # Applied here (before the images/pdf/else branch split) so it reaches whichever
