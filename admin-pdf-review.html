@@ -117,6 +117,7 @@
   .q-diagram-slot .diag-status { font-size: 11px; color: #666; margin-top: 6px; }
   .diag-paste-zone { border: 1px dashed #333; border-radius: 6px; padding: 6px 8px; }
   .diag-paste-zone:focus { outline: none; border-color: #4f8ef7; }
+  .diag-paste-zone.drag-over { border-color: #4f8ef7; background: rgba(79,142,247,0.08); }
   .diag-paste-hint { font-size: 10px; color: #555; margin-top: 4px; }
 
   .q-dup-warning { font-size: 12px; margin-top: 10px; padding: 8px 10px; border-radius: 6px; display: none; }
@@ -1757,9 +1758,9 @@
 
       <div class="q-diagram-slot" id="diagram-slot-${b.id}" style="display:${b.has_diagram ? 'block' : 'none'}">
         <label style="font-size:10px;color:#666;text-transform:uppercase;letter-spacing:0.04em;display:block;margin-bottom:5px;">Question diagram</label>
-        <div class="diag-paste-zone" tabindex="0" onpaste="handleDiagramPaste(event, '${b.id}')">
+        <div class="diag-paste-zone" tabindex="0" onpaste="handleDiagramPaste(event, '${b.id}')" ondragenter="handleDiagZoneDragOver(event)" ondragover="handleDiagZoneDragOver(event)" ondragleave="handleDiagZoneDragLeave(event)" ondrop="handleDiagramDrop(event, '${b.id}')">
           <input type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" id="diagram-file-${b.id}" onchange="uploadDiagram('${b.id}')"/>
-          <div class="diag-paste-hint">or click here and paste (Ctrl+V) an image</div>
+          <div class="diag-paste-hint">or click here and paste (Ctrl+V), or drag an image in</div>
         </div>
         <div class="diag-status" id="diagram-status-${b.id}"></div>
         <div id="diagram-preview-${b.id}">${b.diagram_url ? `<img src="${escapeHtml(b.diagram_url)}"><br><button type="button" class="danger-link" onclick="removeDiagram('${b.id}')">✕ Remove photo</button>` : ''}</div>
@@ -1771,9 +1772,9 @@
           ${['a', 'b', 'c', 'd'].map(opt => `
           <div>
             <label style="font-size:10px;color:#888;">Option ${opt.toUpperCase()}</label>
-            <div class="diag-paste-zone" tabindex="0" onpaste="handleOptionDiagramPaste(event, '${b.id}', '${opt}')">
+            <div class="diag-paste-zone" tabindex="0" onpaste="handleOptionDiagramPaste(event, '${b.id}', '${opt}')" ondragenter="handleDiagZoneDragOver(event)" ondragover="handleDiagZoneDragOver(event)" ondragleave="handleDiagZoneDragLeave(event)" ondrop="handleOptionDiagramDrop(event, '${b.id}', '${opt}')">
               <input type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" id="opt-diagram-file-${opt}-${b.id}" onchange="uploadOptionDiagram('${b.id}', '${opt}')"/>
-              <div class="diag-paste-hint">or click + paste (Ctrl+V)</div>
+              <div class="diag-paste-hint">or click + paste (Ctrl+V) or drag in</div>
             </div>
             <div class="diag-status" id="opt-diagram-status-${opt}-${b.id}"></div>
             <div id="opt-diagram-preview-${opt}-${b.id}">${b['option_' + opt + '_diagram_url'] ? `<img src="${escapeHtml(b['option_' + opt + '_diagram_url'])}"><br><button type="button" class="danger-link" onclick="removeOptionDiagram('${b.id}','${opt}')">✕ Remove photo</button>` : ''}</div>
@@ -2074,6 +2075,55 @@
       document.getElementById('diagram-preview-' + id).innerHTML = `<img src="${escapeHtml(url)}"><br><button type="button" class="danger-link" onclick="removeDiagram('${id}')">✕ Remove photo</button>`;
     });
   }
+
+  // dragenter/dragover MUST call preventDefault() (a browser drop target is opt-in) --
+  // without it, the browser's own default for a dropped file wins: navigating the tab to/
+  // opening the raw image instead of ever firing our drop handler at all. stopPropagation()
+  // keeps it from also re-triggering the document-level safety net below on the same drag.
+  function handleDiagZoneDragOver(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.classList.add('drag-over');
+  }
+
+  function handleDiagZoneDragLeave(event) {
+    event.currentTarget.classList.remove('drag-over');
+  }
+
+  // Feeds the dropped file into the exact same fileInput + onchange handler "Choose File"
+  // already uses (via a synthesized DataTransfer, since fileInput.files can't be assigned an
+  // array directly) rather than duplicating uploadImageFile's call/preview logic here.
+  function handleDiagramDrop(event, id) {
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.classList.remove('drag-over');
+    const file = event.dataTransfer.files && event.dataTransfer.files[0];
+    if (!file) return;
+    const fileInput = document.getElementById('diagram-file-' + id);
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    fileInput.files = dt.files;
+    uploadDiagram(id);
+  }
+
+  function handleOptionDiagramDrop(event, id, opt) {
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.classList.remove('drag-over');
+    const file = event.dataTransfer.files && event.dataTransfer.files[0];
+    if (!file) return;
+    const fileInput = document.getElementById(`opt-diagram-file-${opt}-${id}`);
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    fileInput.files = dt.files;
+    uploadOptionDiagram(id, opt);
+  }
+
+  // Safety net for a file dropped anywhere on the page OUTSIDE the exact dropzone boundary --
+  // without this, the browser's default (navigate the tab to the file) still fires there even
+  // though the zones above handle drops correctly on-target.
+  window.addEventListener('dragover', (e) => e.preventDefault());
+  window.addEventListener('drop', (e) => e.preventDefault());
 
   function removeDiagram(id) {
     const block = blocks[findBlockIndex(id)];
