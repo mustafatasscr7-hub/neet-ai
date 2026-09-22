@@ -4429,6 +4429,32 @@ let selectedImages = [];
       const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
       if (role === 'ai') {
+        // A stored CLARIFY_TYPE/QUESTION/OPTION block (server.py SYSTEM_PROMPT rule 11) only
+        // ever hit the plain markdown branch below on reload/chat-switch -- streamAIResponse's
+        // own isClarification branch (which calls this exact renderClarifyUI) only runs on the
+        // FIRST live render, and nothing stored an isClarification flag on the message object
+        // for a reload to check. The result: the buttons rendered fine until you switched chats
+        // and back, then showed the raw "CLARIFY_TYPE: format / QUESTION: ... / OPTION: ..."
+        // text literally. The stored text always starts with this exact literal marker (it's
+        // what's left in fullText after the AMBIGUOUS: yes first line is stripped during
+        // streaming -- see the isClarification branch there), and an answer never starts with
+        // it otherwise, so it's a safe, unambiguous signal to detect on reload.
+        const clarifyInfo = /^\s*CLARIFY_TYPE:/i.test(text) ? parseClarification(text) : null;
+        if (clarifyInfo && clarifyInfo.valid) {
+          // Mirrors the live isClarification branch's own DOM shape exactly: just the
+          // .bubble-text wrapper containing the clarify block, no metaHtml/diagram/PYQ buttons,
+          // no actions row -- a clarify turn never gets those live either (see the "clarify
+          // turns never get an actions row" comment in streamAIResponse's own retryTarget branch).
+          bubble.innerHTML = '<div class="bubble-text"></div>';
+          renderClarifyUI(bubble, bubble.querySelector('.bubble-text'), clarifyInfo, userQuestion || '');
+          contentWrapper.appendChild(bubble);
+          if (avatar) row.appendChild(avatar);
+          row.appendChild(contentWrapper);
+          chatWindow.appendChild(row);
+          scrollBottom();
+          return bubble;
+        }
+
         const { cleanText, metaHtml, chapterText } = extractAnswerMeta(text);
         // Wrapped in the same .bubble-text container the live streaming path uses (previously
         // this wrote metaHtml+content straight into `bubble` with no wrapper) -- purely
