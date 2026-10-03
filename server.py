@@ -3143,23 +3143,26 @@ async def _stream_gemini_media(media_parts: list, doubt_type: str, media_files: 
             # finish. Gemini reports usage_metadata cumulatively on every streamed chunk, so the last
             # chunk seen (even a partial stream) already holds the running totals -- no separate "final
             # message" fetch needed the way Anthropic's SDK requires.
+            #
+            # NOT a plain `await` -- confirmed live (via stream_solve_response_with_diagram's own
+            # real mid-stream-disconnect test, the identical pattern) that a plain await here still
+            # loses the row: a client disconnect can cancel this request's own asyncio Task, and
+            # that cancellation can interrupt an in-progress `await` sitting in this finally block
+            # before the Supabase POST actually completes, even though the finally block itself
+            # did start running (the PROVIDER USAGE print line fires; the row never lands).
+            # asyncio.create_task detaches each write from this task entirely -- it keeps running
+            # on the event loop independently, so it finishes even after this generator has been
+            # torn down. log_provider_usage/log_token_usage/log_media_doubt already swallow their
+            # own failures internally (see each one's own try/except), so nothing here needs to
+            # await or catch anything.
             if last_usage:
                 cache_hit_tokens = last_usage.cached_content_token_count or 0
                 cache_miss_tokens = max(0, last_usage.prompt_token_count - cache_hit_tokens)
                 cost = _gemini_cost(cache_miss_tokens, cache_hit_tokens, last_usage.candidates_token_count)
-                try:
-                    await log_provider_usage("gemini-3.5-flash-lite", False, last_usage.prompt_token_count, last_usage.candidates_token_count, cost, "/chat", user_id)
-                except Exception:
-                    pass
-                try:
-                    await log_token_usage(user_id, last_usage.prompt_token_count + last_usage.candidates_token_count, ip)
-                except Exception:
-                    pass
+                asyncio.create_task(log_provider_usage("gemini-3.5-flash-lite", False, last_usage.prompt_token_count, last_usage.candidates_token_count, cost, "/chat", user_id))
+                asyncio.create_task(log_token_usage(user_id, last_usage.prompt_token_count + last_usage.candidates_token_count, ip))
             if full_answer:
-                try:
-                    await log_media_doubt(user_id, ip, doubt_type, media_files, full_answer)
-                except Exception:
-                    pass
+                asyncio.create_task(log_media_doubt(user_id, ip, doubt_type, media_files, full_answer))
     except Exception as e:
         await _alert_all_providers_down(f"/chat ({doubt_type})", e, user_id)
         raise
@@ -4735,9 +4738,9 @@ async def stream_solve_response_with_diagram(req: SolveRequest, cached_solution,
                     last_usage = chunk.usage_metadata
         finally:
             # Log on the way out (including on an early client disconnect) rather than only on a
-            # clean finish -- same intent as _stream_gemini_media's own fix for the identical bug
-            # (see its comment), but NOT a plain `await` the way that one does it: confirmed live
-            # via a real mid-stream-disconnect test that a plain await here still loses the row --
+            # clean finish -- same asyncio.create_task fix _stream_gemini_media now also uses (see
+            # its comment; this function's own fix came first and was the one live-disconnect-
+            # tested to confirm a plain await still loses the row) -- NOT a plain `await`:
             # a client disconnect can cancel the request's own asyncio Task, and that cancellation
             # can interrupt an in-progress `await` sitting in this finally block before the
             # Supabase POST actually completes, even though the finally block itself did start
