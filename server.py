@@ -3437,8 +3437,18 @@ async def _update_running_summary(prev_summary: str, dropped_question: str, drop
         cache_miss = usage.input_tokens + (usage.cache_creation_input_tokens or 0)
         cache_hit = usage.cache_read_input_tokens or 0
         cost = _deepseek_cost(cache_miss, cache_hit, usage.output_tokens, is_peak)
+        # stop_reason == "max_tokens" means the generation was CUT OFF by the cap above, not a
+        # natural stop -- same failure mode as the original replace-instead-of-merge bug (fix
+        # 1c8c850), just mechanical instead of a prompt-following lapse: whatever didn't fit got
+        # silently dropped. Still used as-is below (no retry, no behavior change -- fail-safe
+        # stays exactly as it was) -- this only makes the event visible instead of invisible, via
+        # a distinct endpoint tag so it's queryable in provider_usage_log without a schema
+        # change, same user_id/created_at columns it already has giving full traceability.
+        truncated = getattr(resp, "stop_reason", None) == "max_tokens"
+        if truncated:
+            print(f"TRUNCATED RUNNING SUMMARY: user_id={user_id or 'unknown'} output_tokens={usage.output_tokens} (hit max_tokens cap -- summary was cut off mid-generation, facts may be missing)", flush=True)
         try:
-            await log_provider_usage("deepseek-v4-flash", is_peak, cache_miss + cache_hit, usage.output_tokens, cost, "/chat-summary", user_id)
+            await log_provider_usage("deepseek-v4-flash", is_peak, cache_miss + cache_hit, usage.output_tokens, cost, "/chat-summary-truncated" if truncated else "/chat-summary", user_id)
         except Exception:
             pass
         return new_summary
