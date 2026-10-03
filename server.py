@@ -3288,18 +3288,21 @@ async def _stream_qwen(system: str, messages: list, user_id: str, ip: str, endpo
         # Best-effort even on a mid-stream failure -- whatever tokens were actually used still
         # get logged/counted against the student's daily budget; log_token_usage() itself is a
         # no-op for tokens<=0, so a failure before any usage chunk arrived costs nothing extra.
+        #
+        # NOT a plain `await` -- same asyncio.create_task fix as _stream_gemini_media (see its
+        # comment), confirmed live here too: a client disconnect can cancel this request's own
+        # asyncio Task, and that cancellation can interrupt an in-progress `await` sitting in
+        # this finally block before it completes, even though the finally block itself did start
+        # running. create_task detaches each write from this task entirely, so it finishes even
+        # after this generator has been torn down. log_provider_usage/log_token_usage_with_bonus
+        # already swallow their own failures internally, so nothing here needs to await or catch
+        # anything.
         if input_tokens or output_tokens:
             cache_miss_tokens = max(0, input_tokens - cache_hit_tokens)
             cost = _qwen_cost(cache_miss_tokens, cache_hit_tokens, output_tokens)
-            try:
-                await log_provider_usage("qwen-flash", True, input_tokens, output_tokens, cost, endpoint, user_id)
-            except Exception:
-                pass
+            asyncio.create_task(log_provider_usage("qwen-flash", True, input_tokens, output_tokens, cost, endpoint, user_id))
             if billing_context is None or billing_context.get("bill", True):
-                try:
-                    await log_token_usage_with_bonus(user_id, input_tokens + output_tokens, ip)
-                except Exception:
-                    pass
+                asyncio.create_task(log_token_usage_with_bonus(user_id, input_tokens + output_tokens, ip))
 
 async def _stream_deepseek(system: str, messages: list, user_id: str, ip: str, is_peak: bool, endpoint: str, billing_context: dict = None):
     """The default off-peak provider, and also the peak-window fallback when Qwen is
@@ -3318,6 +3321,13 @@ async def _stream_deepseek(system: str, messages: list, user_id: str, ip: str, i
                 yield text_chunk
         finally:
             try:
+                # get_final_message() genuinely needs to stay a plain await -- it's the only way
+                # to resolve `usage`, which the create_task calls below need as an argument
+                # before they can even be scheduled. Confirmed live that awaiting it first does
+                # NOT shield it from cancellation either (the whole inner try can still be
+                # abandoned here on a disconnect) -- but there's no way around awaiting it
+                # directly regardless, since usage must be known synchronously before the actual
+                # DB writes can be detached via create_task.
                 final_message = await stream.get_final_message()
                 usage = final_message.usage
                 # cache_creation_input_tokens (writing a fresh cache entry) is billed at the same
@@ -3326,12 +3336,15 @@ async def _stream_deepseek(system: str, messages: list, user_id: str, ip: str, i
                 cache_miss_tokens = usage.input_tokens + (usage.cache_creation_input_tokens or 0)
                 cache_hit_tokens = usage.cache_read_input_tokens or 0
                 cost = _deepseek_cost(cache_miss_tokens, cache_hit_tokens, usage.output_tokens, is_peak)
-                try:
-                    await log_provider_usage("deepseek-v4-flash", is_peak, cache_miss_tokens + cache_hit_tokens, usage.output_tokens, cost, endpoint, user_id)
-                except Exception:
-                    pass
+                # NOT a plain `await` from here on -- same asyncio.create_task fix as
+                # _stream_gemini_media/_stream_qwen (see their comments), confirmed live for this
+                # function too: a disconnect can cancel an in-progress await sitting in this
+                # finally block before it completes. log_provider_usage/log_token_usage_with_bonus
+                # already swallow their own failures internally, so nothing here needs to await or
+                # catch anything.
+                asyncio.create_task(log_provider_usage("deepseek-v4-flash", is_peak, cache_miss_tokens + cache_hit_tokens, usage.output_tokens, cost, endpoint, user_id))
                 if billing_context is None or billing_context.get("bill", True):
-                    await log_token_usage_with_bonus(user_id, usage.input_tokens + usage.output_tokens, ip)
+                    asyncio.create_task(log_token_usage_with_bonus(user_id, usage.input_tokens + usage.output_tokens, ip))
             except Exception:
                 pass
 
