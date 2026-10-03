@@ -3384,10 +3384,22 @@ async def _stream_deepseek(system: str, messages: list, user_id: str, ip: str, i
 # critical path, async didn't move it at all). See that test's own report for the full numbers.
 _RUNNING_SUMMARY_SYSTEM = """You are maintaining a running summary of a tutoring conversation between a NEET \
 student and a tutor. You will be given the PREVIOUS SUMMARY (if any) and a NEW EXCHANGE that just \
-fell out of the active context window and needs to be folded in. Produce an UPDATED summary \
-covering everything discussed so far (the previous summary's content PLUS the new exchange), in \
-1-3 sentences total. Be concise -- capture only the core topic/concept discussed, not full detail, \
-not direct quotes. Output ONLY the updated summary text, nothing else -- no preamble, no labels."""
+fell out of the active context window and needs to be folded in.
+
+Produce an UPDATED summary that is STRICTLY ADDITIVE, never a replacement: it must retain every \
+single specific fact already present in the PREVIOUS SUMMARY -- every number, named value, \
+formula, unit, or named term (e.g. "72 bpm", "SA node", "9:3:3:1 ratio", "k = 1/(4*pi*eps0)") -- \
+PLUS the new exchange's own specific facts. Dropping a fact that was already in the previous \
+summary is a worse failure than writing a longer summary -- never do it just to save space.
+
+If you need to save space, compress the PHRASING (shorter sentences, fewer connecting words, \
+denser listing of facts), never the FACTS themselves. There is no fixed sentence limit -- use as \
+many sentences as it takes to keep every fact from the previous summary plus the new one, while \
+staying as concise as that allows (often 2-5 sentences, more if several exchanges have already \
+been folded in). Do not pad with restated context or praise -- every sentence should be carrying \
+facts, not filler.
+
+Output ONLY the updated summary text, nothing else -- no preamble, no labels."""
 
 async def _update_running_summary(prev_summary: str, dropped_question: str, dropped_answer: str, user_id: str, ip: str) -> Optional[str]:
     """Fire-and-forget (always called via asyncio.create_task, never awaited before the main
@@ -3403,11 +3415,19 @@ async def _update_running_summary(prev_summary: str, dropped_question: str, drop
         user_msg = (
             f"PREVIOUS SUMMARY: {prev_summary or '(none yet -- this is the first exchange to summarize)'}\n\n"
             f"NEW EXCHANGE TO FOLD IN:\nStudent: {dropped_question}\nTutor: {dropped_answer[:800]}\n\n"
-            f"Updated running summary (1-3 sentences):"
+            f"Updated running summary (keep EVERY fact from the previous summary, plus this exchange's own facts):"
         )
         is_peak = _is_deepseek_peak_hour()
+        # Bumped from 150 -- the old 1-3-sentence cap is gone (see _RUNNING_SUMMARY_SYSTEM's own
+        # comment on why: it was the thing nudging the model to drop old facts to stay short), so
+        # a summary that's already folded in several exchanges needs more headroom to keep every
+        # fact without getting cut off mid-sentence. 300 was tried first and confirmed live to
+        # not always be enough: a real 3rd-overflow call in a 6-turn test session landed at
+        # output_tokens=300 exactly (the cap itself), the classic signature of truncation rather
+        # than a generation that happened to stop there on its own -- a cut-off summary drops
+        # facts the exact same way the original bug did, just mechanically instead of by choice.
         resp = await deepseek_async_client.messages.create(
-            model="deepseek-v4-flash", max_tokens=150, thinking={"type": "disabled"},
+            model="deepseek-v4-flash", max_tokens=500, thinking={"type": "disabled"},
             system=_RUNNING_SUMMARY_SYSTEM, messages=[{"role": "user", "content": user_msg}],
         )
         new_summary = "".join(b.text for b in resp.content if hasattr(b, "text")).strip()
