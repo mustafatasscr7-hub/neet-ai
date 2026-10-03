@@ -737,6 +737,17 @@ class Message(BaseModel):
     personalize: bool = True
     skip_cache: bool = False
     chapter: str = ""
+    # Running-summary layer on top of the sliding-2 window (text doubts only) -- the client is
+    # the only thing that retains the FULL conversation, so it (not the server) is the one that
+    # knows both the current summary text and which single exchange is newly falling out of the
+    # sliding-2 window this turn. running_summary is echoed back unchanged every turn until the
+    # server actually updates it (see stream_response's trailing RUNNING_SUMMARY marker).
+    # dropped_question/dropped_answer are empty whenever nothing has fallen out of the window
+    # yet (short conversations, or history_exchanges_included < 3) -- their presence is what
+    # tells the server a summarization call is actually needed this turn.
+    running_summary: str = ""
+    dropped_question: str = ""
+    dropped_answer: str = ""
 
 class PhoneOtpRequest(BaseModel):
     phone: str
@@ -2860,6 +2871,23 @@ SYSTEM_PROMPT_NO_CLARIFY = (
 # whole text -- any real typed question alongside an image still gets a real NCERT search.
 IMAGE_ONLY_PLACEHOLDER_TEXT = "Describe this image and answer any NEET related content in it."
 
+# Out-of-band trailer for the running-summary layer -- appended (never interleaved) as the very
+# LAST thing in a /chat text-doubt stream, strictly AFTER the real answer content, only when the
+# background summarization call (see _update_running_summary) actually produced a new summary
+# this turn. NUL bytes can never appear in real model-generated text, so this prefix is safe to
+# detect without any risk of colliding with genuine answer content -- same design precedent as
+# this file's other embedded stream markers (VISUAL_INTENT, AMBIGUOUS, DOUBT_TYPE), just at the
+# tail instead of the head. chat.html holds back a small constant lookback buffer while
+# streaming specifically to catch this prefix before ever rendering it; see its own comment for
+# why a trailer (not a response header) is what carries this across request boundaries, and
+# why nothing is appended at all when there's no update to report.
+RUNNING_SUMMARY_MARKER_PREFIX = "\n\x00RSUM\x00"
+RUNNING_SUMMARY_MARKER_SUFFIX = "\x00"
+
+def _encode_running_summary_marker(new_summary: str) -> str:
+    encoded = base64.b64encode(new_summary.encode("utf-8")).decode("ascii")
+    return f"{RUNNING_SUMMARY_MARKER_PREFIX}{encoded}{RUNNING_SUMMARY_MARKER_SUFFIX}"
+
 # Real per-provider pricing used only to compute provider_usage_log's `cost` column -- update
 # these constants directly if a provider changes pricing; nothing else needs to change.
 # DeepSeek's rates are its published peak/off-peak structure effective 2026-08-16 (fetched from
@@ -3347,6 +3375,55 @@ async def _stream_deepseek(system: str, messages: list, user_id: str, ip: str, i
                     asyncio.create_task(log_token_usage_with_bonus(user_id, usage.input_tokens + usage.output_tokens, ip))
             except Exception:
                 pass
+
+# ---------- Running-summary layer (sliding-2 + background summarization) ----------
+# Real cost/latency impact already measured via a standalone test before this was built: ~68
+# real summarization calls averaged ~422 input / ~81 output tokens, ~$0.00002/call, and fired
+# async (not awaited before the main answer) added ZERO measured latency to the student-facing
+# response (confirmed via a real sync-vs-async comparison: sync added +1.23s/turn on the
+# critical path, async didn't move it at all). See that test's own report for the full numbers.
+_RUNNING_SUMMARY_SYSTEM = """You are maintaining a running summary of a tutoring conversation between a NEET \
+student and a tutor. You will be given the PREVIOUS SUMMARY (if any) and a NEW EXCHANGE that just \
+fell out of the active context window and needs to be folded in. Produce an UPDATED summary \
+covering everything discussed so far (the previous summary's content PLUS the new exchange), in \
+1-3 sentences total. Be concise -- capture only the core topic/concept discussed, not full detail, \
+not direct quotes. Output ONLY the updated summary text, nothing else -- no preamble, no labels."""
+
+async def _update_running_summary(prev_summary: str, dropped_question: str, dropped_answer: str, user_id: str, ip: str) -> Optional[str]:
+    """Fire-and-forget (always called via asyncio.create_task, never awaited before the main
+    answer) -- fails SAFE: any error here (DeepSeek down, malformed output, timeout) returns
+    None, and the caller carries the OLD summary forward unchanged rather than blocking or
+    degrading the student's actual answer in any way. Only ever receives the short RAW question/
+    answer text being dropped -- never the NCERT retrieval context that went with it (that's the
+    exact bug the test harness caught in itself: feeding the full multi-KB retrieved passage back
+    in as if it were "what was discussed" inflated this call's cost for no benefit; the caller is
+    responsible for passing the student's original short question text here, not the NCERT-
+    augmented prompt that was actually sent to the model)."""
+    try:
+        user_msg = (
+            f"PREVIOUS SUMMARY: {prev_summary or '(none yet -- this is the first exchange to summarize)'}\n\n"
+            f"NEW EXCHANGE TO FOLD IN:\nStudent: {dropped_question}\nTutor: {dropped_answer[:800]}\n\n"
+            f"Updated running summary (1-3 sentences):"
+        )
+        is_peak = _is_deepseek_peak_hour()
+        resp = await deepseek_async_client.messages.create(
+            model="deepseek-v4-flash", max_tokens=150, thinking={"type": "disabled"},
+            system=_RUNNING_SUMMARY_SYSTEM, messages=[{"role": "user", "content": user_msg}],
+        )
+        new_summary = "".join(b.text for b in resp.content if hasattr(b, "text")).strip()
+        if not new_summary:
+            return None
+        usage = resp.usage
+        cache_miss = usage.input_tokens + (usage.cache_creation_input_tokens or 0)
+        cache_hit = usage.cache_read_input_tokens or 0
+        cost = _deepseek_cost(cache_miss, cache_hit, usage.output_tokens, is_peak)
+        try:
+            await log_provider_usage("deepseek-v4-flash", is_peak, cache_miss + cache_hit, usage.output_tokens, cost, "/chat-summary", user_id)
+        except Exception:
+            pass
+        return new_summary
+    except Exception:
+        return None
 
 async def _stream_with_peak_fallback(system: str, messages: list, user_id: str, ip: str, endpoint: str, billing_context: dict = None, force_qwen: bool = False):
     """Routes text-doubt generation (/chat, /solve -- never image/PDF doubts, those stay on
@@ -4050,7 +4127,7 @@ async def _refetch_images_as_attachments(urls: list) -> list:
 # its own independent cap via that one and this one is scoped to the text path only.
 _TEXT_HISTORY_MAX_TURNS = 4
 
-async def stream_response(text: str, history: list = [], images: list = [], pdf: str = None, answer_style: str = "detailed", student_name: str = "", language: str = "en", user_id: str = "", personalize: bool = True, skip_cache: bool = False, ip: str = ""):
+async def stream_response(text: str, history: list = [], images: list = [], pdf: str = None, answer_style: str = "detailed", student_name: str = "", language: str = "en", user_id: str = "", personalize: bool = True, skip_cache: bool = False, ip: str = "", running_summary: str = "", dropped_question: str = "", dropped_answer: str = ""):
     images = (images or [])[:3]
 
     # See _detect_image_correction's own docstring. Re-fetch failure (deleted file, network
@@ -4291,6 +4368,22 @@ the question, ignore this instruction entirely and use the plain "Answer:" heade
                 yield chunk
             return
         else:
+            # Running-summary layer -- fired here, as early as possible (before the main model
+            # call even starts below), so it has the maximum possible head start. Never awaited
+            # here: summarization_task is only ever awaited AFTER the real answer has finished
+            # streaming (see the trailing-marker emission near the end of this branch), so it
+            # can never add latency to the student's actual answer. Only fires when the client
+            # actually sent a dropped exchange (i.e. the sliding-2 window just overflowed this
+            # turn) -- most turns in most sessions never reach this at all.
+            summarization_task = (
+                asyncio.create_task(_update_running_summary(running_summary, dropped_question, dropped_answer, user_id, ip))
+                if dropped_question and dropped_answer else None
+            )
+            if running_summary:
+                # Prepended to the system prompt, ahead of the sliding-2 messages themselves --
+                # matches the tested design exactly: [running summary] + [last 2 raw exchanges]
+                # + [new question], in that order.
+                full_system = full_system + f"\n\n[Earlier in this conversation, before the messages shown below, the following was already discussed: {running_summary}]"
             is_peak = _is_deepseek_peak_hour()
             # Max plan only (no-op/instant None for every other plan) -- see check_max_usage_tier
             # for the full soft-zone/breakeven logic. force_qwen only affects TEXT doubts: there's
@@ -4582,6 +4675,22 @@ the question, ignore this instruction entirely and use the plain "Answer:" heade
                     headers={**headers, "Content-Type": "application/json"},
                     json={"question_hash": answer_hash, "answer": full_answer}
                 )
+            # The background summarization task (if one was fired above) has had the ENTIRE
+            # main-answer generation above to run concurrently -- typically several seconds,
+            # comfortably longer than a summarization call's own ~1-1.5s real measured latency --
+            # so by this point it's almost always already finished. Bounded wait, not an
+            # unbounded await: a slow/hung summarization call must never hold this response open
+            # indefinitely (the student has already seen their full answer by now regardless).
+            # Fails safe per spec: timeout, exception, or no new summary all mean "nothing to
+            # report" -- emit no trailer at all, and the client simply keeps whatever
+            # running_summary it already had, same as if this turn never touched the window.
+            if summarization_task is not None:
+                try:
+                    new_summary = await asyncio.wait_for(summarization_task, timeout=8.0)
+                except Exception:
+                    new_summary = None
+                if new_summary:
+                    yield _encode_running_summary_marker(new_summary)
     except Exception as e:
         print(f"STREAMING ERROR: {e}")
         yield f"Error: {str(e)}"
@@ -4845,7 +4954,7 @@ async def chat(message: Message, request: Request, _: None = Depends(rate_limite
     await enforce_daily_budget(message.user_id, ip)
     await validate_pdf_limits(message.pdf, message.user_id)
     return StreamingResponse(
-       stream_response(message.text, message.history, message.images, message.pdf, message.answer_style, message.student_name, message.language, message.user_id, message.personalize, message.skip_cache, ip),
+       stream_response(message.text, message.history, message.images, message.pdf, message.answer_style, message.student_name, message.language, message.user_id, message.personalize, message.skip_cache, ip, message.running_summary, message.dropped_question, message.dropped_answer),
         media_type="text/plain"
     )
 

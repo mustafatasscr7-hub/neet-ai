@@ -6926,6 +6926,33 @@ function plainTextFromMarkdown(text) {
       try {
         streamController = new AbortController();
         const { data: { session } } = await client.auth.getSession();
+        // Running-summary layer: the client is the only thing holding the FULL conversation (the
+        // server only ever sees the trimmed last-2-exchange `history` below), so it's the client
+        // that has to work out both which single exchange is newly falling out of the sliding-2
+        // window this turn, and what the current running summary already is.
+        //
+        // historyLen = number of messages strictly before the question being asked right now --
+        // works identically for both a fresh send (aiIndex is currentConversation.length, AFTER
+        // the new user message has already been pushed, so the question sits at aiIndex-1) and a
+        // retry (aiIndex is the EXISTING ai message's index, with its own question at aiIndex-1
+        // too) -- same formula, no separate branches needed.
+        const historyLen = aiIndex - 1;
+        // Exchange k (0-indexed) occupies flat positions [2k, 2k+1]. historyLen messages = k
+        // complete exchanges so far (historyLen/2). The sliding-2 window keeps the last 2; the
+        // exchange newly falling out this turn (if any) is k-3, i.e. flat positions
+        // [historyLen-6, historyLen-5] -- only meaningful once historyLen>=6 (k>=3), matching
+        // exactly when the server's own _TEXT_HISTORY_MAX_TURNS window first starts dropping
+        // anything.
+        const droppedQ = historyLen >= 6 ? (currentConversation[historyLen - 6]?.text || '') : '';
+        const droppedA = historyLen >= 6 ? (currentConversation[historyLen - 5]?.text || '') : '';
+        // Most recent ai message (before the current question) that already carries an updated
+        // summary -- scanning backward stops at the first hit, normally within a couple of
+        // messages. Empty string if the window has never overflowed yet in this conversation.
+        let runningSummary = '';
+        for (let idx = historyLen - 1; idx >= 0; idx--) {
+          const m = currentConversation[idx];
+          if (m && m.role === 'ai' && m.runningSummary) { runningSummary = m.runningSummary; break; }
+        }
         const requestBody = {
           text: questionText,
           // Trimmed to the last 2 exchanges (4 messages) before sending -- the server enforces
@@ -6939,7 +6966,10 @@ function plainTextFromMarkdown(text) {
           language: getLang(),
           user_id: session?.user?.id || '',
           personalize: localStorage.getItem('personalize') !== 'false',
-          skip_cache: !!options.skipCache
+          skip_cache: !!options.skipCache,
+          running_summary: runningSummary,
+          dropped_question: droppedQ,
+          dropped_answer: droppedA
         };
 
         if (options.images && options.images.length > 0) {
@@ -7042,6 +7072,38 @@ function plainTextFromMarkdown(text) {
         let fullText = '';
         let lastRenderTime = 0;
         const RENDER_THROTTLE_MS = 100;
+
+        // Running-summary layer: server.py appends a trailing, never-rendered marker (NUL-byte
+        // delimited -- see RUNNING_SUMMARY_MARKER_PREFIX there) strictly AFTER the real answer
+        // content, only when the background summarization call actually produced a new summary
+        // this turn. NUL bytes can never occur in real model-generated text, so the moment one
+        // appears anywhere in the incoming text, everything from that point on is unconditionally
+        // treated as marker payload instead of answer content -- not added to fullText, never
+        // rendered. All `fullText` appends in the loop below go through appendToFullText (not a
+        // raw `+=`) specifically so this one check covers every call site uniformly.
+        let inRunningSummaryMarker = false;
+        let runningSummaryMarkerBuffer = '';
+        function appendToFullText(str) {
+          if (!str) return;
+          if (inRunningSummaryMarker) { runningSummaryMarkerBuffer += str; return; }
+          const nulIdx = str.indexOf('\u0000');
+          if (nulIdx === -1) { fullText += str; return; }
+          fullText += str.slice(0, nulIdx);
+          inRunningSummaryMarker = true;
+          runningSummaryMarkerBuffer = str.slice(nulIdx);
+        }
+        // Decodes runningSummaryMarkerBuffer (expected shape: \u0000RSUM\u0000<base64>\u0000)
+        // once the stream has fully ended -- returns null (no update) on anything malformed,
+        // same fail-safe spirit as the server side: a corrupted/incomplete marker must never
+        // throw or corrupt the real answer that already rendered successfully.
+        function decodeRunningSummaryMarker() {
+          const m = runningSummaryMarkerBuffer.match(/^\u0000RSUM\u0000([A-Za-z0-9+/=]+)\u0000?$/);
+          if (!m) return null;
+          try {
+            const bytes = Uint8Array.from(atob(m[1]), c => c.charCodeAt(0));
+            return new TextDecoder('utf-8').decode(bytes) || null;
+          } catch (e) { return null; }
+        }
 
         // server.py's second-pass verification (a narrow fix for a Qwen failure on multi-object
         // numerical problems -- see _stream_qwen_verified there) can't stream token-by-token: the
@@ -7167,14 +7229,14 @@ function plainTextFromMarkdown(text) {
                 visualIntentResolved = true;
                 if (amb && amb[1].toLowerCase() === 'yes') {
                   isClarification = true;
-                  fullText += rest; // CLARIFY_TYPE/QUESTION/OPTION lines -- parsed after the loop, never rendered live
+                  appendToFullText(rest); // CLARIFY_TYPE/QUESTION/OPTION lines -- parsed after the loop, never rendered live
                 } else if (m) {
                   visualIntent = m[1].toLowerCase();
-                  fullText += rest;
+                  appendToFullText(rest);
                 } else if (conv) {
-                  fullText += rest;
+                  appendToFullText(rest);
                 } else {
-                  fullText += visualIntentBuffer; // not our line -- flush unchanged, keep default 'no'
+                  appendToFullText(visualIntentBuffer); // not our line -- flush unchanged, keep default 'no'
                 }
                 // Diagram-first: the instant VISUAL_INTENT is known to be yes, pause handing any
                 // more of the answer to the renderer and resolve the diagram lookup right here --
@@ -7201,10 +7263,10 @@ function plainTextFromMarkdown(text) {
                 }
               } else if (visualIntentBuffer.length >= VISUAL_INTENT_BUFFER_CAP) {
                 visualIntentResolved = true;
-                fullText += visualIntentBuffer; // gave up looking for the tag -- flush as-is
+                appendToFullText(visualIntentBuffer); // gave up looking for the tag -- flush as-is
               }
             } else {
-              fullText += chunk[i];
+              appendToFullText(chunk[i]);
             }
             const now = Date.now();
             if (!isClarification && now - lastRenderTime >= RENDER_THROTTLE_MS) {
@@ -7251,9 +7313,15 @@ function plainTextFromMarkdown(text) {
           } else if (conv) {
             // whole buffer WAS just the marker -- nothing left to add
           } else {
-            fullText += visualIntentBuffer;
+            appendToFullText(visualIntentBuffer);
           }
         }
+        // Resolved once the stream has fully ended -- see decodeRunningSummaryMarker's own
+        // comment. null (no marker this turn, or a malformed one) means "nothing to update";
+        // the message object below simply doesn't get a .runningSummary set, and the backward
+        // scan in streamAIResponse's own request-building code naturally keeps using whatever
+        // it already had.
+        const newRunningSummary = inRunningSummaryMarker ? decodeRunningSummaryMarker() : null;
         removeTypingRow(); // safety net -- covers a done-with-no-value edge case (empty response)
         ensureAiRow();
 
@@ -7270,11 +7338,11 @@ function plainTextFromMarkdown(text) {
             // slot outright rather than appending to versions -- and since clarify turns never
             // get an actions row, any stale Retry/version-nav row from the answer it replaced
             // must go with it (nothing left that's retriable in place here).
-            currentConversation[aiIndex] = { role: 'ai', text: fullText, time: new Date().toISOString() };
+            currentConversation[aiIndex] = { role: 'ai', text: fullText, time: new Date().toISOString(), runningSummary: newRunningSummary || undefined };
             const oldActions = aiRow.querySelector('.message-actions');
             if (oldActions) oldActions.remove();
           } else {
-            currentConversation.push({ role: 'ai', text: fullText, time: new Date().toISOString() });
+            currentConversation.push({ role: 'ai', text: fullText, time: new Date().toISOString(), runningSummary: newRunningSummary || undefined });
           }
 
           if (pendingSidebarSave) {
@@ -7403,6 +7471,11 @@ function plainTextFromMarkdown(text) {
           currentConversation.push(aiMsg);
           aiRow.querySelector('.message-content').appendChild(buildActionsDiv('ai', aiTimeStr, aiMsg));
         }
+        // Only overwrites when this turn actually produced a new summary -- a turn where nothing
+        // fell out of the sliding-2 window (or the background call failed/timed out) leaves
+        // whatever this message already had untouched, same fail-safe carry-forward as the
+        // server side.
+        if (newRunningSummary) aiMsg.runningSummary = newRunningSummary;
 
         // Wait for the sidebar save (title generation + the initial insert that assigns
         // conv.supabaseId and the real currentId) to actually finish before relying on either --
