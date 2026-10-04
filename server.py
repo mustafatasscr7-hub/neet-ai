@@ -13,7 +13,9 @@ import openai
 from google import genai
 from google.genai import types as genai_types
 import fitz  # PyMuPDF -- page-count check for PDF tier limits
+from PIL import Image, ImageSequence  # chat image upload -- verify + re-encode real pixel data
 import base64
+import io
 import re
 from dotenv import load_dotenv
 import os
@@ -7227,8 +7229,39 @@ async def chat_image_upload(body: ChatImageUploadRequest, _: None = Depends(rate
         return {"error": "Could not decode image data"}
     if len(file_bytes) > MAX_CHAT_IMAGE_BYTES:
         return {"error": "Image too large"}
+    # body.media_type above is just a string the caller controls -- a renamed/relabeled non-image
+    # file would otherwise sail through the startswith("image/") check untouched. Actually opening
+    # and fully decoding the bytes with Pillow is the real check; img.load() forces every pixel to
+    # be decoded (not just the header), so truncated/corrupt/non-image data raises here instead of
+    # failing later for whoever views the "image." Re-saving through Pillow afterward -- rather
+    # than storing the raw uploaded bytes -- means what lands in storage is only ever pixel data
+    # Pillow itself decoded and re-encoded, discarding anything a crafted file smuggled in beyond
+    # that (EXIF payloads, polyglot trailers appended after valid image data, etc).
+    try:
+        img = Image.open(io.BytesIO(file_bytes))
+        img.load()
+    except Exception:
+        return {"error": "Only image attachments can be uploaded"}
+    fmt = (img.format or "").upper()
+    FORMAT_EXT = {"JPEG": "jpg", "PNG": "png", "WEBP": "webp", "GIF": "gif"}
+    if fmt not in FORMAT_EXT:
+        return {"error": "Unsupported image format"}
+    ext = FORMAT_EXT[fmt]
+    media_type = "image/jpeg" if fmt == "JPEG" else f"image/{fmt.lower()}"
+    out = io.BytesIO()
+    try:
+        if fmt == "JPEG":
+            img.convert("RGB").save(out, format="JPEG", quality=90)
+        elif fmt == "GIF" and getattr(img, "is_animated", False):
+            frames = [frame.convert("RGBA").copy() for frame in ImageSequence.Iterator(img)]
+            frames[0].save(out, format="GIF", save_all=True, append_images=frames[1:],
+                            loop=img.info.get("loop", 0), duration=img.info.get("duration", 100))
+        else:
+            img.save(out, format=fmt)
+    except Exception:
+        return {"error": "Only image attachments can be uploaded"}
+    file_bytes = out.getvalue()
     import uuid
-    ext = body.media_type.split("/")[-1].split("+")[0] or "png"
     path = f"chat-uploads/{uuid.uuid4().hex}.{ext}"
     try:
         response = http_requests.post(
@@ -7236,7 +7269,7 @@ async def chat_image_upload(body: ChatImageUploadRequest, _: None = Depends(rate
             headers={
                 "apikey": SUPABASE_SERVICE_KEY,
                 "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
-                "Content-Type": body.media_type
+                "Content-Type": media_type
             },
             data=file_bytes
         )
