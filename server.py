@@ -1234,6 +1234,49 @@ def _is_deepseek_peak_hour() -> bool:
     hour = now_utc.hour
     return (1 <= hour < 4) or (6 <= hour < 10)
 
+# ---------- Server-side session verification for budget/plan-sensitive endpoints ----------
+# Found in a security audit: /usage/summary, /chat, /solve, /title, /summarize-answer, and
+# /session/heartbeat all took `user_id` directly from client-supplied body/query input and used
+# it for budget enforcement, plan lookup, or device-limit checks -- with NOTHING verifying that
+# value against who the request was actually authenticated as. A request carrying no real
+# session at all (not even a malformed one) could claim ANY user_id string, including a fresh
+# random UUID every single call, which never accumulates usage history under the free tier's
+# rolling-cooldown check (keyed by user_id) and so never trips it -- the only remaining ceiling
+# was the per-IP rate limiter, letting real paid-API cost drain unmetered.
+#
+# Fix: verify the caller's Supabase access token against Supabase's OWN Auth server (not decoded/
+# trusted locally -- this project's JWT signing scheme isn't something this code needs to know or
+# keep in sync with) via GET /auth/v1/user, and use ONLY the id Supabase hands back for anything
+# budget/plan/device-sensitive. A client-supplied user_id is never trusted for these purposes
+# again, regardless of whether one is even present in the request.
+#
+# Deliberately returns "" rather than raising for every failure mode -- missing header, malformed
+# header, expired/invalid token, or Supabase's own Auth endpoint being unreachable -- so a request
+# with no verifiable identity falls through to the EXISTING guest path (IP-scoped), exactly as if
+# no user_id had ever been sent. This is the least-privileged outcome by construction: an
+# unverifiable claim is never trusted, never silently escalated, and never allowed to block a
+# genuine guest from using the product at all. Endpoints that have no sensible guest-equivalent at
+# all (e.g. /usage/summary, which is purely "show ME my own stats") separately reject an empty
+# result with a real 401 instead of proceeding -- that's each endpoint's own call, not this
+# function's; this function only ever answers "who, verifiably, if anyone."
+async def _get_verified_user_id(authorization: str = Header(None)) -> str:
+    if not authorization or not authorization.lower().startswith("bearer "):
+        return ""
+    token = authorization[7:].strip()
+    if not token:
+        return ""
+    try:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/auth/v1/user",
+            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {token}"},
+        )
+        if resp.status_code != 200:
+            return ""
+        data = resp.json()
+        return data.get("id") or ""
+    except Exception:
+        return ""
+
 async def get_user_plan(user_id: str) -> str:
     if not user_id:
         return "free"
@@ -1387,7 +1430,7 @@ class SessionHeartbeatRequest(BaseModel):
                              # the moment that device's own polling happens to run again.
 
 @app.post("/session/heartbeat")
-async def session_heartbeat(req: SessionHeartbeatRequest, request: Request):
+async def session_heartbeat(req: SessionHeartbeatRequest, request: Request, verified_user_id: str = Depends(_get_verified_user_id)):
     """Called once right after login (is_login=True) and then periodically while chat.html stays
     open (is_login=False), so a kicked device finds out within one polling cycle rather than only
     whenever it next happens to send a /chat message.
@@ -1400,6 +1443,12 @@ async def session_heartbeat(req: SessionHeartbeatRequest, request: Request):
     heartbeat (or proactively by _expire_due_grace_periods if a third check-in lands first).
     Fails open throughout: any lookup/write error here returns "ok" rather than blocking a real
     login over this table's own availability."""
+    # Overwritten in place, same as /chat and /solve -- an unverifiable token means
+    # verified_user_id is "", which correctly falls into the existing no-op guard below exactly
+    # as if no user_id had been sent at all. Device-limit logic has no guest-equivalent to
+    # degrade to (guests don't have devices tracked), so there's nothing further to do for that
+    # case beyond this early return.
+    req.user_id = verified_user_id
     if not req.user_id or not req.device_id:
         return {"status": "ok"}
     try:
@@ -4954,8 +5003,13 @@ async def stream_solve_response_with_diagram(req: SolveRequest, cached_solution,
         yield f"Error: {str(e)}"
 
 @app.post("/solve")
-async def solve_question(req: SolveRequest, request: Request, _: None = Depends(rate_limiter(15, 60))):
+async def solve_question(req: SolveRequest, request: Request, _: None = Depends(rate_limiter(15, 60)), verified_user_id: str = Depends(_get_verified_user_id)):
     ip = _client_ip(request)
+    # Overwritten in place (not a separate variable) so every downstream read of req.user_id --
+    # including inside stream_solve_response_with_diagram, which takes the whole `req` object and
+    # reads req.user_id itself -- picks up the verified identity with no further changes needed.
+    # "" (no valid token) correctly falls through to the existing guest path below, unchanged.
+    req.user_id = verified_user_id
     await enforce_daily_budget(req.user_id, ip)
     cached_solution = await get_cached_pyq_solution(req.pyq_id, req.language)
     has_diagram = bool(req.diagram_url or req.option_a_diagram_url or req.option_b_diagram_url or req.option_c_diagram_url or req.option_d_diagram_url)
@@ -4999,8 +5053,12 @@ async def send_otp(req: PhoneOtpRequest, _: None = Depends(rate_limiter(3, 600))
     return {"success": True}
 
 @app.post("/chat")
-async def chat(message: Message, request: Request, _: None = Depends(rate_limiter(15, 60))):
+async def chat(message: Message, request: Request, _: None = Depends(rate_limiter(15, 60)), verified_user_id: str = Depends(_get_verified_user_id)):
     ip = _client_ip(request)
+    # Same reasoning as /solve: overwritten in place so every downstream use (budget check, PDF
+    # tier limits, stream_response and everything it threads this into) uses the verified
+    # identity. "" correctly falls through to the existing guest path, unchanged.
+    message.user_id = verified_user_id
     validate_doubt_length(message.text)
     await enforce_daily_budget(message.user_id, ip)
     await validate_pdf_limits(message.pdf, message.user_id)
@@ -5040,8 +5098,9 @@ def _clean_title(raw: str, fallback: str = "New Chat") -> str:
     return cleaned or fallback
 
 @app.post("/title")
-async def generate_title(message: Message, request: Request, _: None = Depends(rate_limiter(15, 60))):
+async def generate_title(message: Message, request: Request, _: None = Depends(rate_limiter(15, 60)), verified_user_id: str = Depends(_get_verified_user_id)):
     ip = _client_ip(request)
+    message.user_id = verified_user_id
     await enforce_daily_budget(message.user_id, ip)
     client = deepseek_client
     # Deliberately NOT "New Chat" -- that's also the sidebar's own placeholder text for a
@@ -5091,8 +5150,9 @@ async def generate_title(message: Message, request: Request, _: None = Depends(r
 # uncached since it shipped, and a per-answer summary cache would be new infra for a cheap,
 # infrequent call -- not worth adding for this.
 @app.post("/summarize-answer")
-async def summarize_answer(req: SummarizeAnswerRequest, request: Request, _: None = Depends(rate_limiter(15, 60))):
+async def summarize_answer(req: SummarizeAnswerRequest, request: Request, _: None = Depends(rate_limiter(15, 60)), verified_user_id: str = Depends(_get_verified_user_id)):
     ip = _client_ip(request)
+    req.user_id = verified_user_id
     await enforce_daily_budget(req.user_id, ip)
     client = deepseek_client
     lang_instruction = "Respond entirely in Hindi (Devanagari script) -- every word in Hindi, no English words mixed in, except LaTeX/KaTeX math notation and units which stay as-is." if req.language == "hi" else "Respond in English."
@@ -5169,9 +5229,15 @@ USAGE_PROVIDER_BREAKDOWN_DAYS = 30  # no real billing-cycle concept exists yet (
 # fake "doubts allowed" ceiling by dividing the token budget by an average -- that would look
 # precise while actually being a guess.
 @app.get("/usage/summary")
-async def usage_summary(user_id: str):
-    if not user_id:
-        raise HTTPException(status_code=400, detail="user_id is required")
+async def usage_summary(verified_user_id: str = Depends(_get_verified_user_id)):
+    # No client-supplied user_id accepted at all anymore -- this is purely "show ME my own
+    # usage," and every caller already has a real session by the time it's reached (chat.html's
+    # own call sites only ever fire from inside an `if (session)` branch), so there's no genuine
+    # guest-equivalent to fall back to the way /chat's budget check has one. A missing/invalid
+    # token is a real 401, not a silent demotion.
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    user_id = verified_user_id
     try:
         plan = await get_user_plan(user_id)
         # Nobody is "unlimited" in the UI sense anymore -- Pro has always had a real, visible

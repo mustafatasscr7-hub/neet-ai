@@ -3742,7 +3742,11 @@ let selectedImages = [];
                 const { data: { session } } = await client.auth.getSession();
                 const res = await fetch(`${API_BASE}/solve`, {
                   method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
+                  // The server now verifies this Bearer token server-side and uses ONLY the
+                  // identity it resolves from it for budget/plan purposes -- the user_id below is
+                  // no longer trusted on its own, kept only so a request with no session at all
+                  // still has an explicit (and correctly ignored) value rather than undefined.
+                  headers: { 'Content-Type': 'application/json', ...(session?.access_token ? { 'Authorization': `Bearer ${session.access_token}` } : {}) },
                   body: JSON.stringify({ pyq_id: q.id, question: q.question, option_a: q.option_a, option_b: q.option_b, option_c: q.option_c, option_d: q.option_d, correct_answer: resolvedAnswer, language: getLang(), user_id: session?.user?.id || '', diagram_url: q.diagram_url || null, option_a_diagram_url: q.option_a_diagram_url || null, option_b_diagram_url: q.option_b_diagram_url || null, option_c_diagram_url: q.option_c_diagram_url || null, option_d_diagram_url: q.option_d_diagram_url || null })
                 });
                 if (res.status === 402) {
@@ -5580,7 +5584,7 @@ function plainTextFromMarkdown(text) {
         const { data: { session } } = await client.auth.getSession();
         const res = await fetch(`${API_BASE}/summarize-answer`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...(session?.access_token ? { 'Authorization': `Bearer ${session.access_token}` } : {}) },
           body: JSON.stringify({ text: last.aiText, language: getLang(), user_id: session?.user?.id || '' })
         });
         const data = await res.json();
@@ -6272,9 +6276,10 @@ function plainTextFromMarkdown(text) {
 
       let title = firstMessage.substring(0, 35) + '...';
       try {
+        const { data: { session } } = await client.auth.getSession();
         const res = await fetch(`${API_BASE}/title`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...(session?.access_token ? { 'Authorization': `Bearer ${session.access_token}` } : {}) },
           body: JSON.stringify({ text: firstMessage, language: getLang() })
         });
         const data = await res.json();
@@ -6569,7 +6574,12 @@ function plainTextFromMarkdown(text) {
         // of, deliberately -- distinct from MAX_DAILY_TOKEN_CAP, which /usage/summary now reports
         // like any other plan's budget.
         try {
-          const res = await fetch(`${API_BASE}/usage/summary?user_id=${session.user.id}`);
+          // /usage/summary now requires a verified Bearer token server-side (no client-supplied
+          // user_id is accepted at all anymore) -- the query param above is harmless/ignored
+          // leftover, kept rather than removed only to avoid touching this call's URL shape.
+          const res = await fetch(`${API_BASE}/usage/summary?user_id=${session.user.id}`, {
+            headers: { 'Authorization': `Bearer ${session.access_token}` }
+          });
           const data = await res.json();
           applyUsageDisplay(data.today.tokens_used, data.today.budget, userPlan, data.today.blocked ? data.today.reset_in_seconds : null);
           // Pro-only pre-warning at 80%+, strictly separate from #limitBanner's 100% hard stop
@@ -6599,7 +6609,9 @@ function plainTextFromMarkdown(text) {
       // /usage/summary, for every plan) could drift apart and disagree -- this was the actual
       // bug, not the AVG_TOKENS_PER_DOUBT estimate step that runs after it.
       try {
-        const res = await fetch(`${API_BASE}/usage/summary?user_id=${session.user.id}`);
+        const res = await fetch(`${API_BASE}/usage/summary?user_id=${session.user.id}`, {
+          headers: { 'Authorization': `Bearer ${session.access_token}` }
+        });
         const data = await res.json();
         applyUsageDisplay(data.today.tokens_used, data.today.budget, 'free', data.today.blocked ? data.today.reset_in_seconds : null);
       } catch (e) {
@@ -6981,7 +6993,7 @@ function plainTextFromMarkdown(text) {
 
         const response = await fetch(`${API_BASE}/chat`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...(session?.access_token ? { 'Authorization': `Bearer ${session.access_token}` } : {}) },
           body: JSON.stringify(requestBody),
           signal: streamController.signal
         });
@@ -7563,9 +7575,10 @@ function plainTextFromMarkdown(text) {
 
     async function sendDeviceHeartbeat(userId, isLogin) {
       try {
+        const { data: { session } } = await client.auth.getSession();
         const res = await fetch(`${API_BASE}/session/heartbeat`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...(session?.access_token ? { 'Authorization': `Bearer ${session.access_token}` } : {}) },
           body: JSON.stringify({ user_id: userId, device_id: getDeviceId(), device_label: getDeviceLabel(), is_login: !!isLogin })
         });
         const data = await res.json();
@@ -7870,7 +7883,9 @@ function plainTextFromMarkdown(text) {
 
       try {
         const [res, referralRes] = await Promise.all([
-          fetch(`${API_BASE}/usage/summary?user_id=${encodeURIComponent(session.user.id)}`),
+          fetch(`${API_BASE}/usage/summary?user_id=${encodeURIComponent(session.user.id)}`, {
+            headers: { 'Authorization': `Bearer ${session.access_token}` }
+          }),
           fetch(`${API_BASE}/referral/status?user_id=${encodeURIComponent(session.user.id)}`)
         ]);
         const data = await res.json();
