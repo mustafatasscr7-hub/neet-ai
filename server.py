@@ -67,12 +67,33 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+# Previously allow_origins=["*"] (plus wildcard methods/headers) -- any website's JS could call
+# this API directly and read the response of anything that doesn't check identity (e.g. the
+# /usage/summary IDOR, found in the same security-audit pass this fix came from). No cookies are
+# used (allow_credentials was never set), so this was never a session-riding/cookie-CSRF risk --
+# but it was a real cross-origin data-exfiltration one for any endpoint trusting a client-
+# supplied id. Scoped down to exactly what's real: the actual deployed frontend
+# (neet-ai-jet.vercel.app -- confirmed live, it's hardcoded in login.html's own OAuth redirectTo)
+# plus localhost/127.0.0.1 on any port for local dev, matching how this app has always been
+# tested locally (a plain static file server on some port talking to a local uvicorn instance).
+# contractor-pdf-review.html's own vercel.json proxies /api/* same-origin (a rewrite, not a
+# cross-origin fetch), so it was never a CORS case needing its own origin entry either way.
+#
+# Methods/headers scoped to what the frontend actually sends to this API (grepped across every
+# .html file) -- GET/POST/PATCH/DELETE for the real calls, OPTIONS because browsers need it for
+# the CORS preflight itself; Content-Type and X-Admin-Key (the admin tools' own auth header) are
+# the only two headers ever sent. expose_headers narrowed to X-Cache specifically -- the only
+# custom response header any frontend page actually reads (chat.html/pyqbank.html/
+# savedquestions.html/scoreboard.html all check res.headers.get('X-Cache')); everything else was
+# never consumed and a browser already exposes the CORS-safelisted headers by default regardless.
+_LOCALHOST_ORIGIN_REGEX = r"^http://(localhost|127\.0\.0\.1)(:\d+)?$"
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["*"],
+    allow_origins=["https://neet-ai-jet.vercel.app"],
+    allow_origin_regex=_LOCALHOST_ORIGIN_REGEX,
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "X-Admin-Key"],
+    expose_headers=["X-Cache"],
 )
 
 DEEPSEEK_KEY = os.getenv("DEEPSEEK_KEY")
