@@ -6127,9 +6127,17 @@ async def referral_register(req: RegisterReferralRequest):
         return {"error": "Something went wrong. Please try again."}
 
 @app.get("/referral/status")
-async def referral_status(user_id: str):
-    if not user_id:
-        raise HTTPException(status_code=400, detail="user_id is required")
+async def referral_status(verified_user_id: str = Depends(_get_verified_user_id)):
+    # Previously trusted a client-supplied user_id query param directly -- the same IDOR class
+    # already fixed on /usage/summary et al. (see _get_verified_user_id above): anyone could read
+    # any other user's referral code, pending/completed counts, and bonus balance just by passing
+    # their id. Identity now comes only from the verified Bearer token; any user_id the caller
+    # sends is never read (not even declared as a parameter here), matching how /usage/summary
+    # already ignores its own leftover ?user_id= rather than erroring on it -- so settings.js's
+    # existing `?user_id=${session.user.id}` call keeps working unchanged.
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    user_id = verified_user_id
     try:
         referred_by_resp = await async_client.get(
             f"{SUPABASE_URL}/rest/v1/referrals", headers=ADMIN_HEADERS,
