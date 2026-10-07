@@ -689,7 +689,9 @@ async function renderReferralSection() {
   const { data: { session } } = await client.auth.getSession();
   if (!session) return;
   try {
-    const res = await fetch(`${API_BASE}/referral/status?user_id=${encodeURIComponent(session.user.id)}`);
+    const res = await fetch(`${API_BASE}/referral/status?user_id=${encodeURIComponent(session.user.id)}`, {
+      headers: { 'Authorization': `Bearer ${session.access_token}` }
+    });
     const data = await res.json();
     if (document.getElementById('referralContainer') !== container) return; // settings tab changed mid-fetch
     if (data.error) throw new Error(data.error);
@@ -756,7 +758,9 @@ async function renderUsageSection(isManualRefresh) {
   try {
     const [res, referralRes] = await Promise.all([
       fetch(`${API_BASE}/usage/summary?user_id=${encodeURIComponent(session.user.id)}`),
-      fetch(`${API_BASE}/referral/status?user_id=${encodeURIComponent(session.user.id)}`)
+      fetch(`${API_BASE}/referral/status?user_id=${encodeURIComponent(session.user.id)}`, {
+        headers: { 'Authorization': `Bearer ${session.access_token}` }
+      })
     ]);
     const data = await res.json();
     const referralData = await referralRes.json().catch(() => null);
