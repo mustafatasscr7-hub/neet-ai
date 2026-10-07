@@ -822,6 +822,8 @@ class ReportDiagramRequest(BaseModel):
     diagram_id: int
     user_id: str
     source: str  # 'chat' or 'library' -- the two places a standalone diagrams-table row is shown
+    reason: str
+    optional_note: str = ""
 
 class SetNeetExamDateRequest(BaseModel):
     year: int
