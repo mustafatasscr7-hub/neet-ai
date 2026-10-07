@@ -722,6 +722,21 @@
       { value: 'duplicate', label: 'Duplicate question' },
       { value: 'other', label: 'Other' }
     ];
+    // Only offered while this question's own solution panel is actually open (the button reads
+    // "Hide Solution") -- reporting "the explanation is wrong" makes no sense before the student
+    // has seen one, so it's appended conditionally rather than living in REPORT_REASONS itself.
+    const SOLUTION_WRONG_REASON = { value: 'solution_wrong', label: 'Solution / explanation is wrong' };
+
+    function isSolutionOpenFor(pyqId) {
+      const btn = document.getElementById('solBtn-' + pyqId);
+      return !!btn && btn.textContent === t('pyqbank', 'hideSolution');
+    }
+
+    function reportReasonRowHtml(r) {
+      return `<label class="report-reason-row">
+            <input type="radio" name="reportReason" value="${r.value}" onchange="toggleReportNote(this)"/> ${r.label}
+          </label>`;
+    }
 
     function reportFlagBtnHtml(pyqId) {
       return `<button type="button" class="report-flag-btn" title="Report a problem with this question" onclick="event.stopPropagation(); openReportPopup('${pyqId}', this)">report</button>`;
@@ -835,7 +850,17 @@
 
     function reportPopupOutsideClick(e) {
       const popup = document.getElementById('reportPopup');
-      if (popup && !popup.contains(e.target)) closeReportPopup();
+      if (!popup) return;
+      if (popup.contains(e.target)) return;
+      // Toggling Show/Hide Solution for the SAME question the popup is reporting is exactly the
+      // interaction that's supposed to update the popup's option list in place (see
+      // syncReportPopupSolutionOption), not dismiss it -- without this, clicking that one button
+      // would count as a generic "click away" and close the popup before the sync ever runs. Any
+      // other click anywhere else, including that same button on a DIFFERENT question, still
+      // closes it as before.
+      const solBtn = document.getElementById('solBtn-' + popup.dataset.pyqId);
+      if (solBtn && solBtn.contains(e.target)) return;
+      closeReportPopup();
     }
 
     function toggleReportNote(radioEl) {
@@ -849,12 +874,11 @@
       const popup = document.createElement('div');
       popup.id = 'reportPopup';
       popup.className = 'report-popup';
+      popup.dataset.pyqId = pyqId;
+      const reasons = isSolutionOpenFor(pyqId) ? [...REPORT_REASONS, SOLUTION_WRONG_REASON] : REPORT_REASONS;
       popup.innerHTML = `
         <div class="report-popup-title">Report a problem</div>
-        ${REPORT_REASONS.map(r => `
-          <label class="report-reason-row">
-            <input type="radio" name="reportReason" value="${r.value}" onchange="toggleReportNote(this)"/> ${r.label}
-          </label>`).join('')}
+        <div id="reportReasonsList">${reasons.map(reportReasonRowHtml).join('')}</div>
         <textarea class="report-note" id="reportNote" placeholder="Optional note..." style="display:none;" rows="2"></textarea>
         <div class="report-popup-error" id="reportError"></div>
         <div class="report-popup-actions">
@@ -869,6 +893,34 @@
       popup.style.left = left + 'px';
       popup.style.top = top + 'px';
       document.addEventListener('click', reportPopupOutsideClick, true);
+    }
+
+    // Called from toggleSolution every time a question's solution panel opens or closes. If the
+    // report popup is open for THIS SAME question, add or remove just the solution-wrong row in
+    // place rather than rebuilding the popup -- an in-progress note or a different selected
+    // reason survives untouched. Removing the row while it was the checked one deselects it as a
+    // plain side effect of removing a checked radio from the DOM, which is exactly the "clear the
+    // selection" behavior asked for -- no separate step needed.
+    function syncReportPopupSolutionOption(pyqId) {
+      const popup = document.getElementById('reportPopup');
+      if (!popup || popup.dataset.pyqId !== pyqId) return;
+      const list = document.getElementById('reportReasonsList');
+      if (!list) return;
+      const existingRow = list.querySelector('input[value="solution_wrong"]')?.closest('label');
+      const shouldShow = isSolutionOpenFor(pyqId);
+      if (shouldShow && !existingRow) {
+        list.insertAdjacentHTML('beforeend', reportReasonRowHtml(SOLUTION_WRONG_REASON));
+      } else if (!shouldShow && existingRow) {
+        existingRow.remove();
+      } else {
+        return; // nothing actually changed -- skip the reposition below
+      }
+      // The row being added/removed changes the popup's height -- re-clamp just the top offset
+      // (left/width never change) so it doesn't end up overflowing the viewport bottom, which a
+      // narrow/short mobile screen makes much more likely to actually happen.
+      const popupRect = popup.getBoundingClientRect();
+      const maxTop = document.documentElement.clientHeight - popupRect.height - 8;
+      popup.style.top = Math.max(8, Math.min(popupRect.top, maxTop)) + 'px';
     }
 
     async function submitReport(pyqId, btnEl) {
@@ -898,7 +950,7 @@
         const res = await fetch(`${API_BASE}/report-question`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ pyq_id: pyqId, user_id: session.user.id, reason: selected.value, optional_note: note }),
+          body: JSON.stringify({ pyq_id: pyqId, user_id: session.user.id, reason: selected.value, optional_note: note, solution_open: isSolutionOpenFor(pyqId) }),
           signal: controller.signal
         });
         const data = await res.json().catch(() => ({}));
@@ -1303,7 +1355,7 @@ document.getElementById('mainContent').innerHTML = `
 ${q.diagram_url ? `<img class="q-diagram-img" src="${q.diagram_url}">` : ''}
           <div class="q-options">${opts}</div>
           <div class="q-actions">
-            <button class="sol-btn" onclick="toggleSolution(this, '${q.id}', ${JSON.stringify(q).replace(/"/g, '&quot;')})">${t('pyqbank','showSolution')}</button>
+            <button class="sol-btn" id="solBtn-${q.id}" onclick="toggleSolution(this, '${q.id}', ${JSON.stringify(q).replace(/"/g, '&quot;')})">${t('pyqbank','showSolution')}</button>
             <button class="sol-btn sol-btn-orange" onclick="saveQuestion(${JSON.stringify(q).replace(/"/g, '&quot;')}, 'PYQ Bank', this)">${t('pyqbank','save')}</button>
           </div>
           <div class="sol-div" id="sol-${q.id}"></div>
@@ -1493,11 +1545,13 @@ ${q.diagram_url ? `<img class="q-diagram-img" src="${q.diagram_url}">` : ''}
       if (solDiv.style.display === 'block') {
         solDiv.style.display = 'none';
         btn.textContent = t('pyqbank','showSolution');
+        syncReportPopupSolutionOption(id);
         return;
       }
       if (solDiv.innerHTML) {
         solDiv.style.display = 'block';
         btn.textContent = t('pyqbank','hideSolution');
+        syncReportPopupSolutionOption(id);
         return;
       }
       btn.textContent = t('pyqbank','generatingSolution');
@@ -1533,6 +1587,7 @@ ${q.diagram_url ? `<img class="q-diagram-img" src="${q.diagram_url}">` : ''}
           solDiv.innerHTML = `<span class="sol-error-text">${t('chat', guest ? 'guestLimitReachedMessage' : 'limitReachedMessage')} <a href="${link}">${t('chat', guest ? 'login' : 'upgradeToPro')}</a></span>`;
           btn.textContent = t('pyqbank','showSolution');
           btn.disabled = false;
+          syncReportPopupSolutionOption(id);
           return;
         }
         if (!res.ok) throw new Error('solve failed');
@@ -1571,6 +1626,7 @@ ${q.diagram_url ? `<img class="q-diagram-img" src="${q.diagram_url}">` : ''}
         solDiv.innerHTML = parseWithMathInner(fullText);
         btn.textContent = t('pyqbank','hideSolution');
         btn.disabled = false;
+        syncReportPopupSolutionOption(id);
 
         // Fire-and-forget -- must not delay re-enabling the button above.
         ensureAlternateMethodForPyq(q, fullText, getLang()).then(altText => {
@@ -1581,6 +1637,7 @@ ${q.diagram_url ? `<img class="q-diagram-img" src="${q.diagram_url}">` : ''}
         solDiv.innerHTML = `<span class="sol-error-text">${t('pyqbank','failedSolution')}</span>`;
         btn.textContent = t('pyqbank','showSolution');
         btn.disabled = false;
+        syncReportPopupSolutionOption(id);
       }
     }
 

@@ -88,13 +88,25 @@ app = FastAPI(lifespan=lifespan)
 # custom response header any frontend page actually reads (chat.html/pyqbank.html/
 # savedquestions.html/scoreboard.html all check res.headers.get('X-Cache')); everything else was
 # never consumed and a browser already exposes the CORS-safelisted headers by default regardless.
+#
+# Authorization added after the fact -- the user_id/JWT-verification fix (a later commit) started
+# sending a real Bearer token on /chat, /solve, /title, /summarize-answer, /session/heartbeat and
+# /usage/summary, but this list was never revisited to match. Caught live while testing an
+# unrelated feature: any cross-origin request carrying that header (which, since the frontend and
+# this API are genuinely different origins -- vercel.app vs railway.app, not same-origin behind a
+# rewrite -- is every real logged-in user's call to any of those six endpoints) failed outright
+# with "Disallowed CORS headers" on the preflight, before the request body was even sent. Confirmed
+# via a real cross-origin browser fetch, not just reading the config: identical call succeeds with
+# Authorization in this list, fails with "Failed to fetch" without it. Never reached production
+# (still running older code as of this fix), but would have broken every authenticated request the
+# moment the JWT-verification commit shipped.
 _LOCALHOST_ORIGIN_REGEX = r"^http://(localhost|127\.0\.0\.1)(:\d+)?$"
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["https://neet-ai-jet.vercel.app"],
     allow_origin_regex=_LOCALHOST_ORIGIN_REGEX,
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "X-Admin-Key"],
+    allow_headers=["Content-Type", "X-Admin-Key", "Authorization"],
     expose_headers=["X-Cache"],
 )
 
@@ -804,6 +816,7 @@ class ReportQuestionRequest(BaseModel):
     user_id: str
     reason: str
     optional_note: str = ""
+    solution_open: bool = False
 
 class ReportDiagramRequest(BaseModel):
     diagram_id: int
@@ -5319,7 +5332,7 @@ async def usage_summary(verified_user_id: str = Depends(_get_verified_user_id)):
         print(f"USAGE SUMMARY ERROR: {e}", flush=True)
         raise HTTPException(status_code=500, detail="Failed to load usage summary")
 
-REPORT_REASONS = {"wrong_answer", "unclear", "diagram_issue", "duplicate", "other"}
+REPORT_REASONS = {"wrong_answer", "unclear", "diagram_issue", "duplicate", "other", "solution_wrong"}
 MAX_REPORTS_PER_DAY = 20
 # mustafatasscr7@gmail.com (owner account) -- exempt from the daily report cap by request, so
 # testing/QA-flagging real content issues isn't throttled like an ordinary student account.
@@ -5352,11 +5365,29 @@ async def report_question(req: ReportQuestionRequest, _: None = Depends(rate_lim
             if len(today_rows.json()) >= MAX_REPORTS_PER_DAY:
                 raise HTTPException(status_code=429, detail="You've reached today's report limit. Try again tomorrow.")
         note = (req.optional_note or "").strip()[:500] or None
+        report_payload = {"pyq_id": req.pyq_id, "user_id": req.user_id, "reason": req.reason, "optional_note": note, "solution_open_at_report": req.solution_open}
         response = await async_client.post(
             f"{SUPABASE_URL}/rest/v1/question_reports",
             headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=minimal"},
-            json={"pyq_id": req.pyq_id, "user_id": req.user_id, "reason": req.reason, "optional_note": note}
+            json=report_payload
         )
+        # solution_open_at_report needs add_solution_open_to_question_reports.sql run first --
+        # until that happens (or in case it never does), PostgREST returns PGRST204 "column not
+        # found" for the WHOLE insert. That one extra field is a best-effort bonus, never
+        # something that should be able to take the actual report down with it, so retry once
+        # without it rather than surfacing an error to the student.
+        if response.status_code == 400:
+            try:
+                missing_column = response.json().get("code") == "PGRST204"
+            except Exception:
+                missing_column = False
+            if missing_column:
+                report_payload.pop("solution_open_at_report")
+                response = await async_client.post(
+                    f"{SUPABASE_URL}/rest/v1/question_reports",
+                    headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=minimal"},
+                    json=report_payload
+                )
         if response.status_code >= 400:
             return {"error": response.text}
         # Pulled out of student circulation immediately on report, not just once an admin gets to
