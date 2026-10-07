@@ -2034,7 +2034,7 @@ let selectedImages = [];
         const base64 = dataUrl.split(',')[1];
         const res = await fetch(`${API_BASE}/chat-image-upload`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
           body: JSON.stringify({ data: base64, media_type, user_id: session.user.id })
         });
         const json = await res.json();
@@ -2055,7 +2055,7 @@ let selectedImages = [];
         const base64 = dataUrl.split(',')[1];
         const res = await fetch(`${API_BASE}/chat-pdf-upload`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
           body: JSON.stringify({ data: base64, user_id: session.user.id })
         });
         const json = await res.json();
@@ -3337,7 +3337,7 @@ let selectedImages = [];
         }
         const res = await fetch(`${API_BASE}/report-question`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
           body: JSON.stringify({ pyq_id: pyqId, user_id: session.user.id, reason: selected.value, optional_note: note }),
           signal: controller.signal
         });
@@ -3460,7 +3460,7 @@ let selectedImages = [];
         }
         const res = await fetch(`${API_BASE}/report-diagram`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
           body: JSON.stringify({ diagram_id: diagramId, user_id: session.user.id, source, reason: selected.value, optional_note: note }),
           signal: controller.signal
         });
@@ -6491,11 +6491,11 @@ function plainTextFromMarkdown(text) {
     // today, so exhausting the guest limit and then logging in doesn't grant a second, separate
     // allowance on top of the real free-tier one. Safe to call on every page load (idempotent --
     // the server zeroes the guest row after the first successful merge).
-    async function mergeGuestUsage(userId) {
+    async function mergeGuestUsage(userId, accessToken) {
       try {
         await fetch(`${API_BASE}/merge-guest-usage`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${accessToken}` },
           body: JSON.stringify({ user_id: userId })
         });
       } catch (e) { /* best-effort -- a failed merge just means refreshUsageBanner reflects pre-merge state */ }
@@ -7785,7 +7785,7 @@ function plainTextFromMarkdown(text) {
       try {
         const res = await fetch(`${API_BASE}/session/list`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
           body: JSON.stringify({ user_id: session.user.id, device_id: getDeviceId() })
         });
         const data = await res.json();
@@ -7830,7 +7830,7 @@ function plainTextFromMarkdown(text) {
       try {
         const res = await fetch(`${API_BASE}/session/logout`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
           body: JSON.stringify({ user_id: session.user.id, target_device_id: targetDeviceId })
         });
         if (!res.ok) throw new Error('logout failed');
@@ -7980,7 +7980,7 @@ function plainTextFromMarkdown(text) {
           emailEl.textContent = user.email;
           emailEl.style.display = 'block';
         }
-        mergeGuestUsage(user.id).then(refreshUsageBanner);
+        mergeGuestUsage(user.id, session.access_token).then(refreshUsageBanner);
         updateStreak().then(() => {
   client.from('user_streaks').select('current_streak').eq('user_id', user.id).single().then(({ data }) => {
     if (data && data.current_streak > 0) {

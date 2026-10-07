@@ -781,7 +781,7 @@
         }
         const res = await fetch(`${API_BASE}/report-question`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
           body: JSON.stringify({ pyq_id: pyqId, user_id: session.user.id, reason: selected.value, optional_note: note }),
           signal: controller.signal
         });

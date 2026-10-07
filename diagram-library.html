@@ -660,7 +660,7 @@ let allDiagrams = [];      // everything matching the current Subject+Class fetc
         }
         const res = await fetch(`${API_BASE}/report-diagram`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
           body: JSON.stringify({ diagram_id: diagramId, user_id: session.user.id, source, reason: selected.value, optional_note: note }),
           signal: controller.signal
         });

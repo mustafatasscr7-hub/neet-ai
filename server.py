@@ -1566,13 +1566,19 @@ class SessionListRequest(BaseModel):
     device_id: str = ""  # used only to flag which row is "this" session in the response
 
 @app.post("/session/list")
-async def session_list(req: SessionListRequest):
+async def session_list(req: SessionListRequest, verified_user_id: str = Depends(_get_verified_user_id)):
     """Powers the Active Sessions table in chat.html's Account settings tab. Returns only
     sessions that are actually active right now (same window used to enforce the device limit,
     so this list matches what's really counted against it) -- kicked-out and long-idle rows are
-    left out rather than accumulating forever. Sorted most-recently-active first, per spec."""
-    if not req.user_id:
-        return {"sessions": []}
+    left out rather than accumulating forever. Sorted most-recently-active first, per spec.
+
+    Previously trusted req.user_id directly -- same IDOR class as /referral/status, except here
+    it meant anyone could list another account's devices/locations just by knowing their user_id.
+    The one real call site already requires a session first, so this is a real 401, not an empty
+    list."""
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    req.user_id = verified_user_id
     try:
         active_cutoff = datetime.now(timezone.utc) - timedelta(minutes=DEVICE_SESSION_ACTIVE_WINDOW_MINUTES)
         resp = await async_client.get(
@@ -1605,14 +1611,21 @@ class SessionLogoutRequest(BaseModel):
     target_device_id: str  # the session being logged out, may be the caller's own device
 
 @app.post("/session/logout")
-async def session_logout(req: SessionLogoutRequest):
+async def session_logout(req: SessionLogoutRequest, verified_user_id: str = Depends(_get_verified_user_id)):
     """Manual logout from the Active Sessions list -- an immediate kick (no grace period; the
     student explicitly chose this, unlike the automatic device-limit kick). Reuses the exact same
     kicked_at mechanism, so the target device is discovered and signed out via its own next
     heartbeat exactly like an over-limit kick, and the freed slot is picked up automatically by
-    the device-limit check on any subsequent login (no separate bookkeeping needed)."""
-    if not req.user_id or not req.target_device_id:
-        raise HTTPException(status_code=400, detail="user_id and target_device_id are required")
+    the device-limit check on any subsequent login (no separate bookkeeping needed).
+
+    Previously trusted req.user_id directly -- same IDOR class as /referral/status, except here
+    it meant anyone could log out any other account's devices just by knowing their user_id. Both
+    real call sites already require a session first, so this is a real 401, not a silent no-op."""
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    req.user_id = verified_user_id
+    if not req.target_device_id:
+        raise HTTPException(status_code=400, detail="target_device_id is required")
     try:
         resp = await async_client.patch(
             f"{SUPABASE_URL}/rest/v1/active_sessions",
@@ -5206,9 +5219,14 @@ async def guest_usage_status(request: Request):
 # Zeroes the guest row after merging so a repeat call (page refresh, multiple tabs) doesn't
 # double-count -- safe to call on every page load, not just the first one after login.
 @app.post("/merge-guest-usage")
-async def merge_guest_usage(req: MergeGuestUsageRequest, request: Request):
-    if not req.user_id:
-        return {"merged": 0}
+async def merge_guest_usage(req: MergeGuestUsageRequest, request: Request, verified_user_id: str = Depends(_get_verified_user_id)):
+    # Same IDOR class as /referral/status -- the one real call site only ever fires right after
+    # client.auth.getSession() has already confirmed a real session exists (see chat.html, where
+    # this is called from inside `if (session) { ... mergeGuestUsage(user.id) ... }`), so a real
+    # 401 here cannot affect an actual guest; a guest never had a session to reach this call from.
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    req.user_id = verified_user_id
     ip = _client_ip(request)
     today = _ist_today()
     try:
@@ -5350,9 +5368,12 @@ def _ist_today_start_utc_iso() -> str:
 # generic per-IP rate_limiter below guards against rapid-fire bursts, this endpoint's own
 # per-user daily count enforces the actual 20/day business rule on top of that.
 @app.post("/report-question")
-async def report_question(req: ReportQuestionRequest, _: None = Depends(rate_limiter(20, 60))):
-    if not req.user_id:
-        raise HTTPException(status_code=401, detail="Please log in to report a question.")
+async def report_question(req: ReportQuestionRequest, _: None = Depends(rate_limiter(20, 60)), verified_user_id: str = Depends(_get_verified_user_id)):
+    # Same IDOR class as /referral/status -- every real call site already requires a session
+    # before submitting a report, so this is a real 401, not a behavior change for them.
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    req.user_id = verified_user_id
     if req.reason not in REPORT_REASONS:
         return {"error": "Invalid reason"}
     try:
@@ -5423,9 +5444,11 @@ DIAGRAM_REPORT_SOURCES = {"chat", "library"}
 # (not blended with question reports) rather than querying both tables on every submit -- 20/day
 # is already a generous anti-spam ceiling for a feature this size on its own.
 @app.post("/report-diagram")
-async def report_diagram(req: ReportDiagramRequest, _: None = Depends(rate_limiter(20, 60))):
-    if not req.user_id:
-        raise HTTPException(status_code=401, detail="Please log in to report a diagram.")
+async def report_diagram(req: ReportDiagramRequest, _: None = Depends(rate_limiter(20, 60)), verified_user_id: str = Depends(_get_verified_user_id)):
+    # Same IDOR class as /referral/status -- see /report-question's identical comment above.
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    req.user_id = verified_user_id
     if req.reason not in DIAGRAM_REPORT_REASONS:
         return {"error": "Invalid reason"}
     if req.source not in DIAGRAM_REPORT_SOURCES:
@@ -5666,10 +5689,18 @@ async def get_mock_test_questions(_: None = Depends(rate_limiter(20, 60))):
         return {"error": "Something went wrong. Please try again."}
 
 @app.get("/mock-tests/available")
-async def get_available_mock_tests(user_id: str = ""):
+async def get_available_mock_tests(user_id: str = "", verified_user_id: str = Depends(_get_verified_user_id)):
     # Published tests minus ones this user has already completed. RLS on mock_tests
     # already restricts the anon key to is_published=true rows, so the published-only
     # filter here is belt-and-suspenders, not the only guard.
+    #
+    # Same IDOR class as /referral/status -- the user_id param above used to be trusted directly
+    # for the "already completed" lookup, letting anyone see which mock tests another account has
+    # taken just by passing their id. The one real call site already requires a session first, so
+    # this is a real 401, not a behavior change for it.
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    user_id = verified_user_id
     try:
         headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
         response = await async_client.get(
@@ -6992,7 +7023,12 @@ class SolveAlternateMethodRequest(BaseModel):
     user_id: str = ""
 
 @app.post("/solve-alternate-method")
-async def solve_alternate_method_endpoint(req: SolveAlternateMethodRequest, request: Request, _: None = Depends(rate_limiter(20, 60))):
+async def solve_alternate_method_endpoint(req: SolveAlternateMethodRequest, request: Request, _: None = Depends(rate_limiter(20, 60)), verified_user_id: str = Depends(_get_verified_user_id)):
+    # Mirrors /solve, not /referral/status -- guests can view alternate methods same as the
+    # primary solution (no login wall here, ever), so this never 401s on a missing token. Only
+    # stops trusting the client's own user_id for token-usage attribution, same IDOR class the
+    # /referral/status audit found elsewhere.
+    req.user_id = verified_user_id
     if not req.pyq_id or not req.primary_solution:
         return {"alternate_method": ""}
 
@@ -7257,9 +7293,12 @@ MAX_CHAT_IMAGE_BYTES = 8 * 1024 * 1024
 # once, unlike a text message which is always exactly one -- while still comfortably covering a
 # student attaching several images across a session.
 @app.post("/chat-image-upload")
-async def chat_image_upload(body: ChatImageUploadRequest, _: None = Depends(rate_limiter(10, 60))):
-    if not body.user_id:
-        return {"error": "Not logged in"}
+async def chat_image_upload(body: ChatImageUploadRequest, _: None = Depends(rate_limiter(10, 60)), verified_user_id: str = Depends(_get_verified_user_id)):
+    # Same IDOR class as /referral/status -- every real call site already requires a session
+    # before attempting an upload, so this is a real 401, not a silent "not logged in" 200.
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    body.user_id = verified_user_id
     if not body.media_type.startswith("image/"):
         return {"error": "Only image attachments can be uploaded"}
     try:
@@ -7328,9 +7367,11 @@ async def chat_image_upload(body: ChatImageUploadRequest, _: None = Depends(rate
 # shape.
 MAX_CHAT_PDF_BYTES = 15 * 1024 * 1024
 @app.post("/chat-pdf-upload")
-async def chat_pdf_upload(body: ChatPdfUploadRequest, _: None = Depends(rate_limiter(10, 60))):
-    if not body.user_id:
-        return {"error": "Not logged in"}
+async def chat_pdf_upload(body: ChatPdfUploadRequest, _: None = Depends(rate_limiter(10, 60)), verified_user_id: str = Depends(_get_verified_user_id)):
+    # Same IDOR class as /referral/status -- see /chat-image-upload's identical comment above.
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    body.user_id = verified_user_id
     try:
         file_bytes = base64.b64decode(body.data)
     except Exception:
