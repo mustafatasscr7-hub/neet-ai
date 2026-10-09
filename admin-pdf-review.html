@@ -115,6 +115,18 @@
   .q-diagram-slot { margin-top: 10px; padding: 10px; border: 1px dashed #2a2a2a; border-radius: 8px; }
   .q-diagram-slot img { max-width: 160px; max-height: 160px; border-radius: 6px; margin-top: 8px; display: block; }
   .q-diagram-slot .diag-status { font-size: 11px; color: #666; margin-top: 6px; }
+  /* Click-to-enlarge wrapper around every uploaded diagram thumbnail -- .diag-thumb-wrap is
+     inline-block so it hugs the <img> inside it exactly (the hint overlay below is positioned
+     relative to this, not the img's own box, since an <img> can't host a ::after/absolute child
+     sized correctly before it's loaded). */
+  .diag-thumb-wrap { position: relative; display: inline-block; margin-top: 8px; }
+  .diag-thumb-wrap img { cursor: pointer; margin-top: 0; }
+  .diag-thumb-hint {
+    position: absolute; left: 0; right: 0; bottom: 0; padding: 4px 6px; border-radius: 0 0 6px 6px;
+    background: #000000b0; color: #fff; font-size: 10px; text-align: center;
+    opacity: 0; transition: opacity 0.15s ease; pointer-events: none;
+  }
+  .diag-thumb-wrap:hover .diag-thumb-hint { opacity: 1; }
   .diag-paste-zone { border: 1px dashed #333; border-radius: 6px; padding: 6px 8px; }
   .diag-paste-zone:focus { outline: none; border-color: #4f8ef7; }
   .diag-paste-zone.drag-over { border-color: #4f8ef7; background: rgba(79,142,247,0.08); }
@@ -144,6 +156,26 @@
      -- it was rendering visible-but-unclickable (buried under the overlay's own click layer)
      until this was raised above it. */
   :root { --keyboard-zindex: 960; }
+
+  /* Diagram lightbox -- one shared instance (same convention as #formulaModalOverlay/
+     #pdfHistoryOverlay above), opened by clicking any uploaded diagram thumbnail. z-index above
+     both of those since it can be reached while either is theoretically still in the DOM. */
+  #diagramLightboxOverlay {
+    display: none; position: fixed; inset: 0; background: #000000d9; z-index: 970;
+    align-items: center; justify-content: center; overflow: auto; padding: 40px;
+  }
+  #diagramLightboxImg {
+    max-width: 90vw; max-height: 90vh; object-fit: contain; border-radius: 4px;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.6); cursor: zoom-in;
+  }
+  /* Zoomed: natural pixel size instead of the 90vw/90vh cap -- can exceed the viewport, which is
+     why the overlay itself has overflow:auto (step 6's "scroll if larger than the screen"). */
+  #diagramLightboxImg.zoomed { max-width: none; max-height: none; cursor: zoom-out; }
+  #diagramLightboxClose {
+    position: fixed; top: 16px; right: 20px; background: none; border: none; color: #fff;
+    font-size: 26px; line-height: 1; cursor: pointer; padding: 6px 10px; opacity: 0.8;
+  }
+  #diagramLightboxClose:hover { opacity: 1; }
 </style>
 </head>
 <body>
@@ -197,6 +229,11 @@
       </div>
       <div id="pdfHistoryList" style="font-size:13px;color:#ccc;">Loading...</div>
     </div>
+  </div>
+
+  <div id="diagramLightboxOverlay" onclick="handleLightboxBackdropClick(event)">
+    <img id="diagramLightboxImg" src="" onclick="toggleLightboxZoom(event)">
+    <button type="button" id="diagramLightboxClose" onclick="closeDiagramLightbox()">✕</button>
   </div>
 
   <div class="panel">
@@ -1763,7 +1800,7 @@
           <div class="diag-paste-hint">or click here and paste (Ctrl+V), or drag an image in</div>
         </div>
         <div class="diag-status" id="diagram-status-${b.id}"></div>
-        <div id="diagram-preview-${b.id}">${b.diagram_url ? `<img src="${escapeHtml(b.diagram_url)}"><br><button type="button" class="danger-link" onclick="removeDiagram('${b.id}')">✕ Remove photo</button>` : ''}</div>
+        <div id="diagram-preview-${b.id}">${b.diagram_url ? diagramPreviewHtml(b.diagram_url, `removeDiagram('${b.id}')`) : ''}</div>
       </div>
 
       <div class="q-diagram-slot" id="option-diagram-slot-${b.id}" style="display:${hasAnyOptionDiagram(b) ? 'block' : 'none'}">
@@ -1777,7 +1814,7 @@
               <div class="diag-paste-hint">or click + paste (Ctrl+V) or drag in</div>
             </div>
             <div class="diag-status" id="opt-diagram-status-${opt}-${b.id}"></div>
-            <div id="opt-diagram-preview-${opt}-${b.id}">${b['option_' + opt + '_diagram_url'] ? `<img src="${escapeHtml(b['option_' + opt + '_diagram_url'])}"><br><button type="button" class="danger-link" onclick="removeOptionDiagram('${b.id}','${opt}')">✕ Remove photo</button>` : ''}</div>
+            <div id="opt-diagram-preview-${opt}-${b.id}">${b['option_' + opt + '_diagram_url'] ? diagramPreviewHtml(b['option_' + opt + '_diagram_url'], `removeOptionDiagram('${b.id}','${opt}')`) : ''}</div>
           </div>`).join('')}
         </div>
       </div>
@@ -1986,9 +2023,56 @@
     document.getElementById('diagram-slot-' + id).style.display = checked ? 'block' : 'none';
   }
 
-  // Shared by file-picker uploads and clipboard-paste uploads for both the stem diagram and
-  // per-option diagrams -- onSuccess wires the result back into whichever block/field/preview
-  // triggered the upload.
+  // Shared by every diagram preview (stem + all 4 options, both the initial render and every
+  // re-render after an upload) -- the one place that builds the "uploaded thumbnail + Remove
+  // photo button" markup, now wrapped for the click-to-enlarge lightbox (see the delegated click
+  // listener right below). removeOnclickJs is inlined as-is into the button's onclick, same as
+  // every call site already did before this was factored out.
+  function diagramPreviewHtml(url, removeOnclickJs) {
+    return `<span class="diag-thumb-wrap"><img src="${escapeHtml(url)}" title="Click to enlarge"><span class="diag-thumb-hint">🔍 Click to enlarge</span></span><br><button type="button" class="danger-link" onclick="${removeOnclickJs}">✕ Remove photo</button>`;
+  }
+
+  // Event delegation (not a listener per thumbnail) so this keeps working for every diagram
+  // preview re-render -- upload, paste, drag-drop, a question added later, Save & Add Another,
+  // all of which replace a preview div's innerHTML wholesale and would silently orphan any
+  // listener attached directly to the old <img> element.
+  document.addEventListener('click', (e) => {
+    const thumb = e.target.closest('.diag-thumb-wrap img');
+    if (thumb) openDiagramLightbox(thumb.src);
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    if (document.getElementById('diagramLightboxOverlay').style.display !== 'none') closeDiagramLightbox();
+  });
+
+  function openDiagramLightbox(url) {
+    const img = document.getElementById('diagramLightboxImg');
+    img.src = url;
+    img.classList.remove('zoomed');
+    document.getElementById('diagramLightboxOverlay').style.display = 'flex';
+  }
+
+  function closeDiagramLightbox() {
+    document.getElementById('diagramLightboxOverlay').style.display = 'none';
+    document.getElementById('diagramLightboxImg').src = '';
+  }
+
+  // Only closes when the backdrop itself is the click target -- the <img> and the close button
+  // are also inside this element, so a plain "did this click land inside the overlay" check would
+  // close it on every image click too, fighting toggleLightboxZoom below.
+  function handleLightboxBackdropClick(event) {
+    if (event.target.id === 'diagramLightboxOverlay') closeDiagramLightbox();
+  }
+
+  // Optional (task step 6): click the enlarged image again to view it at natural pixel size
+  // (useful for small text in graphs/axes) instead of capped to 90vw/90vh -- the overlay's own
+  // overflow:auto lets it scroll if that's bigger than the viewport.
+  function toggleLightboxZoom(event) {
+    event.stopPropagation();
+    document.getElementById('diagramLightboxImg').classList.toggle('zoomed');
+  }
+
   async function uploadImageFile(file, statusElId, onSuccess) {
     const statusEl = document.getElementById(statusElId);
     statusEl.textContent = 'Uploading...';
@@ -2061,7 +2145,7 @@
     await uploadImageFile(file, 'diagram-status-' + id, (url) => {
       const block = blocks[findBlockIndex(id)];
       block.diagram_url = url;
-      document.getElementById('diagram-preview-' + id).innerHTML = `<img src="${escapeHtml(url)}"><br><button type="button" class="danger-link" onclick="removeDiagram('${id}')">✕ Remove photo</button>`;
+      document.getElementById('diagram-preview-' + id).innerHTML = diagramPreviewHtml(url, `removeDiagram('${id}')`);
     });
   }
 
@@ -2072,7 +2156,7 @@
     await uploadImageFile(file, 'diagram-status-' + id, (url) => {
       const block = blocks[findBlockIndex(id)];
       block.diagram_url = url;
-      document.getElementById('diagram-preview-' + id).innerHTML = `<img src="${escapeHtml(url)}"><br><button type="button" class="danger-link" onclick="removeDiagram('${id}')">✕ Remove photo</button>`;
+      document.getElementById('diagram-preview-' + id).innerHTML = diagramPreviewHtml(url, `removeDiagram('${id}')`);
     });
   }
 
@@ -2152,7 +2236,7 @@
     await uploadImageFile(file, `opt-diagram-status-${opt}-${id}`, (url) => {
       const block = blocks[findBlockIndex(id)];
       block['option_' + opt + '_diagram_url'] = url;
-      document.getElementById(`opt-diagram-preview-${opt}-${id}`).innerHTML = `<img src="${escapeHtml(url)}"><br><button type="button" class="danger-link" onclick="removeOptionDiagram('${id}','${opt}')">✕ Remove photo</button>`;
+      document.getElementById(`opt-diagram-preview-${opt}-${id}`).innerHTML = diagramPreviewHtml(url, `removeOptionDiagram('${id}','${opt}')`);
     });
   }
 
@@ -2163,7 +2247,7 @@
     await uploadImageFile(file, `opt-diagram-status-${opt}-${id}`, (url) => {
       const block = blocks[findBlockIndex(id)];
       block['option_' + opt + '_diagram_url'] = url;
-      document.getElementById(`opt-diagram-preview-${opt}-${id}`).innerHTML = `<img src="${escapeHtml(url)}"><br><button type="button" class="danger-link" onclick="removeOptionDiagram('${id}','${opt}')">✕ Remove photo</button>`;
+      document.getElementById(`opt-diagram-preview-${opt}-${id}`).innerHTML = diagramPreviewHtml(url, `removeOptionDiagram('${id}','${opt}')`);
     });
   }
 
