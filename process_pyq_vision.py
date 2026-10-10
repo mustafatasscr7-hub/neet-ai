@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import io
 import base64
 import concurrent.futures
 import fitz
@@ -258,10 +259,13 @@ def _block_text_from_dict(block):
     line_texts = [_reconstruct_line_text(line) for line in block.get("lines", [])]
     return "\n".join(t for t in line_texts if t)
 
-# Matches a LINE whose ENTIRE text is just a numbered-option marker ("1.", "2.", ... "4.") and
-# nothing else -- see _reconstruct_fragmented_options below for why this specific shape is the
-# signal that a whole option list needs special handling.
-_BARE_OPTION_MARKER_RE = re.compile(r'^([1-4])\.\s*$')
+# Matches a LINE whose ENTIRE text is just a numbered-option marker and nothing else -- see
+# _reconstruct_fragmented_options below for why this specific shape is the signal that a whole
+# option list needs special handling. Accepts "1.", "1)", "(1)" (and the lettered equivalents
+# "a.", "a)", "(a)", case-insensitive) since a source PDF's own option-numbering style varies --
+# the EMI chapter uses "1."-"4." throughout, but nothing about the fragmentation this exists to
+# repair is specific to that one punctuation choice.
+_BARE_OPTION_MARKER_RE = re.compile(r'^\(?([1-4]|[a-dA-D])[.)]\s*$')
 # An option short enough to sit entirely on the same line as its own marker (e.g. "3. vd =
 # constant") needs no zone-reconstruction for its own text, but it still has to be recognized as
 # marker "3" for the sequence-continuity check below, or a genuinely fragmented neighbor (marker
@@ -269,7 +273,15 @@ _BARE_OPTION_MARKER_RE = re.compile(r'^([1-4])\.\s*$')
 # it (confirmed live: Current Electricity Q5, "vd ~ E" / "vd ~ 1/E" fragmented across two blocks,
 # "vd = constant" complete on one line -- without this, only options 1-2 ever got reconstructed
 # and 3-4 were left dangling, out of order, in the stem block's own leftover text).
-_SELF_CONTAINED_OPTION_RE = re.compile(r'^([1-4])\.\s+(\S.*)$')
+_SELF_CONTAINED_OPTION_RE = re.compile(r'^\(?([1-4]|[a-dA-D])[.)]\s+(\S.*)$')
+_LETTER_MARKER_TO_NUM = {"a": 1, "b": 2, "c": 3, "d": 4}
+
+def _marker_label_to_num(label):
+    """Both regexes above capture either a digit 1-4 or a letter a-d/A-D in the same group --
+    normalizes either to its 1-4 position so every run/grouping/zone check below this point stays
+    purely integer-based and completely unaware of which punctuation or alphabet the source PDF
+    actually used."""
+    return int(label) if label.isdigit() else _LETTER_MARKER_TO_NUM[label.lower()]
 # A decimal number that happens to start with 1-4 ("2.5 x 10^6") looks IDENTICAL to a real
 # marker+answer under the regex above ("2." + " 5 x 10^6") -- confirmed live: Current Electricity
 # Q4's four mobility values all literally begin "2.5"/"2.5"/"2.25"/"2.25", so all four got
@@ -337,11 +349,23 @@ def _reconstruct_fragmented_options(blocks, mid_x, page_width):
             text = _reconstruct_line_text(line).strip()
             m = _BARE_OPTION_MARKER_RE.match(text)
             if m:
-                all_markers.append({"num": int(m.group(1)), "bbox": line["bbox"], "block": b, "line": line, "self_text": None})
+                all_markers.append({"num": _marker_label_to_num(m.group(1)), "bbox": line["bbox"], "block": b, "line": line, "self_text": None})
                 continue
             m2 = _SELF_CONTAINED_OPTION_RE.match(text)
             if m2 and _HAS_LETTER_RE.search(m2.group(2)):
-                all_markers.append({"num": int(m2.group(1)), "bbox": line["bbox"], "block": b, "line": line, "self_text": m2.group(2)})
+                all_markers.append({"num": _marker_label_to_num(m2.group(1)), "bbox": line["bbox"], "block": b, "line": line, "self_text": m2.group(2)})
+
+    # A block is only a valid "next option list starts here" signal (see next_boundary_ys below)
+    # if it actually contains that list's OWN marker 1 -- a block containing only marker 2/3/4
+    # (e.g. a lone "4." fused to nothing else) is mid-list, not a list start, and must never stop
+    # an EARLIER group's zone. Confirmed live (EMI Q8/Q9, Faraday's Law page): Q9's lone bare "4."
+    # block sat at the same x0 as Q8's own option markers and matched the old boundary check
+    # (which accepted ANY digit 1-4), capping Q8's zone so late that Q9's own un-numbered fraction
+    # fragments (meant for Q9's options) got vacuumed into Q8's option 4 instead.
+    _blocks_with_marker_num = {}
+    for m in all_markers:
+        _blocks_with_marker_num.setdefault(id(m["block"]), set()).add(m["num"])
+    ineligible_boundary_block_ids = {bid for bid, nums in _blocks_with_marker_num.items() if 1 not in nums}
 
     # Grouped PER PAGE-COLUMN, not by a single page-wide y0 sort -- on a real 2-column page,
     # sorting every marker on the page together interleaves two DIFFERENT questions' markers
@@ -391,9 +415,19 @@ def _reconstruct_fragmented_options(blocks, mid_x, page_width):
         # Bound the zone's bottom at whatever comes next in this same column (the next question's
         # own stem, or another option list's own "1." for a short, closely-spaced option block) --
         # a fixed trailing margin alone bled into whatever followed whenever options were short.
+        #
+        # Same COLUMN SIDE (not a tight +/-3pt x0 match) -- a genuine question-stem-start block
+        # routinely sits a few extra points further right than its own options' marker column in
+        # this layout (confirmed live, EMI: markers at x0=41.1, the stem-start block "9 A coil
+        # having..." at x0=46.8 -- a tight x0 match silently excluded it as a boundary candidate,
+        # leaving the zone to either run unbounded or lock onto a much further-away false match).
+        # ineligible_boundary_block_ids (see above) excludes a bare mid-list marker like "4." from
+        # ending this zone early/wrongly -- only a real list-start ("1.") or a non-option stem
+        # block can.
         next_boundary_ys = [
             b["bbox"][1] for b in blocks
-            if b["bbox"][1] > last_y1 and abs(b["bbox"][0] - marker_x0) <= 3
+            if b["bbox"][1] > last_y1 and (b["bbox"][0] < mid_x) == (marker_x0 < mid_x)
+            and id(b) not in ineligible_boundary_block_ids
             and _ANY_NUMBER_START_RE.match(_block_text_from_dict(b).strip())
         ]
         zone_y1 = (min(next_boundary_ys) - 2) if next_boundary_ys else (last_y1 + 15)
@@ -453,8 +487,22 @@ def _reconstruct_fragmented_options(blocks, mid_x, page_width):
             if block_contributed:
                 excluded_ids.add(id(b))
 
-        if not content_lines:
-            continue  # markers with no matching zone content -- leave this page's block-level path untouched
+        # A self-contained marker (e.g. "1. 0.14 V") already carries its own full option text in
+        # self_text -- it needs NO extra content_lines at all, unlike a bare marker ("1.") whose
+        # entire value depends on finding fragments nearby. The old check here required
+        # content_lines unconditionally, so a group made ENTIRELY of self-contained markers with
+        # nothing further to gather (the common case -- there's nothing missing) hit this bail-out
+        # every time: the marker's own line had already been stripped out of its parent block
+        # (see parent-block handling above), and since this function never ran the loop below for
+        # it either, the option's already-known text was simply thrown away. Confirmed live (EMI
+        # Q10/Q11/Q12): three plain, non-fraction option lists vanished completely, each one
+        # producing a real "Option(s) A, B, C, D came back empty" flag on a question whose options
+        # were sitting right there in the PDF the whole time. Only bail out here when there is
+        # truly nothing recoverable for ANY marker in the group -- no self_text and no
+        # content_lines -- matching this function's own "leave this page's block-level path
+        # untouched" intent for a genuinely unresolvable case.
+        if not content_lines and all(m["self_text"] is None for m in markers):
+            continue  # markers with no matching zone content and no self text -- leave this page's block-level path untouched
 
         marker_y_centers = [(m["num"], (m["bbox"][1] + m["bbox"][3]) / 2) for m in markers]
         by_num = {m["num"]: [] for m in markers}
@@ -971,6 +1019,86 @@ def _flag_suspicious_mcq_options(q):
         q["needs_review"] = True
         q["review_reason"] = f"Option(s) {pairs} came back identical -- extraction may have scrambled this question's options, please review manually."
 
+# Catches content silently LOST during reconstruction (as opposed to _flag_suspicious_mcq_options,
+# which catches options merged/scrambled into each other -- a different failure shape). Confirmed
+# live: the EMI PDF's Q2 ("a uniform magnetic field of induction 1/pi (Wb/m2) ... axis makes an
+# angle of 60 degrees with vec B") had its fraction, unit and vector swallowed into an unrelated
+# question's option zone (see _reconstruct_fragmented_options) and NOTHING was flagged -- the
+# extracted stem just silently read as a shorter, damaged sentence. Only a NUMBER combined with a
+# real math/unit signal (degree sign, pi, mu, Omega, a slash, an arrow) is worth checking -- a bare
+# "2" or "10" is far too common in ordinary prose to mean anything on its own.
+_NOTABLE_RAW_TOKEN_RE = re.compile(
+    r'\d+\s*/\s*\d*\.?\d*\s*[a-zA-ZπμΩ]*'    # fractions: "1/pi", "2/3", "0.02/5"
+    r'|\d+(?:\.\d+)?\s*°'                        # degree values: "60°"
+    r'|→\s*[A-Za-z]'                             # inline vector arrows: "->B"
+    r'|\([^()\n]{1,24}\)'                        # short parenthesized unit/value groups: "(Wb/m2)"
+)
+_LATEX_ESCAPE_NORMALIZE = {
+    r'\times': 'x', r'\pi': 'π', r'\mu': 'μ', r'\Omega': 'Ω', r'\vec': '', r'\text': '',
+    r'\circ': '°',
+}
+# A raw "1/pi" surviving as the semantically-equivalent "$\frac{1}{\pi}$" (slash notation ->
+# LaTeX frac command) must still count as present -- confirmed needed live: this is exactly the
+# shape the FIXED code produces for Q2's own fraction. Rewritten to "1/\pi" BEFORE the plain
+# backslash-command replacements above run, so "\pi" inside it still normalizes to "π" the same
+# way it would anywhere else.
+_LATEX_FRAC_RE = re.compile(r'\\frac\{([^{}]*)\}\{([^{}]*)\}')
+
+def _normalize_for_token_compare(text):
+    """Strips whitespace, digit-grouping/LaTeX punctuation and case so the same number/unit
+    surviving in a DIFFERENT textual form (e.g. raw "1/pi (Wb/m2)" that a model correctly
+    re-expresses as "$\\frac{1}{\\pi}\\text{ Wb/m}^2$") still counts as present -- this check only
+    cares whether the underlying digits and unit/symbol letters survived somewhere, not their
+    exact formatting or LaTeX wrapping."""
+    if not text:
+        return ""
+    text = _LATEX_FRAC_RE.sub(lambda m: f"{m.group(1)}/{m.group(2)}", text)
+    for latex, plain in _LATEX_ESCAPE_NORMALIZE.items():
+        text = text.replace(latex, plain)
+    # "^" is just LaTeX's superscript marker (e.g. "m^2" for "m²") -- dropping it, not just the
+    # braces around it, is what makes that equivalent to a raw, non-LaTeX "m2".
+    return re.sub(r'[\s\$\\{}()^]+', '', text).lower()
+
+def _extract_notable_tokens(raw_text):
+    tokens = []
+    for m in _NOTABLE_RAW_TOKEN_RE.finditer(raw_text or ""):
+        token = m.group(0)
+        if re.search(r'\d', token) and re.search(r'[°πμΩ/→]', token):
+            tokens.append(token)
+    return tokens
+
+def find_missing_raw_tokens(raw_page_text, extracted_texts):
+    """Returns the notable raw-text tokens (deduped, normalized) that don't survive in ANY form
+    inside extracted_texts (an iterable of already-extracted strings -- a page's combined question
+    stems/options). Deliberately page-level, not per-question: pdfplumber's own reading order on a
+    real 2-column exam page interleaves unrelated questions (confirmed live on this same PDF), so
+    trying to attribute a raw token to exactly one question on a multi-question page would just be
+    a different kind of guess. A page-level flag is a strictly honest signal -- "something on this
+    page's raw text didn't make it into any extracted question" -- and reuses the exact flagging
+    plumbing scan_pdf_bytes already has for page-level issues."""
+    combined_norm = _normalize_for_token_compare(" ".join(t for t in extracted_texts if t))
+    missing = []
+    seen = set()
+    for token in _extract_notable_tokens(raw_page_text):
+        norm = _normalize_for_token_compare(token)
+        if not norm or norm in seen:
+            continue
+        seen.add(norm)
+        if norm not in combined_norm:
+            missing.append(token.strip())
+    return missing
+
+def _raw_pdfplumber_page_texts(pdf_bytes):
+    """Independent raw-text layer via pdfplumber, used ONLY for find_missing_raw_tokens's
+    safety-net comparison above -- never fed to any model and never used for extraction itself,
+    so adding this check can't regress the proven extraction path it's checking up on."""
+    import pdfplumber
+    texts = []
+    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+        for page in pdf.pages:
+            texts.append(page.extract_text() or "")
+    return texts
+
 def _parse_extraction_json(text, page_num):
     """Shared by both extraction paths (Gemini text-only and Claude Vision). Always runs the
     backslash fix BEFORE parsing rather than only as an exception fallback -- see
@@ -1084,6 +1212,29 @@ def scan_pdf_bytes(pdf_bytes, subject, max_workers=4):
                 "page": idx + 1,
                 "reason": f"Found {expected} question-number markers on this page but extracted 0 questions -- likely an extraction issue, not a genuinely empty page. Worth checking manually."
             })
+
+    # Safety net for content LOST during reconstruction rather than merged/scrambled (the shape
+    # _flag_suspicious_mcq_options already catches) -- e.g. a fraction or unit visible in the raw
+    # PDF text layer that silently never made it into any extracted question on its page (see
+    # find_missing_raw_tokens's docstring for why this is page-level, not per-question). Wrapped in
+    # its own try/except: this is an ADDITIONAL check layered on top of the proven extraction path,
+    # so a failure in it (a malformed PDF pdfplumber chokes on, etc.) must never take down the scan
+    # itself -- it just means this one extra safety net didn't run for this PDF.
+    try:
+        raw_page_texts = _raw_pdfplumber_page_texts(pdf_bytes)
+        for idx in to_extract:
+            if idx >= len(raw_page_texts):
+                continue
+            page_questions = results.get(idx, [])
+            extracted_texts = [q.get(f) for q in page_questions for f in _EXTRACTED_TEXT_FIELDS]
+            missing = find_missing_raw_tokens(raw_page_texts[idx], extracted_texts)
+            if missing:
+                flagged_pages.append({
+                    "page": idx + 1,
+                    "reason": f"The PDF's raw text layer contains {', '.join(repr(t) for t in missing[:5])} but no extracted question on this page includes it -- likely lost during extraction, worth checking manually."
+                })
+    except Exception as e:
+        print(f"    Raw-text safety-net check failed (non-fatal, skipped): {e}")
 
     questions = []
     for i, page in enumerate(pages):
