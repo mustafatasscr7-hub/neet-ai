@@ -199,9 +199,11 @@ async function showSettingsSection(section, clickedEl) {
             ${email ? `<span class="account-pill-value" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(email)}">${escapeHtml(email)}</span>` : ''}
             ${planLabel ? `<span class="account-pill-value" style="flex-shrink:0;">${escapeHtml(planLabel)}</span>` : ''}
             ${(!email && !planLabel) ? `<span class="account-pill-value">Not logged in</span>` : ''}
+            ${(!email && isLoggedIn) ? `<button onclick="showEmailLinkPanel()" class="account-pill-btn">Link email</button>` : ''}
           </div>
         </div>`;
         })()}
+        <div id="emailLinkPanel" style="display:none;padding:12px 0;border-bottom:1px solid rgba(255,255,255,0.07);"></div>
         <div class="account-row">
           <div class="account-row-label" data-i18n="chat.password">Password</div>
           <button onclick="resetPassword()" class="account-pill-btn" data-i18n="chat.sendResetEmail">Send Reset Email</button>
@@ -479,7 +481,7 @@ function onDisplayNameInput() {
   btn.classList.toggle('visible', input.value.trim() !== displayNameSavedValue.trim());
 }
 
-function saveDisplayName() {
+async function saveDisplayName() {
   const btn = document.getElementById('displayNameSaveBtn');
   const input = document.getElementById('displayNameInput');
   const name = input.value.trim();
@@ -487,19 +489,23 @@ function saveDisplayName() {
   btn.disabled = true;
   btn.classList.remove('success', 'error');
   btn.textContent = 'Saving...';
+  // Real persistence now (user_metadata.full_name via Supabase) -- this used to only mutate the
+  // DOM, never actually saving anything (confirmed while auditing the mobile app against this
+  // exact function). The try/catch below predates this and could never actually fail before;
+  // now a real network/validation error from updateUser() lands there for real.
   try {
+    const { error } = await client.auth.updateUser({ data: { full_name: name } });
+    if (error) throw error;
     document.querySelector('.profile-name').textContent = name;
     document.querySelector('.profile-avatar').textContent = name[0].toUpperCase();
     displayNameSavedValue = name;
+    btn.classList.add('success');
+    btn.textContent = '✓ Saved';
     setTimeout(() => {
-      btn.classList.add('success');
-      btn.textContent = '✓ Saved';
-      setTimeout(() => {
-        btn.disabled = false;
-        btn.classList.remove('success', 'visible');
-        btn.textContent = 'Save';
-      }, 1300);
-    }, 250);
+      btn.disabled = false;
+      btn.classList.remove('success', 'visible');
+      btn.textContent = 'Save';
+    }, 1300);
   } catch (e) {
     btn.disabled = false;
     btn.classList.add('error');
@@ -510,9 +516,40 @@ function saveDisplayName() {
 async function resetPassword() {
   const { data: { session } } = await client.auth.getSession();
   if (!session) { alert('Please log in first.'); return; }
+  if (!session.user.email) {
+    alert('Link an email first to reset your password.');
+    showEmailLinkPanel();
+    return;
+  }
   const { error } = await client.auth.resetPasswordForEmail(session.user.email);
   if (error) { alert('Error: ' + error.message); return; }
   alert('Password reset email sent!');
+}
+
+// ---------- Email linking (attach an email to a phone-only account; Supabase sends a
+// confirmation link, not an OTP -- once the user clicks it, the email just shows up here and on
+// Send Reset Email the next time the Account tab loads) ----------
+function showEmailLinkPanel() {
+  const panel = document.getElementById('emailLinkPanel');
+  if (!panel) return;
+  panel.style.display = 'block';
+  panel.innerHTML = `
+    <div style="display:flex;gap:8px;">
+      <input id="linkEmailInput" type="email" placeholder="Email address" style="flex:1;background:#0d0d0d;border:1px solid #2a2a2a;border-radius:8px;padding:6px 12px;color:#ececec;font-size:13px;font-family:Inter,sans-serif;outline:none;" />
+      <button onclick="sendLinkEmail()" style="padding:6px 14px;border-radius:8px;background:#4f8ef7;border:none;color:white;cursor:pointer;font-size:12px;font-family:Inter,sans-serif;">Send Link</button>
+    </div>
+    <div id="emailLinkMsg" style="font-size:12px;margin-top:8px;"></div>
+  `;
+}
+
+async function sendLinkEmail() {
+  const email = document.getElementById('linkEmailInput').value.trim();
+  const msgEl = document.getElementById('emailLinkMsg');
+  if (!email || !email.includes('@')) { msgEl.style.color = '#ef4444'; msgEl.textContent = 'Enter a valid email address'; return; }
+  const { error } = await client.auth.updateUser({ email });
+  if (error) { msgEl.style.color = '#ef4444'; msgEl.textContent = error.message; return; }
+  const panel = document.getElementById('emailLinkPanel');
+  panel.innerHTML = `<div style="font-size:12px;color:#555;">Check your inbox to confirm ${escapeHtml(email)}. Once confirmed, it'll show here.</div>`;
 }
 
 // ---------- Phone linking (attach a phone number to the CURRENT logged-in account) ----------
