@@ -757,7 +757,13 @@ async function renderUsageSection(isManualRefresh) {
 
   try {
     const [res, referralRes] = await Promise.all([
-      fetch(`${API_BASE}/usage/summary?user_id=${encodeURIComponent(session.user.id)}`),
+      // /usage/summary requires a verified Bearer token server-side (no client-supplied user_id
+      // is accepted at all anymore) -- this call was missing it entirely, so it always 401'd;
+      // chat.html's own /usage/summary calls already send it correctly. The query param is
+      // harmless/ignored leftover, kept rather than removed only to avoid touching the URL shape.
+      fetch(`${API_BASE}/usage/summary?user_id=${encodeURIComponent(session.user.id)}`, {
+        headers: { 'Authorization': `Bearer ${session.access_token}` }
+      }),
       fetch(`${API_BASE}/referral/status?user_id=${encodeURIComponent(session.user.id)}`, {
         headers: { 'Authorization': `Bearer ${session.access_token}` }
       })
