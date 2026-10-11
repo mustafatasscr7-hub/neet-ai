@@ -261,11 +261,17 @@ def _block_text_from_dict(block):
 
 # Matches a LINE whose ENTIRE text is just a numbered-option marker and nothing else -- see
 # _reconstruct_fragmented_options below for why this specific shape is the signal that a whole
-# option list needs special handling. Accepts "1.", "1)", "(1)" (and the lettered equivalents
-# "a.", "a)", "(a)", case-insensitive) since a source PDF's own option-numbering style varies --
-# the EMI chapter uses "1."-"4." throughout, but nothing about the fragmentation this exists to
-# repair is specific to that one punctuation choice.
-_BARE_OPTION_MARKER_RE = re.compile(r'^\(?([1-4]|[a-dA-D])[.)]\s*$')
+# option list needs special handling. Accepts "1.", "1)", "(1)" -- a source PDF's own
+# digit-marker punctuation varies, and nothing about the fragmentation this exists to repair is
+# specific to one punctuation choice.
+#
+# Digits ONLY, deliberately -- a 2026-10-11 regression (confirmed live on a dense 3-column
+# Biology book where literally every question has lettered (a)-(d) options) found that also
+# accepting letters here made this fire on PERFECTLY INTACT lettered option lists that were never
+# fragmented at all, merging/reordering content across different, unrelated questions. Letter
+# support was reverted for that reason -- if a future lettered-option PDF genuinely needs this
+# same fragmentation repair, it needs its own, narrower detection, not a blanket a-d match here.
+_BARE_OPTION_MARKER_RE = re.compile(r'^\(?([1-4])[.)]\s*$')
 # An option short enough to sit entirely on the same line as its own marker (e.g. "3. vd =
 # constant") needs no zone-reconstruction for its own text, but it still has to be recognized as
 # marker "3" for the sequence-continuity check below, or a genuinely fragmented neighbor (marker
@@ -273,15 +279,7 @@ _BARE_OPTION_MARKER_RE = re.compile(r'^\(?([1-4]|[a-dA-D])[.)]\s*$')
 # it (confirmed live: Current Electricity Q5, "vd ~ E" / "vd ~ 1/E" fragmented across two blocks,
 # "vd = constant" complete on one line -- without this, only options 1-2 ever got reconstructed
 # and 3-4 were left dangling, out of order, in the stem block's own leftover text).
-_SELF_CONTAINED_OPTION_RE = re.compile(r'^\(?([1-4]|[a-dA-D])[.)]\s+(\S.*)$')
-_LETTER_MARKER_TO_NUM = {"a": 1, "b": 2, "c": 3, "d": 4}
-
-def _marker_label_to_num(label):
-    """Both regexes above capture either a digit 1-4 or a letter a-d/A-D in the same group --
-    normalizes either to its 1-4 position so every run/grouping/zone check below this point stays
-    purely integer-based and completely unaware of which punctuation or alphabet the source PDF
-    actually used."""
-    return int(label) if label.isdigit() else _LETTER_MARKER_TO_NUM[label.lower()]
+_SELF_CONTAINED_OPTION_RE = re.compile(r'^\(?([1-4])[.)]\s+(\S.*)$')
 # A decimal number that happens to start with 1-4 ("2.5 x 10^6") looks IDENTICAL to a real
 # marker+answer under the regex above ("2." + " 5 x 10^6") -- confirmed live: Current Electricity
 # Q4's four mobility values all literally begin "2.5"/"2.5"/"2.25"/"2.25", so all four got
@@ -349,11 +347,11 @@ def _reconstruct_fragmented_options(blocks, mid_x, page_width):
             text = _reconstruct_line_text(line).strip()
             m = _BARE_OPTION_MARKER_RE.match(text)
             if m:
-                all_markers.append({"num": _marker_label_to_num(m.group(1)), "bbox": line["bbox"], "block": b, "line": line, "self_text": None})
+                all_markers.append({"num": int(m.group(1)), "bbox": line["bbox"], "block": b, "line": line, "self_text": None})
                 continue
             m2 = _SELF_CONTAINED_OPTION_RE.match(text)
             if m2 and _HAS_LETTER_RE.search(m2.group(2)):
-                all_markers.append({"num": _marker_label_to_num(m2.group(1)), "bbox": line["bbox"], "block": b, "line": line, "self_text": m2.group(2)})
+                all_markers.append({"num": int(m2.group(1)), "bbox": line["bbox"], "block": b, "line": line, "self_text": m2.group(2)})
 
     # A block is only a valid "next option list starts here" signal (see next_boundary_ys below)
     # if it actually contains that list's OWN marker 1 -- a block containing only marker 2/3/4

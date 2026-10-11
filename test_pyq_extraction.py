@@ -138,18 +138,27 @@ def test_numbered_options_1_to_4_reconstructed_not_dropped():
     for expected in ["1. 0.14 V", "2. 0.12 V", "3. 0.11 V", "4. 0.13 V"]:
         check(f"reconstructed_entries contains {expected!r}", any(expected in t for t in recon_texts), detail=f"all entries: {recon_texts}")
 
-    # Also directly exercises the broadened marker regex (step 2): "1)" and "(1)" formats, and
-    # lettered "a." options, must be recognized too -- not just this PDF's own "1." style. No real
-    # PDF in this repo uses these formats, so this part is a synthetic, rather than live, check.
+    # Also directly exercises the broadened marker regex (step 2): "1)" and "(1)" formats must be
+    # recognized too -- not just this PDF's own "1." style. No real PDF in this repo uses these
+    # formats, so this part is a synthetic, rather than live, check.
+    #
+    # Deliberately digit-only, NOT lettered "a."/"(a)" -- a 2026-10-11 regression (see
+    # _BARE_OPTION_MARKER_RE's own comment) found letter support made this fire on perfectly
+    # intact lettered option lists in a dense, all-lettered-options Biology PDF, merging content
+    # across unrelated questions. Letter marker support was reverted for that reason.
     for label, text in [
         ("digit-paren '1)' format", "1) Zero\n2) 1\n3) 2\n4) 3"),
         ("parenthesized '(1)' format", "(1) Zero\n(2) 1\n(3) 2\n(4) 3"),
-        ("lettered 'a.' format", "a. Zero\nb. 1\nc. 2\nd. 3"),
     ]:
         m1 = ppv._SELF_CONTAINED_OPTION_RE.match(text.splitlines()[0])
         check(f"self-contained marker regex recognizes {label}", bool(m1), detail=f"line={text.splitlines()[0]!r}")
         if m1:
-            check(f"{label} marker 1 normalizes to num=1", ppv._marker_label_to_num(m1.group(1)) == 1)
+            check(f"{label} marker 1 normalizes to num=1", int(m1.group(1)) == 1)
+    lettered_line = "a. Zero"
+    check(
+        "letter marker format 'a.' is NOT matched (reverted -- see _BARE_OPTION_MARKER_RE comment)",
+        ppv._SELF_CONTAINED_OPTION_RE.match(lettered_line) is None,
+    )
 
 
 def test_math_only_options_reconstructed_in_order():
