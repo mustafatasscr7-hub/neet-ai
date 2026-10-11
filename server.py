@@ -208,6 +208,7 @@ qwen_async_client = openai.AsyncOpenAI(api_key=QWEN_API_KEY, base_url="https://d
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 import requests as http_requests
 from process_pyq_vision import scan_pdf_bytes, scan_mock_test_pdf
+from process_pyq_book_3col import scan_book_pdf_bytes
 from utils.krutidev2unicode import kru2uni
 
 # Shared verbatim between SYSTEM_PROMPT (rule 12 below) and _VERIFY_MCQ_HEDGE_SYSTEM further down
@@ -889,6 +890,11 @@ class ScanPdfRequest(BaseModel):
     subject: str
     data: str  # base64-encoded PDF bytes
     filename: Optional[str] = None  # original filename, for processed_pdfs tracking
+    # "standard" (default) = process_pyq_vision's existing pipeline, completely unchanged.
+    # "3col_book" = process_pyq_book_3col's layout for 3-column coaching-book PDFs (zero-padded
+    # question numbers, lettered (a)-(d) options, printed "Ans. (x)") -- a separate module, never
+    # auto-detected, so an existing PDF's scan can't silently switch pipelines.
+    layout: str = "standard"
 
 class PdfMarkProcessedRequest(BaseModel):
     id: int
@@ -7113,6 +7119,8 @@ def admin_scan_pdf(req: ScanPdfRequest, _: None = Depends(verify_admin_or_contra
     # so this multi-second-to-multi-minute call doesn't block the event loop for other requests.
     if req.subject not in ("Biology", "Physics", "Chemistry"):
         return {"error": "Invalid subject"}
+    if req.layout not in ("standard", "3col_book"):
+        return {"error": "Invalid layout"}
     try:
         pdf_bytes = base64.b64decode(req.data)
     except Exception:
@@ -7120,7 +7128,7 @@ def admin_scan_pdf(req: ScanPdfRequest, _: None = Depends(verify_admin_or_contra
 
     processed_pdf_id = _create_processed_pdf_row(req.filename, req.subject) if req.filename else None
     try:
-        result = scan_pdf_bytes(pdf_bytes, req.subject)
+        result = scan_book_pdf_bytes(pdf_bytes, req.subject) if req.layout == "3col_book" else scan_pdf_bytes(pdf_bytes, req.subject)
     except Exception as e:
         _update_processed_pdf_row(processed_pdf_id, "failed", error_message=str(e))
         return {"error": str(e)}

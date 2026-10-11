@@ -251,6 +251,13 @@
 
     <div id="pdfModeSection">
       <h2>2. Upload PDF</h2>
+      <div style="margin-bottom:10px;">
+        <label style="display:block;font-size:11px;color:#888;margin-bottom:4px;">Layout</label>
+        <select id="pdfLayoutSelect" style="width:100%;max-width:300px;background:#0d0d0d;border:1px solid #2a2a2a;border-radius:8px;padding:8px 10px;color:#ececec;font-family:'Inter',sans-serif;font-size:13px;">
+          <option value="standard">Standard (official question papers)</option>
+          <option value="3col_book">3-column book (coaching-book PYQ chapters)</option>
+        </select>
+      </div>
       <div class="upload-row">
         <input type="file" id="pdfFile" accept="application/pdf" onchange="updateScanButton()"/>
         <button type="button" class="scan-btn" id="scanBtn" disabled onclick="scanPdf()">Scan PDF</button>
@@ -1600,7 +1607,7 @@
       const res = await fetch(`${API_BASE}/admin/scan-pdf`, {
         method: 'POST',
         headers: authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ subject: currentSubject, data: b64, filename: file.name })
+        body: JSON.stringify({ subject: currentSubject, data: b64, filename: file.name, layout: document.getElementById('pdfLayoutSelect').value })
       });
       if (res.status === 401) return logout();
       if (!res.ok) { statusEl.textContent = 'Scan failed: ' + await describeHttpError(res); return; }
