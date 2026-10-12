@@ -147,28 +147,127 @@ def test_diagram_only_attaches_within_question_bbox():
     check("diagram in the explanation's area (below the question) does not attach", not pk._bbox_overlaps(question_bbox, diagram_in_explanation))
 
 
+def test_answer_on_next_column_same_page():
+    """Real Q84 shape (page 10): the question's own block sits in the middle column with all 4
+    options but no 'Ans.' line -- the 'Ans. (a)' is the first block of the NEXT column over, on
+    the SAME page. Must be reached without needing a page turn."""
+    print("\n=== Answer line continues in the next column, same page ===")
+    with open(PDF_PATH, "rb") as f:
+        pdf_bytes = f.read()
+    result = pk.scan_book_pdf_bytes(pdf_bytes, "Biology")
+    q = next((q for q in result["questions"] if q["question"].startswith("Which one of the following is a\nliving fossil")
+              or q["question"].startswith("Which one of the following is a living fossil")), None)
+    check("Q84 (living fossil) found", q is not None)
+    if q:
+        check("Q84 is not flagged", not q["needs_review"], detail=repr(q))
+        check("Q84's answer ('a', from the next column) was found", q["correct_answer"] == "a", detail=repr(q["correct_answer"]))
+        check("Q84's own options are untouched", q["option_a"] == "Cycas" and q["option_d"] == "Spirogyra", detail=repr(q))
+
+
+def test_answer_on_next_page():
+    """Real Q07 shape (page 1, column 3 -- the page's last column): options run out of room at
+    the very bottom of the page, and 'Ans. (b)' is the second block at the top of page 2's first
+    column (the running header 'Plant Kingdom\\n19' is the first block there and must be skipped,
+    not treated as a stop)."""
+    print("\n=== Answer line continues on the next page ===")
+    with open(PDF_PATH, "rb") as f:
+        pdf_bytes = f.read()
+    result = pk.scan_book_pdf_bytes(pdf_bytes, "Biology")
+    q = next((q for q in result["questions"] if "colonial alga" in q["question"]), None)
+    check("Q07 (colonial alga) found", q is not None)
+    if q:
+        check("Q07 is not flagged", not q["needs_review"], detail=repr(q))
+        check("Q07's answer ('b', from the next page) was found", q["correct_answer"] == "b", detail=repr(q["correct_answer"]))
+
+
+def test_options_split_across_columns():
+    """Real Q75 shape (page 9): the question's own block (middle column) has no options at all;
+    option (a) and (b) continue at the top of the SAME page's next column, and options (c) and
+    (d) continue YET AGAIN at the top of a THIRD column -- all on one page, no page turn."""
+    print("\n=== Options split across more than one column on the same page ===")
+    with open(PDF_PATH, "rb") as f:
+        pdf_bytes = f.read()
+    result = pk.scan_book_pdf_bytes(pdf_bytes, "Biology")
+    q = next((q for q in result["questions"] if q["question"] == "Select the correct statement."), None)
+    check("Q75 (Select the correct statement) found", q is not None)
+    if q:
+        check("Q75 is not flagged", not q["needs_review"], detail=repr(q))
+        check("option a (from column 2) present", q["option_a"].startswith("Salvinia"), detail=repr(q["option_a"]))
+        check("option b (from column 2) present", "Sequoia" in q["option_b"], detail=repr(q["option_b"]))
+        check("option c (from column 3) present", "not well adapted" in q["option_c"], detail=repr(q["option_c"]))
+        check("option d present", q["option_d"], detail=repr(q["option_d"]))
+        check("answer found", q["correct_answer"] == "b", detail=repr(q["correct_answer"]))
+
+
+def test_embedded_question_start_recovered():
+    """Real Q21/Q22 shape (page 3): PyMuPDF merges the TAIL of Q20's own explanation directly
+    onto Q21's entire number+stem+options+Ans as ONE block, with Q22 then glued onto the tail of
+    Q21's own explanation the same way -- both completely invisible to a check that only looks at
+    a block's own first line. Must fail on the old code (both silently absent, no trace in
+    flagged_pages) and pass on the new code (_split_embedded_question_starts)."""
+    print("\n=== Questions whose number is merged mid-block into the previous explanation ===")
+    with open(PDF_PATH, "rb") as f:
+        pdf_bytes = f.read()
+    result = pk.scan_book_pdf_bytes(pdf_bytes, "Biology")
+    q21 = next((q for q in result["questions"] if "Brown algae is characterised" in q["question"]), None)
+    q22 = next((q for q in result["questions"] if "very rich in protein" in q["question"]), None)
+    check("Q21 (Brown algae) recovered", q21 is not None)
+    check("Q22 (rich in protein) recovered", q22 is not None)
+    if q21:
+        check("Q21 is not flagged", not q21["needs_review"], detail=repr(q21))
+        check("Q21's answer is correct", q21["correct_answer"] == "c", detail=repr(q21["correct_answer"]))
+    if q22:
+        check("Q22 is not flagged", not q22["needs_review"], detail=repr(q22))
+        check("Q22's answer is correct", q22["correct_answer"] == "d", detail=repr(q22["correct_answer"]))
+
+
+def test_numbering_gap_is_flagged():
+    """Unit-level test of the gap-detection safety net itself (step 3): a missing integer in the
+    1..max(found) sequence must be flagged by number, on a sensible nearby page, and the function
+    must never invent content for it. Also checks the clean (no gap) case stays silent."""
+    print("\n=== A gap in question numbers is flagged, not silently dropped ===")
+    qnum_page_with_gap = {1: 1, 2: 1, 3: 1, 5: 2, 6: 2}  # 4 is missing
+    gaps = pk._find_numbering_gaps(qnum_page_with_gap)
+    check("exactly one gap found", len(gaps) == 1, detail=repr(gaps))
+    if gaps:
+        check("the gap is question 04", "04" in gaps[0]["reason"], detail=repr(gaps[0]))
+        check("the gap is placed on the nearest-following found page (page 2, where Q5 is)", gaps[0]["page"] == 2, detail=repr(gaps[0]))
+        check("the reason points to '+ Add Missed Question', never invents an answer/option", "Add Missed Question" in gaps[0]["reason"] and "option" not in gaps[0]["reason"].lower())
+
+    qnum_page_multi_gap = {1: 1, 4: 3}  # 2 and 3 missing, both should land on page 3
+    gaps2 = pk._find_numbering_gaps(qnum_page_multi_gap)
+    check("two gaps found for a 2-wide hole", len(gaps2) == 2, detail=repr(gaps2))
+    check("both land on page 3 (where Q4 is)", all(g["page"] == 3 for g in gaps2), detail=repr(gaps2))
+
+    qnum_page_no_gap = {1: 1, 2: 1, 3: 2}
+    check("no gap reported when the sequence is already continuous", pk._find_numbering_gaps(qnum_page_no_gap) == [])
+
+    # And end-to-end: the real, fixed document has NO gaps left at all (99/99 found).
+    with open(PDF_PATH, "rb") as f:
+        pdf_bytes = f.read()
+    result = pk.scan_book_pdf_bytes(pdf_bytes, "Biology")
+    gap_flags = [f for f in result["flagged_pages"] if "was never found" in f["reason"]]
+    check("the real, fixed document has zero numbering gaps left", len(gap_flags) == 0, detail=repr(gap_flags))
+
+
 def test_full_document_extraction():
-    """End-to-end regression against the real PDF: all 99 questions present, in order, with
-    explanations never leaking into any question/option field, and only the known, already
-    diagnosed cross-page-spillover edge cases left flagged (not silently wrong)."""
+    """End-to-end regression against the real PDF: ALL 99 questions present (including the 2
+    that were previously silently undetected), none flagged, with explanations never leaking
+    into any question/option field."""
     print("\n=== Full-document extraction against the real PDF ===")
     with open(PDF_PATH, "rb") as f:
         pdf_bytes = f.read()
     result = pk.scan_book_pdf_bytes(pdf_bytes, "Biology")
     check("13 pages scanned", result["pages_scanned"] == 13, detail=f"got {result['pages_scanned']}")
-    check("97 of 99 questions extracted (2 known cross-page-spillover cases still open)", len(result["questions"]) == 97, detail=f"got {len(result['questions'])}")
-    check("5 or fewer questions still flagged for review", len(result["flagged_pages"]) <= 5, detail=f"got {len(result['flagged_pages'])}")
+    check("all 99 of 99 questions extracted", len(result["questions"]) == 99, detail=f"got {len(result['questions'])}")
+    check("zero questions flagged for review", len(result["flagged_pages"]) == 0, detail=f"got {result['flagged_pages']}")
 
     explanation_telltales = ["can be explained as", "Other options can be", "is a cosmopolitan marine"]
     leaked = [q for q in result["questions"] for tell in explanation_telltales if tell in (q["question"] + q["option_a"] + q["option_b"] + q["option_c"] + q["option_d"])]
     check("no publisher explanation text leaked into any question/option field", len(leaked) == 0, detail=f"{len(leaked)} leaked")
 
-    non_flagged = [q for q in result["questions"] if not q["needs_review"]]
-    check("every non-flagged question has all 4 options filled", all(q["option_a"] and q["option_b"] and q["option_c"] and q["option_d"] for q in non_flagged))
-    check("every non-flagged question has an answer letter", all(q["correct_answer"] in ("a", "b", "c", "d") for q in non_flagged))
-
-    sample = next((q for q in result["questions"] if q["question"].startswith("An example of colonial alga")), None)
-    check("Q07 (cross-page continuation case) is complete", sample is not None and sample["correct_answer"] == "b", detail=repr(sample))
+    check("every question has all 4 options filled", all(q["option_a"] and q["option_b"] and q["option_c"] and q["option_d"] for q in result["questions"]))
+    check("every question has an answer letter", all(q["correct_answer"] in ("a", "b", "c", "d") for q in result["questions"]))
 
 
 if __name__ == "__main__":
@@ -183,6 +282,11 @@ if __name__ == "__main__":
     test_year_tag_extracted_and_removed_from_stem()
     test_ans_word_boundary_regression()
     test_diagram_only_attaches_within_question_bbox()
+    test_answer_on_next_column_same_page()
+    test_answer_on_next_page()
+    test_options_split_across_columns()
+    test_embedded_question_start_recovered()
+    test_numbering_gap_is_flagged()
     test_full_document_extraction()
 
     print(f"\nTOTAL: {len(_passed)} passed, {len(_failed)} failed")

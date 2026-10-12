@@ -9,20 +9,25 @@ to read directly vs. an answer that's never in the source at all) and mixing the
 the kind of cross-contamination already found and fixed once this session (see
 process_pyq_vision.py's _BARE_OPTION_MARKER_RE comment for that history).
 
-No Gemini/Claude call anywhere in this module. Diagnosis (2026-10-11, Chapter 3 - Plant Kingdom
-Pages 18-30.pdf) found this layout's structure is mechanical, not something that needs a model's
-judgement: every question's own number, stem, year tag and "Ans. (x)" are findable by plain
-pattern, and the publisher's explanation paragraph is always a separate block that follows. The
-one genuine wrinkle (see _looks_like_continuation below) is that a question's own lettered options
-sometimes don't fit in its own text frame and spill into one or more follow-on blocks -- sometimes
-onto the very next page -- which a model call wouldn't actually help with either, since it's a
-layout fact, not an ambiguous read.
+No Gemini/Claude call anywhere in this module. Diagnosis (2026-10-11/12, Chapter 3 - Plant
+Kingdom Pages 18-30.pdf) found this layout's structure is mechanical, not something that needs a
+model's judgement: every question's own number, stem, year tag and "Ans. (x)" are findable by
+plain pattern. The two real wrinkles are both pure geometry, not ambiguous reads:
+  1. A question's own lettered options sometimes don't fit in its own text frame and spill into
+     one or more follow-on blocks, in strict reading order -- bottom of one column continues at
+     the top of the next column, and the bottom of a page's last column continues at the top of
+     the next page's first column.
+  2. PyMuPDF occasionally merges an explanation's own tail directly onto the very next question's
+     stem as ONE block (no blank-line signal strong enough to split them) -- confirmed live, Q21
+     and Q22 both arrive this way, completely invisible to a check that only looks at a block's
+     own first line.
 """
 import re
 import fitz
 
 from process_pyq_vision import (
     _block_text_from_dict,
+    _reconstruct_line_text,
     _cluster_columns,
     _MIN_DIAGRAM_DIM,
 )
@@ -37,6 +42,7 @@ from process_pyq_vision import (
 _MAX_QUESTION_BLOCK_WIDTH = 250
 
 _QNUM_RE = re.compile(r'^(0[1-9]|[1-9][0-9])\s+(.*)$', re.S)
+_QNUM_LINE_RE = re.compile(r'^(0[1-9]|[1-9][0-9])\s+\S')
 # "[NEET 2021]", "[NEET (Oct.) 2020]", "[CBSE AIPMT 2014]", "[NEET 2016, Phase II]" -- captured
 # as a whole (source_tag, minus the brackets) and the first real 4-digit year inside it kept
 # separately (year). Confirmed live to appear ANYWHERE in a question's own block -- including
@@ -54,14 +60,47 @@ _OPTION_MARKER_RE = re.compile(r'\(([a-dA-D])\)')
 # another text frame" by SHAPE alone -- it starts with its own lettered marker, with "Ans.", or
 # with a year tag (confirmed live: a follow-on block can lead with "[CBSE AIPMT 1995, 2006]"
 # before its own options, not just the options directly) -- never by position relative to the
-# question (confirmed live: this can be the very next block in the same column, one of several
-# such blocks in a row, or the first block at the top of the NEXT page's same column after the
-# current page's column ran out of room).
+# question.
 _CONTINUATION_START_RE = re.compile(r'^\(?[a-dA-D]\)|^Ans\.?\s*\(|^\[', re.I)
-# How many extra blocks a single question is allowed to pull in across the page boundary --
-# bounds the cross-page lookahead so a genuinely broken/empty page can't make this scan every
-# block of the rest of the document looking for a continuation that was never coming.
+# How many extra blocks a single question is allowed to pull in -- bounds the lookahead so a
+# genuinely broken/empty stretch of the document can't make this scan every remaining block
+# looking for a continuation that was never coming.
 _MAX_FOLLOWUP_BLOCKS = 6
+
+
+def _split_embedded_question_starts(block):
+    """Returns a list of block-like dicts (each with its own 'bbox' and 'lines') -- normally just
+    [block] unchanged, but if a NEW question's own number+stem starts MID-BLOCK, splits at each
+    such internal start so the question underneath is still reachable by the normal
+    question-start check. Confirmed live: PyMuPDF sometimes merges an explanation's own tail
+    directly onto the very next question's stem as one block, with no blank-line signal strong
+    enough to split them on its own (Plant Kingdom Q21 and Q22 both arrive this way -- Q21's
+    entire number+stem+options+"Ans." sits glued onto the end of Q20's explanation, in the SAME
+    block, invisible to any check that only looks at the block's own first line)."""
+    lines = block.get("lines", [])
+    if not lines:
+        return [block]
+    split_at = []
+    for idx, line in enumerate(lines):
+        if idx == 0:
+            continue  # the block's own first line is what the normal top-level check already sees
+        if _QNUM_LINE_RE.match(_reconstruct_line_text(line).strip()):
+            split_at.append(idx)
+    if not split_at:
+        return [block]
+
+    segments = []
+    bounds = [0] + split_at + [len(lines)]
+    for start, end in zip(bounds[:-1], bounds[1:]):
+        seg_lines = lines[start:end]
+        if not seg_lines:
+            continue
+        x0 = min(l["bbox"][0] for l in seg_lines)
+        y0 = min(l["bbox"][1] for l in seg_lines)
+        x1 = max(l["bbox"][2] for l in seg_lines)
+        y1 = max(l["bbox"][3] for l in seg_lines)
+        segments.append({"bbox": (x0, y0, x1, y1), "lines": seg_lines})
+    return segments
 
 
 def _cluster_all_columns(blocks, threshold=40):
@@ -223,29 +262,67 @@ def _get_diagram_bboxes(page):
     return bboxes
 
 
-def _consume_followups(text_acc, q_bbox, parsed, blocks, start_idx, budget):
-    """Appends blocks[start_idx:] one at a time into text_acc as long as each next one is both
-    continuation-shaped (see _CONTINUATION_START_RE) and not itself a new question start,
-    re-parsing after each -- stopping as soon as the result is complete, the shape check fails,
-    or `budget` is exhausted. Returns (text_acc, q_bbox, parsed, consumed_count)."""
-    k = 0
-    while not _is_complete(parsed) and start_idx + k < len(blocks) and k < budget:
-        block = blocks[start_idx + k]
-        candidate_text = _block_text_from_dict(block).strip()
-        if _question_start_info(block) or not _CONTINUATION_START_RE.match(candidate_text):
-            break
-        text_acc = text_acc + " " + candidate_text
-        bbox = block["bbox"]
-        q_bbox = (min(q_bbox[0], bbox[0]), min(q_bbox[1], bbox[1]), max(q_bbox[2], bbox[2]), max(q_bbox[3], bbox[3]))
-        parsed = _parse_question_text(text_acc)
-        k += 1
-    return text_acc, q_bbox, parsed, k
-
-
 def _bbox_overlaps(a, b):
     ax0, ay0, ax1, ay1 = a
     bx0, by0, bx1, by1 = b
     return ax0 < bx1 and ax1 > bx0 and ay0 < by1 and ay1 > by0
+
+
+def _union_bbox(a, b):
+    return (min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3]))
+
+
+def _find_numbering_gaps(qnum_page):
+    """qnum_page: {question number -> the page it was found on}. Returns a list of
+    {"page", "reason"} dicts, one per integer missing from the 1..max(found) sequence -- the
+    book numbers questions with no gaps, so any missing integer means a question was never even
+    found as a block anywhere in the document (confirmed live: Q21 and Q22, before the
+    embedded-question-start fix in _split_embedded_question_starts, were silently absent with no
+    trace in flagged_pages at all). Never guesses the missing question's own content -- only
+    where to go look for it: the nearest-following found question's own page (a gap sits right
+    before whatever comes next in numbering order), or the last found page if the gap is at the
+    very end, since the admin UI's banner needs a real page number and that's exactly where a
+    human would look for the missing question anyway."""
+    if not qnum_page:
+        return []
+    found_sorted = sorted(qnum_page)
+    gaps = []
+    for missing_num in sorted(set(range(1, found_sorted[-1] + 1)) - set(found_sorted)):
+        next_found = next((num for num in found_sorted if num > missing_num), None)
+        nearby_page = qnum_page[next_found] if next_found is not None else qnum_page[found_sorted[-1]]
+        gaps.append({
+            "page": nearby_page,
+            "reason": f"Question {missing_num:02d} was never found anywhere in the PDF's text layer -- its own number may be merged into another block, or it may be missing from this scan range. Use \"+ Add Missed Question\" to add it manually.",
+        })
+    return gaps
+
+
+def _build_reading_order(pdf_bytes):
+    """Returns (items, diagram_bboxes_by_page, page_count). `items` is the WHOLE document's text
+    blocks flattened into one true reading-order sequence: page by page, column by column
+    (left-to-right), top-to-bottom within each column -- so a question's own options/answer that
+    spill past the bottom of one column, the bottom of the page's last column, or even onto the
+    next page are all just "the next few items in this one sequence," with no separate
+    same-column/next-column/cross-page special-casing needed. Each item is
+    {"page": 1-indexed page number, "block": block-like dict with bbox+lines}.
+
+    Blocks are run through _split_embedded_question_starts first, so a question whose own number
+    got merged into the tail of the PRECEDING explanation's block (see that function's docstring)
+    is still its own reachable item here, in its correct position."""
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    page_count = len(doc)
+    items = []
+    diagram_bboxes_by_page = []
+    for page_num in range(page_count):
+        page = doc[page_num]
+        raw_blocks = [b for b in page.get_text("dict")["blocks"] if b.get("type") == 0]
+        expanded = [seg for b in raw_blocks for seg in _split_embedded_question_starts(b)]
+        for col in _cluster_all_columns(expanded):
+            for block in col:
+                items.append({"page": page_num + 1, "block": block})
+        diagram_bboxes_by_page.append(_get_diagram_bboxes(page))
+    doc.close()
+    return items, diagram_bboxes_by_page, page_count
 
 
 def scan_book_pdf_bytes(pdf_bytes, subject):
@@ -254,89 +331,62 @@ def scan_book_pdf_bytes(pdf_bytes, subject):
     process_pyq_vision.scan_pdf_bytes -- {"questions": [...], "pages_scanned": N,
     "flagged_pages": [...]} -- so it drops straight into the existing review-before-save UI with
     no changes there. No model call anywhere: see this module's own docstring for why."""
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    page_count = len(doc)
-
-    # Pass 1: per page, per column (left-to-right, each top-to-bottom) -- every block, not just
-    # question-starts, so a follow-on options/answer block or a diagram's own stray text label
-    # is available for the merge step below in its own correct reading-order position.
-    page_columns = []
-    page_diagram_bboxes = []
-    for page_num in range(page_count):
-        page = doc[page_num]
-        blocks = [b for b in page.get_text("dict")["blocks"] if b.get("type") == 0]
-        page_columns.append(_cluster_all_columns(blocks))
-        page_diagram_bboxes.append(_get_diagram_bboxes(page))
-    doc.close()
+    items, diagram_bboxes_by_page, page_count = _build_reading_order(pdf_bytes)
 
     questions = []
     flagged_pages = []
-    # Tracks, per (page_index, column_index), how many of that column's LEADING blocks have
-    # already been consumed as a cross-page continuation by a question from the previous page --
-    # so this page's own first question doesn't also try to read them as part of ITS stem.
-    consumed_leading = {}
+    qnum_page = {}  # qnum -> the page it was found on, also used to place a gap's flag sensibly
+    n = len(items)
+    i = 0
 
-    for page_num in range(page_count):
-        columns = page_columns[page_num]
-        diagram_bboxes = page_diagram_bboxes[page_num]
+    while i < n:
+        block = items[i]["block"]
+        info = _question_start_info(block)
+        if not info:
+            i += 1
+            continue
 
-        for col_idx, col_blocks in enumerate(columns):
-            start_at = consumed_leading.get((page_num, col_idx), 0)
-            i = start_at
-            while i < len(col_blocks):
-                info = _question_start_info(col_blocks[i])
-                if not info:
-                    i += 1
-                    continue
-                qnum, text_acc = info
-                q_bbox = col_blocks[i]["bbox"]
-                parsed = _parse_question_text(text_acc)
-                j = i + 1
+        qnum, text_acc = info
+        q_page = items[i]["page"]
+        qnum_page[qnum] = q_page
+        q_bbox = block["bbox"]
+        parsed = _parse_question_text(text_acc)
 
-                # Same-page, same-column follow-on blocks (Plant Kingdom Q05/Q10's shape: the
-                # question's own block has only the stem, and one or more later blocks in the
-                # same column hold "(a)...(d)\nAns.(x)", sometimes split across 2 blocks).
-                text_acc, q_bbox, parsed, used = _consume_followups(text_acc, q_bbox, parsed, col_blocks, j, _MAX_FOLLOWUP_BLOCKS)
-                j += used
+        j = i + 1
+        followups = 0
+        while not _is_complete(parsed) and j < n and followups < _MAX_FOLLOWUP_BLOCKS:
+            cand_block = items[j]["block"]
+            if _question_start_info(cand_block):
+                break  # the next real question -- whatever's still missing stays missing, flagged below
+            cand_bbox = cand_block["bbox"]
+            if (cand_bbox[2] - cand_bbox[0]) > _MAX_QUESTION_BLOCK_WIDTH:
+                # A running header/footer between this question and its own continuation
+                # (confirmed live: page 2's "Plant Kingdom\n19" sits directly before Q07's
+                # actual "Ans. (b)" continuation) -- skipped over, not treated as a stopping
+                # point and not counted against the follow-up budget.
+                j += 1
+                continue
+            cand_text = _block_text_from_dict(cand_block).strip()
+            if not _CONTINUATION_START_RE.match(cand_text):
+                break  # genuine explanation prose -- stop, leave it for the outer loop to skip
+            text_acc = text_acc + " " + cand_text
+            q_bbox = _union_bbox(q_bbox, cand_bbox)
+            parsed = _parse_question_text(text_acc)
+            j += 1
+            followups += 1
 
-                # Cross-page: this question ran out of blocks in its own column on this page and
-                # STILL isn't complete. Which column of the NEXT page the reader's eye actually
-                # continues into turns out NOT to be consistent -- confirmed live, Plant Kingdom:
-                # some questions continue at the same column index on the next page, but Q07
-                # specifically continues at the next page's FIRST column instead (its own column
-                # was the page's last, so the reader's eye goes to the top of the next page
-                # entirely). Rather than guess one rule, try the same index first, then column 0
-                # (when different), and use whichever one's leading block actually looks like a
-                # continuation -- a real question start there blocks the wrong guess immediately.
-                if not _is_complete(parsed) and j >= len(col_blocks) and page_num + 1 < page_count:
-                    next_cols = page_columns[page_num + 1]
-                    for candidate_idx in dict.fromkeys([col_idx, 0]):  # dedupe, preserve order
-                        if candidate_idx >= len(next_cols):
-                            continue
-                        next_blocks = next_cols[candidate_idx]
-                        # The next page's own running header/footer ("Plant Kingdom\n19") sits
-                        # at the very top of column 0 and matches neither the question-start nor
-                        # the continuation shape -- it would otherwise block this search before
-                        # it even reaches the real continuation block right after it (confirmed
-                        # live: Q07's "Ans. (b)" is the SECOND block in page 2's column 0, not
-                        # the first). Skipped here by the same width test as a real question
-                        # start (a header spans the full page width; a real continuation block
-                        # is exactly one column wide), not by position alone.
-                        skip = 0
-                        while skip < len(next_blocks) and (next_blocks[skip]["bbox"][2] - next_blocks[skip]["bbox"][0]) > _MAX_QUESTION_BLOCK_WIDTH:
-                            skip += 1
-                        text_acc, q_bbox, parsed, used = _consume_followups(text_acc, q_bbox, parsed, next_blocks, skip, _MAX_FOLLOWUP_BLOCKS)
-                        if used > 0:
-                            consumed_leading[(page_num + 1, candidate_idx)] = max(consumed_leading.get((page_num + 1, candidate_idx), 0), skip + used)
-                            break
+        diagram_bboxes = diagram_bboxes_by_page[q_page - 1]
+        has_diagram = any(_bbox_overlaps(q_bbox, d) for d in diagram_bboxes)
+        q = _build_question_dict(parsed, q_page, has_diagram)
+        questions.append(q)
+        if q["needs_review"]:
+            flagged_pages.append({"page": q_page, "reason": q["review_reason"]})
 
-                has_diagram = any(_bbox_overlaps(q_bbox, d) for d in diagram_bboxes)
-                q = _build_question_dict(parsed, page_num + 1, has_diagram)
-                questions.append(q)
-                if q["needs_review"]:
-                    flagged_pages.append({"page": page_num + 1, "reason": q["review_reason"]})
+        i = j
 
-                i = j
+    # Final safety net -- never guesses a missing question's content, just surfaces the gap by
+    # number so "+ Add Missed Question" can be used instead of it going unnoticed.
+    flagged_pages.extend(_find_numbering_gaps(qnum_page))
 
     flagged_pages.sort(key=lambda f: f["page"])
     return {"questions": questions, "pages_scanned": page_count, "flagged_pages": flagged_pages}
