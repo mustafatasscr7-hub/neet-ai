@@ -4263,6 +4263,20 @@ async def _refetch_images_as_attachments(urls: list) -> list:
 # its own independent cap via that one and this one is scoped to the text path only.
 _TEXT_HISTORY_MAX_TURNS = 4
 
+# chat.html/chatStore.tsx are now expected to only ever send a real display name
+# (user_metadata.full_name) as student_name, never the phone/email fallback their own profile UI
+# shows when no display name is set -- but this still guards server-side, since a stale app
+# build, a future caller, or a user_metadata.full_name someone literally pasted their phone/email
+# into could still send one through. Addressing a student by their phone number or email in a
+# generated answer would read as a data leak, not a personalization touch.
+_PHONE_LIKE_NAME_RE = re.compile(r'^\+?[\d\s\-().]{6,}$')
+
+def _usable_student_name(name: str) -> str:
+    name = (name or "").strip()
+    if not name or "@" in name or _PHONE_LIKE_NAME_RE.match(name):
+        return ""
+    return name
+
 async def stream_response(text: str, history: list = [], images: list = [], pdf: str = None, answer_style: str = "detailed", student_name: str = "", language: str = "en", user_id: str = "", personalize: bool = True, skip_cache: bool = False, ip: str = "", running_summary: str = "", dropped_question: str = "", dropped_answer: str = ""):
     images = (images or [])[:3]
 
@@ -4406,7 +4420,8 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
         messages.append({"role": "user", "content": user_message})
     try:
         import sys
-        name_context = f"\n\nThe student name is {student_name}. Use their name naturally and occasionally in responses to make it personal." if student_name else ""
+        usable_student_name = _usable_student_name(student_name)
+        name_context = f"\n\nThe student name is {usable_student_name}. Use their name naturally and occasionally in responses to make it personal." if usable_student_name else ""
         style_context = "\n\nIMPORTANT: The student has selected CONCISE mode. Give a very short answer — maximum 3 sentences only. No bullet points, no key points section, no memory tricks. Just the core answer." if answer_style == "concise" else ""
         lang_context = "\n\nIMPORTANT: Respond ONLY in Hindi (Devanagari script). Every word — headings, key points, explanations, memory tricks — must be in Hindi. Do not mix in English words or Hinglish, even for common scientific terms (e.g. write \"गुणसूत्र\" not \"chromosome\"). The ONLY exceptions are: LaTeX/KaTeX math notation, chemical formulas/symbols (e.g. $H_2O$), units (e.g. m/s, kg), and proper nouns like NEET or NCERT — keep those exactly as-is, do not translate or romanize them. For the section headers specifically, use these EXACT fixed Hindi labels rather than inventing your own translation each time: \"Answer:\" becomes \"उत्तर:\", \"Key Points:\" becomes \"मुख्य बिंदु:\", \"Quick Recall:\" becomes \"त्वरित याद:\". \"NEET Importance:\" and \"Chapter:\" stay in English exactly as given in the format above — never translate those two labels." if language == "hi" else ""
         # Graph/curve-matching questions are Gemini's one consistently weak category (~73%
