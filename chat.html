@@ -6974,7 +6974,11 @@ function plainTextFromMarkdown(text) {
           // wire as a session gets longer -- not a second source of truth for the actual limit.
           history: currentConversation.slice(0, -1).slice(-4),
           answer_style: localStorage.getItem('answerStyle') || 'detailed',
-          student_name: document.querySelector('.profile-name')?.textContent || '',
+          // Only a real display name, never the phone/email/'Student' fallback .profile-name
+          // itself shows when none is set -- the server also guards against this independently
+          // (_usable_student_name in server.py), but this is the actual source of truth: a real
+          // name or nothing, never a stand-in that reads as a data leak if the AI used it.
+          student_name: session?.user?.user_metadata?.full_name || '',
           language: getLang(),
           user_id: session?.user?.id || '',
           personalize: localStorage.getItem('personalize') !== 'false',
