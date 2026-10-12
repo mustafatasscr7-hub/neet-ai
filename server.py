@@ -3482,6 +3482,16 @@ async def _stream_deepseek(system: str, messages: list, user_id: str, ip: str, i
             except Exception:
                 pass
 
+# Shared by every endpoint that enforces a Hindi-only response -- previously five independently
+# written strings (stream_response's lang_context, _solve_system_prompt, generate_alternate_method,
+# /title, /summarize-answer) that had quietly drifted apart in wording/exceptions. Any future
+# change to the core rule (e.g. which exceptions stay untranslated) only needs to happen here.
+HINDI_ONLY_CORE = (
+    "Respond ONLY in Hindi (Devanagari script) -- every word in Hindi, no English words or "
+    "Hinglish mixing. The ONLY exceptions are LaTeX/KaTeX math notation, chemical formulas/"
+    "symbols (e.g. $H_2O$), and units (e.g. m/s, kg), which stay exactly as-is."
+)
+
 # ---------- Running-summary layer (sliding-2 + background summarization) ----------
 # Real cost/latency impact already measured via a standalone test before this was built: ~68
 # real summarization calls averaged ~422 input / ~81 output tokens, ~$0.00002/call, and fired
@@ -3507,7 +3517,7 @@ facts, not filler.
 
 Output ONLY the updated summary text, nothing else -- no preamble, no labels."""
 
-async def _update_running_summary(prev_summary: str, dropped_question: str, dropped_answer: str, user_id: str, ip: str) -> Optional[str]:
+async def _update_running_summary(prev_summary: str, dropped_question: str, dropped_answer: str, user_id: str, ip: str, language: str = "en") -> Optional[str]:
     """Fire-and-forget (always called via asyncio.create_task, never awaited before the main
     answer) -- fails SAFE: any error here (DeepSeek down, malformed output, timeout) returns
     None, and the caller carries the OLD summary forward unchanged rather than blocking or
@@ -3516,12 +3526,23 @@ async def _update_running_summary(prev_summary: str, dropped_question: str, drop
     exact bug the test harness caught in itself: feeding the full multi-KB retrieved passage back
     in as if it were "what was discussed" inflated this call's cost for no benefit; the caller is
     responsible for passing the student's original short question text here, not the NCERT-
-    augmented prompt that was actually sent to the model)."""
+    augmented prompt that was actually sent to the model).
+
+    `language` keeps the summary itself written in the active language -- it used to always come
+    out in English, which meant a Hindi conversation's system prompt carried an English paragraph
+    (this summary) right next to the Hindi-only instruction, a likely contributor to mixed-language
+    answers. Facts/numbers/units/formulas are unaffected either way, see HINDI_ONLY_CORE."""
     try:
         user_msg = (
             f"PREVIOUS SUMMARY: {prev_summary or '(none yet -- this is the first exchange to summarize)'}\n\n"
             f"NEW EXCHANGE TO FOLD IN:\nStudent: {dropped_question}\nTutor: {dropped_answer[:800]}\n\n"
             f"Updated running summary (keep EVERY fact from the previous summary, plus this exchange's own facts):"
+        )
+        summary_system = _RUNNING_SUMMARY_SYSTEM + (
+            f"\n\n{HINDI_ONLY_CORE} Write the summary itself in Hindi under that same rule -- the "
+            "facts/numbers/units/formulas you're preserving are unaffected, only the connecting "
+            "language changes."
+            if language == "hi" else ""
         )
         is_peak = _is_deepseek_peak_hour()
         # Bumped from 150 -- the old 1-3-sentence cap is gone (see _RUNNING_SUMMARY_SYSTEM's own
@@ -3534,7 +3555,7 @@ async def _update_running_summary(prev_summary: str, dropped_question: str, drop
         # facts the exact same way the original bug did, just mechanically instead of by choice.
         resp = await deepseek_async_client.messages.create(
             model="deepseek-v4-flash", max_tokens=500, thinking={"type": "disabled"},
-            system=_RUNNING_SUMMARY_SYSTEM, messages=[{"role": "user", "content": user_msg}],
+            system=summary_system, messages=[{"role": "user", "content": user_msg}],
         )
         new_summary = "".join(b.text for b in resp.content if hasattr(b, "text")).strip()
         if not new_summary:
@@ -4423,7 +4444,20 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
         usable_student_name = _usable_student_name(student_name)
         name_context = f"\n\nThe student name is {usable_student_name}. Use their name naturally and occasionally in responses to make it personal." if usable_student_name else ""
         style_context = "\n\nIMPORTANT: The student has selected CONCISE mode. Give a very short answer — maximum 3 sentences only. No bullet points, no key points section, no memory tricks. Just the core answer." if answer_style == "concise" else ""
-        lang_context = "\n\nIMPORTANT: Respond ONLY in Hindi (Devanagari script). Every word — headings, key points, explanations, memory tricks — must be in Hindi. Do not mix in English words or Hinglish, even for common scientific terms (e.g. write \"गुणसूत्र\" not \"chromosome\"). The ONLY exceptions are: LaTeX/KaTeX math notation, chemical formulas/symbols (e.g. $H_2O$), units (e.g. m/s, kg), and proper nouns like NEET or NCERT — keep those exactly as-is, do not translate or romanize them. For the section headers specifically, use these EXACT fixed Hindi labels rather than inventing your own translation each time: \"Answer:\" becomes \"उत्तर:\", \"Key Points:\" becomes \"मुख्य बिंदु:\", \"Quick Recall:\" becomes \"त्वरित याद:\". \"NEET Importance:\" and \"Chapter:\" stay in English exactly as given in the format above — never translate those two labels." if language == "hi" else ""
+        # Deliberately NOT folded into full_system below -- appended last, after
+        # student_context/graph_context/conciseness_context/mcq_context and (in the text branch)
+        # after the running-summary note, in every branch, so it's always the most recent
+        # instruction the model reads before answering rather than one buried mid-prompt with
+        # English context (running summary, student_context) stacked after it. That ordering was
+        # a likely contributor to mixed-language answers in longer Hindi conversations.
+        lang_context = (
+            f"\n\nIMPORTANT: {HINDI_ONLY_CORE} Proper nouns like NEET or NCERT also stay exactly "
+            "as-is -- do not translate or romanize them. For the section headers specifically, use "
+            "these EXACT fixed Hindi labels rather than inventing your own translation each time: "
+            "\"Answer:\" becomes \"उत्तर:\", \"Key Points:\" becomes \"मुख्य बिंदु:\", \"Quick "
+            "Recall:\" becomes \"त्वरित याद:\". \"NEET Importance:\" and \"Chapter:\" stay in "
+            "English exactly as given in the format above -- never translate those two labels."
+        ) if language == "hi" else ""
         # Graph/curve-matching questions are Gemini's one consistently weak category (~73%
         # across 4 rounds of testing, vs 95-100% on everything else) -- this can't be gated on
         # chapter/question-type ahead of time since the chapter is an OUTPUT of the answer (the
@@ -4480,7 +4514,7 @@ Answer: <letter>) <the option's text or value>
 Then continue directly into the full explanation on the lines after it, exactly as you normally
 would -- do not shorten, skip, or omit anything else. If there are no multiple-choice options in
 the question, ignore this instruction entirely and use the plain "Answer:" header as usual.""" if (images or pdf) else ""
-        full_system = SYSTEM_PROMPT + name_context + style_context + lang_context + student_context + graph_context + conciseness_context + mcq_context
+        full_system = SYSTEM_PROMPT + name_context + style_context + student_context + graph_context + conciseness_context + mcq_context
         if _is_mnemonic_request(text):
             # Applied here (before the images/pdf/else branch split) so it reaches whichever
             # model actually serves the request, including Gemini for an image of a mnemonic
@@ -4488,6 +4522,7 @@ the question, ignore this instruction entirely and use the plain "Answer:" heade
             # call time rather than edited into rule 9's own SYSTEM_PROMPT text.
             full_system = full_system + MNEMONIC_QUALITY_GUARD
         if images:
+            full_system = full_system + lang_context
             # See the gemini_client comment above for why images specifically moved off Claude.
             # Computed up front (before the call, not after) so it's already in hand even if the
             # stream below is interrupted mid-way -- see log_media_doubt's own docstring for why
@@ -4509,6 +4544,7 @@ the question, ignore this instruction entirely and use the plain "Answer:" heade
                 yield chunk
             return
         elif pdf:
+            full_system = full_system + lang_context
             # Moved off Claude to Gemini 3.5 Flash-Lite -- same client/pattern as the images
             # branch above, confirmed working via a live standalone test (91% accuracy across
             # 3 real PDFs, ~10x cheaper input tokens than Claude Sonnet's pricing).
@@ -4527,7 +4563,7 @@ the question, ignore this instruction entirely and use the plain "Answer:" heade
             # actually sent a dropped exchange (i.e. the sliding-2 window just overflowed this
             # turn) -- most turns in most sessions never reach this at all.
             summarization_task = (
-                asyncio.create_task(_update_running_summary(running_summary, dropped_question, dropped_answer, user_id, ip))
+                asyncio.create_task(_update_running_summary(running_summary, dropped_question, dropped_answer, user_id, ip, language))
                 if dropped_question and dropped_answer else None
             )
             if running_summary:
@@ -4535,6 +4571,10 @@ the question, ignore this instruction entirely and use the plain "Answer:" heade
                 # matches the tested design exactly: [running summary] + [last 2 raw exchanges]
                 # + [new question], in that order.
                 full_system = full_system + f"\n\n[Earlier in this conversation, before the messages shown below, the following was already discussed: {running_summary}]"
+            # lang_context appended last, after the running-summary note above -- see its own
+            # comment for why (recency: it must be the most recent instruction, not buried before
+            # an English summary/history).
+            full_system = full_system + lang_context
             is_peak = _is_deepseek_peak_hour()
             # Max plan only (no-op/instant None for every other plan) -- see check_max_usage_tier
             # for the full soft-zone/breakeven logic. force_qwen only affects TEXT doubts: there's
@@ -4885,7 +4925,7 @@ def _solve_system_prompt(language: str, has_diagram: bool) -> str:
     stream_solve_response_with_diagram's own comment for why this exists at all (2026-09-17
     diagram-dependent-PYQ audit: the text-only path was confidently fabricating descriptions of
     diagram content it never received)."""
-    lang_instruction = "\n5. Respond ONLY in Hindi (Devanagari script) — every word in Hindi, no English words or Hinglish mixing. The ONLY exceptions are LaTeX/KaTeX math notation, chemical formulas/symbols, and units, which stay exactly as-is." if language == "hi" else ""
+    lang_instruction = f"\n5. {HINDI_ONLY_CORE}" if language == "hi" else ""
     intro = (
         "You are a NEET exam expert. Solve the given NEET question step by step. The attached "
         "image(s) show the diagram(s) this question depends on -- base your answer on what is "
@@ -5206,7 +5246,7 @@ async def summarize_answer(req: SummarizeAnswerRequest, request: Request, _: Non
     req.user_id = verified_user_id
     await enforce_daily_budget(req.user_id, ip)
     client = deepseek_client
-    lang_instruction = "Respond entirely in Hindi (Devanagari script) -- every word in Hindi, no English words mixed in, except LaTeX/KaTeX math notation and units which stay as-is." if req.language == "hi" else "Respond in English."
+    lang_instruction = HINDI_ONLY_CORE if req.language == "hi" else "Respond in English."
     response = client.messages.create(
         model="deepseek-v4-flash",
         max_tokens=220,
@@ -6944,11 +6984,7 @@ def generate_alternate_method(question: str, primary_answer: str, options_contex
     alternate exists -- a real, cacheable verdict, not a retry state -- or (None, 0) on a hard
     failure the caller must NOT cache, so it's retried next time instead of permanently
     remembering a failure as "no alternate exists"."""
-    lang_instruction = (
-        "\n\nRespond ONLY in Hindi (Devanagari script) -- every word in Hindi, no English words or "
-        "Hinglish mixing. The ONLY exceptions are LaTeX/KaTeX math notation, chemical formulas/"
-        "symbols, and units, which stay exactly as-is."
-    ) if language == "hi" else ""
+    lang_instruction = f"\n\n{HINDI_ONLY_CORE}" if language == "hi" else ""
     try:
         response = deepseek_client.messages.create(
             model="deepseek-v4-flash",
