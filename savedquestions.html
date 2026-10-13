@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="./sidebar.css">
   <link rel="stylesheet" href="./settings.css">
   <link rel="stylesheet" href="./tint-buttons.css">
+  <link rel="stylesheet" href="./question-images.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
   <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
   <script src="./math-format.js"></script>
@@ -866,7 +867,7 @@
           // text is empty hid the option (and its diagram) entirely.
           if (!q['option_' + opt] && !q['option_' + opt + '_diagram_url']) return '';
           const isCorrect = opt === correctAns;
-          const optImg = q['option_' + opt + '_diagram_url'] ? `<img class="q-diagram-img" src="${escapeHtml(q['option_' + opt + '_diagram_url'])}">` : '';
+          const optImg = q['option_' + opt + '_diagram_url'] ? `<img class="q-diagram-img q-opt-img" src="${escapeHtml(q['option_' + opt + '_diagram_url'])}">` : '';
           return `<div class="q-option ${isCorrect ? 'correct' : ''}"><strong>${opt.toUpperCase()})</strong> ${parseWithMath(q['option_' + opt])}${optImg}</div>`;
         }).join('');
 
@@ -881,7 +882,7 @@
               ${q.question_id ? metaActionsHtml(q.difficulty, q.question_id) : ''}
             </div>
             <div class="q-text">${parseWithMath(q.question)}</div>
-            ${q.diagram_url ? `<img class="q-diagram-img" src="${escapeHtml(q.diagram_url)}">` : ''}
+            ${q.diagram_url ? `<img class="q-diagram-img q-img" src="${escapeHtml(q.diagram_url)}">` : ''}
             <div class="q-options">${opts}</div>
             <div class="q-actions">
               <button class="sol-btn btn-tint-blue" onclick="toggleSolution(this, '${q.id}', ${JSON.stringify(q).replace(/"/g, '&quot;')})">${t('pyqbank','showSolution')}</button>

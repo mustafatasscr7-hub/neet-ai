@@ -19,6 +19,7 @@
   <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
   <link rel="stylesheet" href="./sidebar-resize.css">
   <link rel="stylesheet" href="./tint-buttons.css">
+  <link rel="stylesheet" href="./question-images.css">
   <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
     /* Self-hosted (assets/fonts/) rather than a third-party CDN at runtime -- one less external
@@ -3665,7 +3666,7 @@ let selectedImages = [];
               if (q['option_' + opt] || q['option_' + opt + '_diagram_url']) {
                 const optEl = document.createElement('div');
                 optEl.className = 'pyq-opt';
-                const optImg = q['option_' + opt + '_diagram_url'] ? `<img src="${escapeHtml(q['option_' + opt + '_diagram_url'])}" style="max-width:100%;height:auto;border-radius:6px;margin-top:6px;border:1px solid #3a3a5e;display:block;">` : '';
+                const optImg = q['option_' + opt + '_diagram_url'] ? `<img class="q-opt-img" src="${escapeHtml(q['option_' + opt + '_diagram_url'])}" style="max-width:100%;height:auto;border-radius:6px;margin-top:6px;border:1px solid #3a3a5e;display:block;">` : '';
                 optEl.innerHTML = escapeHtml(opt.toUpperCase() + ') ' + (q['option_' + opt] || '')) + optImg;
                 optionEls[opt] = optEl;
                 optionsDiv.appendChild(optEl);

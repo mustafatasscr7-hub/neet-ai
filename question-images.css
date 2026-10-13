@@ -1,0 +1,52 @@
+/* Question and option images -- the one shared copy, linked by every page that renders a
+   question's diagram_url or option_*_diagram_url: mocktest.html, personalised-test.html,
+   pyqbank.html, savedquestions.html, mockresults.html, scoreboard.html, chat.html (PYQ modal).
+   Pages keep their own cosmetic image rules (border, radius, margin); this file only sizes.
+
+   Images are never upscaled (width/height stay auto, so max-* only ever shrinks them) and
+   never wider than their container. The height caps only apply from 768px up; below that
+   the mobile layout is left as it was. */
+:root {
+  /* Option images: four options should fit in the visible question area. The reserved
+     height is what the mock test screen spends on everything except the images themselves
+     (top bar, padding, question meta, a one-line question, option card padding and gaps,
+     the Mark/Clear/Prev/Next row). The minimum keeps formulas readable; if the capped
+     images still can't fit on a very short screen, the question area just scrolls. */
+  --q-opt-img-min-h: 90px;
+  --q-opt-img-reserved-h: 400px;
+  --q-opt-img-max-h: max(var(--q-opt-img-min-h), calc((100vh - var(--q-opt-img-reserved-h)) / 4));
+  /* Question diagram shown with the question text. */
+  --q-diagram-max-h: 40vh;
+  /* Vertical padding of an image option card on the test screens (text-only cards keep
+     their own 14px padding). */
+  --q-opt-img-card-pad-y: 8px;
+}
+@supports (height: 100dvh) {
+  :root {
+    --q-opt-img-max-h: max(var(--q-opt-img-min-h), calc((100dvh - var(--q-opt-img-reserved-h)) / 4));
+    --q-diagram-max-h: 40dvh;
+  }
+}
+
+.q-opt-img, .q-img {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  min-width: 0;
+  object-fit: contain;
+  box-sizing: border-box;
+}
+
+@media (min-width: 768px) {
+  .q-opt-img { max-height: var(--q-opt-img-max-h); }
+  .q-img { max-height: var(--q-diagram-max-h); }
+}
+
+/* Test-screen option cards (mocktest.html / personalised-test.html): the image sits inside
+   the option's content box next to the A/B/C/D circle. min-width:0 lets that box shrink to
+   the card instead of pushing the image past the card's right edge. */
+.option-content { min-width: 0; }
+@media (min-width: 768px) {
+  .option:has(.q-opt-img) { padding-top: var(--q-opt-img-card-pad-y); padding-bottom: var(--q-opt-img-card-pad-y); }
+}

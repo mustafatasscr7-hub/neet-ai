@@ -9,6 +9,7 @@
   <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+  <link rel="stylesheet" href="./question-images.css">
   <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
   <script src="./math-format.js"></script>
   <style>
@@ -921,7 +922,7 @@ function generateScorecard() {
           let cls = 'q-option';
           if (opt === correctAns) cls += ' correct-ans';
           if (opt === userAns && opt !== correctAns) cls += ' wrong-ans';
-          const optImg = q['option_' + opt + '_diagram_url'] ? `<img class="q-diagram-img" src="${escapeHtml(q['option_' + opt + '_diagram_url'])}">` : '';
+          const optImg = q['option_' + opt + '_diagram_url'] ? `<img class="q-diagram-img q-opt-img" src="${escapeHtml(q['option_' + opt + '_diagram_url'])}">` : '';
           return `<div class="${cls}">${opt.toUpperCase()}) ${renderMathInText(q['option_' + opt])}${optImg}</div>`;
         }).join('');
 
@@ -935,7 +936,7 @@ function generateScorecard() {
             ${q.id ? metaActionsHtml(q.difficulty, q.id) : ''}
           </div>
           <div class="q-text">${applySpecialFormattingOnly_ML(q.question)}</div>
-          ${q.diagram_url ? `<img class="q-diagram-img" src="${escapeHtml(q.diagram_url)}">` : ''}
+          ${q.diagram_url ? `<img class="q-diagram-img q-img" src="${escapeHtml(q.diagram_url)}">` : ''}
           <div class="q-options">${opts}</div>
           ${q.userAnswer ? `<div class="your-answer-note" style="font-size:11px;color:#555;margin-bottom:8px;">${t('mockresults','yourAnswer')} ${q.userAnswer?.toUpperCase()}</div>` : ''}
           <button id="save-${i}" class="save-question-btn" onclick="saveFromResults(${i})">${t('mockresults','saveQuestion')}</button>

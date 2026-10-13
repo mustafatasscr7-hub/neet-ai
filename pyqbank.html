@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="./sidebar.css">
   <link rel="stylesheet" href="./settings.css">
   <link rel="stylesheet" href="./tint-buttons.css">
+  <link rel="stylesheet" href="./question-images.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
   <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
   <script src="./math-format.js"></script>
@@ -1314,7 +1315,7 @@ function handleBack() {
         // correct") -- skipping whenever text is empty hid the option (and its diagram)
         // entirely. Only skip when there's truly nothing to show either way.
         if (!q['option_' + opt] && !q['option_' + opt + '_diagram_url']) return '';
-        const optImg = q['option_' + opt + '_diagram_url'] ? `<img class="q-diagram-img" src="${q['option_' + opt + '_diagram_url']}">` : '';
+        const optImg = q['option_' + opt + '_diagram_url'] ? `<img class="q-diagram-img q-opt-img" src="${q['option_' + opt + '_diagram_url']}">` : '';
         return `<div class="q-option" id="opt-${opt}" onclick="selectPyqOption('${opt}', '${q.correct_answer.toLowerCase().trim()}', '${q.id}')"><strong>${opt.toUpperCase()})</strong> ${parseWithMath(q['option_' + opt])}${optImg}</div>`;
       }).join('');
 
@@ -1350,7 +1351,7 @@ document.getElementById('mainContent').innerHTML = `
             ${metaActionsHtml(q.difficulty, q.id)}
           </div>
          <div class="q-text">${parseWithMath(q.question)}</div>
-${q.diagram_url ? `<img class="q-diagram-img" src="${q.diagram_url}">` : ''}
+${q.diagram_url ? `<img class="q-diagram-img q-img" src="${q.diagram_url}">` : ''}
           <div class="q-options">${opts}</div>
           <div class="q-actions">
             <button class="sol-btn btn-tint-blue" id="solBtn-${q.id}" onclick="toggleSolution(this, '${q.id}', ${JSON.stringify(q).replace(/"/g, '&quot;')})">${t('pyqbank','showSolution')}</button>

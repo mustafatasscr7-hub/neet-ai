@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="./sidebar.css">
   <link rel="stylesheet" href="./settings.css">
   <link rel="stylesheet" href="./tint-buttons.css">
+  <link rel="stylesheet" href="./question-images.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
   <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
   <script src="./math-format.js"></script>
@@ -976,7 +977,7 @@
           let cls = 'review-q-option';
           if (opt === correctAns) cls += ' correct-ans';
           if (opt === userAns && opt !== correctAns) cls += ' wrong-ans';
-          const optImg = q['option_' + opt + '_diagram_url'] ? `<img class="review-q-diagram-img" src="${escapeHtml(q['option_' + opt + '_diagram_url'])}">` : '';
+          const optImg = q['option_' + opt + '_diagram_url'] ? `<img class="review-q-diagram-img q-opt-img" src="${escapeHtml(q['option_' + opt + '_diagram_url'])}">` : '';
           return `<div class="${cls}">${opt.toUpperCase()}) ${renderMathInText(q['option_' + opt])}${optImg}</div>`;
         }).join('');
 

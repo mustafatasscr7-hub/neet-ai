@@ -10,6 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
   <link rel="stylesheet" href="./test-navigator.css">
+  <link rel="stylesheet" href="./question-images.css">
   <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
   <script src="./math-format.js"></script>
   <style>
@@ -1668,13 +1669,12 @@
         <div class="question-meta"><span>${subjectName(q.subject) || ''}${q.chapter ? ' • ' + escapeHtml(chapterName(q.chapter)) : ''}</span>${metaActionsHtml(q.difficulty, q.id)}</div>
         <div class="question-number">${t('mocktest','questionOf').replace('{i}', localizeNum(index + 1)).replace('{n}', localizeNum(questions.length))}</div>
         <div class="question-text">${formatQuestionText(q.question)}</div>
-        ${q.diagram_url ? `<img src="${q.diagram_url}" style="max-width:100%;border-radius:8px;margin:12px 0;border:1px solid #2a2a2a;">` : ''}
+        ${q.diagram_url ? `<img class="q-img" src="${q.diagram_url}" style="border-radius:8px;margin:12px 0;border:1px solid #2a2a2a;">` : ''}
         <div class="options" id="optionsContainer">
           ${['a','b','c','d'].map(opt => (q['option_' + opt] || q['option_' + opt + '_diagram_url']) ? `
             <div class="option ${selectedAnswer === opt ? 'selected' : ''}" onclick="selectAnswer('${opt}')">
               <div class="option-label">${opt.toUpperCase()}</div>
-              <div>${renderMathInText(q['option_' + opt])}</div>
-              ${q['option_' + opt + '_diagram_url'] ? `<img src="${q['option_' + opt + '_diagram_url']}" style="max-width:100%;border-radius:6px;margin-top:8px;border:1px solid #2a2a2a;">` : ''}
+              <div class="option-content">${renderMathInText(q['option_' + opt])}${q['option_' + opt + '_diagram_url'] ? `<img class="q-opt-img" src="${q['option_' + opt + '_diagram_url']}" style="border-radius:6px;${q['option_' + opt] ? 'margin-top:8px;' : ''}border:1px solid #2a2a2a;">` : ''}</div>
             </div>
           ` : '').join('')}
         </div>
@@ -1984,7 +1984,7 @@
           let cls = 'q-option';
           if (opt === correctAns) cls += ' correct-ans';
           if (opt === userAns && opt !== correctAns) cls += ' wrong-ans';
-          const optImg = q['option_' + opt + '_diagram_url'] ? `<img class="q-diagram-img" src="${escapeHtml(q['option_' + opt + '_diagram_url'])}">` : '';
+          const optImg = q['option_' + opt + '_diagram_url'] ? `<img class="q-diagram-img q-opt-img" src="${escapeHtml(q['option_' + opt + '_diagram_url'])}">` : '';
           return `<div class="${cls}">${opt.toUpperCase()}) ${renderMathInText(q['option_' + opt])}${optImg}</div>`;
         }).join('');
 
@@ -1998,7 +1998,7 @@
             ${metaActionsHtml(q.difficulty, q.id)}
           </div>
           <div class="q-text">${applySpecialFormattingOnly_ML(q.question)}</div>
-          ${q.diagram_url ? `<img class="q-diagram-img" src="${escapeHtml(q.diagram_url)}">` : ''}
+          ${q.diagram_url ? `<img class="q-diagram-img q-img" src="${escapeHtml(q.diagram_url)}">` : ''}
           <div class="q-options">${opts}</div>
           ${q.userAnswer ? `<div style="font-size:11px;color:#555;margin-bottom:8px;">${t('mockresults','yourAnswer')} ${q.userAnswer?.toUpperCase()}</div>` : ''}
           <button id="review-save-${i}" class="save-question-btn" onclick="saveFromReview(${i}, '${filter}')">${t('mockresults','saveQuestion')}</button>
