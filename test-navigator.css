@@ -1,0 +1,33 @@
+/* Question navigator panel (grid + legend + stats row) -- the one shared copy, linked by
+   mocktest.html (.qnav-panel) and personalised-test.html (#testScreen .sidebar). Each page
+   keeps its own panel container rule; everything inside it lives here. Light-mode overrides
+   stay in each page's body.light-mode block. */
+
+/* The grid is the only part that scrolls: it takes whatever height is left after the
+   header, legend and stats row (min-height:0 lets it shrink below its content in the flex
+   column), so the legend and stats are always fully visible at the bottom. */
+.question-grid { padding: 12px; overflow-y: auto; flex: 1; min-height: 0; }
+.question-grid::-webkit-scrollbar { width: 3px; }
+.question-grid::-webkit-scrollbar-thumb { background: #2a2a2a; }
+.grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
+.grid-btn { width: 100%; aspect-ratio: 1; border-radius: 6px; border: 1px solid #2a2a2a; background: #1a1a1a; color: #666; font-size: 11px; font-weight: 600; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; justify-content: center; }
+.grid-btn:hover { border-color: #4f8ef750; color: #ccc; }
+.grid-btn.current { border-color: #4f8ef7; background: #4f8ef720; color: #4f8ef7; }
+.grid-btn.answered { background: #4f8ef7; border-color: #4f8ef7; color: white; }
+.grid-btn.marked { background: #f9731620; border-color: #f97316; color: #f97316; }
+.grid-btn.answered.marked { background: #a855f7; border-color: #a855f7; color: white; }
+
+.legend { padding: 12px 16px; border-top: 1px solid #1e1e1e; display: flex; flex-wrap: wrap; gap: 8px; flex-shrink: 0; }
+.legend-item { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #666; }
+.legend-dot { width: 12px; height: 12px; border-radius: 3px; flex-shrink: 0; }
+
+/* Three equal columns that can never be wider than the panel. The old single flex row
+   (16px gaps, no wrapping) ran "Skipped" 16-24px past the 280px panel's right edge in
+   English, where overflow:hidden clipped it. Each stat is dot + count on the first line
+   with its label underneath (aligned to the count), so 3-digit counts and longer Hindi
+   labels both fit. Extra bottom padding keeps it off the screen edge. */
+.stats-bar { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding: 10px 12px 14px; padding-bottom: max(14px, env(safe-area-inset-bottom)); border-top: 1px solid #1e1e1e; background: #0d0d0d; flex-shrink: 0; }
+.stat { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; column-gap: 6px; row-gap: 1px; min-width: 0; font-size: 12px; }
+.stat-dot { width: 8px; height: 8px; border-radius: 50%; }
+.stat-count { font-weight: 600; color: #ececec; font-variant-numeric: tabular-nums; }
+.stat-label { grid-column: 2; min-width: 0; color: #555; line-height: 1.3; overflow-wrap: anywhere; }
