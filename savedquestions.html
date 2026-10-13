@@ -39,9 +39,9 @@
     body.light-mode .page-title { color: #0d0d0d !important; }
     body.light-mode .page-subtitle { color: #7a7a85 !important; }
 
-    body.light-mode .filter-tab { border-color: #d5d5dd !important; background: #ffffff !important; color: #55555f !important; }
-    body.light-mode .filter-tab:hover { background: #f0f0f3 !important; border-color: #c8c8d0 !important; }
-    body.light-mode .filter-tab.active { background: #4f8ef720 !important; border-color: #4f8ef7 !important; color: #2f6fd8 !important; }
+    body.light-mode .filter-tab, body.light-mode .filter-caret { border-color: #d5d5dd !important; background: #ffffff !important; color: #55555f !important; }
+    body.light-mode .filter-tab:hover, body.light-mode .filter-caret:hover { background: #f0f0f3 !important; border-color: #c8c8d0 !important; }
+    body.light-mode .filter-tab.active, body.light-mode .filter-tab.active + .filter-caret { background: #4f8ef720 !important; border-color: #4f8ef7 !important; color: #2f6fd8 !important; }
 
     body.light-mode .question-card { background: #ffffff !important; border-color: #e3e3ea !important; box-shadow: 0 1px 3px rgba(0,0,0,0.06) !important; }
     body.light-mode .q-meta { color: #7a7a85 !important; }
@@ -73,6 +73,39 @@
     .filter-tabs { display: flex; gap: 8px; margin-bottom: 24px; flex-wrap: wrap; }
     .filter-tab { padding: 6px 14px; border-radius: 6px; border: 1px solid #2a2a2a; background: transparent; color: #666; font-size: 12px; font-family: 'Inter', sans-serif; cursor: pointer; transition: all 0.2s; }
     .filter-tab.active { background: #4f8ef720; border-color: #4f8ef7; color: #4f8ef7; }
+
+    /* Subject chips (Biology/Physics/Chemistry) carry a difficulty menu. The chip is split into
+       two real buttons -- the existing .filter-tab label (unchanged behaviour, still one of the 7
+       tabs the 1-7 shortcuts and filterBy() walk) and a caret -- joined into one pill, so the
+       pair wraps as a single flex item and never breaks across lines. The caret takes its colours
+       from whatever the label has (.active included) via the sibling selector below. */
+    .filter-split { display: inline-flex; }
+    .filter-split > .filter-tab { border-right: none; border-top-right-radius: 0; border-bottom-right-radius: 0; padding-right: 9px; white-space: nowrap; }
+    .filter-caret { position: relative; display: inline-flex; align-items: center; padding: 0 9px 0 8px; border: 1px solid #2a2a2a; border-left: none; border-radius: 0 6px 6px 0; background: transparent; color: #666; cursor: pointer; transition: all 0.2s; }
+    .filter-tab.active + .filter-caret { background: #4f8ef720; border-color: #4f8ef7; color: #4f8ef7; }
+    /* Faint divider between label and caret, drawn short so the pill still reads as one chip. */
+    .filter-caret::before { content: ''; position: absolute; left: 0; top: 25%; bottom: 25%; width: 1px; background: currentColor; opacity: 0.25; }
+    .filter-caret svg { display: block; transition: transform 150ms ease; }
+    .filter-caret[aria-expanded="true"] svg { transform: rotate(180deg); }
+    .filter-tab:focus-visible, .filter-caret:focus-visible { outline: 2px solid var(--tint-blue); outline-offset: 2px; }
+    .filter-level { font-weight: 500; }
+
+    .level-menu {
+      --level-menu-bg: #1a1a1a; --level-menu-border: #2a2a2a; --level-menu-text: #ececec;
+      --level-menu-hover: rgba(255,255,255,0.06); --level-menu-shadow: 0 8px 24px rgba(0,0,0,0.4); --level-menu-accent: var(--tint-blue);
+      position: absolute; z-index: 2000; min-width: 168px; padding: 4px; background: var(--level-menu-bg); border: 1px solid var(--level-menu-border); border-radius: 10px; box-shadow: var(--level-menu-shadow); font-family: 'Inter', sans-serif;
+      opacity: 0; transform: scale(0.96) translateY(-4px); transform-origin: top left; transition: opacity 150ms ease, transform 150ms ease;
+    }
+    body.light-mode .level-menu { --level-menu-bg: #ffffff; --level-menu-border: #e3e3ea; --level-menu-text: #33333d; --level-menu-hover: rgba(0,0,0,0.05); --level-menu-shadow: 0 8px 24px rgba(0,0,0,0.12); --level-menu-accent: #2f6fd8; }
+    .level-menu.open { opacity: 1; transform: none; }
+    .level-menu-item { display: flex; align-items: center; gap: 8px; width: 100%; height: 38px; padding: 0 12px 0 8px; border: none; border-radius: 7px; background: transparent; color: var(--level-menu-text); font-size: 13px; font-family: inherit; text-align: left; cursor: pointer; }
+    .level-menu-item:hover, .level-menu-item:focus { background: var(--level-menu-hover); outline: none; }
+    .level-menu-item[aria-checked="true"] { color: var(--level-menu-accent); font-weight: 500; }
+    .level-menu-check { width: 14px; height: 14px; flex-shrink: 0; display: inline-flex; }
+    @media (prefers-reduced-motion: reduce) {
+      .level-menu, .filter-caret svg { transition: none; }
+      .level-menu { transform: none; }
+    }
 
     .question-card { background: #111; border: 1px solid #1e1e1e; border-radius: 12px; padding: 20px; margin-bottom: 12px; }
     .q-meta { font-size: 11px; color: #555; margin-bottom: 10px; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
@@ -160,6 +193,8 @@
     .spinner { width: 32px; height: 32px; border: 3px solid #1e1e1e; border-top-color: #4f8ef7; border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 16px; }
     @keyframes spin { to { transform: rotate(360deg); } }
     .empty { text-align: center; padding: 60px; color: #555; font-size: 14px; }
+    .empty a { color: var(--tint-blue); text-decoration: none; }
+    .empty a:hover, .empty a:focus-visible { text-decoration: underline; }
   
     /* Smooth fade-in on page load */
     body { animation: pageFadeIn 0.22s ease; }
@@ -300,9 +335,9 @@
 
     <div class="filter-tabs">
       <button class="filter-tab active" onclick="filterBy('all', this)" data-i18n="savedquestions.all">All</button>
-      <button class="filter-tab" onclick="filterBy('Biology', this)"><span data-i18n="common.biology">Biology</span></button>
-      <button class="filter-tab" onclick="filterBy('Physics', this)"><span data-i18n="common.physics">Physics</span></button>
-      <button class="filter-tab" onclick="filterBy('Chemistry', this)"><span data-i18n="common.chemistry">Chemistry</span></button>
+      <div class="filter-split" data-subject="Biology"><button class="filter-tab" onclick="filterBy('Biology', this)"><span data-i18n="common.biology">Biology</span><span class="filter-level"></span></button><button type="button" class="filter-caret" aria-haspopup="menu" aria-expanded="false" onclick="toggleLevelMenu(this)"><svg viewBox="0 0 12 12" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4.5l3 3 3-3"/></svg></button></div>
+      <div class="filter-split" data-subject="Physics"><button class="filter-tab" onclick="filterBy('Physics', this)"><span data-i18n="common.physics">Physics</span><span class="filter-level"></span></button><button type="button" class="filter-caret" aria-haspopup="menu" aria-expanded="false" onclick="toggleLevelMenu(this)"><svg viewBox="0 0 12 12" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4.5l3 3 3-3"/></svg></button></div>
+      <div class="filter-split" data-subject="Chemistry"><button class="filter-tab" onclick="filterBy('Chemistry', this)"><span data-i18n="common.chemistry">Chemistry</span><span class="filter-level"></span></button><button type="button" class="filter-caret" aria-haspopup="menu" aria-expanded="false" onclick="toggleLevelMenu(this)"><svg viewBox="0 0 12 12" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4.5l3 3 3-3"/></svg></button></div>
       <button class="filter-tab" onclick="filterBy('PYQ Bank', this)" data-i18n="savedquestions.fromPyqBank">From Question Bank</button>
       <button class="filter-tab" onclick="filterBy('Mock Test', this)" data-i18n="savedquestions.fromMockTest">From Mock Test</button>
       <button class="filter-tab" onclick="filterBy('Mistake Journal', this)" data-i18n="savedquestions.mistakeJournal">Mistake Journal</button>
@@ -863,10 +898,131 @@
       currentFilter = filter;
       document.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
       btn.classList.add('active');
-      if (filter === 'all') { renderQuestions(allQuestions); return; }
-      const filtered = allQuestions.filter(q => q.subject === filter || q.source === filter);
+      applyFilter();
+    }
+
+    // ---------------- Difficulty filter (subject chips only) ----------------
+    // Levels are the classifier's own fixed set (server.py classify_difficulty) and all three
+    // are present in real pyq data. The selection is remembered per subject for the session but
+    // only ever applied while that subject's chip is the active one -- All and the source chips
+    // never see it, so it can't leak onto the wrong list.
+    const DIFFICULTY_LEVELS = ['Easy', 'Moderate', 'Difficult'];
+    const LEVEL_KEYS = { Easy: 'levelEasy', Moderate: 'levelModerate', Difficult: 'levelDifficult' };
+    const levelBySubject = {};
+
+    function applyFilter() {
+      updateLevelLabels();
+      if (currentFilter === 'all') { renderQuestions(allQuestions); return; }
+      const level = levelBySubject[currentFilter];
+      const filtered = allQuestions.filter(q => (q.subject === currentFilter || q.source === currentFilter) && (!level || q.difficulty === level));
+      if (level && filtered.length === 0) {
+        document.getElementById('questionsList').innerHTML = `<div class="empty">${t('savedquestions','noMatchFilter')}<br><br><a href="#" role="button" onclick="clearLevelFilter(event)">${t('savedquestions','clearFilter')}</a></div>`;
+        return;
+      }
       renderQuestions(filtered);
     }
+
+    function clearLevelFilter(e) {
+      e.preventDefault();
+      delete levelBySubject[currentFilter];
+      applyFilter();
+    }
+
+    // Label suffix ("Biology · Difficult") only on the active chip; caret aria-labels follow the
+    // current language. Called on every filter change and on language change.
+    function updateLevelLabels() {
+      document.querySelectorAll('.filter-split').forEach(split => {
+        const subject = split.dataset.subject;
+        const label = split.querySelector('.filter-tab');
+        const level = label.classList.contains('active') ? levelBySubject[subject] : null;
+        split.querySelector('.filter-level').textContent = level ? ' · ' + t('savedquestions', LEVEL_KEYS[level]) : '';
+        split.querySelector('.filter-caret').setAttribute('aria-label', t('savedquestions','levelMenuAria').replace('{subject}', subjectName(subject)));
+      });
+    }
+
+    let levelMenuCaret = null;
+
+    function closeLevelMenu(returnFocus) {
+      const menu = document.getElementById('levelMenu');
+      if (menu) menu.remove();
+      if (!levelMenuCaret) return;
+      const caret = levelMenuCaret;
+      levelMenuCaret = null;
+      caret.setAttribute('aria-expanded', 'false');
+      caret.removeAttribute('aria-controls');
+      if (returnFocus) caret.focus();
+    }
+
+    function toggleLevelMenu(caret, focusLast) {
+      if (levelMenuCaret === caret) { closeLevelMenu(true); return; }
+      closeLevelMenu(false);
+      const subject = caret.closest('.filter-split').dataset.subject;
+      const current = levelBySubject[subject] || null;
+      const options = [null, ...DIFFICULTY_LEVELS];
+      const menu = document.createElement('div');
+      menu.id = 'levelMenu';
+      menu.className = 'level-menu';
+      menu.setAttribute('role', 'menu');
+      menu.setAttribute('aria-label', t('savedquestions','levelMenuAria').replace('{subject}', subjectName(subject)));
+      menu.innerHTML = options.map(level => `
+        <button type="button" class="level-menu-item" role="menuitemradio" tabindex="-1" aria-checked="${level === current}" data-level="${level || ''}">
+          <span class="level-menu-check">${level === current ? LANG_CHECK_SVG : ''}</span><span>${t('savedquestions', level ? LEVEL_KEYS[level] : 'allLevels')}</span>
+        </button>`).join('');
+      menu.addEventListener('click', e => {
+        const item = e.target.closest('.level-menu-item');
+        if (item) chooseLevel(subject, item.dataset.level || null);
+      });
+      menu.addEventListener('keydown', levelMenuKeydown);
+      document.body.appendChild(menu);
+
+      // Under the chip (left-aligned with the whole pill), clamped to stay fully on screen.
+      const chip = caret.closest('.filter-split').getBoundingClientRect();
+      const viewportW = document.documentElement.clientWidth;
+      const left = Math.max(8, Math.min(chip.left, viewportW - menu.offsetWidth - 8));
+      menu.style.left = (left + window.scrollX) + 'px';
+      menu.style.top = (chip.bottom + 6 + window.scrollY) + 'px';
+      requestAnimationFrame(() => menu.classList.add('open'));
+
+      levelMenuCaret = caret;
+      caret.setAttribute('aria-expanded', 'true');
+      caret.setAttribute('aria-controls', 'levelMenu');
+      const items = [...menu.querySelectorAll('.level-menu-item')];
+      (focusLast ? items[items.length - 1] : (items.find(i => i.getAttribute('aria-checked') === 'true') || items[0])).focus();
+    }
+
+    function chooseLevel(subject, level) {
+      if (level) levelBySubject[subject] = level; else delete levelBySubject[subject];
+      const label = document.querySelector(`.filter-split[data-subject="${subject}"] .filter-tab`);
+      closeLevelMenu(true);
+      if (currentFilter !== subject) filterBy(subject, label); else applyFilter();
+    }
+
+    function levelMenuKeydown(e) {
+      const items = [...e.currentTarget.querySelectorAll('.level-menu-item')];
+      const i = items.indexOf(document.activeElement);
+      if (e.key === 'ArrowDown') { e.preventDefault(); items[(i + 1) % items.length].focus(); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); items[(i - 1 + items.length) % items.length].focus(); }
+      else if (e.key === 'Home') { e.preventDefault(); items[0].focus(); }
+      else if (e.key === 'End') { e.preventDefault(); items[items.length - 1].focus(); }
+      else if (e.key === 'Escape' || e.key === 'Tab') { e.preventDefault(); closeLevelMenu(true); }
+      // Enter/Space fall through to the focused <button>'s own click.
+      e.stopPropagation();
+    }
+
+    document.querySelector('.filter-tabs').addEventListener('keydown', e => {
+      const caret = e.target.closest('.filter-caret');
+      if (!caret || (e.key !== 'ArrowDown' && e.key !== 'ArrowUp')) return;
+      e.preventDefault();
+      if (levelMenuCaret !== caret) toggleLevelMenu(caret, e.key === 'ArrowUp');
+    });
+    document.addEventListener('click', e => {
+      if (!levelMenuCaret || e.target.closest('#levelMenu') || e.target.closest('.filter-caret') === levelMenuCaret) return;
+      closeLevelMenu(false);
+    }, true);
+    document.addEventListener('keydown', e => { if (e.key === 'Escape' && levelMenuCaret) closeLevelMenu(true); });
+    window.addEventListener('resize', () => closeLevelMenu(false));
+    document.addEventListener('langchange', () => { closeLevelMenu(false); updateLevelLabels(); });
+    updateLevelLabels();
 
     async function deleteQuestion(id) {
       if (!(await showConfirmModal(t('savedquestions','confirmRemove'), { confirmLabel: t('savedquestions','remove'), danger: true }))) return;
@@ -965,7 +1121,9 @@
       }
       allQuestions = data;
       await ensureDifficulties(allQuestions, 'pyq', 'question_id');
-      renderQuestions(allQuestions);
+      // Also the language-switch callback -- re-apply the active chip/level rather than showing
+      // everything under a chip that still reads "Biology · Difficult".
+      applyFilter();
     }
 
     loadSavedQuestions();

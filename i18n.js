@@ -1381,7 +1381,14 @@ const TRANSLATIONS = {
       loginToSee: 'log in',
       loginToSeePrefix: 'Please ',
       loginToSeeSuffix: ' to see your saved questions.',
-      failedLoadSaved: 'Failed to load saved questions.'
+      failedLoadSaved: 'Failed to load saved questions.',
+      allLevels: 'All levels',
+      levelEasy: 'Easy',
+      levelModerate: 'Moderate',
+      levelDifficult: 'Difficult',
+      levelMenuAria: 'Filter {subject} by difficulty',
+      noMatchFilter: 'No questions match this filter',
+      clearFilter: 'Clear filter'
     },
     hi: {
       headerTitle: 'सहेजे गए प्रश्न',
@@ -1400,7 +1407,14 @@ const TRANSLATIONS = {
       loginToSee: 'लॉग इन करें',
       loginToSeePrefix: 'कृपया अपने सहेजे गए प्रश्न देखने के लिए ',
       loginToSeeSuffix: '।',
-      failedLoadSaved: 'सहेजे गए प्रश्न लोड करने में विफल।'
+      failedLoadSaved: 'सहेजे गए प्रश्न लोड करने में विफल।',
+      allLevels: 'सभी स्तर',
+      levelEasy: 'आसान',
+      levelModerate: 'मध्यम',
+      levelDifficult: 'कठिन',
+      levelMenuAria: '{subject} को कठिनाई के अनुसार फ़िल्टर करें',
+      noMatchFilter: 'इस फ़िल्टर से कोई प्रश्न मेल नहीं खाता',
+      clearFilter: 'फ़िल्टर हटाएँ'
     }
   },
 
