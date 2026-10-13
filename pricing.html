@@ -219,7 +219,7 @@
           <span class="plan-price" data-i18n-num>₹0</span>
         </div>
         <div class="plan-price-sub" data-i18n="pricing.foreverFree">forever free</div>
-        <button class="plan-btn" id="freeCtaBtn" onclick="window.location.href='./index.html'" data-i18n="pricing.freeCta">Start Free</button>
+        <button class="plan-btn" id="freeCtaBtn" onclick="startFree()" data-i18n="pricing.freeCta">Start Free</button>
         <div class="divider"></div>
         <div class="features-label" data-i18n="pricing.whatsIncluded">What's included</div>
         <div class="features">
@@ -331,18 +331,6 @@
     const PLAN_PRICE_BASE_ANNUAL = { pro: 3999, max: 6499 };
 
     // ---- NEET-year selection + date-based annual pricing (UI + calc only, no Razorpay yet) ----
-    // FLAGGING FOR APPROVAL, not silently decided -- both picked as reasonable defaults, easy to
-    // change in one place if Mustafa wants different numbers:
-    //   - Rounding to the nearest ₹50 (not ₹10): a 4-digit INR price rounded to ₹10 still reads
-    //     like arbitrary math ("₹2,147"); ₹50 lands on numbers that read like real, deliberately
-    //     set prices ("₹2,150"), closer to how the flat ₹3,999/₹6,499 prices themselves read.
-    //   - Minimum floor of 45 real days, even if the actual exam is sooner: applied to the DAYS
-    //     used in the calculation (not a separate flat rupee minimum) specifically so the
-    //     displayed price and the displayed "covers N days" caption always agree with each other
-    //     -- a flat rupee floor with the true (smaller) day count shown next to it would make the
-    //     two numbers visibly inconsistent. 45 days covers real onboarding/support overhead for a
-    //     new subscriber even if their exam is only weeks away; tune NEET_PRICING_MIN_DAYS below
-    //     if a different number is wanted.
     const NEET_PRICING_ROUND_TO = 50;
     const NEET_PRICING_MIN_DAYS = 45;
 
@@ -520,6 +508,13 @@
         // Best-effort -- a failed lookup just leaves the page in its normal guest-view state.
       }
     }
+    // Free card CTA: straight into the app when signed in, otherwise to login first.
+    async function startFree() {
+      let session = null;
+      try { ({ data: { session } } = await client.auth.getSession()); } catch (e) {}
+      window.location.href = session ? './chat.html' : './login.html';
+    }
+
     document.addEventListener('langchange', applyPlanBadges);
     initPlanAwareness();
   </script>
