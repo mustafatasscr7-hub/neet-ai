@@ -10,6 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet"/>
   <link rel="stylesheet" href="./sidebar.css">
   <link rel="stylesheet" href="./settings.css">
+  <link rel="stylesheet" href="./tint-buttons.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
   <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
   <script src="./math-format.js"></script>
@@ -127,17 +128,18 @@
     .review-q-answer-note { font-size: 11px; color: #666; }
     .review-q-diagram-img { max-width: 100%; height: auto; display: block; border-radius: 8px; margin: 10px 0; border: 1px solid #26262e; }
 
-    /* Show Explanation -- same .sol-btn/.sol-div treatment pyqbank.html/mockresults.html/
-       personalised-test.html/savedquestions.html already use for their own "Show Solution"
-       buttons, reused here rather than a new visual style. Wrong-only: correct answers don't
+    /* Show Explanation -- same .sol-btn/.sol-div treatment pyqbank.html/savedquestions.html
+       use for their own "Show Solution" buttons. .sol-btn is geometry only; colour + states come
+       from the shared .btn-tint-blue (tint-buttons.css). Wrong-only: correct answers don't
        need a solution reveal, skipped ones aren't in scope for this task either. */
-    .sol-btn { background: #a78bfa1c; border: none; color: #a78bfa; padding: 6px 14px; border-radius: 8px; cursor: pointer; font-size: 11.5px; font-weight: 600; font-family: 'Inter', sans-serif; transition: filter 0.15s ease, transform 0.1s ease; margin-top: 8px; }
-    .sol-btn:hover { filter: brightness(1.15); }
-    .sol-btn:active { transform: scale(0.97); }
+    /* min-height pins the pre-restyle height (the removed emoji had a taller line box than the text). */
+    .sol-btn { min-height: 27px; padding: 6px 14px; border-radius: 8px; cursor: pointer; font-size: 11.5px; font-weight: 600; font-family: 'Inter', sans-serif; margin-top: 8px; }
     .sol-btn:disabled { opacity: 0.5; cursor: not-allowed; }
     .sol-div { display: none; margin-top: 10px; padding: 12px; background: #16161f; border-radius: 8px; border: 1px solid #2a2a3a; color: #c4c4c4; line-height: 1.65; font-size: 12.5px; overflow-x: auto; word-wrap: break-word; }
     .sol-error-text { color: #ef4444; }
     .thinking-indicator { display: flex; align-items: center; gap: 10px; }
+    /* Loading orb inside a review card (explanation panel + diagram skeleton): blue, no purple on the card. */
+    .review-question-card .thinking-orb::after { border-bottom-color: var(--tint-blue); border-left-color: var(--tint-blue); }
     .thinking-text { font-size: 12.5px; color: #888; animation: thinkingFade 2.2s ease-in-out infinite; }
 
     /* Report-a-question: identical component to pyqbank.html/mockresults.html/chat.html --
@@ -241,7 +243,6 @@
     body.light-mode .review-q-option.correct-ans { background: #4ade8018 !important; border-color: #4ade8050 !important; color: #2f9d5e !important; }
     body.light-mode .review-q-option.wrong-ans { background: #ef444415 !important; border-color: #ef444450 !important; color: #d13a3a !important; }
     body.light-mode .review-q-answer-note { color: #9a9aa5 !important; }
-    body.light-mode .sol-btn { background: #a78bfa1a !important; color: #7c3aed !important; }
     body.light-mode .sol-div { background: #f5f5f7 !important; border-color: #d5d5dd !important; color: #333338 !important; }
     body.light-mode .thinking-text { color: #7a7a85 !important; }
     body.light-mode .review-q-diagram-img { border-color: #e5e5ea !important; }
@@ -988,7 +989,7 @@
         // attribute -- avoids the quote-escaping fragility of embedding a full question object
         // (with LaTeX backslashes, quoted phrases, etc) as inline HTML.
         const explanationHtml = q.status === 'wrong'
-          ? `<button class="sol-btn" id="sol-btn-${i}-${qIdx}" onclick="toggleExplanation(${i}, '${category}', ${qIdx}, this)">${t('scoreboard', 'showExplanation')}</button>
+          ? `<button class="sol-btn btn-tint-blue" id="sol-btn-${i}-${qIdx}" onclick="toggleExplanation(${i}, '${category}', ${qIdx}, this)">${t('scoreboard', 'showExplanation')}</button>
              <div class="sol-div" id="sol-div-${i}-${qIdx}"></div>`
           : '';
 

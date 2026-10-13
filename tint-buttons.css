@@ -1,0 +1,55 @@
+/* Quiet tinted action buttons -- the one shared copy, linked by every page whose question cards
+   carry Show Solution / Remove (savedquestions, pyqbank, chat's PYQ modal, scoreboard review).
+   Colours are the app's existing accent blue (#4f8ef7: year labels, send button) and red
+   (#ef4444). Fill/border/focus ring use them directly; TEXT is the same colour mixed toward white
+   (dark) or black (light) because the raw hex fails WCAG AA as 12px text on its own tint -- e.g.
+   #4f8ef7 on chat's #2a2a3e card is only ~3.3:1. Mixed text measures >= 5:1 on every card
+   background these buttons sit on, at rest and hover, in both themes.
+   Size/padding/radius are deliberately NOT set here: each page keeps its existing .sol-btn/.del-btn
+   geometry, this file only owns colour + states. The 1px border is an inset box-shadow, not a real
+   border, so adding it doesn't grow the buttons by 2px. Selectors are button.-qualified so they
+   outrank each page's own inline-<style> .sol-btn rules regardless of stylesheet order. */
+:root {
+  --tint-blue: #4f8ef7;
+  --tint-red: #ef4444;
+  --tint-blue-text: color-mix(in srgb, var(--tint-blue) 65%, #fff);
+  --tint-red-text: color-mix(in srgb, var(--tint-red) 60%, #fff);
+}
+body.light-mode {
+  --tint-blue-text: color-mix(in srgb, var(--tint-blue) 65%, #000);
+  --tint-red-text: color-mix(in srgb, var(--tint-red) 65%, #000);
+}
+
+button.btn-tint-blue, button.btn-tint-red {
+  --tint: var(--tint-blue);
+  --tint-text: var(--tint-blue-text);
+  background: color-mix(in srgb, var(--tint) 13%, transparent);
+  color: var(--tint-text);
+  border: none;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tint) 25%, transparent);
+  transition: background-color 150ms ease, box-shadow 150ms ease, transform 150ms ease;
+}
+button.btn-tint-red { --tint: var(--tint-red); --tint-text: var(--tint-red-text); }
+
+button.btn-tint-blue:hover:not(:disabled), button.btn-tint-red:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--tint) 20%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tint) 35%, transparent);
+  filter: none;
+}
+button.btn-tint-blue:active:not(:disabled), button.btn-tint-red:active:not(:disabled) { transform: scale(0.97); }
+button.btn-tint-blue:focus-visible, button.btn-tint-red:focus-visible { outline: 2px solid var(--tint); outline-offset: 2px; }
+button.btn-tint-blue:focus:not(:focus-visible), button.btn-tint-red:focus:not(:focus-visible) { outline: none; }
+
+/* Pages carry older body.light-mode !important overrides on sibling buttons; keep these winning. */
+body.light-mode button.btn-tint-blue, body.light-mode button.btn-tint-red {
+  background: color-mix(in srgb, var(--tint) 13%, transparent) !important;
+  color: var(--tint-text) !important;
+}
+body.light-mode button.btn-tint-blue:hover:not(:disabled), body.light-mode button.btn-tint-red:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--tint) 20%, transparent) !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button.btn-tint-blue, button.btn-tint-red { transition: background-color 150ms ease, box-shadow 150ms ease; }
+  button.btn-tint-blue:active:not(:disabled), button.btn-tint-red:active:not(:disabled) { transform: none; }
+}

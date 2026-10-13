@@ -18,6 +18,7 @@
   <script src="./math-format.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
   <link rel="stylesheet" href="./sidebar-resize.css">
+  <link rel="stylesheet" href="./tint-buttons.css">
   <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
     /* Self-hosted (assets/fonts/) rather than a third-party CDN at runtime -- one less external
@@ -196,15 +197,17 @@
     /* Show Solution / Save buttons inside each PYQ card. Previously styled with inline
        style.cssText, which meant no :hover was possible at all (an element's own inline style
        always wins over any stylesheet rule for the same property, hover state or not) -- moved
-       to real classes so hover feedback actually shows. */
-    .sol-btn { background: #a78bfa1c; border: none; color: #a78bfa; padding: 7px 16px; border-radius: 9px; cursor: pointer; font-size: 12px; font-weight: 600; font-family: 'Inter', sans-serif; transition: filter 0.15s ease, transform 0.1s ease; }
-    .sol-btn:hover { filter: brightness(1.15); }
-    .sol-btn:active { transform: scale(0.97); }
+       to real classes so hover feedback actually shows. .sol-btn is geometry only; its colour +
+       hover/pressed/focus states come from the shared .btn-tint-blue (tint-buttons.css). */
+    /* min-height pins the pre-restyle height (the removed emoji had a taller line box than the text). */
+    .sol-btn { min-height: 30px; padding: 7px 16px; border-radius: 9px; cursor: pointer; font-size: 12px; font-weight: 600; font-family: 'Inter', sans-serif; }
+    /* Loading orb inside a PYQ card (solution panel + diagram skeleton): blue instead of the
+       global blue/violet pair -- the card itself carries no purple. */
+    .pyq-q-card .thinking-orb::after { border-bottom-color: var(--tint-blue); border-left-color: var(--tint-blue); }
     .pyq-save-btn { background: #f973161c; border: none; color: #f97316; padding: 7px 16px; border-radius: 9px; cursor: pointer; font-size: 12px; font-weight: 600; font-family: 'Inter', sans-serif; margin-left: 8px; transition: filter 0.15s ease, transform 0.1s ease; }
     .pyq-save-btn:hover { filter: brightness(1.15); }
     .pyq-save-btn:active { transform: scale(0.97); }
     .pyq-save-btn:disabled { cursor: default; opacity: 0.6; }
-    body.light-mode .sol-btn { background: #a78bfa1a !important; color: #7c3aed !important; }
     body.light-mode .pyq-save-btn { background: #f973161a !important; color: #c2540a !important; }
     /* Header "Upgrade" pill -- deliberately quiet: a translucent neutral capsule, text only, no
        fill/shadow/glow. It's sized and rounded to pair with the countdown pill beside it
@@ -3632,9 +3635,9 @@ let selectedImages = [];
         filtered.forEach(function(q) {
           const card = document.createElement('div');
           card.className = 'pyq-q-card';
-          card.style.cssText = 'background:#2a2a3e;border-radius:8px;padding:16px;margin-bottom:12px;border-left:3px solid ' + (subjectColors[subject] || '#a78bfa') + ';overflow:hidden;';
+          card.style.cssText = 'background:#2a2a3e;border-radius:8px;padding:16px;margin-bottom:12px;border-left:3px solid ' + (subjectColors[subject] || 'var(--tint-blue)') + ';overflow:hidden;';
           const meta = document.createElement('div');
-          meta.style.cssText = 'color:' + (subjectColors[subject] || '#a78bfa') + ';font-size:12px;margin-bottom:8px;display:flex;align-items:center;';
+          meta.style.cssText = 'color:' + (subjectColors[subject] || 'var(--tint-blue)') + ';font-size:12px;margin-bottom:8px;display:flex;align-items:center;';
           meta.innerHTML = `<span>${escapeHtml('NEET ' + localizeNum(q.year || '') + ' • ' + (subjectName(q.subject) || ''))}</span>${q.id ? metaActionsHtml(q.difficulty, q.id) : ''}`;
           const question = document.createElement('div');
           question.className = 'pyq-q-text';
@@ -3708,8 +3711,8 @@ let selectedImages = [];
             });
           }
           const solBtn = document.createElement('button');
-          solBtn.className = 'sol-btn';
-          solBtn.textContent = '💡 Show Solution';
+          solBtn.className = 'sol-btn btn-tint-blue';
+          solBtn.textContent = 'Show Solution';
           const saveBtn = document.createElement('button');
           saveBtn.className = 'pyq-save-btn';
           saveBtn.textContent = '🔖 Save';
@@ -3755,7 +3758,7 @@ let selectedImages = [];
           let visible = false;
           solBtn.onclick = async function() {
             if (!solved) {
-              solBtn.textContent = '⏳ Generating solution...';
+              solBtn.textContent = 'Generating solution...';
               solBtn.disabled = true;
               solDiv.style.display = 'block';
               const THINKING_PHRASE_KEYS = ['thinkingPhrase1', 'thinkingPhrase2', 'thinkingPhrase3', 'thinkingPhrase4', 'thinkingPhrase5'];
@@ -3797,7 +3800,7 @@ let selectedImages = [];
                   const ctaKey = guest ? 'login' : (pro ? 'upgradeToMax' : 'upgradeToPro');
                   const ctaHtml = max ? '' : ` <a href="${link}">${t('chat', ctaKey)}</a>`;
                   solDiv.innerHTML = `<span style="color:#ef4444;">${t('chat', msgKey)}${ctaHtml}</span>`;
-                  solBtn.textContent = '💡 Show Solution';
+                  solBtn.textContent = 'Show Solution';
                   solBtn.disabled = false;
                   refreshUsageBanner();
                   return;
@@ -3833,18 +3836,18 @@ let selectedImages = [];
                 solDiv.innerHTML = parseWithMath(fullText);
                 solved = true;
                 visible = true;
-                solBtn.textContent = '🔼 Hide Solution';
+                solBtn.textContent = 'Hide Solution';
                 solBtn.disabled = false;
               } catch(e) {
                 clearInterval(thinkingInterval);
                 solDiv.innerHTML = '<span style="color:#ef4444;">Failed to generate solution. Try again.</span>';
-                solBtn.textContent = '💡 Show Solution';
+                solBtn.textContent = 'Show Solution';
                 solBtn.disabled = false;
               }
             } else {
               visible = !visible;
               solDiv.style.display = visible ? 'block' : 'none';
-              solBtn.textContent = visible ? '🔼 Hide Solution' : '💡 Show Solution';
+              solBtn.textContent = visible ? 'Hide Solution' : 'Show Solution';
             }
           };
           card.appendChild(meta);
