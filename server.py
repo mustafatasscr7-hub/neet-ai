@@ -67,7 +67,15 @@ async def lifespan(app: FastAPI):
     keepalive_task.cancel()
     await async_client.aclose()
 
-app = FastAPI(lifespan=lifespan)
+# /docs, /redoc and /openapi.json were public in production, handing anyone a full map of every
+# endpoint and request schema. Off by default; set ENABLE_DOCS=1 locally to get them back.
+_DOCS_ENABLED = os.getenv("ENABLE_DOCS") == "1"
+app = FastAPI(
+    lifespan=lifespan,
+    docs_url="/docs" if _DOCS_ENABLED else None,
+    redoc_url="/redoc" if _DOCS_ENABLED else None,
+    openapi_url="/openapi.json" if _DOCS_ENABLED else None,
+)
 
 # Previously allow_origins=["*"] (plus wildcard methods/headers) -- any website's JS could call
 # this API directly and read the response of anything that doesn't check identity (e.g. the
