@@ -205,10 +205,43 @@
     .pyq-save-btn:disabled { cursor: default; opacity: 0.6; }
     body.light-mode .sol-btn { background: #a78bfa1a !important; color: #7c3aed !important; }
     body.light-mode .pyq-save-btn { background: #f973161a !important; color: #c2540a !important; }
-    .upgrade-btn { background: #f9b02c1c; border: none; color: #f9b02c; padding: 7px 16px; border-radius: 9px; cursor: pointer; font-size: 12px; font-weight: 600; font-family: 'Inter', sans-serif; transition: filter 0.15s ease, transform 0.1s ease; }
-    .upgrade-btn:hover { filter: brightness(1.15); }
-    .upgrade-btn:active { transform: scale(0.97); }
-    body.light-mode .upgrade-btn { background: #f9b02c22 !important; color: #b5790a !important; }
+    /* Header "Upgrade" CTA -- the one solid-filled control in the header, so it reads as the
+       primary action through fill + contrast alone (no emoji/gradient/glow). All tunables are
+       custom properties on the class itself (chat.html has no :root token layer); light mode only
+       swaps the variables. Visual height stays 30px so the header doesn't grow; ::before
+       extends the hit area to 44px for touch. */
+    .upgrade-btn {
+      --upgrade-fill: #f4b23f;            /* the app's #f9b02c amber, a touch softer/warmer */
+      --upgrade-label: #1c1405;           /* ~10:1 on the fill (WCAG AAA) */
+      --upgrade-radius: 999px;
+      --upgrade-shadow: 0 1px 2px rgba(0,0,0,0.28), 0 2px 8px rgba(0,0,0,0.18);
+      --upgrade-highlight: inset 0 1px 0 rgba(255,255,255,0.32);
+      --upgrade-ring: #f4b23f;
+      position: relative; display: inline-flex; align-items: center; justify-content: center;
+      height: 30px; padding: 0 23.5px; white-space: nowrap;  /* 101px wide = the old emoji button, so the countdown pill does not move */
+      background: var(--upgrade-fill); color: var(--upgrade-label);
+      border: none; border-radius: var(--upgrade-radius);
+      box-shadow: var(--upgrade-highlight), var(--upgrade-shadow);
+      font-family: 'Inter', sans-serif; font-size: 13px; font-weight: 600; letter-spacing: normal;
+      cursor: pointer; -webkit-tap-highlight-color: transparent;
+      transition: transform 220ms cubic-bezier(0.2, 0.9, 0.3, 1.15), filter 180ms ease-out, box-shadow 180ms ease-out;
+    }
+    .upgrade-btn::before { content: ''; position: absolute; left: 0; right: 0; top: 50%; height: 44px; transform: translateY(-50%); }
+    .upgrade-btn:hover { filter: brightness(1.06); }
+    .upgrade-btn:active { transform: scale(0.97); filter: brightness(0.96); box-shadow: var(--upgrade-highlight), 0 1px 1px rgba(0,0,0,0.22); transition-duration: 90ms; }
+    .upgrade-btn:focus { outline: none; }
+    .upgrade-btn:focus-visible { outline: 2px solid var(--upgrade-ring); outline-offset: 2px; }
+    .upgrade-btn:disabled { opacity: 0.45; cursor: not-allowed; filter: none; transform: none; box-shadow: none; }
+    body.light-mode .upgrade-btn {
+      --upgrade-fill: #f2ab32;
+      --upgrade-shadow: 0 0 0 0.5px rgba(120,80,0,0.22), 0 1px 2px rgba(120,80,0,0.16);
+      --upgrade-highlight: inset 0 1px 0 rgba(255,255,255,0.45);
+      --upgrade-ring: #b5790a;
+    }
+    @media (max-width: 620px) { .upgrade-btn { padding: 0 14px; } }
+    @media (prefers-reduced-motion: reduce) {
+      .upgrade-btn, .upgrade-btn:active { transform: none; transition: filter 120ms linear, box-shadow 120ms linear; }
+    }
 
     /* Report-a-question: subtle flag icon, low visibility until hovered, and its popup --
        same block as mocktest.html/pyqbank.html/personalised-test.html, kept identical so the
@@ -1352,7 +1385,7 @@
             <div style="font-size:10px;color:#333;margin-top:10px;text-align:center;" data-i18n="chat.neetDateFormatted">May 4, 2027</div>
           </div>
        </div>
-        <button id="headerUpgradeBtn" class="upgrade-btn" onclick="window.location.href='./pricing.html'" data-i18n="chat.upgradeBtn">⭐ Upgrade</button>
+        <button id="headerUpgradeBtn" class="upgrade-btn" onclick="window.location.href='./pricing.html'" data-i18n="chat.upgradeBtn">Upgrade</button>
       </div>
     </div>
 
