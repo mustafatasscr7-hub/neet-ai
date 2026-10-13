@@ -1,0 +1,10 @@
+/* Sidebar resize handle -- the one shared copy, linked by chat.html and @imported by sidebar.css
+   (every other page with the sidebar). The 6px strip is an invisible hit area; on hover/drag
+   it shows only a faint neutral 1px hairline on the sidebar edge (no accent colour), so the
+   resize affordance stays discoverable without drawing attention. */
+.sidebar-resize-handle { position: absolute; top: 0; right: 0; width: 6px; height: 100%; cursor: col-resize; z-index: 20; background: transparent; touch-action: none; outline: none; }
+.sidebar-resize-handle::after { content: ''; position: absolute; top: 0; right: 0; width: 1px; height: 100%; background: transparent; transition: background-color 150ms ease; }
+.sidebar-resize-handle:hover::after, .sidebar-resize-handle.active::after { background: rgba(255,255,255,0.12); }
+body.light-mode .sidebar-resize-handle:hover::after, body.light-mode .sidebar-resize-handle.active::after { background: rgba(0,0,0,0.12); }
+.sidebar.collapsed .sidebar-resize-handle { display: none; }
+@media (hover: none) { .sidebar-resize-handle { display: none; } }

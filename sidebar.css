@@ -1,3 +1,4 @@
+@import url('./sidebar-resize.css');
 /* Shared sidebar component -- used by every standalone page (pyqbank.html, savedquestions.html,
    diagram-library.html, mocktest.html, scoreboard.html) so navigation, the Pinned/Recent chat
    list, and account info are available identically outside of chat.html, not just from within it.
@@ -22,10 +23,6 @@ body.light-mode .page-main-content::-webkit-scrollbar-thumb:hover { background: 
 .sidebar { position: relative; width: 260px; background: #111111; display: flex; flex-direction: column; padding: 12px 8px; gap: 4px; border-right: 1px solid #1e1e1e; flex-shrink: 0; transition: width 0.25s ease-in-out; overflow: hidden; }
 .sidebar.collapsed { width: 56px; }
 .sidebar.resizing { transition: none; }
-.sidebar-resize-handle { position: absolute; top: 0; right: 0; width: 6px; height: 100%; cursor: col-resize; z-index: 20; background: transparent; touch-action: none; }
-.sidebar-resize-handle:hover, .sidebar-resize-handle.active { background: rgba(124,58,237,0.4); }
-.sidebar.collapsed .sidebar-resize-handle { display: none; }
-@media (hover: none) { .sidebar-resize-handle { display: none; } }
 .sidebar.collapsed .new-chat-btn { justify-content: center; padding: 10px 0; gap: 0; width: 100%; }
 .sidebar.collapsed .nav-item { justify-content: center; padding: 10px 0; gap: 0; }
 .sidebar.collapsed .profile-btn { justify-content: center; padding: 10px 0; gap: 0; }

@@ -17,6 +17,7 @@
   <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
   <script src="./math-format.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+  <link rel="stylesheet" href="./sidebar-resize.css">
   <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
     /* Self-hosted (assets/fonts/) rather than a third-party CDN at runtime -- one less external
@@ -510,10 +511,6 @@
        Claude.ai's own edge. Not shown at all while collapsed (56px icon rail has nothing
        meaningful to resize down from) or on a touch device (no persistent hover to discover it
        exists, and no real screen-width benefit to a narrower rail on a small viewport). */
-    .sidebar-resize-handle { position: absolute; top: 0; right: 0; width: 6px; height: 100%; cursor: col-resize; z-index: 20; background: transparent; touch-action: none; }
-    .sidebar-resize-handle:hover, .sidebar-resize-handle.active { background: rgba(124,58,237,0.4); }
-    .sidebar.collapsed .sidebar-resize-handle { display: none; }
-    @media (hover: none) { .sidebar-resize-handle { display: none; } }
     .sidebar.collapsed .new-chat-btn { justify-content: center; padding: 10px 0; gap: 0; width: 100%; }
     .sidebar.collapsed .nav-item { justify-content: center; padding: 10px 0; gap: 0; }
     .sidebar.collapsed .profile-btn { justify-content: center; padding: 10px 0; gap: 0; }
