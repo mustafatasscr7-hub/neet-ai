@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Header, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.datastructures import MutableHeaders
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict
@@ -76,6 +77,29 @@ app = FastAPI(
     redoc_url="/redoc" if _DOCS_ENABLED else None,
     openapi_url="/openapi.json" if _DOCS_ENABLED else None,
 )
+
+# HSTS on every response. Railway only serves this API over HTTPS, so pinning browsers to HTTPS
+# costs nothing; browsers ignore the header on plain-http localhost, so local dev is unaffected.
+# Plain ASGI, deliberately not @app.middleware("http"): that wraps responses in
+# BaseHTTPMiddleware, which changes how a client disconnect reaches the /chat and /solve
+# streaming generators (their token logging depends on it). This only edits the
+# response-start headers and never touches the body stream.
+class _HSTSMiddleware:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+
+        async def send_with_hsts(message):
+            if message["type"] == "http.response.start":
+                MutableHeaders(scope=message).setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+            await send(message)
+
+        await self.app(scope, receive, send_with_hsts)
+
+app.add_middleware(_HSTSMiddleware)
 
 # Previously allow_origins=["*"] (plus wildcard methods/headers) -- any website's JS could call
 # this API directly and read the response of anything that doesn't check identity (e.g. the
