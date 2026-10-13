@@ -8844,6 +8844,294 @@ async def admin_resolve_diagram_reports(diagram_id: int, _: None = Depends(verif
     except Exception as e:
         return {"error": str(e)}
 
+# ---------- Response feedback (thumbs up/down) + admin Feedback review ----------
+# chat.html votes go through these endpoints (the mobile app still writes response_feedback
+# directly with the anon key -- see alter_response_feedback_add_review_fields.sql for the trigger
+# that keeps students from writing the admin/server-owned columns that way). The question/answer
+# snapshot is copied from the student's own stored chats row, not trusted from the request body;
+# the client-sent text is only a fallback for a vote cast before that row has been saved, and is
+# labelled text_source='client' so the admin view can tell the two apart.
+#
+# Never log question_text/answer_text/comment/admin_note -- these are student conversations.
+
+_UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+FEEDBACK_ADMIN_PAGE_SIZE = 25
+FEEDBACK_SELECT = "id,user_id,chat_id,msg_index,question_text,answer_text,rating,comment,created_at,reviewed,reviewed_at,admin_note,model,text_source"
+_FEEDBACK_MAX_TEXT = 50000
+
+def _is_uuid(value) -> bool:
+    return isinstance(value, str) and bool(_UUID_RE.match(value))
+
+def _parse_iso_ts(value: str):
+    try:
+        ts = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return None
+    return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+
+class FeedbackVoteRequest(BaseModel):
+    rating: str
+    msg_index: int
+    chat_id: Optional[str] = None
+    feedback_id: Optional[str] = None  # set when switching an existing vote up<->down
+    # Fallback only, used when the chat row isn't saved yet (see the block comment above).
+    question_text: Optional[str] = None
+    answer_text: Optional[str] = None
+
+class FeedbackCommentRequest(BaseModel):
+    comment: str
+
+class FeedbackReviewRequest(BaseModel):
+    reviewed: bool
+    note: Optional[str] = None
+
+async def _feedback_text_from_chat(user_id: str, chat_id: str, msg_index: int):
+    """(question, answer, ai_message_time) from the student's own stored chat, or None if the row
+    or that message isn't there (yet) / isn't an AI message."""
+    try:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/chats", headers=ADMIN_HEADERS,
+            params={"id": f"eq.{chat_id}", "user_id": f"eq.{user_id}", "select": "messages", "limit": 1}
+        )
+        rows = resp.json() if resp.status_code == 200 else []
+    except Exception:
+        return None
+    if not rows:
+        return None
+    messages = rows[0].get("messages") or []
+    if not isinstance(messages, list) or not (0 <= msg_index < len(messages)):
+        return None
+    ai_msg = messages[msg_index]
+    if not isinstance(ai_msg, dict) or ai_msg.get("role") != "ai" or not ai_msg.get("text"):
+        return None
+    prev = messages[msg_index - 1] if msg_index > 0 else None
+    question = prev.get("text") if isinstance(prev, dict) and prev.get("role") == "user" else None
+    return question, ai_msg["text"], ai_msg.get("time")
+
+async def _infer_feedback_model(user_id: str, ai_time: str):
+    """Best-effort: the provider of this user's /chat call logged closest to when the rated reply
+    finished. provider_usage_log is written right as the stream completes, and chat.html stamps
+    the AI message's `time` at that same moment, so a +/-60s window is plenty."""
+    ts = _parse_iso_ts(ai_time) if ai_time else None
+    if not ts:
+        return None
+    try:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/provider_usage_log", headers=ADMIN_HEADERS,
+            params=[
+                ("user_id", f"eq.{user_id}"), ("endpoint", "eq./chat"),
+                ("created_at", f"gte.{(ts - timedelta(seconds=60)).isoformat()}"),
+                ("created_at", f"lte.{(ts + timedelta(seconds=60)).isoformat()}"),
+                ("select", "provider,created_at"), ("limit", "20"),
+            ]
+        )
+        rows = resp.json() if resp.status_code == 200 else []
+    except Exception:
+        return None
+    best = None
+    for r in rows if isinstance(rows, list) else []:
+        rts = _parse_iso_ts(r.get("created_at") or "")
+        if rts and (best is None or abs((rts - ts).total_seconds()) < best[0]):
+            best = (abs((rts - ts).total_seconds()), r.get("provider"))
+    return best[1] if best else None
+
+async def _feedback_write(method: str, params: dict, payload: dict):
+    """Insert/patch response_feedback. If the review-fields migration hasn't been run yet, retry
+    without the new columns so votes keep recording either way."""
+    headers = {**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"}
+    url = f"{SUPABASE_URL}/rest/v1/response_feedback"
+    call = async_client.post if method == "post" else async_client.patch
+    resp = await call(url, headers=headers, params={**params, "select": "id"}, json=payload)
+    new_cols = ("model", "text_source", "reviewed", "reviewed_at")
+    if resp.status_code >= 400 and any(k in payload for k in new_cols) and "column" in resp.text:
+        legacy = {k: v for k, v in payload.items() if k not in new_cols}
+        resp = await call(url, headers=headers, params={**params, "select": "id"}, json=legacy)
+    return resp
+
+@app.post("/feedback")
+async def feedback_vote(req: FeedbackVoteRequest, verified_user_id: str = Depends(_get_verified_user_id)):
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if req.rating not in ("up", "down"):
+        raise HTTPException(status_code=400, detail="rating must be 'up' or 'down'")
+    if req.msg_index < 0:
+        raise HTTPException(status_code=400, detail="Invalid msg_index")
+    if req.chat_id is not None and not _is_uuid(req.chat_id):
+        raise HTTPException(status_code=400, detail="Invalid chat_id")
+    if req.feedback_id is not None and not _is_uuid(req.feedback_id):
+        raise HTTPException(status_code=400, detail="Invalid feedback_id")
+    try:
+        if req.feedback_id:
+            # Switching up<->down. A changed rating is a new opinion, so it goes back into the
+            # unreviewed queue.
+            resp = await _feedback_write(
+                "patch", {"id": f"eq.{req.feedback_id}", "user_id": f"eq.{verified_user_id}"},
+                {"rating": req.rating, "reviewed": False, "reviewed_at": None}
+            )
+            if resp.status_code >= 400:
+                print(f"FEEDBACK UPDATE FAILED: status={resp.status_code}", flush=True)
+                raise HTTPException(status_code=502, detail="Could not save feedback")
+            if not resp.json():
+                raise HTTPException(status_code=404, detail="Feedback not found")
+            return {"id": req.feedback_id}
+
+        stored = await _feedback_text_from_chat(verified_user_id, req.chat_id, req.msg_index) if req.chat_id else None
+        if stored:
+            question, answer, ai_time = stored
+            text_source = "server"
+            model = await _infer_feedback_model(verified_user_id, ai_time)
+        else:
+            question = (req.question_text or "")[:_FEEDBACK_MAX_TEXT] or None
+            answer = (req.answer_text or "")[:_FEEDBACK_MAX_TEXT] or None
+            text_source = "client"
+            model = None
+        resp = await _feedback_write("post", {}, {
+            "user_id": verified_user_id, "chat_id": req.chat_id, "msg_index": req.msg_index,
+            "question_text": question, "answer_text": answer, "rating": req.rating,
+            "model": model, "text_source": text_source,
+        })
+        if resp.status_code >= 400:
+            print(f"FEEDBACK INSERT FAILED: status={resp.status_code}", flush=True)
+            raise HTTPException(status_code=502, detail="Could not save feedback")
+        return {"id": resp.json()[0]["id"], "text_source": text_source}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"FEEDBACK ERROR: {type(e).__name__}", flush=True)
+        raise HTTPException(status_code=502, detail="Could not save feedback")
+
+@app.delete("/feedback/{feedback_id}")
+async def feedback_delete(feedback_id: str, verified_user_id: str = Depends(_get_verified_user_id)):
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if not _is_uuid(feedback_id):
+        raise HTTPException(status_code=400, detail="Invalid feedback_id")
+    try:
+        resp = await async_client.delete(
+            f"{SUPABASE_URL}/rest/v1/response_feedback", headers=ADMIN_HEADERS,
+            params={"id": f"eq.{feedback_id}", "user_id": f"eq.{verified_user_id}"}
+        )
+    except Exception as e:
+        print(f"FEEDBACK DELETE ERROR: {type(e).__name__}", flush=True)
+        raise HTTPException(status_code=502, detail="Could not remove feedback")
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=502, detail="Could not remove feedback")
+    return {"ok": True}
+
+@app.post("/feedback/{feedback_id}/comment")
+async def feedback_comment(feedback_id: str, req: FeedbackCommentRequest, verified_user_id: str = Depends(_get_verified_user_id)):
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if not _is_uuid(feedback_id):
+        raise HTTPException(status_code=400, detail="Invalid feedback_id")
+    text = (req.comment or "").strip()[:500]
+    if not text:
+        raise HTTPException(status_code=400, detail="Comment is empty")
+    try:
+        resp = await _feedback_write("patch", {"id": f"eq.{feedback_id}", "user_id": f"eq.{verified_user_id}"}, {"comment": text})
+    except Exception as e:
+        print(f"FEEDBACK COMMENT ERROR: {type(e).__name__}", flush=True)
+        raise HTTPException(status_code=502, detail="Could not save comment")
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=502, detail="Could not save comment")
+    if not resp.json():
+        raise HTTPException(status_code=404, detail="Feedback not found")
+    return {"ok": True}
+
+async def _feedback_count(params: list) -> int:
+    resp = await async_client.get(
+        f"{SUPABASE_URL}/rest/v1/response_feedback",
+        headers={**ADMIN_HEADERS, "Prefer": "count=exact"},
+        params=params + [("select", "id"), ("limit", "1")]
+    )
+    if resp.status_code >= 400:
+        raise RuntimeError(f"count failed ({resp.status_code})")
+    tail = resp.headers.get("content-range", "").split("/")[-1]
+    return int(tail) if tail.isdigit() else 0
+
+@app.get("/admin/feedback")
+async def admin_feedback_list(
+    rating: str = "down", reviewed: str = "false",
+    date_from: Optional[str] = None, date_to: Optional[str] = None,
+    page: int = 1, _: None = Depends(verify_admin)
+):
+    """Newest first, 25 per page. date_from/date_to are ISO timestamps (the admin page sends the
+    browser's local midnight boundaries), date_to exclusive."""
+    if rating not in ("up", "down", "all"):
+        raise HTTPException(status_code=400, detail="rating must be up, down or all")
+    if reviewed not in ("true", "false", "all"):
+        raise HTTPException(status_code=400, detail="reviewed must be true, false or all")
+    if page < 1 or page > 10000:
+        raise HTTPException(status_code=400, detail="Invalid page")
+    filters = []
+    if rating != "all":
+        filters.append(("rating", f"eq.{rating}"))
+    if reviewed != "all":
+        filters.append(("reviewed", f"eq.{reviewed}"))
+    for name, value, op in (("date_from", date_from, "gte"), ("date_to", date_to, "lt")):
+        if value:
+            ts = _parse_iso_ts(value)
+            if not ts:
+                raise HTTPException(status_code=400, detail=f"Invalid {name}")
+            filters.append(("created_at", f"{op}.{ts.astimezone(timezone.utc).isoformat()}"))
+    try:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/response_feedback",
+            headers={**ADMIN_HEADERS, "Prefer": "count=exact"},
+            params=filters + [
+                ("select", FEEDBACK_SELECT), ("order", "created_at.desc"),
+                ("limit", str(FEEDBACK_ADMIN_PAGE_SIZE)), ("offset", str((page - 1) * FEEDBACK_ADMIN_PAGE_SIZE)),
+            ]
+        )
+        if resp.status_code >= 400:
+            print(f"ADMIN FEEDBACK LIST FAILED: status={resp.status_code}", flush=True)
+            raise HTTPException(status_code=502, detail="Could not load feedback")
+        tail = resp.headers.get("content-range", "").split("/")[-1]
+        total = int(tail) if tail.isdigit() else 0
+        up_total, down_total, down_unreviewed = await asyncio.gather(
+            _feedback_count([("rating", "eq.up")]),
+            _feedback_count([("rating", "eq.down")]),
+            _feedback_count([("rating", "eq.down"), ("reviewed", "eq.false")]),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"ADMIN FEEDBACK LIST ERROR: {type(e).__name__}", flush=True)
+        raise HTTPException(status_code=502, detail="Could not load feedback")
+    return {
+        "items": resp.json(), "total": total, "page": page, "page_size": FEEDBACK_ADMIN_PAGE_SIZE,
+        "counts": {"up": up_total, "down": down_total, "down_unreviewed": down_unreviewed},
+    }
+
+@app.post("/admin/feedback/{feedback_id}/review")
+async def admin_feedback_review(feedback_id: str, req: FeedbackReviewRequest, _: None = Depends(verify_admin)):
+    if not _is_uuid(feedback_id):
+        raise HTTPException(status_code=400, detail="Invalid feedback_id")
+    note = (req.note or "").strip()
+    if len(note) > 2000:
+        raise HTTPException(status_code=400, detail="Note is too long (2000 characters max)")
+    payload = {
+        "reviewed": req.reviewed,
+        "reviewed_at": datetime.now(timezone.utc).isoformat() if req.reviewed else None,
+        "admin_note": note or None,
+    }
+    try:
+        resp = await async_client.patch(
+            f"{SUPABASE_URL}/rest/v1/response_feedback",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
+            params={"id": f"eq.{feedback_id}", "select": "id,reviewed,reviewed_at,admin_note"}, json=payload
+        )
+    except Exception as e:
+        print(f"ADMIN FEEDBACK REVIEW ERROR: {type(e).__name__}", flush=True)
+        raise HTTPException(status_code=502, detail="Could not save review")
+    if resp.status_code >= 400:
+        print(f"ADMIN FEEDBACK REVIEW FAILED: status={resp.status_code}", flush=True)
+        raise HTTPException(status_code=502, detail="Could not save review")
+    rows = resp.json()
+    if not rows:
+        raise HTTPException(status_code=404, detail="Feedback not found")
+    return rows[0]
+
 if __name__ == "__main__":
     import uvicorn
     import os

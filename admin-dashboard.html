@@ -12,6 +12,10 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
   <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
   <script src="./math-format.js"></script>
+  <!-- Same markdown + sanitizer chat.html renders AI replies with (Feedback tab). -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+  <script src="./theme.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: 'Inter', sans-serif; background: #0d0d0d; color: #ececec; min-height: 100vh; }
@@ -132,6 +136,148 @@
     .pagination .page-info { font-size: 12px; color: #666; }
 
     .loading-text { text-align: center; padding: 40px; color: #555; font-size: 13px; }
+
+    /* ---------- Theme tokens (Feedback tab + light-mode shell) ----------
+       The page was dark-only; theme.js applies body.light-mode from the same 'theme' key chat.html
+       uses. Dark values match the existing hard-coded palette above. */
+    :root {
+      --fb-bg: #0d0d0d; --fb-surface: #111; --fb-surface-2: #0d0d0d; --fb-hover: #161616;
+      --fb-border: #1e1e1e; --fb-border-strong: #2a2a2a;
+      --fb-text: #ececec; --fb-text-2: #c8c8cc; --fb-muted: #9a9aa2;
+      --fb-accent: #4f8ef7; --fb-accent-text: #6b9ff8; --fb-on-accent: #0b1220; --fb-accent-soft: rgba(79,142,247,0.12);
+      --fb-up: #4ade80; --fb-down: #f87171; --fb-warn: #fbbf24;
+      --fb-code-bg: #1a1a1a;
+    }
+    body.light-mode {
+      --fb-bg: #f5f5f7; --fb-surface: #ffffff; --fb-surface-2: #f5f5f7; --fb-hover: #f0f0f3;
+      --fb-border: #e3e3e8; --fb-border-strong: #d0d0d8;
+      --fb-text: #16161d; --fb-text-2: #33333b; --fb-muted: #5c5c66;
+      --fb-accent: #4f8ef7; --fb-accent-text: #1d5fd6; --fb-on-accent: #0b1220; --fb-accent-soft: rgba(79,142,247,0.12);
+      --fb-up: #15803d; --fb-down: #b91c1c; --fb-warn: #92400e;
+      --fb-code-bg: #eef0f4;
+      background: var(--fb-bg); color: var(--fb-text);
+    }
+    body.light-mode #gateOverlay { background: var(--fb-bg); }
+    body.light-mode .gate-box, body.light-mode .view-tabs, body.light-mode .stat-card,
+    body.light-mode .filter-bar, body.light-mode .table-wrap, body.light-mode .report-group-card { background: var(--fb-surface); border-color: var(--fb-border); }
+    body.light-mode .gate-box input, body.light-mode .filter-bar select, body.light-mode .filter-bar input[type="text"] { background: var(--fb-surface-2); border-color: var(--fb-border-strong); color: var(--fb-text); }
+    body.light-mode .gate-box p, body.light-mode .stat-card .label, body.light-mode .filter-bar .result-count,
+    body.light-mode .pagination .page-info, body.light-mode .loading-text, body.light-mode .report-group-meta { color: var(--fb-muted); }
+    body.light-mode .view-tab, body.light-mode .logout-btn, body.light-mode thead th { color: var(--fb-muted); }
+    body.light-mode .view-tab:hover, body.light-mode .logout-btn:hover { color: var(--fb-text); }
+    body.light-mode .view-tab.active { color: white; }
+    body.light-mode .logout-btn, body.light-mode .pagination button { border-color: var(--fb-border-strong); }
+    body.light-mode .pagination button { background: var(--fb-surface); color: var(--fb-text); }
+    body.light-mode thead th, body.light-mode tbody tr.row-main { border-color: var(--fb-border); }
+    body.light-mode tbody tr.row-main:hover { background: var(--fb-hover); }
+    body.light-mode td.q-cell, body.light-mode .report-group-question { color: var(--fb-text-2); }
+    body.light-mode tr.edit-row td, body.light-mode .report-group-notes { background: var(--fb-surface-2); }
+    .theme-toggle { display: inline-flex; align-items: center; justify-content: center; padding: 6px 8px; }
+    .theme-toggle svg { width: 15px; height: 15px; }
+    .theme-toggle .icon-sun { display: none; }
+    body.light-mode .theme-toggle .icon-sun { display: block; }
+    body.light-mode .theme-toggle .icon-moon { display: none; }
+
+    /* ---------- Feedback view ---------- */
+    #feedbackView { color: var(--fb-text); }
+    .fb-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 16px; }
+    .fb-stat { background: var(--fb-surface); border: 1px solid var(--fb-border); border-radius: 10px; padding: 14px 16px; display: flex; align-items: center; gap: 12px; }
+    .fb-stat svg { width: 18px; height: 18px; flex-shrink: 0; display: block; }
+    .fb-stat .num { font-size: 22px; font-weight: 700; line-height: 1.1; color: var(--fb-text); }
+    .fb-stat .label { font-size: 12px; color: var(--fb-muted); margin-top: 2px; }
+    .fb-stat.up svg { color: var(--fb-up); }
+    .fb-stat.down svg { color: var(--fb-down); }
+    .fb-stat.pending svg { color: var(--fb-accent-text); }
+
+    .fb-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; background: var(--fb-surface); border: 1px solid var(--fb-border); border-radius: 10px; padding: 10px 12px; margin-bottom: 16px; }
+    .fb-seg { display: inline-flex; background: var(--fb-surface-2); border: 1px solid var(--fb-border-strong); border-radius: 8px; padding: 2px; }
+    .fb-seg button { background: transparent; border: none; color: var(--fb-muted); font: 600 12px 'Inter', sans-serif; padding: 6px 12px; border-radius: 6px; cursor: pointer; }
+    .fb-seg button:hover { color: var(--fb-text); }
+    .fb-seg button[aria-pressed="true"] { background: var(--fb-accent); color: var(--fb-on-accent); }
+    .fb-check { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--fb-text-2); cursor: pointer; user-select: none; }
+    .fb-check input { accent-color: var(--fb-accent); width: 14px; height: 14px; }
+    .fb-dates { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fb-muted); }
+    .fb-dates input { background: var(--fb-surface-2); border: 1px solid var(--fb-border-strong); border-radius: 7px; padding: 5px 8px; color: var(--fb-text); font: 12px 'Inter', sans-serif; color-scheme: dark; }
+    body.light-mode .fb-dates input { color-scheme: light; }
+    .fb-dates input:focus, .fb-note:focus { outline: none; border-color: var(--fb-accent); }
+    .fb-link-btn { background: none; border: none; color: var(--fb-accent-text); font: 500 12px 'Inter', sans-serif; cursor: pointer; padding: 4px; }
+    .fb-link-btn:hover { text-decoration: underline; }
+    .fb-total { margin-left: auto; font-size: 12px; color: var(--fb-muted); white-space: nowrap; }
+
+    .fb-split { display: grid; grid-template-columns: minmax(340px, 420px) 1fr; gap: 16px; align-items: start; }
+    .fb-list { background: var(--fb-surface); border: 1px solid var(--fb-border); border-radius: 10px; overflow: hidden; }
+    .fb-row { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: 10px; align-items: start; width: 100%; text-align: left; background: transparent; border: none; border-bottom: 1px solid var(--fb-border); padding: 12px 14px; color: inherit; font-family: 'Inter', sans-serif; cursor: pointer; }
+    .fb-row:last-child { border-bottom: none; }
+    .fb-row:hover { background: var(--fb-hover); }
+    .fb-row[aria-current="true"] { background: var(--fb-accent-soft); box-shadow: inset 3px 0 0 var(--fb-accent); }
+    .fb-row:focus-visible { outline: 2px solid var(--fb-accent); outline-offset: -2px; }
+    .fb-row svg { width: 16px; height: 16px; margin-top: 1px; display: block; }
+    .fb-row.up svg { color: var(--fb-up); }
+    .fb-row.down svg { color: var(--fb-down); }
+    .fb-row-preview, .fb-row-date { display: block; }
+    .fb-row-preview { font-size: 13px; color: var(--fb-text); line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .fb-row-date { font-size: 11px; color: var(--fb-muted); margin-top: 3px; }
+    .fb-state { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 20px; white-space: nowrap; border: 1px solid var(--fb-border-strong); color: var(--fb-muted); }
+    .fb-state.done { color: var(--fb-up); border-color: transparent; background: color-mix(in srgb, var(--fb-up) 14%, transparent); }
+    .fb-empty { padding: 40px 16px; text-align: center; font-size: 13px; color: var(--fb-muted); }
+    .fb-error { padding: 16px; font-size: 13px; color: var(--fb-down); }
+    .fb-pager { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; border-top: 1px solid var(--fb-border); font-size: 12px; color: var(--fb-muted); }
+    .fb-pager button { background: var(--fb-surface-2); border: 1px solid var(--fb-border-strong); color: var(--fb-text); padding: 5px 12px; border-radius: 6px; font: 12px 'Inter', sans-serif; cursor: pointer; }
+    .fb-pager button:hover:not(:disabled) { border-color: var(--fb-accent); }
+    .fb-pager button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .fb-detail { background: var(--fb-surface); border: 1px solid var(--fb-border); border-radius: 10px; padding: 20px 24px; min-height: 240px; position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow-y: auto; }
+    .fb-detail-empty { color: var(--fb-muted); font-size: 13px; text-align: center; padding: 80px 0; }
+    .fb-detail-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; padding-bottom: 14px; border-bottom: 1px solid var(--fb-border); margin-bottom: 18px; }
+    .fb-pill { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; }
+    .fb-pill svg { width: 15px; height: 15px; }
+    .fb-pill.up { color: var(--fb-up); }
+    .fb-pill.down { color: var(--fb-down); }
+    .fb-meta { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 12px; color: var(--fb-muted); }
+    .fb-meta b { font-weight: 500; color: var(--fb-text-2); }
+    .fb-meta code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; color: var(--fb-text-2); }
+    .fb-source-warn { color: var(--fb-warn); }
+    .fb-turn { margin-bottom: 20px; }
+    .fb-turn-label { font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--fb-muted); margin-bottom: 8px; }
+    .fb-prompt { background: var(--fb-surface-2); border: 1px solid var(--fb-border); border-radius: 10px; padding: 12px 14px; font-size: 14px; line-height: 1.6; color: var(--fb-text); white-space: pre-wrap; word-wrap: break-word; }
+    .fb-comment { border-left: 3px solid var(--fb-down); padding: 6px 12px; font-size: 13px; color: var(--fb-text-2); white-space: pre-wrap; }
+    .fb-missing { font-style: italic; color: var(--fb-muted); }
+
+    /* AI reply -- mirrors chat.html's .message-bubble.ai typography */
+    .fb-reply { font-size: 14px; line-height: 1.7; color: var(--fb-text); word-wrap: break-word; }
+    .fb-reply p { margin: 8px 0; }
+    .fb-reply h1, .fb-reply h2, .fb-reply h3 { margin: 14px 0 6px; line-height: 1.3; }
+    .fb-reply h1 { font-size: 18px; } .fb-reply h2 { font-size: 16px; } .fb-reply h3 { font-size: 15px; }
+    .fb-reply ul, .fb-reply ol { padding-left: 22px; margin: 6px 0; }
+    .fb-reply li { margin: 3px 0; }
+    .fb-reply code { background: var(--fb-code-bg); padding: 2px 6px; border-radius: 4px; font-size: 13px; color: var(--fb-accent-text); }
+    .fb-reply pre { background: var(--fb-code-bg); padding: 12px; border-radius: 8px; overflow-x: auto; }
+    .fb-reply pre code { background: none; padding: 0; color: var(--fb-text); }
+    .fb-reply table { border-collapse: collapse; margin: 10px 0; font-size: 13px; }
+    .fb-reply th, .fb-reply td { border: 1px solid var(--fb-border-strong); padding: 6px 10px; text-align: left; }
+    .fb-reply blockquote { border-left: 3px solid var(--fb-border-strong); padding-left: 12px; color: var(--fb-text-2); }
+    .fb-reply .chat-math-inline { font-size: 1.15em; }
+    .fb-reply .chat-math-display { font-size: 1.3em; }
+    .fb-reply .solution-steps { max-width: 90%; margin: 0 auto; text-align: center; }
+
+    .fb-review { border-top: 1px solid var(--fb-border); padding-top: 16px; margin-top: 8px; display: grid; gap: 10px; }
+    .fb-switch-row { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--fb-text); }
+    .fb-switch { position: relative; width: 36px; height: 20px; border-radius: 20px; border: 1px solid var(--fb-border-strong); background: var(--fb-surface-2); cursor: pointer; padding: 0; flex-shrink: 0; transition: background 0.15s; }
+    .fb-switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--fb-muted); transition: transform 0.15s, background 0.15s; }
+    .fb-switch[aria-checked="true"] { background: var(--fb-accent); border-color: var(--fb-accent); }
+    .fb-switch[aria-checked="true"]::after { transform: translateX(16px); background: #fff; }
+    .fb-switch:focus-visible, .fb-save:focus-visible { outline: 2px solid var(--fb-accent); outline-offset: 2px; }
+    .fb-note { width: 100%; min-height: 70px; resize: vertical; background: var(--fb-surface-2); border: 1px solid var(--fb-border-strong); border-radius: 8px; padding: 9px 11px; color: var(--fb-text); font: 13px/1.5 'Inter', sans-serif; }
+    .fb-review-actions { display: flex; align-items: center; gap: 12px; }
+    .fb-save { background: var(--fb-accent); color: var(--fb-on-accent); border: none; border-radius: 7px; padding: 7px 16px; font: 600 12px 'Inter', sans-serif; cursor: pointer; }
+    .fb-save:disabled { opacity: 0.6; cursor: default; }
+    .fb-status { font-size: 12px; color: var(--fb-muted); }
+    .fb-status.err { color: var(--fb-down); }
+
+    @media (max-width: 1100px) {
+      .fb-split { grid-template-columns: 1fr; }
+      .fb-detail { position: static; max-height: none; }
+    }
   
     /* Smooth fade-in on page load */
     body { animation: pageFadeIn 0.22s ease; }
@@ -157,7 +303,12 @@
         <div class="view-tabs">
           <button type="button" id="tabAllQuestions" class="view-tab active" onclick="switchView('questions')">All Questions</button>
           <button type="button" id="tabReports" class="view-tab" onclick="switchView('reports')">Reported Questions<span id="reportsBadge" class="reports-badge" style="display:none;"></span></button>
+          <button type="button" id="tabFeedback" class="view-tab" onclick="switchView('feedback')">Feedback<span id="feedbackBadge" class="reports-badge" style="display:none;"></span></button>
         </div>
+        <button type="button" class="logout-btn theme-toggle" onclick="toggleTheme()" aria-label="Switch light or dark theme" title="Switch theme">
+          <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+          <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        </button>
         <button class="logout-btn" onclick="logout()">Log out</button>
       </div>
     </div>
@@ -229,6 +380,32 @@
       </div>
       <div id="reportsArea"><div class="loading-text">Loading...</div></div>
     </div>
+
+    <div id="feedbackView" style="display:none;">
+      <div class="fb-stats">
+        <div class="fb-stat down"><span data-fb-icon="down"></span><div><div class="num" id="fbCountDown">–</div><div class="label">Thumbs down, all time</div></div></div>
+        <div class="fb-stat pending"><span data-fb-icon="inbox"></span><div><div class="num" id="fbCountPending">–</div><div class="label">Thumbs down, unreviewed</div></div></div>
+        <div class="fb-stat up"><span data-fb-icon="up"></span><div><div class="num" id="fbCountUp">–</div><div class="label">Thumbs up, all time</div></div></div>
+      </div>
+      <div class="fb-filters" role="group" aria-label="Feedback filters">
+        <div class="fb-seg" id="fbRatingSeg">
+          <button type="button" data-rating="all" aria-pressed="false">All</button>
+          <button type="button" data-rating="down" aria-pressed="true">Thumbs down</button>
+          <button type="button" data-rating="up" aria-pressed="false">Thumbs up</button>
+        </div>
+        <label class="fb-check"><input type="checkbox" id="fbUnreviewed" checked/> Unreviewed only</label>
+        <div class="fb-dates">
+          <label for="fbFrom">From</label><input type="date" id="fbFrom"/>
+          <label for="fbTo">to</label><input type="date" id="fbTo"/>
+          <button type="button" class="fb-link-btn" id="fbClearDates">Clear</button>
+        </div>
+        <div class="fb-total" id="fbTotal" aria-live="polite"></div>
+      </div>
+      <div class="fb-split">
+        <div class="fb-list" id="fbList"><div class="fb-empty">Loading...</div></div>
+        <div class="fb-detail" id="fbDetail"><div class="fb-detail-empty">Select a rating to see the full exchange.</div></div>
+      </div>
+    </div>
   </div>
 
   <script>
@@ -285,6 +462,7 @@
       loadStats();
       loadResults();
       refreshReportsBadge();
+      refreshFeedbackBadge();
     }
 
     async function loadStats() {
@@ -585,7 +763,10 @@
       document.getElementById('tabReports').classList.toggle('active', view === 'reports');
       document.getElementById('questionsView').style.display = view === 'questions' ? 'block' : 'none';
       document.getElementById('reportsView').style.display = view === 'reports' ? 'block' : 'none';
+      document.getElementById('tabFeedback').classList.toggle('active', view === 'feedback');
+      document.getElementById('feedbackView').style.display = view === 'feedback' ? 'block' : 'none';
       if (view === 'reports') loadReports();
+      if (view === 'feedback') loadFeedback();
     }
 
     async function refreshReportsBadge() {
@@ -678,6 +859,264 @@
         btnEl.textContent = originalLabel;
       }
     }
+
+    // ---------- Feedback (thumbs up/down on AI replies) ----------
+    // Backed by GET /admin/feedback and POST /admin/feedback/{id}/review in server.py.
+    const FB_ICONS = {
+      up: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z"/></svg>',
+      down: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z"/></svg>',
+      inbox: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>'
+    };
+    document.querySelectorAll('[data-fb-icon]').forEach(el => { el.innerHTML = FB_ICONS[el.dataset.fbIcon]; });
+
+    const MODEL_LABELS = { 'deepseek-v4-flash': 'DeepSeek V4 Flash', 'qwen-flash': 'Qwen Flash', 'gemini-3.5-flash-lite': 'Gemini 3.5 Flash Lite' };
+    const fbState = { rating: 'down', unreviewedOnly: true, from: '', to: '', page: 1, total: 0, pageSize: 25, items: [], selectedId: null, counts: null };
+
+    // Same parseWithMath/renderSolutionStepsHtml as chat.html (copied, kept in step with it) so a
+    // reply looks here exactly as the student saw it.
+    function renderSolutionStepsHtml(stepsText) {
+      const matches = [];
+      const segRe = /\$\$([^$]+)\$\$|\$([^$\n]+)\$/g;
+      let sm;
+      while ((sm = segRe.exec(stepsText)) !== null) matches.push(sm);
+      const parts = [];
+      let lastIndex = 0;
+      matches.forEach((m, i) => {
+        if (m.index > lastIndex) parts.push({ type: 'text', value: stepsText.slice(lastIndex, m.index) });
+        const isDisplay = m[1] !== undefined;
+        parts.push({ type: isDisplay ? 'display' : 'inline', value: (isDisplay ? m[1] : m[2]).trim(), isLast: i === matches.length - 1 });
+        lastIndex = m.index + m[0].length;
+      });
+      if (lastIndex < stepsText.length) parts.push({ type: 'text', value: stepsText.slice(lastIndex) });
+      const rendered = parts.map(p => {
+        if (p.type === 'text') return escapeHtml(p.value).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>');
+        try {
+          const source = p.isLast ? '\\Large ' + addFracSpacing(p.value) : addFracSpacing(p.value);
+          const katexHtml = katex.renderToString(source, { displayMode: p.type === 'display', throwOnError: false, output: 'html' });
+          return p.isLast ? katexHtml : '<span class="' + (p.type === 'display' ? 'chat-math-display' : 'chat-math-inline') + '">' + katexHtml + '</span>';
+        } catch (e) {
+          return escapeHtml(p.type === 'display' ? '$$' + p.value + '$$' : '$' + p.value + '$');
+        }
+      }).join('');
+      return '<div class="solution-steps">' + rendered + '</div>';
+    }
+
+    function parseWithMath(text) {
+      let html = text;
+      html = html.replace(/Solution:\n([\s\S]*?)(?=\n\nFinal Answer:|\n\n🔑 Key Concept:|$)/, function(_, stepsText) {
+        return 'Solution:\n' + renderSolutionStepsHtml(stepsText);
+      });
+      html = html.replace(/\$\$([^$]+)\$\$/g, function(_, math) {
+        try {
+          return '<div class="chat-math-display" style="text-align:center;margin:12px 0;overflow-x:auto;">' + katex.renderToString(addFracSpacing(math.trim()), { displayMode: true, throwOnError: false, output: 'html' }) + '</div>';
+        } catch(e) { return _; }
+      });
+      html = html.replace(/\$([^$\n]+)\$/g, function(_, math) {
+        try {
+          return '<span class="chat-math-inline">' + katex.renderToString(addFracSpacing(math.trim()), { displayMode: false, throwOnError: false, output: 'html' }) + '</span>';
+        } catch(e) { return _; }
+      });
+      return DOMPurify.sanitize(marked.parse(html, { breaks: true }));
+    }
+
+    function fbFormatDate(iso, long) {
+      const d = new Date(iso);
+      if (isNaN(d)) return '';
+      return d.toLocaleString('en-IN', long
+        ? { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }
+        : { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+    }
+
+    // <input type="date"> gives YYYY-MM-DD; send the admin's local-midnight boundaries as ISO so
+    // "From 12 Oct" means 12 Oct in their own timezone, not UTC.
+    function fbDayBoundary(value, addDays) {
+      const [y, m, d] = value.split('-').map(Number);
+      return new Date(y, m - 1, d + addDays).toISOString();
+    }
+
+    function fbRenderCounts() {
+      const c = fbState.counts;
+      document.getElementById('fbCountDown').textContent = c ? c.down : '–';
+      document.getElementById('fbCountPending').textContent = c ? c.down_unreviewed : '–';
+      document.getElementById('fbCountUp').textContent = c ? c.up : '–';
+      const badge = document.getElementById('feedbackBadge');
+      if (c && c.down_unreviewed > 0) { badge.textContent = c.down_unreviewed; badge.style.display = 'inline-block'; }
+      else badge.style.display = 'none';
+    }
+
+    async function refreshFeedbackBadge() {
+      try {
+        const res = await fetch(`${API_BASE}/admin/feedback?rating=down&reviewed=false&page=1`, { headers: authHeaders() });
+        if (!res.ok) return;
+        fbState.counts = (await res.json()).counts;
+        fbRenderCounts();
+      } catch (e) {}
+    }
+
+    async function loadFeedback() {
+      const list = document.getElementById('fbList');
+      list.innerHTML = '<div class="fb-empty">Loading...</div>';
+      const params = new URLSearchParams({
+        rating: fbState.rating,
+        reviewed: fbState.unreviewedOnly ? 'false' : 'all',
+        page: String(fbState.page)
+      });
+      if (fbState.from) params.set('date_from', fbDayBoundary(fbState.from, 0));
+      if (fbState.to) params.set('date_to', fbDayBoundary(fbState.to, 1));
+      let data;
+      try {
+        const res = await fetch(`${API_BASE}/admin/feedback?${params}`, { headers: authHeaders() });
+        if (res.status === 401) return logout();
+        data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          list.innerHTML = `<div class="fb-error">${escapeHtml(data.detail || 'Could not load feedback.')}</div>`;
+          return;
+        }
+      } catch (e) {
+        list.innerHTML = '<div class="fb-error">Could not reach server.</div>';
+        return;
+      }
+      fbState.items = data.items || [];
+      fbState.total = data.total || 0;
+      fbState.pageSize = data.page_size || 25;
+      fbState.counts = data.counts || null;
+      fbRenderCounts();
+      document.getElementById('fbTotal').textContent = `${fbState.total} ${fbState.total === 1 ? 'rating' : 'ratings'}`;
+      if (!fbState.items.some(i => i.id === fbState.selectedId)) fbState.selectedId = null;
+      fbRenderList();
+      fbRenderDetail();
+    }
+
+    function fbRenderList() {
+      const list = document.getElementById('fbList');
+      if (!fbState.items.length) {
+        list.innerHTML = '<div class="fb-empty">No ratings match these filters.</div>';
+        return;
+      }
+      const rows = fbState.items.map(item => {
+        const preview = (item.question_text || '').replace(/\s+/g, ' ').trim() || '(no question text)';
+        return `<button type="button" class="fb-row ${item.rating}" data-id="${escapeHtml(item.id)}" aria-current="${item.id === fbState.selectedId}">
+          <span aria-label="${item.rating === 'up' ? 'Thumbs up' : 'Thumbs down'}" role="img">${FB_ICONS[item.rating]}</span>
+          <span style="min-width:0;"><span class="fb-row-preview">${escapeHtml(preview.slice(0, 200))}</span><span class="fb-row-date">${escapeHtml(fbFormatDate(item.created_at))}</span></span>
+          <span class="fb-state ${item.reviewed ? 'done' : ''}">${item.reviewed ? 'Reviewed' : 'Unreviewed'}</span>
+        </button>`;
+      }).join('');
+      const pages = Math.max(1, Math.ceil(fbState.total / fbState.pageSize));
+      list.innerHTML = rows + `<div class="fb-pager">
+        <button type="button" id="fbPrev" ${fbState.page <= 1 ? 'disabled' : ''}>Previous</button>
+        <span>Page ${fbState.page} of ${pages}</span>
+        <button type="button" id="fbNext" ${fbState.page >= pages ? 'disabled' : ''}>Next</button>
+      </div>`;
+      list.querySelectorAll('.fb-row').forEach(btn => btn.addEventListener('click', () => {
+        fbState.selectedId = btn.dataset.id;
+        list.querySelectorAll('.fb-row').forEach(b => b.setAttribute('aria-current', String(b === btn)));
+        fbRenderDetail();
+      }));
+      document.getElementById('fbPrev').onclick = () => { fbState.page--; loadFeedback(); };
+      document.getElementById('fbNext').onclick = () => { fbState.page++; loadFeedback(); };
+    }
+
+    function fbRenderDetail() {
+      const pane = document.getElementById('fbDetail');
+      const item = fbState.items.find(i => i.id === fbState.selectedId);
+      if (!item) {
+        pane.innerHTML = '<div class="fb-detail-empty">Select a rating to see the full exchange.</div>';
+        return;
+      }
+      const model = item.model ? `${escapeHtml(MODEL_LABELS[item.model] || item.model)} <span title="Matched from provider_usage_log by user and time">(inferred)</span>` : 'Unknown';
+      const source = item.text_source === 'server' ? 'Saved chat'
+        : item.text_source === 'client' ? '<span class="fb-source-warn" title="The chat was not saved yet when the vote was cast, so this is the text the app sent">Sent by app</span>'
+        : '<span class="fb-source-warn" title="Recorded before server-side capture existed">Legacy snapshot</span>';
+      const userShort = item.user_id ? item.user_id.slice(0, 8) : '';
+      const chatShort = item.chat_id ? item.chat_id.slice(0, 8) : '–';
+      pane.innerHTML = `
+        <div class="fb-detail-head">
+          <span class="fb-pill ${item.rating}">${FB_ICONS[item.rating]}${item.rating === 'up' ? 'Thumbs up' : 'Thumbs down'}</span>
+          <div class="fb-meta">
+            <span><b>${escapeHtml(fbFormatDate(item.created_at, true))}</b></span>
+            <span>Model: <b>${model}</b></span>
+            <span>User: <code title="${escapeHtml(item.user_id || '')}">${escapeHtml(userShort)}</code></span>
+            <span>Chat: <code title="${escapeHtml(item.chat_id || '')}">${escapeHtml(chatShort)}</code> #${escapeHtml(String(item.msg_index))}</span>
+            <span>Text: ${source}</span>
+          </div>
+        </div>
+        <section class="fb-turn">
+          <div class="fb-turn-label">Student</div>
+          <div class="fb-prompt">${item.question_text ? renderMathInText(item.question_text) : '<span class="fb-missing">No question text recorded</span>'}</div>
+        </section>
+        <section class="fb-turn">
+          <div class="fb-turn-label">AI reply</div>
+          <div class="fb-reply">${item.answer_text ? parseWithMath(item.answer_text) : '<span class="fb-missing">No reply text recorded</span>'}</div>
+        </section>
+        ${item.comment ? `<section class="fb-turn"><div class="fb-turn-label">Student comment</div><div class="fb-comment">${escapeHtml(item.comment)}</div></section>` : ''}
+        <div class="fb-review">
+          <div class="fb-switch-row">
+            <button type="button" class="fb-switch" id="fbReviewedSwitch" role="switch" aria-checked="${!!item.reviewed}" aria-labelledby="fbReviewedLabel"></button>
+            <span id="fbReviewedLabel">Reviewed</span>
+            ${item.reviewed && item.reviewed_at ? `<span class="fb-status">on ${escapeHtml(fbFormatDate(item.reviewed_at, true))}</span>` : ''}
+          </div>
+          <label class="fb-turn-label" for="fbNote" style="margin:4px 0 0;">Admin note</label>
+          <textarea class="fb-note" id="fbNote" maxlength="2000" placeholder="What was wrong, what to fix...">${escapeHtml(item.admin_note || '')}</textarea>
+          <div class="fb-review-actions">
+            <button type="button" class="fb-save" id="fbSaveNote">Save note</button>
+            <span class="fb-status" id="fbReviewStatus" aria-live="polite"></span>
+          </div>
+        </div>`;
+      pane.scrollTop = 0;
+      const sw = document.getElementById('fbReviewedSwitch');
+      sw.onclick = () => fbSaveReview(item, sw.getAttribute('aria-checked') !== 'true');
+      document.getElementById('fbSaveNote').onclick = () => fbSaveReview(item, !!item.reviewed);
+    }
+
+    async function fbSaveReview(item, reviewed) {
+      const status = document.getElementById('fbReviewStatus');
+      const saveBtn = document.getElementById('fbSaveNote');
+      const sw = document.getElementById('fbReviewedSwitch');
+      const note = document.getElementById('fbNote').value;
+      status.className = 'fb-status';
+      status.textContent = 'Saving...';
+      saveBtn.disabled = true; sw.disabled = true;
+      try {
+        const res = await fetch(`${API_BASE}/admin/feedback/${encodeURIComponent(item.id)}/review`, {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ reviewed, note })
+        });
+        if (res.status === 401) return logout();
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.detail || 'Could not save.');
+        const wasReviewed = !!item.reviewed;
+        Object.assign(item, data);
+        if (item.rating === 'down' && fbState.counts && wasReviewed !== !!item.reviewed) {
+          fbState.counts.down_unreviewed += item.reviewed ? -1 : 1;
+          fbRenderCounts();
+        }
+        // Row stays in the list until the next reload even if it no longer matches
+        // "Unreviewed only" -- less jumpy while working through a queue.
+        fbRenderList();
+        fbRenderDetail();
+        const fresh = document.getElementById('fbReviewStatus');
+        fresh.textContent = 'Saved';
+      } catch (e) {
+        status.className = 'fb-status err';
+        status.textContent = e.message || 'Could not reach server.';
+        saveBtn.disabled = false; sw.disabled = false;
+      }
+    }
+
+    document.querySelectorAll('#fbRatingSeg button').forEach(btn => btn.addEventListener('click', () => {
+      fbState.rating = btn.dataset.rating;
+      document.querySelectorAll('#fbRatingSeg button').forEach(b => b.setAttribute('aria-pressed', String(b === btn)));
+      fbState.page = 1;
+      loadFeedback();
+    }));
+    document.getElementById('fbUnreviewed').addEventListener('change', e => { fbState.unreviewedOnly = e.target.checked; fbState.page = 1; loadFeedback(); });
+    document.getElementById('fbFrom').addEventListener('change', e => { fbState.from = e.target.value; fbState.page = 1; loadFeedback(); });
+    document.getElementById('fbTo').addEventListener('change', e => { fbState.to = e.target.value; fbState.page = 1; loadFeedback(); });
+    document.getElementById('fbClearDates').addEventListener('click', () => {
+      document.getElementById('fbFrom').value = ''; document.getElementById('fbTo').value = '';
+      fbState.from = ''; fbState.to = ''; fbState.page = 1; loadFeedback();
+    });
 
     if (adminKey) {
       enterDashboard();

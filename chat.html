@@ -4648,11 +4648,11 @@ function plainTextFromMarkdown(text) {
     // (see switchVersion/ensureVersions) so switching versions shows that version's own vote
     // rather than leaking one version's feedback onto another's different content.
     //
-    // response_feedback itself is a separate, append-only log (question/answer text snapshot,
-    // rating, optional comment) nothing else reads back -- a simple review table, not a feature.
-    // Written directly from here with the page's own anon-key client (RLS scopes each student to
-    // their own rows), matching saved_questions' existing client-direct pattern rather than adding
-    // a new FastAPI endpoint for something this small.
+    // response_feedback itself is a separate log (question/answer snapshot, rating, optional
+    // comment) reviewed in admin-dashboard.html's Feedback tab. Written through server.py's
+    // /feedback endpoints, which take the user from the verified JWT and copy the question/answer
+    // from the stored chats row -- the text sent here is only a fallback for a vote cast before
+    // that row is saved. persistConversationSilently() is awaited first for exactly that reason.
     async function rateMessage(btn, rating) {
       const { data: { session } } = await client.auth.getSession();
       if (!session) { alert('Please log in to rate responses.'); return; }
@@ -4681,7 +4681,7 @@ function plainTextFromMarkdown(text) {
         downBtn.classList.remove('voted-down');
         closeFeedbackCommentBox(row);
         persistConversationSilently();
-        if (oldId) client.from('response_feedback').delete().eq('id', oldId).eq('user_id', session.user.id).then(() => {});
+        if (oldId) fetch(`${API_BASE}/feedback/${encodeURIComponent(oldId)}`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${session.access_token}` } }).catch(() => {});
         return;
       }
 
@@ -4689,25 +4689,37 @@ function plainTextFromMarkdown(text) {
       syncActiveVersion();
       upBtn.classList.toggle('voted-up', rating === 'up');
       downBtn.classList.toggle('voted-down', rating === 'down');
-      persistConversationSilently();
+      // Awaited (unlike the toggle-off path above) so the server can read this exact message
+      // back from chats.messages when it records the vote.
+      await persistConversationSilently().catch(() => {});
 
       const userMsg = msgIndex > 0 ? currentConversation[msgIndex - 1] : null;
       const conv = conversations.find(c => c.id === currentId || c.supabaseId === currentId);
       const chatId = conv ? (conv.supabaseId || null) : null;
 
+      const feedbackHeaders = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` };
       if (msg.feedbackId) {
         // Switching an existing up<->down vote -- update the same row in place.
-        client.from('response_feedback').update({ rating }).eq('id', msg.feedbackId).eq('user_id', session.user.id).then(() => {});
+        fetch(`${API_BASE}/feedback`, {
+          method: 'POST', headers: feedbackHeaders,
+          body: JSON.stringify({ rating, msg_index: msgIndex, chat_id: chatId, feedback_id: msg.feedbackId })
+        }).catch(() => {});
       } else {
-        const { data, error } = await client.from('response_feedback').insert({
-          user_id: session.user.id,
-          chat_id: chatId,
-          msg_index: msgIndex,
-          question_text: userMsg ? userMsg.text : null,
-          answer_text: msg.text,
-          rating: rating
-        }).select('id').single();
-        if (!error && data) {
+        let data = null;
+        try {
+          const res = await fetch(`${API_BASE}/feedback`, {
+            method: 'POST', headers: feedbackHeaders,
+            body: JSON.stringify({
+              rating,
+              msg_index: msgIndex,
+              chat_id: chatId,
+              question_text: userMsg ? userMsg.text : null,
+              answer_text: msg.text
+            })
+          });
+          if (res.ok) data = await res.json();
+        } catch (e) {}
+        if (data && data.id) {
           msg.feedbackId = data.id;
           syncActiveVersion();
           persistConversationSilently();
@@ -4755,8 +4767,16 @@ function plainTextFromMarkdown(text) {
         sendBtn.disabled = true;
         closeBtn.disabled = true;
         sendBtn.textContent = 'Sending…';
-        const { error } = await client.from('response_feedback').update({ comment: text }).eq('id', msg.feedbackId).eq('user_id', session.user.id);
-        if (error) {
+        let ok = false;
+        try {
+          const res = await fetch(`${API_BASE}/feedback/${encodeURIComponent(msg.feedbackId)}/comment`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
+            body: JSON.stringify({ comment: text })
+          });
+          ok = res.ok;
+        } catch (e) {}
+        if (!ok) {
           // Don't pretend it worked -- show it failed and let the student try Send again
           // rather than silently closing as if the comment had been saved.
           wrap.innerHTML = '<span class="feedback-comment-status">Couldn’t send, try again</span>';
