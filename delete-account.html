@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Delete Your Account — NEET-AI</title>
+  <link rel="icon" href="assets/favicon.ico" sizes="any"/>
+  <link rel="icon" type="image/svg+xml" href="assets/logo.svg"/>
+  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png"/>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+  <!-- Public account-deletion page -- the "Delete account URL" in Play Console's Data safety form.
+       Same look as privacy.html. What's listed as deleted/kept here must match server.py's
+       ACCOUNT_DELETE_TABLES / ACCOUNT_ANONYMISE_COLUMNS (POST /account/delete). -->
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Inter', sans-serif; background: #0a0a0f; color: #ececec; line-height: 1.7; }
+    .header { padding: 14px 24px; border-bottom: 1px solid #1a1a1a; display: flex; align-items: center; justify-content: space-between; background: #0a0a0f; position: sticky; top: 0; z-index: 10; }
+    .header-title { font-size: 15px; font-weight: 700; color: #fff; }
+    .header-title span { color: #7c5cff; }
+    .container { max-width: 760px; margin: 0 auto; padding: 60px 24px; }
+    h1 { font-size: 32px; font-weight: 700; color: #fff; margin-bottom: 8px; letter-spacing: -0.5px; }
+    .updated { font-size: 13px; color: #555; margin-bottom: 48px; }
+    h2 { font-size: 18px; font-weight: 600; color: #fff; margin: 36px 0 12px; }
+    p { font-size: 14px; color: #999; margin-bottom: 16px; }
+    ol, ul { padding-left: 20px; margin-bottom: 16px; }
+    li { font-size: 14px; color: #999; margin-bottom: 8px; }
+    a { color: #7c5cff; text-decoration: none; }
+    strong { color: #ececec; font-weight: 600; }
+
+    body.light-mode { background: #f7f7fa !important; color: #14141a !important; }
+    body.light-mode .header { background: #ffffff !important; border-color: #e5e5ea !important; }
+    body.light-mode .header-title { color: #0d0d0d !important; }
+    body.light-mode h1, body.light-mode h2 { color: #0d0d0d !important; }
+    body.light-mode .updated { color: #7a7a85 !important; }
+    body.light-mode p, body.light-mode li { color: #45454f !important; }
+    body.light-mode strong { color: #14141a !important; }
+
+    body { animation: pageFadeIn 0.22s ease; }
+    @keyframes pageFadeIn { from { opacity: 0; } to { opacity: 1; } }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div style="display:flex;align-items:center;gap:16px;">
+      <span class="header-title">NEET<span>-AI</span></span>
+    </div>
+  </div>
+  <div class="container">
+    <h1>Delete Your Account</h1>
+    <div class="updated">NEET-AI by Al-Hakimi United · Last updated: October 13, 2026</div>
+
+    <p>You can permanently delete your NEET-AI account and its data at any time. Deletion from the app or the website happens immediately and cannot be undone.</p>
+
+    <h2>In the NEET-AI app</h2>
+    <ol>
+      <li>Open the menu and tap your profile, then <strong>Settings</strong>.</li>
+      <li>Open <strong>Privacy</strong> and tap <strong>Delete Account</strong>.</li>
+      <li>Type <strong>DELETE</strong> to confirm.</li>
+    </ol>
+
+    <h2>On the website</h2>
+    <ol>
+      <li><a href="./login.html">Log in to the NEET-AI website</a> and open <strong>Settings</strong> from your profile menu.</li>
+      <li>Open <strong>Privacy</strong> and click <strong>Delete Account</strong>.</li>
+      <li>Type <strong>DELETE</strong> to confirm.</li>
+    </ol>
+
+    <h2>Can't log in?</h2>
+    <p>Email <a class="support-email-link" href="#"><span class="support-email"></span></a> with the subject "Delete my account". Send it from the email address on your account, or include the phone number you log in with, so we can find your account. We delete it within 30 days and reply to confirm.</p>
+
+    <h2>What is deleted</h2>
+    <ul>
+      <li>Your account and login details (name, email, phone number, Google sign-in)</li>
+      <li>All your chats, and the images and PDFs you uploaded in them</li>
+      <li>Saved questions, mock test results and study streaks</li>
+      <li>Your plan, bonus tokens, referral code, usage history and signed-in devices</li>
+      <li>Feedback you gave on AI answers</li>
+    </ul>
+
+    <h2>What is kept, without your name or ID</h2>
+    <ul>
+      <li>Reports you sent about a question or diagram (the reason and note), so we can still fix that content</li>
+      <li>Referral records, so a student you referred, or who referred you, keeps their history and rewards</li>
+      <li>AI usage cost records (token counts only, no questions or answers)</li>
+    </ul>
+    <p>None of these can be linked back to you once your account is deleted. Copies in our database provider's automatic backups expire within 30 days.</p>
+
+    <h2>Questions</h2>
+    <p>See our <a href="./privacy.html">Privacy Policy</a>, or email <a class="support-email-link" href="#"><span class="support-email"></span></a>.</p>
+  </div>
+  <script>
+    // The one place this page's support address lives (temporary address -- change it here).
+    const SUPPORT_EMAIL = 'neetai0123@gmail.com';
+    document.querySelectorAll('.support-email').forEach((el) => { el.textContent = SUPPORT_EMAIL; });
+    document.querySelectorAll('.support-email-link').forEach((el) => {
+      el.href = `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent('Delete my account')}`;
+    });
+  </script>
+  <script src="./theme.js"></script>
+</body>
+</html>

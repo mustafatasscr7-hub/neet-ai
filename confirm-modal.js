@@ -38,7 +38,10 @@
       '.confirm-modal-ok.danger:hover { background: #dc3838; }' +
       'body.light-mode .confirm-modal { background: #ffffff !important; border-color: #e3e3ea !important; }' +
       'body.light-mode .confirm-modal-message { color: #16161d !important; }' +
-      'body.light-mode .confirm-modal-cancel { border-color: #d5d5dd !important; color: #55555f !important; }';
+      'body.light-mode .confirm-modal-cancel { border-color: #d5d5dd !important; color: #55555f !important; }' +
+      '.confirm-modal-title { color: #ececec; }' +
+      'body.light-mode .confirm-modal-title { color: #16161d !important; }' +
+      'body.light-mode .confirm-modal-input { background: #f6f6f9 !important; border-color: #d5d5dd !important; color: #16161d !important; }';
     document.head.appendChild(style);
   }
 
@@ -90,6 +93,91 @@
       document.addEventListener('keydown', onKeydown);
 
       document.body.appendChild(overlay);
+    });
+  };
+
+  // Same modal, for actions serious enough to need the user to type a word first (Delete
+  // Account). The confirm button stays disabled until the input matches opts.confirmWord exactly.
+  // opts.onConfirm is async and runs with the modal still open (buttons disabled, label switched
+  // to opts.busyLabel): resolve true to close, or an error string to show it and let the user
+  // retry or cancel. Resolves true only after onConfirm succeeded.
+  //   const ok = await showTypedConfirmModal({ title, message, confirmWord: 'DELETE', prompt,
+  //     confirmLabel, busyLabel, cancelLabel, danger: true, onConfirm: async () => true });
+  window.showTypedConfirmModal = function (opts) {
+    return new Promise(function (resolve) {
+      var existing = document.getElementById('confirmModalOverlay');
+      if (existing) existing.remove();
+
+      var overlay = document.createElement('div');
+      overlay.id = 'confirmModalOverlay';
+      overlay.className = 'confirm-modal-overlay';
+      overlay.innerHTML =
+        '<div class="confirm-modal" style="width:400px;">' +
+          '<div class="confirm-modal-title" style="font-size:16px;font-weight:700;margin-bottom:10px;"></div>' +
+          '<div class="confirm-modal-message" style="margin-bottom:16px;"></div>' +
+          '<label class="confirm-modal-prompt" style="display:block;font-size:12px;color:#999;margin-bottom:6px;"></label>' +
+          '<input class="confirm-modal-input" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" style="width:100%;box-sizing:border-box;background:#0d0d0d;border:1px solid #2a2a2a;border-radius:8px;padding:8px 12px;color:#ececec;font-size:13px;font-family:Inter,sans-serif;outline:none;" />' +
+          '<div class="confirm-modal-error" style="display:none;font-size:12px;color:#ef4444;margin-top:8px;"></div>' +
+          '<div class="confirm-modal-actions" style="margin-top:20px;">' +
+            '<button type="button" class="confirm-modal-cancel"></button>' +
+            '<button type="button" class="confirm-modal-ok' + (opts.danger ? ' danger' : '') + '" disabled style="opacity:0.5;cursor:not-allowed;"></button>' +
+          '</div>' +
+        '</div>';
+      var titleEl = overlay.querySelector('.confirm-modal-title');
+      var input = overlay.querySelector('.confirm-modal-input');
+      var errorEl = overlay.querySelector('.confirm-modal-error');
+      var cancelBtn = overlay.querySelector('.confirm-modal-cancel');
+      var okBtn = overlay.querySelector('.confirm-modal-ok');
+      titleEl.textContent = opts.title || '';
+      overlay.querySelector('.confirm-modal-message').textContent = opts.message || '';
+      overlay.querySelector('.confirm-modal-prompt').textContent = opts.prompt || '';
+      cancelBtn.textContent = opts.cancelLabel || 'Cancel';
+      okBtn.textContent = opts.confirmLabel || 'OK';
+      var busy = false;
+
+      function matches() { return input.value.trim() === opts.confirmWord; }
+      function setOkEnabled(enabled) {
+        okBtn.disabled = !enabled;
+        okBtn.style.opacity = enabled ? '' : '0.5';
+        okBtn.style.cursor = enabled ? '' : 'not-allowed';
+      }
+      function close(result) {
+        overlay.remove();
+        document.removeEventListener('keydown', onKeydown);
+        resolve(result);
+      }
+      function onKeydown(e) {
+        if (e.key === 'Escape' && !busy) close(false);
+      }
+      async function submit() {
+        if (busy || !matches()) return;
+        busy = true;
+        errorEl.style.display = 'none';
+        setOkEnabled(false);
+        cancelBtn.disabled = true;
+        input.disabled = true;
+        okBtn.textContent = opts.busyLabel || okBtn.textContent;
+        var result;
+        try { result = opts.onConfirm ? await opts.onConfirm() : true; } catch (e) { result = false; }
+        if (result === true) { close(true); return; }
+        busy = false;
+        cancelBtn.disabled = false;
+        input.disabled = false;
+        okBtn.textContent = opts.confirmLabel || 'OK';
+        setOkEnabled(matches());
+        errorEl.textContent = typeof result === 'string' ? result : 'Something went wrong. Please try again.';
+        errorEl.style.display = 'block';
+      }
+
+      input.addEventListener('input', function () { setOkEnabled(matches()); });
+      input.addEventListener('keydown', function (e) { if (e.key === 'Enter') submit(); });
+      cancelBtn.onclick = function () { if (!busy) close(false); };
+      okBtn.onclick = submit;
+      overlay.addEventListener('mousedown', function (e) { if (e.target === overlay && !busy) close(false); });
+      document.addEventListener('keydown', onKeydown);
+
+      document.body.appendChild(overlay);
+      input.focus();
     });
   };
 })();

@@ -7,7 +7,7 @@
 //
 // Requires (already present on every page this is loaded on): `client` (Supabase client),
 // `API_BASE`, and i18n.js's t()/applyTranslations()/getLang()/setLang(). Also requires
-// confirm-modal.js's showConfirmModal() (used only by deleteAccount()) and settings.css.
+// confirm-modal.js's showTypedConfirmModal() (used only by deleteAccount()) and settings.css.
 //
 // Intentionally NOT ported: openProfileSubmenu()/PROFILE_SUBMENU_CONTENT (the profile menu's
 // Language/Learn More flyout) -- sidebar.js already provides an equivalent on every page this
@@ -621,8 +621,37 @@ async function verifyLinkPhoneOtp() {
 }
 
 async function deleteAccount() {
-  if (!(await showConfirmModal('Are you sure? This will permanently delete your account and all data.', { confirmLabel: 'Delete Account', danger: true }))) return;
-  alert('Account deletion coming soon. Contact support for now.');
+  const { data: { session } } = await client.auth.getSession();
+  if (!session) return;
+  // Typed confirmation + the real server-side delete (POST /account/delete, which removes the
+  // auth user last). The modal stays open on failure so the student can retry or cancel.
+  const deleted = await showTypedConfirmModal({
+    title: t('chat', 'deleteAccountTitle'),
+    message: t('chat', 'deleteAccountWarning'),
+    confirmWord: 'DELETE',
+    prompt: t('chat', 'deleteAccountTypePrompt'),
+    confirmLabel: t('chat', 'deleteAccount'),
+    busyLabel: t('chat', 'deleteAccountDeleting'),
+    cancelLabel: t('chat', 'cancel'),
+    danger: true,
+    onConfirm: async () => {
+      try {
+        const res = await fetch(`${API_BASE}/account/delete`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
+          body: JSON.stringify({ confirm: 'DELETE' })
+        });
+        return res.ok ? true : t('chat', 'deleteAccountFailed');
+      } catch (e) {
+        return t('chat', 'deleteAccountFailed');
+      }
+    }
+  });
+  if (!deleted) return;
+  // The auth user no longer exists, so only clear the local session (a server-side sign-out
+  // would just fail).
+  try { await client.auth.signOut({ scope: 'local' }); } catch (e) { /* session already invalid */ }
+  window.location.href = './login.html';
 }
 
 // ---------- Active sessions (Account tab) ----------

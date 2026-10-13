@@ -17,6 +17,7 @@ import fitz  # PyMuPDF -- page-count check for PDF tier limits
 from PIL import Image, ImageSequence  # chat image upload -- verify + re-encode real pixel data
 import base64
 import io
+import json
 import re
 from dotenv import load_dotenv
 import os
@@ -7443,7 +7444,10 @@ async def chat_image_upload(body: ChatImageUploadRequest, _: None = Depends(rate
         return {"error": "Only image attachments can be uploaded"}
     file_bytes = out.getvalue()
     import uuid
-    path = f"chat-uploads/{uuid.uuid4().hex}.{ext}"
+    # Per-user folder (since 2026-10-13) so /account/delete can find every upload by listing
+    # chat-uploads/<user_id>/ -- earlier uploads sit flat under chat-uploads/ with no owner in the
+    # path, which /account/delete can only find via the URLs stored in that user's chats.
+    path = f"chat-uploads/{verified_user_id}/{uuid.uuid4().hex}.{ext}"
     try:
         response = http_requests.post(
             f"{SUPABASE_URL}/storage/v1/object/{DIAGRAMS_BUCKET}/{path}",
@@ -7483,7 +7487,8 @@ async def chat_pdf_upload(body: ChatPdfUploadRequest, _: None = Depends(rate_lim
     if len(file_bytes) > MAX_CHAT_PDF_BYTES:
         return {"error": "PDF too large"}
     import uuid
-    path = f"chat-uploads/pdfs/{uuid.uuid4().hex}.pdf"
+    # Per-user folder -- see /chat-image-upload's identical comment above.
+    path = f"chat-uploads/{verified_user_id}/pdfs/{uuid.uuid4().hex}.pdf"
     try:
         response = http_requests.post(
             f"{SUPABASE_URL}/storage/v1/object/{DIAGRAMS_BUCKET}/{path}",
@@ -7500,6 +7505,140 @@ async def chat_pdf_upload(body: ChatPdfUploadRequest, _: None = Depends(rate_lim
     except Exception as e:
         print(f"CHAT PDF UPLOAD ERROR (user_id={body.user_id}): {e}", flush=True)
         return {"error": "Something went wrong. Please try again."}
+
+# ---------- Account deletion (Play Store requirement) ----------
+# Called from Settings > Privacy > Delete Account on the website (settings.js + chat.html's own
+# copy) and the app. Identity comes ONLY from the verified Bearer token; the body's "DELETE" is a
+# second guard against a stray call, the real typed confirmation lives in the UI.
+#
+# Order matters: (1) anonymise first -- the step most likely to fail (it needs
+# anonymise_referrals_diagram_reports.sql applied), so a missing migration aborts before anything
+# is deleted; (2) collect + delete the student's chat uploads -- legacy ones are only findable via
+# the URLs inside their chats, so this must run before chats are deleted; (3) delete every table
+# row; (4) delete the Supabase auth user LAST. Every step is idempotent and
+# any failure aborts with a 500 before the auth user is touched, so the same still-valid token can
+# simply retry. What's deleted vs anonymised (and why) is listed in ACCOUNT_DELETE_TABLES /
+# ACCOUNT_ANONYMISE_COLUMNS below and on delete-account.html -- keep the three in step.
+class AccountDeleteRequest(BaseModel):
+    confirm: str
+
+ACCOUNT_DELETE_TABLES = [
+    "chats", "saved_questions", "mock_results", "user_streaks", "response_feedback",
+    "active_sessions", "media_doubt_log", "usage_log", "max_usage_alerts", "bonus_tokens",
+    "user_plan", "user_referral_codes",
+]
+# Kept with the student's id nulled out: content reports (quality signal for questions/diagrams),
+# cost telemetry, and both sides of a referral -- so the OTHER student's referral history and the
+# bonus they already earned stay intact. referrals, diagram_reports and question_reports need
+# anonymise_referrals_diagram_reports.sql run first (their columns were NOT NULL).
+ACCOUNT_ANONYMISE_COLUMNS = [
+    ("question_reports", "user_id"), ("diagram_reports", "user_id"),
+    ("provider_usage_log", "user_id"), ("referrals", "referrer_id"), ("referrals", "referred_id"),
+]
+_LEGACY_CHAT_UPLOAD_RE = re.compile(r"chat-uploads/(?:pdfs/)?[0-9a-f]{32}\.(?:jpg|png|webp|gif|pdf)")
+
+def _account_rows_affected(resp) -> int:
+    try:
+        return int((resp.headers.get("content-range") or "").rsplit("/", 1)[-1])
+    except ValueError:
+        return 0
+
+async def _account_collect_upload_paths(user_id: str) -> set:
+    """Every chat-upload storage path this student owns: everything listed under their own
+    chat-uploads/<user_id>/ folder, plus legacy flat-layout uploads referenced in their chats.
+    A URL pointing into a DIFFERENT student's folder is never collected (chats are client-
+    writable, so a crafted message must not be able to get someone else's file deleted)."""
+    paths = set()
+    url_re = re.compile(re.escape(f"/storage/v1/object/public/{DIAGRAMS_BUCKET}/") + r"(chat-uploads/[A-Za-z0-9/._-]+)")
+    own_prefix = f"chat-uploads/{user_id}/"
+    offset = 0
+    while True:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/chats", headers=ADMIN_HEADERS, timeout=30,
+            params={"user_id": f"eq.{user_id}", "select": "messages", "order": "id.asc", "limit": 100, "offset": offset}
+        )
+        if resp.status_code >= 400:
+            raise RuntimeError(f"chats read: {resp.status_code} {resp.text[:200]}")
+        rows = resp.json()
+        for row in rows:
+            for p in url_re.findall(json.dumps(row.get("messages"))):
+                if p.startswith(own_prefix) or _LEGACY_CHAT_UPLOAD_RE.fullmatch(p):
+                    paths.add(p)
+        if len(rows) < 100:
+            break
+        offset += 100
+    for folder in (f"chat-uploads/{user_id}", f"chat-uploads/{user_id}/pdfs"):
+        offset = 0
+        while True:
+            resp = await async_client.post(
+                f"{SUPABASE_URL}/storage/v1/object/list/{DIAGRAMS_BUCKET}", headers=ADMIN_HEADERS, timeout=30,
+                json={"prefix": folder, "limit": 1000, "offset": offset}
+            )
+            if resp.status_code >= 400:
+                raise RuntimeError(f"storage list {folder}: {resp.status_code} {resp.text[:200]}")
+            items = resp.json()
+            # Sub-folders (e.g. pdfs/) come back as id-less entries -- listed separately above.
+            paths.update(f"{folder}/{item['name']}" for item in items if item.get("id"))
+            if len(items) < 1000:
+                break
+            offset += 1000
+    return paths
+
+@app.post("/account/delete")
+async def account_delete(body: AccountDeleteRequest, _: None = Depends(rate_limiter(3, 3600)), verified_user_id: str = Depends(_get_verified_user_id)):
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if body.confirm != "DELETE":
+        raise HTTPException(status_code=400, detail="Confirmation text did not match")
+    # SUPABASE_SERVICE_KEY silently falls back to the anon key when unset (see its definition) --
+    # that would let the row deletes partly "succeed" under RLS and then fail at the auth-user
+    # step. Refuse up front instead of leaving a half-deleted account.
+    if not SUPABASE_SERVICE_KEY or SUPABASE_SERVICE_KEY == SUPABASE_KEY:
+        print("ACCOUNT DELETE REFUSED: SUPABASE_SERVICE_KEY is not configured", flush=True)
+        raise HTTPException(status_code=503, detail="Account deletion is temporarily unavailable")
+    user_id = verified_user_id
+    summary = {}
+    count_headers = {**ADMIN_HEADERS, "Prefer": "return=minimal,count=exact"}
+    try:
+        for table, column in ACCOUNT_ANONYMISE_COLUMNS:
+            resp = await async_client.patch(
+                f"{SUPABASE_URL}/rest/v1/{table}", headers={**count_headers, "Content-Type": "application/json"}, timeout=30,
+                params={column: f"eq.{user_id}"}, json={column: None}
+            )
+            if resp.status_code >= 400:
+                raise RuntimeError(f"{table}.{column} anonymise: {resp.status_code} {resp.text[:200]}")
+            summary[f"{table}.{column}=null"] = _account_rows_affected(resp)
+
+        upload_paths = sorted(await _account_collect_upload_paths(user_id))
+        for i in range(0, len(upload_paths), 100):
+            resp = await async_client.request(
+                "DELETE", f"{SUPABASE_URL}/storage/v1/object/{DIAGRAMS_BUCKET}", headers=ADMIN_HEADERS, timeout=30,
+                json={"prefixes": upload_paths[i:i + 100]}
+            )
+            if resp.status_code >= 400:
+                raise RuntimeError(f"storage delete: {resp.status_code} {resp.text[:200]}")
+        summary["uploads"] = len(upload_paths)
+
+        for table in ACCOUNT_DELETE_TABLES:
+            resp = await async_client.delete(
+                f"{SUPABASE_URL}/rest/v1/{table}", headers=count_headers, timeout=30,
+                params={"user_id": f"eq.{user_id}"}
+            )
+            if resp.status_code >= 400:
+                raise RuntimeError(f"{table} delete: {resp.status_code} {resp.text[:200]}")
+            summary[table] = _account_rows_affected(resp)
+
+        resp = await async_client.delete(
+            f"{SUPABASE_URL}/auth/v1/admin/users/{user_id}", headers=ADMIN_HEADERS, timeout=30
+        )
+        # 404 = already gone (a retry after a timeout that actually succeeded) -- still done.
+        if resp.status_code >= 400 and resp.status_code != 404:
+            raise RuntimeError(f"auth user delete: {resp.status_code} {resp.text[:200]}")
+    except Exception as e:
+        print(f"ACCOUNT DELETE FAILED (user_id={user_id}, done so far={summary}): {e}", flush=True)
+        raise HTTPException(status_code=500, detail="Could not delete your account. Please try again.")
+    print(f"ACCOUNT DELETED: user_id={user_id} {summary}", flush=True)
+    return {"deleted": True}
 
 @app.post("/admin/diagrams-create")
 async def admin_diagrams_create(body: DiagramCreate, _: None = Depends(verify_admin)):
