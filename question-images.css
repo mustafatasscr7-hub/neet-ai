@@ -5,7 +5,11 @@
 
    Images are never upscaled (width/height stay auto, so max-* only ever shrinks them) and
    never wider than their container. The height caps only apply from 768px up; below that
-   the mobile layout is left as it was. */
+   the mobile layout is left as it was.
+
+   Portrait and square option images (height >= width) get a higher minimum cap than wide
+   ones: a structure or graph shrunk to formula-strip height is unreadable. question-images.js
+   tags each option image with data-orient from its natural size. */
 :root {
   /* Option images: four options should fit in the visible question area. The reserved
      height is what the mock test screen spends on everything except the images themselves
@@ -15,6 +19,10 @@
   --q-opt-img-min-h: 90px;
   --q-opt-img-reserved-h: 400px;
   --q-opt-img-max-h: max(var(--q-opt-img-min-h), calc((100vh - var(--q-opt-img-reserved-h)) / 4));
+  /* Portrait/square option images are never capped below this; when four of them don't fit,
+     the question area scrolls. */
+  --q-opt-img-min-portrait: 160px;
+  --q-opt-img-portrait-max-h: max(var(--q-opt-img-min-portrait), calc((100vh - var(--q-opt-img-reserved-h)) / 4));
   /* Question diagram shown with the question text. */
   --q-diagram-max-h: 40vh;
   /* Vertical padding of an image option card on the test screens (text-only cards keep
@@ -24,6 +32,7 @@
 @supports (height: 100dvh) {
   :root {
     --q-opt-img-max-h: max(var(--q-opt-img-min-h), calc((100dvh - var(--q-opt-img-reserved-h)) / 4));
+    --q-opt-img-portrait-max-h: max(var(--q-opt-img-min-portrait), calc((100dvh - var(--q-opt-img-reserved-h)) / 4));
     --q-diagram-max-h: 40dvh;
   }
 }
@@ -40,8 +49,13 @@
 
 @media (min-width: 768px) {
   .q-opt-img { max-height: var(--q-opt-img-max-h); }
+  .q-opt-img[data-orient="portrait"] { max-height: var(--q-opt-img-portrait-max-h); }
   .q-img { max-height: var(--q-diagram-max-h); }
 }
+
+/* Until question-images.js has tagged an option image it stays out of the layout, so it
+   appears once at its final size (see question-images.js). */
+html.q-img-orient .q-opt-img:not([data-orient]) { display: none !important; }
 
 /* Test-screen option cards (mocktest.html / personalised-test.html): the image sits inside
    the option's content box next to the A/B/C/D circle. min-width:0 lets that box shrink to
