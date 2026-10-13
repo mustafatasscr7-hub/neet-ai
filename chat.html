@@ -205,42 +205,46 @@
     .pyq-save-btn:disabled { cursor: default; opacity: 0.6; }
     body.light-mode .sol-btn { background: #a78bfa1a !important; color: #7c3aed !important; }
     body.light-mode .pyq-save-btn { background: #f973161a !important; color: #c2540a !important; }
-    /* Header "Upgrade" CTA -- the one solid-filled control in the header, so it reads as the
-       primary action through fill + contrast alone (no emoji/gradient/glow). All tunables are
-       custom properties on the class itself (chat.html has no :root token layer); light mode only
-       swaps the variables. Visual height stays 30px so the header doesn't grow; ::before
-       extends the hit area to 44px for touch. */
+    /* Header "Upgrade" pill -- deliberately quiet: a translucent neutral capsule, text only, no
+       fill/shadow/glow. It's sized and rounded to pair with the countdown pill beside it
+       (#countdownWrapper > div: same 30px height, 15px radius, 1px border). Tunables are custom
+       properties on the class itself (chat.html has no :root token layer); light mode only swaps
+       the variables. ::before extends the hit area to 44px for touch without growing the header. */
     .upgrade-btn {
-      --upgrade-fill: #f4b23f;            /* the app's #f9b02c amber, a touch softer/warmer */
-      --upgrade-label: #1c1405;           /* ~10:1 on the fill (WCAG AAA) */
-      --upgrade-radius: 999px;
-      --upgrade-shadow: 0 1px 2px rgba(0,0,0,0.28), 0 2px 8px rgba(0,0,0,0.18);
-      --upgrade-highlight: inset 0 1px 0 rgba(255,255,255,0.32);
-      --upgrade-ring: #f4b23f;
+      --upgrade-bg: rgba(255,255,255,0.06);
+      --upgrade-bg-hover: rgba(255,255,255,0.10);
+      --upgrade-border: rgba(255,255,255,0.12);
+      --upgrade-border-hover: rgba(255,255,255,0.20);
+      --upgrade-label: rgba(245,245,247,0.9);
+      --upgrade-label-hover: #ffffff;
+      --upgrade-ring: rgba(255,255,255,0.6);
+      --upgrade-radius: 15px;             /* full pill at 30px; matches the countdown pill */
       position: relative; display: inline-flex; align-items: center; justify-content: center;
-      height: 30px; padding: 0 23.5px; white-space: nowrap;  /* 101px wide = the old emoji button, so the countdown pill does not move */
-      background: var(--upgrade-fill); color: var(--upgrade-label);
-      border: none; border-radius: var(--upgrade-radius);
-      box-shadow: var(--upgrade-highlight), var(--upgrade-shadow);
-      font-family: 'Inter', sans-serif; font-size: 13px; font-weight: 600; letter-spacing: normal;
+      box-sizing: border-box; height: 30px; padding: 0 22.5px; white-space: nowrap;  /* ~101px wide, same as before, so the countdown pill does not move */
+      background: var(--upgrade-bg); color: var(--upgrade-label);
+      border: 1px solid var(--upgrade-border); border-radius: var(--upgrade-radius);
+      font-family: 'Inter', sans-serif; font-size: 13px; font-weight: 500; letter-spacing: normal;
       cursor: pointer; -webkit-tap-highlight-color: transparent;
-      transition: transform 220ms cubic-bezier(0.2, 0.9, 0.3, 1.15), filter 180ms ease-out, box-shadow 180ms ease-out;
+      transition: background-color 180ms ease, border-color 180ms ease, color 180ms ease, transform 180ms ease;
     }
     .upgrade-btn::before { content: ''; position: absolute; left: 0; right: 0; top: 50%; height: 44px; transform: translateY(-50%); }
-    .upgrade-btn:hover { filter: brightness(1.06); }
-    .upgrade-btn:active { transform: scale(0.97); filter: brightness(0.96); box-shadow: var(--upgrade-highlight), 0 1px 1px rgba(0,0,0,0.22); transition-duration: 90ms; }
+    .upgrade-btn:hover { background: var(--upgrade-bg-hover); border-color: var(--upgrade-border-hover); color: var(--upgrade-label-hover); }
+    .upgrade-btn:active { transform: scale(0.97); background: var(--upgrade-bg); transition-duration: 90ms; }
     .upgrade-btn:focus { outline: none; }
     .upgrade-btn:focus-visible { outline: 2px solid var(--upgrade-ring); outline-offset: 2px; }
-    .upgrade-btn:disabled { opacity: 0.45; cursor: not-allowed; filter: none; transform: none; box-shadow: none; }
+    .upgrade-btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
     body.light-mode .upgrade-btn {
-      --upgrade-fill: #f2ab32;
-      --upgrade-shadow: 0 0 0 0.5px rgba(120,80,0,0.22), 0 1px 2px rgba(120,80,0,0.16);
-      --upgrade-highlight: inset 0 1px 0 rgba(255,255,255,0.45);
-      --upgrade-ring: #b5790a;
+      --upgrade-bg: rgba(0,0,0,0.04);
+      --upgrade-bg-hover: rgba(0,0,0,0.07);
+      --upgrade-border: rgba(0,0,0,0.10);
+      --upgrade-border-hover: rgba(0,0,0,0.18);
+      --upgrade-label: rgba(29,29,31,0.9);
+      --upgrade-label-hover: #000000;
+      --upgrade-ring: rgba(0,0,0,0.5);
     }
-    @media (max-width: 620px) { .upgrade-btn { padding: 0 14px; } }
+    @media (max-width: 620px) { .upgrade-btn { padding: 0 13px; } }
     @media (prefers-reduced-motion: reduce) {
-      .upgrade-btn, .upgrade-btn:active { transform: none; transition: filter 120ms linear, box-shadow 120ms linear; }
+      .upgrade-btn, .upgrade-btn:active { transform: none; }
     }
 
     /* Report-a-question: subtle flag icon, low visibility until hovered, and its popup --
@@ -1373,7 +1377,7 @@
       </div>
     <div style="display:flex;align-items:center;gap:10px;">
 <div style="position:relative;" id="countdownWrapper">
-          <div style="font-size:12px;font-weight:600;color:#4f8ef7;background:#4f8ef710;border:1px solid #4f8ef730;padding:4px 12px;border-radius:6px;cursor:default;">NEET <span data-i18n-num>2027</span> — <span id="countdownDays">--</span> <span data-i18n="chat.daysLeft">days left</span></div>
+          <div style="box-sizing:border-box;min-height:30px;display:flex;align-items:center;font-size:12px;font-weight:600;color:#4f8ef7;background:#4f8ef710;border:1px solid #4f8ef730;padding:4px 12px;border-radius:15px;cursor:default;"><span>NEET <span data-i18n-num>2027</span> — <span id="countdownDays">--</span> <span data-i18n="chat.daysLeft">days left</span></span></div>
           <div id="countdownTooltip" style="display:none;position:absolute;top:36px;right:0;background:#111;border:1px solid #4f8ef730;border-radius:10px;padding:16px 20px;min-width:200px;z-index:999;box-shadow:0 8px 24px rgba(0,0,0,0.6);">
             <div style="font-size:10px;color:#4f8ef7;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:10px;" data-i18n="chat.timeUntilNeet">Time until NEET 2027</div>
             <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;text-align:center;">
