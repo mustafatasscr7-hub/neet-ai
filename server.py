@@ -6194,10 +6194,20 @@ async def admin_set_user_plan(req: SetUserPlanRequest, _: None = Depends(verify_
 
 # ---------------- Referral program: student-facing endpoints ----------------
 @app.get("/referral/my-code")
-async def referral_my_code(user_id: str):
-    if not user_id:
-        raise HTTPException(status_code=400, detail="user_id is required")
-    return {"code": await _referral_code_for_user(user_id)}
+async def referral_my_code(verified_user_id: str = Depends(_get_verified_user_id)):
+    # Previously took an unauthenticated ?user_id= and trusted it -- the same IDOR class as
+    # /referral/status, worse here because _referral_code_for_user is get-or-create (anyone could
+    # read another student's code, or mint one for any real id), and a malformed id surfaced as a
+    # raw 500. Identity now comes only from the verified Bearer token; a leftover ?user_id= is
+    # ignored, same as /referral/status. Neither the web app nor neet-ai-mobile calls this (both
+    # read the code from /referral/status), so no client needed changing.
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        return {"code": await _referral_code_for_user(verified_user_id)}
+    except Exception as e:
+        print(f"REFERRAL MY-CODE ERROR (user_id={verified_user_id}): {e}", flush=True)
+        raise HTTPException(status_code=502, detail="Could not load referral code")
 
 @app.post("/referral/register")
 async def referral_register(req: RegisterReferralRequest):
