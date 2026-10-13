@@ -7425,8 +7425,9 @@ async def chat_image_upload(body: ChatImageUploadRequest, _: None = Depends(rate
 # Retry/Edit (getResendAttachments's own session cache is the only thing that ever worked, and
 # only within the same browser session). Mirrors /chat-image-upload exactly: same bucket, same
 # chat-uploads/ prefix convention (under a pdfs/ subfolder), same trust model, same rate limiter
-# shape.
-MAX_CHAT_PDF_BYTES = 15 * 1024 * 1024
+# shape. Matches the largest PDF_LIMITS tier (max: 20MB) -- this used to be 15MB, so a Max
+# student's 15-20MB PDF was answered by /chat but silently never persisted for reload.
+MAX_CHAT_PDF_BYTES = 20 * 1024 * 1024
 @app.post("/chat-pdf-upload")
 async def chat_pdf_upload(body: ChatPdfUploadRequest, _: None = Depends(rate_limiter(10, 60)), verified_user_id: str = Depends(_get_verified_user_id)):
     # Same IDOR class as /referral/status -- see /chat-image-upload's identical comment above.
