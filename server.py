@@ -244,7 +244,7 @@ from process_pyq_vision import scan_pdf_bytes, scan_mock_test_pdf
 from process_pyq_book_3col import scan_book_pdf_bytes
 from utils.krutidev2unicode import kru2uni
 
-# Shared verbatim between SYSTEM_PROMPT (rule 12 below) and _VERIFY_MCQ_HEDGE_SYSTEM further down
+# Shared verbatim between INERT_PAIR_GUARD and _VERIFY_MCQ_HEDGE_SYSTEM further down
 # -- kept as ONE constant specifically so the two can never drift out of sync the way they just
 # did: the verification prompt was left carrying the model's OLD, unfixed belief about this exact
 # comparison for a full commit after the main generation prompt was corrected, silently
@@ -783,12 +783,7 @@ Rules:
     entirely and answer in the normal format starting with VISUAL_INTENT, exactly as before. If
     a doubt happens to qualify as ambiguous in BOTH ways at once, resolve TOPIC ambiguity only —
     never output two clarification questions in the same turn; once the student picks a topic
-    interpretation, judge format ambiguity fresh on that follow-up if it still applies.
-12. NAMED WORKED EXAMPLE — Group 14 inert pair effect (Sn vs Pb): confirmed via live testing that
-    this specific comparison gets answered backwards, and that a live self-check doesn't fix it
-    (the same wrong belief gets confidently re-confirmed) — so treat the reasoning below as
-    something to copy exactly, not just a fact to recall from memory.
-    """ + _INERT_PAIR_EFFECT_SN_PB_FACTS
+    interpretation, judge format ambiguity fresh on that follow-up if it still applies."""
 
 class ImageAttachment(BaseModel):
     data: str
@@ -2667,78 +2662,68 @@ async def search_pyq(query: str, limit: int = 5, chapter: str = ""):
 
     return [], "none"
 
-async def get_student_context(user_id: str) -> str:
+async def fetch_student_mistake_rows(user_id: str) -> list:
+    """The student's 15 most recent saved (missed) questions as {subject, chapter} rows -- raw
+    data only, fetched concurrently with NCERT retrieval. Turning it into prompt text has to wait
+    for retrieval anyway (see build_student_context), since which rows are relevant depends on the
+    subject of what was actually retrieved."""
     if not user_id:
-        return ""
-    # Uses the service-role key deliberately: these tables are RLS-scoped to the
-    # authenticated owner, and this request is made server-side on the student's
-    # behalf (already filtered to their own user_id below), not through their session.
+        return []
+    # Uses the service-role key deliberately: this table is RLS-scoped to the authenticated
+    # owner, and this request is made server-side on the student's behalf (already filtered to
+    # their own user_id below), not through their session.
     headers = {"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"}
+    try:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/saved_questions",
+            headers=headers,
+            params={
+                "user_id": f"eq.{user_id}",
+                "select": "subject,chapter",
+                "order": "saved_at.desc",
+                "limit": 15
+            }
+        )
+        rows = resp.json()
+        return rows if isinstance(rows, list) else []
+    except Exception:
+        return []
 
-    async def fetch_mock_average():
-        try:
-            resp = await async_client.get(
-                f"{SUPABASE_URL}/rest/v1/mock_results",
-                headers=headers,
-                params={
-                    "user_id": f"eq.{user_id}",
-                    "select": "score,correct,wrong,subject_biology_score,subject_physics_score,subject_chemistry_score",
-                    "order": "created_at.desc",
-                    "limit": 5
-                }
-            )
-            results = resp.json()
-            if isinstance(results, list) and results:
-                avg_score = sum(r.get("score", 0) for r in results) / len(results)
-                return f"Recent mock test average score: {avg_score:.0f}/720 over the last {len(results)} test(s)."
-        except Exception:
-            pass
-        return None
+def build_student_context(mistake_rows: list, subjects: set) -> str:
+    """Weak-chapter context for ONE answer, restricted to chapters in the same subject(s) as the
+    NCERT content actually retrieved for this doubt. Previously the top-3 chapters were taken
+    across ALL subjects (the subject column was fetched and then ignored) under an instruction to
+    "spend more care on their weak chapters" -- confirmed live 2026-10-13 that Qwen then name-
+    dropped Biology chapters into a Physics answer ("since you've struggled with Locomotion and
+    Movement and Excretory Products...") in 3/8 runs with a real student's context. No retrieval
+    (subject unknown) means no weak-chapter context at all, rather than guessing.
 
-    async def fetch_weak_chapters():
-        try:
-            resp = await async_client.get(
-                f"{SUPABASE_URL}/rest/v1/saved_questions",
-                headers=headers,
-                params={
-                    "user_id": f"eq.{user_id}",
-                    "select": "subject,chapter",
-                    "order": "saved_at.desc",
-                    "limit": 15
-                }
-            )
-            mistakes = resp.json()
-            if isinstance(mistakes, list) and mistakes:
-                chapter_counts = {}
-                for m in mistakes:
-                    ch = (m.get("chapter") or "").strip()
-                    if ch:
-                        chapter_counts[ch] = chapter_counts.get(ch, 0) + 1
-                if chapter_counts:
-                    weak = sorted(chapter_counts.items(), key=lambda x: -x[1])[:3]
-                    weak_str = ", ".join(f"{ch} ({count} missed questions)" for ch, count in weak)
-                    return f"Chapters this student struggles with most: {weak_str}."
-        except Exception:
-            pass
-        return None
-
-    # These two queries don't depend on each other -- run concurrently instead of stacking
-    # their latency sequentially, same reasoning as the outer NCERT/student-context overlap.
-    mock_part, weak_part = await asyncio.gather(fetch_mock_average(), fetch_weak_chapters())
-    parts = [p for p in (mock_part, weak_part) if p]
-
-    if not parts:
+    The mock-test average line that used to sit here was removed on purpose: a whole-paper score
+    says nothing about a single doubt, and a real "2/720" average (abandoned tests) produced
+    invented praise ("You've done well in your mock tests") in live testing."""
+    if not mistake_rows or not subjects:
         return ""
-
+    wanted = {s.strip().lower() for s in subjects if s}
+    chapter_counts = {}
+    for m in mistake_rows:
+        ch = (m.get("chapter") or "").strip()
+        if ch and (m.get("subject") or "").strip().lower() in wanted:
+            chapter_counts[ch] = chapter_counts.get(ch, 0) + 1
+    if not chapter_counts:
+        return ""
+    weak = sorted(chapter_counts.items(), key=lambda x: -x[1])[:3]
+    weak_str = ", ".join(f"{ch} ({count} missed questions)" for ch, count in weak)
     return (
-        "\n\nSTUDENT CONTEXT (use this to naturally tailor depth and examples to this "
-        "specific student — e.g. spend more care on their weak chapters, don't over-explain "
-        "things they're already strong in. Don't explicitly say 'according to your data' or "
-        "similar — just let it shape the answer naturally):\n" + "\n".join(parts)
+        "\n\nSTUDENT CONTEXT (background only): in this same subject, this student has recently "
+        f"missed questions from: {weak_str}. If this doubt is directly about one of those "
+        "chapters, explain the steps students usually get wrong there with extra care. Otherwise "
+        "ignore this entirely. Never mention these chapters, the student's weak areas, or their "
+        "past mistakes/scores in the answer unless the doubt is directly about one of those "
+        "chapters -- and never list them."
     )
 
-async def _empty_str():
-    return ""
+async def _empty_list():
+    return []
 
 async def _empty_bool():
     return False
@@ -2987,11 +2972,12 @@ def _deterministic_topic_ambiguity_response(text: str):
 #
 # Built by slicing rule 11 (TOPIC AMBIGUITY + FORMAT AMBIGUITY) out of SYSTEM_PROMPT by its own
 # start/end marker text, not a hardcoded copy of the rule's body -- so this never goes stale if
-# rule 11's own wording changes later; only these two marker strings need to keep matching.
+# rule 11's own wording changes later; only the start marker string needs to keep matching.
+# Rule 11 is the LAST rule (the old rule 12, the Group 14 inert-pair worked example, moved out
+# to INERT_PAIR_GUARD), so it runs to the end of SYSTEM_PROMPT.
 _RULE_11_START_MARKER = "11. BEFORE writing VISUAL_INTENT"
-_RULE_11_END_MARKER = "12. NAMED WORKED EXAMPLE"
 _rule_11_start_idx = SYSTEM_PROMPT.index(_RULE_11_START_MARKER)
-_rule_11_end_idx = SYSTEM_PROMPT.index(_RULE_11_END_MARKER)
+_rule_11_end_idx = len(SYSTEM_PROMPT)
 SYSTEM_PROMPT_NO_CLARIFY = (
     SYSTEM_PROMPT[:_rule_11_start_idx]
     + "11. This doubt has already been confirmed, by a separate server-side check, to NOT be "
@@ -3946,6 +3932,92 @@ MNEMONIC_QUALITY_GUARD = (
     "rather than forcing a weak one."
 )
 
+# Was SYSTEM_PROMPT's rule 12 -- an always-on "copy exactly" worked example for the Group 14
+# inert-pair comparison, sent with EVERY text doubt regardless of topic. Confirmed live
+# (2026-10-13) that this leaked into unrelated answers: a real "Ohms law" chat got a Key Point
+# reading "A common NEET trap: Students often think Pb(II) is a reducing agent..." -- the Key
+# Points rule asks for "students often think X but it's actually Y" traps, and this block was the
+# only ready-made one sitting in the prompt. Replaying that chat's real history on Qwen: 5/10
+# leaks with the always-on rule, 0/10 without it. Same call-time pattern as
+# MNEMONIC_QUALITY_GUARD now: appended only for doubts that actually mention the topic, so the
+# fix it exists for (the backwards Sn/Pb comparison) still applies where it's relevant.
+_INERT_PAIR_QUERY_RE = re.compile(
+    r'inert[\s-]*pair|group\s*(?:14|iv\s*a|iva)\b|carbon\s+family|stann(?:ous|ic)|plumb(?:ous|ic)|'
+    r'\btin\b|\blead\s*\(|\blead\s+(?:ii|iv|chloride|oxide|dioxide|monoxide|halide|tetra|compound|salt|ion)|'
+    r'अक्रिय\s*युग्म|समूह\s*14',
+    re.IGNORECASE
+)
+# Element symbols are case-sensitive on purpose -- "Sn"/"Pb" as typed in a real formula, never
+# the substring "sn"/"pb" inside an ordinary word. "Sn1"/"Sn2" typed for the SN1/SN2 reaction
+# mechanisms is excluded, while the ion "Sn2+" still matches.
+_INERT_PAIR_SYMBOL_RE = re.compile(r'(?<![A-Za-z])(?:Sn|Pb)(?![a-z])(?!\s*[12](?![+⁺]))')
+
+def _is_inert_pair_query(text: str) -> bool:
+    return bool(_INERT_PAIR_QUERY_RE.search(text or '') or _INERT_PAIR_SYMBOL_RE.search(text or ''))
+
+INERT_PAIR_GUARD = (
+    "\n\nNAMED WORKED EXAMPLE — Group 14 inert pair effect (Sn vs Pb): this doubt involves this "
+    "topic. Confirmed via live testing that this specific comparison gets answered backwards, and "
+    "that a live self-check doesn't fix it (the same wrong belief gets confidently re-confirmed) — "
+    "so treat the reasoning below as something to copy exactly, not just a fact to recall from "
+    "memory.\n    " + _INERT_PAIR_EFFECT_SN_PB_FACTS
+)
+
+# Self-correction / thinking-out-loud detector for anything about to be written to a SHARED cache
+# (pyq_solution_cache, answer_cache) -- both are served verbatim to every later student, so one
+# "Wait -- let me re-verify..." generation becomes permanent. Deliberately much tighter than
+# _HEDGE_PATTERNS below (which matches bare "however"/"actually", fine for its narrow MCQ trigger
+# but common in clean explanations): measured 2026-10-13 against every real stored answer --
+# flags exactly the 4 bad rows of 67 in pyq_solution_cache, 1 of 110 answer_cache rows and 1 of
+# 388 chat answers, all genuine self-talk on manual review, zero false positives. A bare "Let me
+# verify each statement" (2 clean answer_cache rows) is intentionally NOT matched -- only
+# re-checking/backtracking wording is.
+_SELF_CORRECTION_PATTERNS = [
+    re.compile(r'\bwait\b\s*(?:[,!:—–]|-\s|\.\.\.)', re.IGNORECASE),
+    re.compile(r'\bhmm+\b', re.IGNORECASE),
+    re.compile(r"\blet(?:\s+me|\s+us|['’]s)\s+(?:re-?check|re-?verify|re-?evaluate|re-?examine|re-?consider|"
+               r"re-?calculate|re-?think|re-?read|double[- ]check|check\s+again|verify\s+again|think\s+again|go\s+back)",
+               re.IGNORECASE),
+    re.compile(r'\bre-?verify(?:ing)?\b', re.IGNORECASE),
+    re.compile(r'\bon\s+second\s+thought', re.IGNORECASE),
+    re.compile(r'\bI\s+made\s+(?:a|an)\s+(?:mistake|error)', re.IGNORECASE),
+    # Line-anchored so "End correction: e = 0.3d" (a real physics term) never matches.
+    re.compile(r'^\s*(?:[-*•]\s*)?(?:⚠️\s*)?correction\s*:', re.IGNORECASE | re.MULTILINE),
+    re.compile(r'\b(?:given|stated|provided|marked)\s+(?:correct\s+)?answer\b[^.\n]{0,60}\b(?:is|seems|appears|looks)\s+'
+               r'(?:to\s+be\s+)?(?:likely\s+)?(?:wrong|incorrect|a\s+mistake|an\s+error|mistaken)', re.IGNORECASE),
+    re.compile(r'\banswer\s+key\b[^.\n]{0,40}\b(?:wrong|incorrect|mistake|error)', re.IGNORECASE),
+    re.compile(r'\bsince\s+the\s+user\s+(?:provided|gave|said)', re.IGNORECASE),
+    re.compile(r'रुकिए|ठहरिए|दोबारा\s+जा[ँं]च|फिर\s+से\s+जा[ँं]च|पुनः\s+जा[ँं]च|मुझसे\s+गलती'),
+]
+
+def _has_self_correction(text: str) -> bool:
+    return any(p.search(text or '') for p in _SELF_CORRECTION_PATTERNS)
+
+# Appended to the system prompt for the one background regeneration a flagged answer gets.
+SELF_CORRECTION_RETRY_GUARD = (
+    "\n\nIMPORTANT (server-enforced): a previous attempt at this exact question included visible "
+    "self-correction (\"Wait\", \"let me re-check\", \"Hmm\", second-guessing the given answer). "
+    "Do all checking silently. Write ONLY the final, clean, confident solution -- no rechecking, "
+    "no backtracking, no second draft. One exception: if a Correct Answer was provided and your "
+    "own working genuinely shows it is wrong, still say so in the single line \"⚠️ The given "
+    "answer appears to be incorrect: [one-line reason]\" -- never invent a justification for an "
+    "answer you believe is wrong."
+)
+# ^ That exception exists because live testing (2026-10-13) showed a blanket "no commentary on the
+# answer key" retry making the model invent a clean but wrong solution for a PYQ whose stored
+# options were broken (8edfce62). The warning line is itself flagged by _has_self_correction, so
+# such a retry is never cached -- it gets logged for PYQ data review instead.
+
+# Strong references for fire-and-forget regeneration tasks -- asyncio only keeps a weak reference
+# to a running Task, so an unreferenced multi-second model call could be garbage-collected mid-run.
+_BACKGROUND_TASKS = set()
+
+def _spawn_background(coro):
+    task = asyncio.create_task(coro)
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+    return task
+
 # Deliberately broad per the audit's own examples, not narrowed in advance -- "however" and
 # "actually" alone are common in ordinary explanatory prose too (real false-positive risk), but
 # rather than guess at a tighter pattern up front, this ships as specified and gets measured
@@ -4331,6 +4403,31 @@ def _usable_student_name(name: str) -> str:
         return ""
     return name
 
+async def _regenerate_and_cache_chat_answer(system: str, messages: list, answer_hash: str, has_retrieval: bool, force_qwen: bool, user_id: str, ip: str):
+    """Background (never awaited by the request) replacement for a shared-cache /chat answer that
+    _has_self_correction flagged. One retry with SELF_CORRECTION_RETRY_GUARD appended, same model
+    routing, NOT billed to the student (they already paid for the answer they saw; provider cost
+    is still logged under /chat). Cached only if the retry is clean and is a real answer, not a
+    clarifying question -- this path skips stream_response's rule-11 guard, so an AMBIGUOUS reply
+    is never cached from here. Anything else leaves the cache empty for this question, so the
+    next student asking it gets a fresh generation through the normal checks."""
+    try:
+        stream = _stream_with_peak_fallback(system + SELF_CORRECTION_RETRY_GUARD, messages, user_id, ip, "/chat", {"bill": False}, force_qwen)
+        answer = ""
+        async for chunk in _force_citation_when_no_retrieval(stream, has_retrieval):
+            answer += chunk
+        if answer.strip() and not answer.lstrip().startswith("AMBIGUOUS") and not _has_self_correction(answer):
+            await async_client.post(
+                f"{SUPABASE_URL}/rest/v1/answer_cache",
+                headers={"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}", "Content-Type": "application/json"},
+                json={"question_hash": answer_hash, "answer": answer}
+            )
+            print(f"CHAT SELF-CORRECTION REGENERATED AND CACHED: question_hash={answer_hash[:12]}", flush=True)
+        else:
+            print(f"CHAT SELF-CORRECTION UNRESOLVED, NOT CACHED: question_hash={answer_hash[:12]}", flush=True)
+    except Exception as e:
+        print(f"CHAT SELF-CORRECTION REGENERATION FAILED: question_hash={answer_hash[:12]}: {e}", flush=True)
+
 async def stream_response(text: str, history: list = [], images: list = [], pdf: str = None, answer_style: str = "detailed", student_name: str = "", language: str = "en", user_id: str = "", personalize: bool = True, skip_cache: bool = False, ip: str = "", running_summary: str = "", dropped_question: str = "", dropped_answer: str = ""):
     images = (images or [])[:3]
 
@@ -4409,15 +4506,18 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
     # no real question text to search on. The diagram-existence check is only meaningful for
     # text doubts (format-ambiguity -- "explain it or show the diagram?" -- doesn't apply once
     # an image is already attached), so it's skipped for images/pdf the same way.
-    student_context_coro = get_student_context(user_id) if (personalize and user_id) else _empty_str()
     skip_ncert_search = bool(images) and text.strip() == IMAGE_ONLY_PLACEHOLDER_TEXT
     diagram_exists_coro = _diagram_exists_for(text) if not images and not pdf else _empty_bool()
     if skip_ncert_search:
+        # No retrieval means no known subject, and build_student_context only ever uses weak
+        # chapters from the retrieved subject -- so there's nothing to fetch here at all.
         results = []
-        student_context = await student_context_coro
+        mistake_rows = []
         diagram_exists = False
     else:
-        results, student_context, diagram_exists = await asyncio.gather(search_ncert(text), student_context_coro, diagram_exists_coro)
+        mistake_rows_coro = fetch_student_mistake_rows(user_id) if (personalize and user_id) else _empty_list()
+        results, mistake_rows, diagram_exists = await asyncio.gather(search_ncert(text), mistake_rows_coro, diagram_exists_coro)
+    student_context = build_student_context(mistake_rows, {r.get('subject') for r in results})
 
     if results:
         context = "\n\n".join([
@@ -4554,6 +4654,10 @@ the question, ignore this instruction entirely and use the plain "Answer:" heade
             # request -- see MNEMONIC_QUALITY_GUARD's own comment for why this is appended at
             # call time rather than edited into rule 9's own SYSTEM_PROMPT text.
             full_system = full_system + MNEMONIC_QUALITY_GUARD
+        if _is_inert_pair_query(text):
+            # Same call-time placement and reasoning as MNEMONIC_QUALITY_GUARD just above -- see
+            # INERT_PAIR_GUARD's own comment for why this is no longer an always-on rule.
+            full_system = full_system + INERT_PAIR_GUARD
         if images:
             full_system = full_system + lang_context
             # See the gemini_client comment above for why images specifically moved off Claude.
@@ -4894,11 +4998,18 @@ the question, ignore this instruction entirely and use the plain "Answer:" heade
                         full_answer += text_chunk
                         yield text_chunk
             if not images and not pdf and use_shared_cache:
-                await async_client.post(
-                    f"{SUPABASE_URL}/rest/v1/answer_cache",
-                    headers={**headers, "Content-Type": "application/json"},
-                    json={"question_hash": answer_hash, "answer": full_answer}
-                )
+                if _has_self_correction(full_answer):
+                    # Shared cache, served verbatim to every later student asking the same text --
+                    # never store visible self-correction there. This student has already seen
+                    # it; a clean background regeneration takes its place in the cache instead.
+                    print(f"CHAT SELF-CORRECTION DETECTED, NOT CACHED: question_hash={answer_hash[:12]}", flush=True)
+                    _spawn_background(_regenerate_and_cache_chat_answer(full_system, messages, answer_hash, bool(results), force_qwen, user_id, ip))
+                else:
+                    await async_client.post(
+                        f"{SUPABASE_URL}/rest/v1/answer_cache",
+                        headers={**headers, "Content-Type": "application/json"},
+                        json={"question_hash": answer_hash, "answer": full_answer}
+                    )
             # The background summarization task (if one was fired above) has had the ENTIRE
             # main-answer generation above to run concurrently -- typically several seconds,
             # comfortably longer than a summarization call's own ~1-1.5s real measured latency --
@@ -4957,8 +5068,15 @@ def _solve_system_prompt(language: str, has_diagram: bool) -> str:
     to actually look at the attached image(s) rather than describe options it can't see -- see
     stream_solve_response_with_diagram's own comment for why this exists at all (2026-09-17
     diagram-dependent-PYQ audit: the text-only path was confidently fabricating descriptions of
-    diagram content it never received)."""
-    lang_instruction = f"\n5. {HINDI_ONLY_CORE}" if language == "hi" else ""
+    diagram content it never received).
+
+    Rule 5 (2026-10-13): 4 of 67 cached solutions contained visible thinking-out-loud ("Wait --
+    let me recheck", "Let us re-verify", arguing with the supplied answer key), served verbatim to
+    every later student. Checking stays silent; a genuine answer-key disagreement becomes ONE
+    plain warning line, which _has_self_correction also matches -- so that solution is never
+    cached and gets logged for a PYQ data review, instead of the model either arguing in the open
+    or inventing a justification for a wrong key."""
+    lang_instruction = f"\n6. {HINDI_ONLY_CORE}" if language == "hi" else ""
     intro = (
         "You are a NEET exam expert. Solve the given NEET question step by step. The attached "
         "image(s) show the diagram(s) this question depends on -- base your answer on what is "
@@ -4988,16 +5106,99 @@ Rules:
    - Inline: $formula$ example: $\\frac{{1}}{{2}}mv^2$
    - Display: $$formula$$ example: $$E = mc^2$$
    - Always write $H_2O$ not H₂O
-   - Always write $v^2$ not v²{lang_instruction}"""
+   - Always write $v^2$ not v²
+5. Do all checking and re-checking silently -- write ONLY the final, clean solution. Never write
+   "Wait", "Hmm", "let me re-check/re-verify", corrections, or a second draft. If the Correct
+   Answer says "not provided", determine it yourself and present it normally -- that is not a
+   disagreement with anything. Only if a Correct Answer IS provided and your own working genuinely
+   disagrees with it, write exactly one line at the very top -- "⚠️ The given answer appears to be
+   incorrect: [one-line reason]" -- then the solution for the option you find correct, with no
+   further argument.{lang_instruction}"""
 
-async def stream_solve_response(pyq_id: str, cached_solution, question: str, option_a: str, option_b: str, option_c: str, option_d: str, correct_answer: str, language: str = "en", user_id: str = "", ip: str = ""):
+def _solve_has_diagram(req: SolveRequest) -> bool:
+    return bool(req.diagram_url or req.option_a_diagram_url or req.option_b_diagram_url or req.option_c_diagram_url or req.option_d_diagram_url)
+
+def _solve_correct_answer_text(req: SolveRequest) -> str:
+    # Spelled out rather than left as a bare "Correct Answer: " -- confirmed live 2026-10-13 that
+    # an empty value reads to the model as a wrong key, triggering rule 5's answer-key warning line
+    # on blank-key PYQs (and so never caching them).
+    return (req.correct_answer or "").strip() or "not provided -- determine it yourself"
+
+def _solve_text_messages(req: SolveRequest) -> list:
+    return [
+        {"role": "user", "content": f"Solve this NEET question:\n\nQuestion: {req.question}\n\nA) {req.option_a}\nB) {req.option_b}\nC) {req.option_c}\nD) {req.option_d}\n\nCorrect Answer: {_solve_correct_answer_text(req)}"}
+    ]
+
+async def _store_cached_pyq_solution(pyq_id: str, language: str, solution: str, reset_alternate: bool = False):
+    """Upsert on the (pyq_id, language) primary key -- a plain insert for a live cache miss, and
+    also lets scan_solution_cache.py replace an existing flagged row in place. reset_alternate
+    clears the alternate method, which was generated FROM the old primary solution, so it gets
+    regenerated against the new one on next request."""
+    row = {"pyq_id": pyq_id, "language": language, "solution": solution}
+    if reset_alternate:
+        row["alternate_method"] = None
+    await async_client.post(
+        f"{SUPABASE_URL}/rest/v1/pyq_solution_cache",
+        headers={**SOLVE_CACHE_HEADERS, "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates"},
+        json=row
+    )
+
+async def _generate_solve_solution(req: SolveRequest, ip: str, extra_system: str = "", bill: bool = True) -> str:
+    """Non-streaming full generation through the same model/prompt each live /solve path uses
+    (Gemini with the real diagram image(s) when there is one, otherwise the peak-hour DeepSeek/
+    Qwen routing). Used by the background self-correction regeneration and by
+    scan_solution_cache.py --apply, never by the live streaming request itself. Provider cost is
+    always logged under /solve; bill=False skips charging the student's daily budget."""
+    has_diagram = _solve_has_diagram(req)
+    system = _solve_system_prompt(req.language, has_diagram) + extra_system
+    if not has_diagram:
+        solution = ""
+        async for chunk in _stream_with_peak_fallback(system, _solve_text_messages(req), req.user_id, ip, "/solve", {"bill": bill}):
+            solution += chunk
+        return solution
+    contents = await _solve_diagram_contents(req)
+    config = genai_types.GenerateContentConfig(system_instruction=system, max_output_tokens=1024)
+    resp = await gemini_client.aio.models.generate_content(model="gemini-3.5-flash-lite", contents=contents, config=config)
+    usage = resp.usage_metadata
+    if usage:
+        cost = _gemini_cost(usage.prompt_token_count, 0, usage.candidates_token_count)
+        asyncio.create_task(log_provider_usage("gemini-3.5-flash-lite", False, usage.prompt_token_count, usage.candidates_token_count, cost, "/solve", req.user_id))
+        if bill:
+            asyncio.create_task(log_token_usage(req.user_id, usage.prompt_token_count + usage.candidates_token_count, ip))
+    return resp.text or ""
+
+async def _regenerate_and_cache_solution(req: SolveRequest, ip: str):
+    """Background (never awaited by the request) replacement for a solution _has_self_correction
+    flagged -- one retry with SELF_CORRECTION_RETRY_GUARD, not billed to the student (they already
+    paid for the one they saw). Cached only if clean. Still flagged after the retry almost always
+    means the PYQ row itself is wrong (answer key, or options extracted wrongly -- e.g. 8edfce62's
+    matching question, where no option is correct) -- logged for data review and left uncached,
+    since caching anything there would serve a broken or invented solution to every student."""
+    try:
+        solution = await _generate_solve_solution(req, ip, SELF_CORRECTION_RETRY_GUARD, bill=False)
+        if solution.strip() and not _has_self_correction(solution):
+            await _store_cached_pyq_solution(req.pyq_id, req.language, solution)
+            print(f"SOLVE SELF-CORRECTION REGENERATED AND CACHED: pyq_id={req.pyq_id} language={req.language}", flush=True)
+        else:
+            print(f"SOLVE SELF-CORRECTION UNRESOLVED, NOT CACHED (review this PYQ's answer key/options): pyq_id={req.pyq_id} language={req.language}", flush=True)
+    except Exception as e:
+        print(f"SOLVE SELF-CORRECTION REGENERATION FAILED: pyq_id={req.pyq_id}: {e}", flush=True)
+
+async def _cache_or_regenerate_solution(req: SolveRequest, solution: str, ip: str):
+    """The one place a freshly streamed /solve answer reaches pyq_solution_cache (both paths) --
+    clean answers are cached as before; flagged ones never are, and get a background retry."""
+    if _has_self_correction(solution):
+        print(f"SOLVE SELF-CORRECTION DETECTED, NOT CACHED: pyq_id={req.pyq_id} language={req.language}", flush=True)
+        _spawn_background(_regenerate_and_cache_solution(req, ip))
+    else:
+        await _store_cached_pyq_solution(req.pyq_id, req.language, solution)
+
+async def stream_solve_response(req: SolveRequest, cached_solution, ip: str):
     if cached_solution is not None:
         yield cached_solution
         return
-    solve_system = _solve_system_prompt(language, has_diagram=False)
-    solve_messages = [
-        {"role": "user", "content": f"Solve this NEET question:\n\nQuestion: {question}\n\nA) {option_a}\nB) {option_b}\nC) {option_c}\nD) {option_d}\n\nCorrect Answer: {correct_answer}"}
-    ]
+    solve_system = _solve_system_prompt(req.language, has_diagram=False)
+    solve_messages = _solve_text_messages(req)
     try:
         full_solution = ""
         # Same routing (Qwen during DeepSeek's peak windows, DeepSeek otherwise, with failover)
@@ -5005,16 +5206,12 @@ async def stream_solve_response(pyq_id: str, cached_solution, question: str, opt
         # shared logic and its accepted early-disconnect / mid-stream-failure tradeoffs. Also
         # subject to the same Max-plan breakeven downgrade (text-only endpoint, no image
         # involved, same reasoning as stream_response's text branch).
-        force_qwen = (await check_max_usage_tier(user_id)) == "breakeven"
-        async for text_chunk in _stream_with_peak_fallback(solve_system, solve_messages, user_id, ip, "/solve", force_qwen=force_qwen):
+        force_qwen = (await check_max_usage_tier(req.user_id)) == "breakeven"
+        async for text_chunk in _stream_with_peak_fallback(solve_system, solve_messages, req.user_id, ip, "/solve", force_qwen=force_qwen):
             full_solution += text_chunk
             yield text_chunk
-        if pyq_id and full_solution:
-            await async_client.post(
-                f"{SUPABASE_URL}/rest/v1/pyq_solution_cache",
-                headers={**SOLVE_CACHE_HEADERS, "Content-Type": "application/json"},
-                json={"pyq_id": pyq_id, "language": language, "solution": full_solution}
-            )
+        if req.pyq_id and full_solution:
+            await _cache_or_regenerate_solution(req, full_solution, ip)
     except Exception as e:
         yield f"Error: {str(e)}"
 
@@ -5046,29 +5243,33 @@ async def _fetch_gemini_image_part(url: str):
 # savings to outweigh the cache's own storage cost at any realistic /solve volume -- so this calls
 # Gemini directly with system_instruction set, no cache involved, same as _build_gemini_call_args'
 # own no-cache fallback path.
+async def _solve_diagram_contents(req: SolveRequest) -> list:
+    """Gemini contents for a diagram-dependent /solve: the real image(s) plus the question text.
+    Shared by the live stream below and _generate_solve_solution's non-streaming regeneration."""
+    option_diagram_urls = [req.option_a_diagram_url, req.option_b_diagram_url, req.option_c_diagram_url, req.option_d_diagram_url]
+    media_parts = []
+    if any(option_diagram_urls):
+        # Per-option case: send whichever of the 4 option images actually exist, labeled in
+        # order -- a mixed question (some options text, some image) keeps its real text for
+        # the text-bearing options rather than papering over it with "(see attached image)".
+        for url in option_diagram_urls:
+            if url:
+                media_parts.append(await _fetch_gemini_image_part(url))
+        opts = [req.option_a, req.option_b, req.option_c, req.option_d]
+        options_block = "\n".join(f"{letter}) {opt or '(see attached image)'}" for letter, opt in zip("ABCD", opts))
+        user_text = f"Solve this NEET question. The attached images are the answer options, in order (A, B, C, D) -- only the ones that are actually images are attached; others are given as text below.\n\nQuestion: {req.question}\n\n{options_block}\n\nCorrect Answer: {_solve_correct_answer_text(req)}"
+    else:
+        media_parts.append(await _fetch_gemini_image_part(req.diagram_url))
+        user_text = f"Solve this NEET question using the attached diagram:\n\nQuestion: {req.question}\n\nA) {req.option_a}\nB) {req.option_b}\nC) {req.option_c}\nD) {req.option_d}\n\nCorrect Answer: {_solve_correct_answer_text(req)}"
+    return [genai_types.Content(role="user", parts=media_parts + [genai_types.Part.from_text(text=user_text)])]
+
 async def stream_solve_response_with_diagram(req: SolveRequest, cached_solution, ip: str):
     if cached_solution is not None:
         yield cached_solution
         return
     solve_system_image = _solve_system_prompt(req.language, has_diagram=True)
-    option_diagram_urls = [req.option_a_diagram_url, req.option_b_diagram_url, req.option_c_diagram_url, req.option_d_diagram_url]
     try:
-        media_parts = []
-        if any(option_diagram_urls):
-            # Per-option case: send whichever of the 4 option images actually exist, labeled in
-            # order -- a mixed question (some options text, some image) keeps its real text for
-            # the text-bearing options rather than papering over it with "(see attached image)".
-            for url in option_diagram_urls:
-                if url:
-                    media_parts.append(await _fetch_gemini_image_part(url))
-            opts = [req.option_a, req.option_b, req.option_c, req.option_d]
-            options_block = "\n".join(f"{letter}) {opt or '(see attached image)'}" for letter, opt in zip("ABCD", opts))
-            user_text = f"Solve this NEET question. The attached images are the answer options, in order (A, B, C, D) -- only the ones that are actually images are attached; others are given as text below.\n\nQuestion: {req.question}\n\n{options_block}\n\nCorrect Answer: {req.correct_answer}"
-        else:
-            media_parts.append(await _fetch_gemini_image_part(req.diagram_url))
-            user_text = f"Solve this NEET question using the attached diagram:\n\nQuestion: {req.question}\n\nA) {req.option_a}\nB) {req.option_b}\nC) {req.option_c}\nD) {req.option_d}\n\nCorrect Answer: {req.correct_answer}"
-
-        contents = [genai_types.Content(role="user", parts=media_parts + [genai_types.Part.from_text(text=user_text)])]
+        contents = await _solve_diagram_contents(req)
         config = genai_types.GenerateContentConfig(system_instruction=solve_system_image, max_output_tokens=1024)
         gemini_stream = await gemini_client.aio.models.generate_content_stream(
             model="gemini-3.5-flash-lite", contents=contents, config=config
@@ -5112,13 +5313,10 @@ async def stream_solve_response_with_diagram(req: SolveRequest, cached_solution,
         # Same cache, same pyq_id+language key as the text-only path -- a cached diagram-solve is
         # indistinguishable from a cached text-solve to any later reader (get_cached_pyq_solution
         # doesn't know or care which path produced it), so every subsequent student who requests
-        # this PYQ's solution gets it for free regardless of which path they'd otherwise hit.
+        # this PYQ's solution gets it for free regardless of which path they'd otherwise hit. Same
+        # self-correction gate as the text path too -- see _cache_or_regenerate_solution.
         if req.pyq_id and full_solution:
-            await async_client.post(
-                f"{SUPABASE_URL}/rest/v1/pyq_solution_cache",
-                headers={**SOLVE_CACHE_HEADERS, "Content-Type": "application/json"},
-                json={"pyq_id": req.pyq_id, "language": req.language, "solution": full_solution}
-            )
+            await _cache_or_regenerate_solution(req, full_solution, ip)
     except Exception as e:
         # Gemini is the sole provider for a diagram-based /solve request (no DeepSeek/Qwen
         # fallback exists here either, same reasoning as _stream_gemini_media) -- this is that
@@ -5136,10 +5334,9 @@ async def solve_question(req: SolveRequest, request: Request, _: None = Depends(
     req.user_id = verified_user_id
     await enforce_daily_budget(req.user_id, ip)
     cached_solution = await get_cached_pyq_solution(req.pyq_id, req.language)
-    has_diagram = bool(req.diagram_url or req.option_a_diagram_url or req.option_b_diagram_url or req.option_c_diagram_url or req.option_d_diagram_url)
     generator = (
-        stream_solve_response_with_diagram(req, cached_solution, ip) if has_diagram
-        else stream_solve_response(req.pyq_id, cached_solution, req.question, req.option_a, req.option_b, req.option_c, req.option_d, req.correct_answer, req.language, req.user_id, ip)
+        stream_solve_response_with_diagram(req, cached_solution, ip) if _solve_has_diagram(req)
+        else stream_solve_response(req, cached_solution, ip)
     )
     return StreamingResponse(
         generator,
@@ -5816,7 +6013,7 @@ async def get_available_mock_tests(user_id: str = "", verified_user_id: str = De
         if user_id:
             # Service-role key: mock_results is RLS-scoped to the owning user, and this
             # lookup runs server-side on the student's own behalf (already filtered to
-            # their own user_id below) -- same justification as get_student_context() above.
+            # their own user_id below) -- same justification as fetch_student_mistake_rows() above.
             taken_resp = await async_client.get(
                 f"{SUPABASE_URL}/rest/v1/mock_results",
                 headers={"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"},
