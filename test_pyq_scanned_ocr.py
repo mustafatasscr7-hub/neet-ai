@@ -8,6 +8,7 @@ test-fixtures/scanned/disha-ocr-lines-real.json.
 import io
 import json
 import os
+import re
 import sys
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
@@ -18,6 +19,7 @@ import process_pyq_scanned as ps
 import process_pyq_scanned_ocr as po
 
 OCR_FIXTURE = os.path.join(HERE, "test-fixtures", "scanned", "disha-ocr-lines-real.json")
+BIOCLASS_FIXTURE = os.path.join(HERE, "test-fixtures", "scanned", "disha-bioclass-ocr-lines-real.json")
 DISHA_PDF = os.path.join(HERE, "pyq-pdfs", "DISHA_36_YEARS_BIOLOGY_11thTEST.pdf")
 
 _passed = []
@@ -93,13 +95,144 @@ def test_gutter_measured_per_page():
                L("(c) Order", 170, 160, 265), L("(d) Division", 360, 160, 475),
                L("16.", 560, 100, 594), L("Which one of the following animals is", 600, 100, 977),
                L("(a) Tiger (b) Cuttle fish (c) Humans (d) Housefly", 603, 120, 977)]
-    gutter = po.find_gutter(po._norm_lines(page(*shifted)))
-    check("gutter lands between 546 and 560", 546 <= gutter <= 560, detail=f"gutter={gutter}")
+    lines = po._norm_lines(page(*shifted))
+    gutter = po.find_gutter(lines)
+    # The hanging "16." is left out of the measurement, so the gutter lands anywhere between the
+    # left column's tags (end 546) and the right column's text (starts 600); "16." then goes with
+    # its own text.
+    check("gutter lands between 546 and 600", gutter is not None and 546 <= gutter <= 600, detail=f"gutter={gutter}")
+    cols = {l["text"]: c for l, c in po.assign_columns(lines, gutter)}
+    check("'16.' assigned to the right column", cols["16."] == "right")
     items, _ = po.segment_page(page(*shifted))
     q = {it["number"]: it for it in items if it["kind"] == "question"}
     check("Q14 and Q16 both found as their own questions", sorted(q) == [14, 16], detail=str(sorted(q)))
     check("Q14's year tag stays with Q14 (not pulled into the right column)", q.get(14, {}).get("year_tag") == "2013")
     check("Q16 got 4 options from its 2x2 row", len(q.get(16, {}).get("options", {})) == 4)
+
+
+def test_hanging_numbers_near_midpoint():
+    """DISHA Biological Classification page 1: the right column's "3." / "4." / "5." sit at
+    x=505-531, just past the midpoint and nearer the left column's text (ends 487) than the gap to
+    their own text (starts 549) is wide. Before the fix they were filed into the LEFT column, so
+    Q3-Q5 never started and their text, tags and options were glued into Q2's options."""
+    print("\n=== Right-column hanging numbers just past the midpoint stay in the right column ===")
+    lines = [*left_q(1, 100, "First", tag="2022")[:1], L("Which of the following is a correct statement?", 107, 100, 487)]
+    for i, letter in enumerate("abcd"):
+        lines.append(L(f"({letter}) Q1 option {letter}", 107, 120 + 20 * i, 487))
+    lines += [L("2.", 64, 220, 86), L("Five kingdom system is not based on:", 107, 220, 487),
+              L("NCERT | Page-17 / N-11 |2014", 268, 240, 487),
+              L("(a) Presence of nucleus.", 107, 260, 487), L("(b) Mode of reproduction.", 107, 280, 340),
+              L("(c) Mode of nutrition.", 553, 60, 740), L("(d)Complexity of body organisation.", 553, 80, 860),
+              L("3.", 505, 100, 531), L("In the five-kingdom system, which kingdom", 553, 100, 928),
+              L("can include blue green algae?", 553, 120, 900),
+              L("NCERT |Page-19 & 20 /N-13 | 1998, 2003", 631, 140, 928),
+              L("(a) Fungi", 553, 160, 646), L("(b) Plantae", 743, 160, 850),
+              L("(c) Protista", 553, 180, 659), L("(d) Monera", 744, 180, 852),
+              L("4.", 505, 220, 531), L("In five kingdom system, the main basis of", 553, 220, 932),
+              L("classification is", 553, 240, 682), L("NCERT|Page-17/ N-11 | 2002", 710, 240, 929),
+              L("(a) structure of nucleus", 553, 260, 756), L("(b) mode of nutrition", 554, 280, 737),
+              L("(c)", 558, 300, 592), L("structure of cell wall", 598, 300, 763),
+              L("(d) asexual reproduction", 553, 320, 765),
+              L("5.", 505, 360, 531), L("A system of classification in which a large", 553, 360, 932),
+              L("number of traits are considered, is", 553, 380, 831), L("1999", 889, 380, 931),
+              L("(a) artificial system (b) synthetic system", 553, 400, 932),
+              L("(c) natural system (d) phylogenetic system", 553, 420, 932)]
+    r = run_pages([page(*lines)])
+    by = {q["question_number"]: q for q in r["questions"]}
+    check("Q1-Q5 all found, in order", [q["question_number"] for q in r["questions"]] == [1, 2, 3, 4, 5], detail=str(list(by)))
+    check("Q2 keeps exactly its own 4 options", [by[2][f"option_{l}"] for l in "abcd"] == ["Presence of nucleus.", "Mode of reproduction.", "Mode of nutrition.", "Complexity of body organisation."], detail=str([by[2][f"option_{l}"] for l in "abcd"]))
+    check("Q3 tags parsed, not left in the text", by[3]["ncert_tag"] == "Page-19 & 20 / N-13" and by[3]["source_tag"] == "1998, 2003" and "NCERT" not in by[3]["question"], detail=str((by[3]["ncert_tag"], by[3]["source_tag"])))
+    check("Q3's 2x2 grid read a, b, c, d", [by[3][f"option_{l}"] for l in "abcd"] == ["Fungi", "Plantae", "Protista", "Monera"])
+    check("Q4 split '(c)' box joined to its text", by[4]["option_c"] == "structure of cell wall")
+    check("Q5 year tag and 2x2 options", by[5]["source_tag"] == "1999" and by[5]["option_d"] == "phylogenetic system")
+    check("no question flagged", not any(q["needs_review"] for q in r["questions"]), detail=str([q["review_reason"] for q in r["questions"] if q["needs_review"]]))
+
+
+def test_off_centre_gutter_and_single_column():
+    print("\n=== Gutter well off the midpoint; single-column page ===")
+    # Left column 40-640, right column 680-980: a fixed midpoint split would cut the left column.
+    p = page(L("1.", 40, 100, 60), L("Left question stem runs wide", 70, 100, 640),
+             L("(a) w (b) x", 70, 120, 640), L("(c) y (d) z", 70, 140, 640),
+             L("2.", 680, 100, 700), L("Right stem", 710, 100, 980),
+             L("(a) p (b) q", 710, 120, 980), L("(c) r (d) s", 710, 140, 980))
+    gutter = po.find_gutter(po._norm_lines(p))
+    check("gutter found between 640 and 680", gutter is not None and 640 <= gutter <= 680, detail=f"gutter={gutter}")
+    r = run_pages([p])
+    check("both questions, left first", [q["question_number"] for q in r["questions"]] == [1, 2])
+    check("left question's options intact", r["questions"][0]["option_d"] == "z")
+    single = page(L("1.", 40, 100, 60), L("A single-column stem that runs right across the page", 70, 100, 960),
+                  L("(a) one (b) two (c) three (d) four", 70, 120, 960),
+                  L("2.", 40, 160, 60), L("Another stem across the whole page width here", 70, 160, 950),
+                  L("(a) five", 70, 180, 300), L("(b) six", 520, 180, 700), L("(c) seven", 70, 200, 300), L("(d) eight", 520, 200, 700))
+    check("single-column page -> no gutter", po.find_gutter(po._norm_lines(single)) is None)
+    r = run_pages([single])
+    by = {q["question_number"]: q for q in r["questions"]}
+    check("single column: both questions with their own options", sorted(by) == [1, 2] and by[2]["option_b"] == "six" and by[1]["option_d"] == "four", detail=str({n: [q[f'option_{l}'] for l in 'abcd'] for n, q in by.items()}))
+
+
+def test_tilted_column_hanging_numbers():
+    """DISHA Biological Classification pages 3-4: the scan's left edge drifts from x=91 at the
+    top to x=70 at the bottom, so the top numbers sat >20 units right of the column-wide minimum."""
+    print("\n=== Tilted scan: hanging numbers judged against the nearby column edge ===")
+    lines = []
+    for i, n in enumerate(range(39, 44)):
+        y = 100 + 170 * i
+        x = 94 - 6 * i  # drifts 24 units left going down the page
+        lines += [L(f"{n}.", x, y, x + 30), L(f"Stem {n}", x + 40, y, 480)]
+        lines += [L(f"({l}) Q{n} {l}", x + 40, y + 20 * (k + 1), 480) for k, l in enumerate("abcd")]
+    r = run_pages([page(*lines)])
+    check("Q39-Q43 all start as questions", [q["question_number"] for q in r["questions"]] == [39, 40, 41, 42, 43], detail=str([q["question_number"] for q in r["questions"]]))
+
+
+def test_grid_wrapped_cell():
+    print("\n=== 2x2 grid whose (a) cell wraps onto its own line ===")
+    items, _ = po.segment_page(page(
+        L("7.", 50, 100, 80), L("Which pair is correct?", 90, 100, 460),
+        L("(a) Fungi with chitin", 90, 120, 260), L("(b) Plantae", 280, 120, 400),
+        L("cell walls", 110, 140, 220),
+        L("(c) Protista", 90, 160, 220), L("(d) Monera", 280, 160, 400), L("cells", 300, 180, 360)))
+    q = next(it for it in items if it["kind"] == "question")
+    check("wrapped text stays in its own cell", q["options"] == {"a": "Fungi with chitin cell walls", "b": "Plantae", "c": "Protista", "d": "Monera cells"}, detail=str(q["options"]))
+
+
+def test_polluted_option_split_and_flagged():
+    print("\n=== Safety net: another question glued into an option is split out and flagged ===")
+    q2 = {"number": 2, "question": "Five kingdom system is not based on:", "page": 1, "issues": [], "continued": False,
+          "year_tag": "2014", "ncert_tag": "Page-17 / N-11", "question_type": "mcq", "has_diagram": False,
+          "options": {"a": "Presence of nucleus.", "b": "Mode of reproduction.", "c": "Mode of nutrition.",
+                      "d": "Complexity of body organisation. 3. Which single kingdom can include blue green algae? "
+                           "NCERT |Page-19 & 20 /N-13 | 1998, 2003 (a) Fungi (b) Plantae (c) Protista (d) Monera"}}
+    q4 = {**q2, "number": 4, "question": "Main basis", "issues": [], "year_tag": None, "ncert_tag": None,
+          "options": {"a": "nucleus", "b": "nutrition 1998, 2003", "c": "cell wall",
+                      "d": "asexual reproduction and a great deal of other text that does not belong here at all, glued on"}}
+    seg = {"questions": [q2, q4], "answer_key": {}, "key_conflicts": [], "starts_at_chapter": False}
+    po._resplit_polluted(seg)
+    by = {q["number"]: q for q in seg["questions"]}
+    check("Q3 split out between Q2 and Q4", [q["number"] for q in seg["questions"]] == [2, 3, 4])
+    check("Q2 option (d) cleaned", by[2]["options"]["d"] == "Complexity of body organisation.", detail=by[2]["options"]["d"])
+    check("Q3 stem, tags and options recovered", by[3]["question"] == "Which single kingdom can include blue green algae?"
+          and by[3]["ncert_tag"] == "Page-19 & 20 / N-13" and by[3]["year_tag"] == "1998, 2003"
+          and by[3]["options"] == {"a": "Fungi", "b": "Plantae", "c": "Protista", "d": "Monera"}, detail=str(by[3]))
+    check("Q2 and Q3 both flagged", by[2]["issues"] and by[3]["issues"])
+    check("year tag stripped from an option and given to the question", by[4]["options"]["b"] == "nutrition" and by[4]["year_tag"] == "1998, 2003")
+    check("much-longer option flagged", any("much longer" in i for i in by[4]["issues"]))
+    q5 = {**q2, "number": 5, "issues": [], "options": {"a": "1953, 1958", "b": "x", "c": "y", "d": "z 7. not next"}}
+    seg = {"questions": [q5, {**q2, "number": 6, "issues": []}], "answer_key": {}, "key_conflicts": [], "starts_at_chapter": False}
+    po._resplit_polluted(seg)
+    check("years that ARE the option kept; a non-adjacent number not split, only flagged",
+          len(seg["questions"]) == 2 and q5["options"]["a"] == "1953, 1958" and any("7." in i for i in q5["issues"]), detail=str(q5))
+
+
+def test_glued_ocr_tokens():
+    print("\n=== OCR dropped spaces: '123.Satellite', 'number(b) disappear' ===")
+    items, _ = po.segment_page(page(
+        L("123.Satellite RNAs are present in", 26, 100, 445),
+        L("(a) Plant viruses (b) Viroids (c) Prions (d) Phages", 60, 120, 445),
+        L("64.", 26, 160, 60), L("The vacuole will", 70, 160, 445),
+        L("(a) increase in number(b) disappear", 70, 180, 445), L("(c) increase in size (d) decrease", 70, 200, 445)))
+    q = {it["number"]: it for it in items if it["kind"] == "question"}
+    check("'123.Satellite' starts Q123", q.get(123, {}).get("question") == "Satellite RNAs are present in", detail=str(list(q)))
+    check("glued '(b)' split out", q.get(64, {}).get("options") == {"a": "increase in number", "b": "disappear", "c": "increase in size", "d": "decrease"}, detail=str(q.get(64, {}).get("options")))
 
 
 def test_full_width_answer_key_splits_bands():
@@ -265,9 +398,42 @@ def test_disha_replay():
     check("tags: Q23 multi-year, Q35 phase tag", by[23]["source_tag"] == "1990,91,92,96" and by[35]["source_tag"] == "Ph-II 2022" and by[35]["year"] == 2022)
 
 
+def test_bioclass_replay():
+    """DISHA Biological Classification (10 pages): before the column fix Q3-Q5 (page 1), Q39-41,
+    Q43, Q49-51 (tilted pages 3-4), Q76 and Q123 never started and were glued into the previous
+    question's options -- 137 of 149 found."""
+    print("\n=== DISHA Biological Classification 10-page PDF: replay of the real OCR output ===")
+    fx = json.load(open(BIOCLASS_FIXTURE, encoding="utf-8"))
+    r = run_pages(fx["pages"])
+    qs = r["questions"]
+    by = {q["question_number"]: q for q in qs}
+    check("149 questions numbered 1..149 in reading order", [q["question_number"] for q in qs] == list(range(1, 150)), detail=str(sorted(set(range(1, 150)) - set(by))))
+    check("every question has 4 options", all(q[f"option_{l}"] for q in qs for l in "abcd"))
+    check("Q2's options are exactly its own", [by[2][f"option_{l}"] for l in "abcd"] == [
+        "Presence or absence of a well defined nucleus.", "Mode of reproduction.", "Mode of nutrition.", "Complexity of body organisation."])
+    check("Q3 clean, tags parsed", by[3]["question"].startswith("In the five-kingdom system of classification, which single kingdom")
+          and by[3]["question"].endswith("methanogenic archaebacteria?") and by[3]["source_tag"] == "1998, 2003"
+          and by[3]["ncert_tag"] == "Page-19 & 20 / N-13" and [by[3][f"option_{l}"] for l in "abcd"] == ["Fungi", "Plantae", "Protista", "Monera"], detail=str(by[3]))
+    check("Q4 clean", by[4]["source_tag"] == "2002" and [by[4][f"option_{l}"] for l in "abcd"] == [
+        "structure of nucleus", "mode of nutrition", "structure of cell wall", "asexual reproduction"])
+    check("Q5 clean", by[5]["source_tag"] == "1999" and [by[5][f"option_{l}"] for l in "abcd"] == [
+        "artificial system", "synthetic system", "natural system", "phylogenetic system"])
+    check("page 1 holds Q1-Q5, none flagged", [q["question_number"] for q in qs if q["source_page"] == 1] == [1, 2, 3, 4, 5]
+          and not any(q["needs_review"] for q in qs if q["source_page"] == 1))
+    check("no option holds an NCERT tag or a question number", not any(
+        "NCERT" in q[f"option_{l}"] or re.search(r'(?:^|\s)\d{1,3}\.(?:\s|$|[A-Z])', q[f"option_{l}"]) for q in qs for l in "abcd"))
+    check("tilted pages: Q39-41 and Q49-51 found as their own questions", all(by[n]["question"] for n in (39, 40, 41, 49, 50, 51)))
+
+
 if __name__ == "__main__":
     test_left_column_then_right_column()
     test_gutter_measured_per_page()
+    test_hanging_numbers_near_midpoint()
+    test_off_centre_gutter_and_single_column()
+    test_tilted_column_hanging_numbers()
+    test_grid_wrapped_cell()
+    test_polluted_option_split_and_flagged()
+    test_glued_ocr_tokens()
     test_full_width_answer_key_splits_bands()
     test_continuation_across_page_break()
     test_continuation_across_column_break()
@@ -278,6 +444,7 @@ if __name__ == "__main__":
     test_suspicious_text_flags()
     test_cost_and_missing_engine()
     test_disha_replay()
+    test_bioclass_replay()
 
     print(f"\nTOTAL: {len(_passed)} passed, {len(_failed)} failed")
     sys.exit(1 if _failed else 0)

@@ -41,6 +41,7 @@ from process_pyq_scanned import (
     cropped_edge_flags,
     split_option_markers,
     _OPTION_MARKER_RE,
+    _LETTERS,
 )
 
 OCR_ENGINE_NAME = "RapidOCR (PP-OCR, onnxruntime)"
@@ -124,11 +125,17 @@ _TOPIC_RE = re.compile(r'^\s*Topic\s*[-–]?\s*\d+\s*[:.]', re.I)
 _KEY_CELLS_RE = re.compile(r'^(?:\s*(?:\d{1,3}|\(?[a-dA-D]\)))+\s*$')
 _KEY_TOKEN_RE = re.compile(r'(\d{1,3})|\(?([a-dA-D])\)')
 
-# "1.", "23. A taxon is", "38."
-_QSTART_RE = re.compile(r'^(\d{1,3})\s*[.)](?:\s+(.*))?$')
+# "1.", "23. A taxon is", "38.", and "123.Satellite RNAs" (OCR dropped the space -- DISHA
+# Biological Classification page 9; only before a capital, so "1.5 g" never matches).
+_QSTART_RE = re.compile(r'^(\d{1,3})\s*[.)](?:(?:\s+|(?=[A-Z]))(.*))?$')
 # A hanging number OCR couldn't read as digits ("l.", "I.") -- still a question start, number unknown.
 _QSTART_UNREADABLE_RE = re.compile(r'^[\dIlO|!]{1,3}[.,]$')
 _NUMBER_HANG = 20  # a question number sits at the column's left edge; wrapped text is indented past this
+# The column's left edge is taken from rows within this distance above/below, not the whole
+# column: a tilted scan drifts. Seen live on DISHA Biological Classification pages 3-4, the left
+# edge runs from x=91 at the top to x=70 at the bottom, so against the column-wide minimum the
+# top rows' hanging "39." / "40." / "49." sat 21 units in and were read as wrapped text.
+_EDGE_WINDOW = 250
 # "NCERT | Page-8 / N-6 | 1990,91,92,96", "NCERT | Page-10 / N-8|2022", "NCERT | Page-12 |2010 M"
 _NCERT_RE = re.compile(r'NCERT\s*\|?\s*(Page[^|]*?)\s*\|\s*([^|]+?)\s*$', re.I)
 # Right-aligned year tags as printed: "2016", "2003, 04", "1990,91,92,96", "2010 M", "Ph-II 2022".
@@ -136,6 +143,9 @@ _YEAR_TAG_RE = re.compile(r'^(?:Ph\s*-?\s*I{1,3}\s*)?(?:19|20)\d{2}(?:\s*,\s*(?:
 _TAG_RIGHT_SLACK = 40  # a year tag's right edge sits at the column's right edge
 _OPEN_MARKER_RE = re.compile(r'(?<!\S)\(([a-d])(?=\s)')       # OCR dropped the ")" -> "(a"
 _BARE_MARKER_RE = re.compile(r'(?:^|(?<=\s))([a-d])\)(?=\s)')  # OCR dropped the "(" -> "a)"
+# OCR dropped the space before a marker -> "increase in number(b) disappear" (DISHA Biological
+# Classification Q64); the option split only sees a marker after whitespace.
+_GLUED_MARKER_RE = re.compile(r'(?<=[A-Za-z.,])\(([a-d])\)(?=\s|[A-Z])')
 _SUBSTATEMENT_START_RE = re.compile(r'^(?:\((?:[ivx]+|[A-D])\)|Column\s+I\b)')
 # The "(A) (B) (C) (D)" header row over a match-the-column answer grid (DISHA page 4, top left).
 # Dropped: the grid rows below it get the labels back via _expand_match_grid_options.
@@ -145,7 +155,19 @@ _GRID_HEADER_RE = re.compile(r'^(?:\(\s*[A-D]\s*\)\s*){2,4}$')
 # pages 1 and 3 (left-column year tags end at x=546 there, while page 3's right column STARTS at
 # 481), so any single fixed gutter misfiles one or the other -- seen live, a fixed x=470 pulled
 # page 2's left-column tags into the right column and hid Q16's hanging number.
-_GUTTER_SEARCH = (350, 650)
+# Searched well past the midpoint either side, for books whose gutter isn't centred.
+_GUTTER_SEARCH = (250, 750)
+# A question number OCR read as its own box ("3."). These are left out when measuring the gutter
+# and then go with the text to their right: seen live on DISHA Biological Classification page 1,
+# the right column's hanging "3." / "4." / "5." sit at x=505-531, closer to the left column's
+# text (ends 487) than the gap between them and their own text (starts 549) is wide -- so with
+# them counted, the widest empty band was 531-549 and all three were filed into the LEFT column.
+_NUMBER_BOX_RE = re.compile(r'^[\dIlO|!]{1,3}\s*[.,)]$')
+_NUMBER_TO_TEXT_GAP = 80  # a hanging number's own text starts within this distance to its right
+# A real gutter is an empty vertical band at least this wide, crossed by (almost) no lines; a page
+# with none is read as one column.
+_MIN_GUTTER_WIDTH = 3
+_MAX_GUTTER_CROSSING = 0.05
 
 
 def _norm_lines(ocr):
@@ -178,12 +200,21 @@ def _rows(lines):
     return [sorted(r["lines"], key=lambda l: l["x0"]) for r in rows]
 
 
+def _is_number_box(l):
+    return bool(_NUMBER_BOX_RE.match(l["text"]))
+
+
 def find_gutter(lines):
-    """The x (0-1000) between the two columns: centre of the widest run in the middle of the page
-    that the fewest text lines cross (normally none). Full-width zones are already removed."""
+    """The x (0-1000) between the two columns, or None for a single-column page: centre of the
+    widest vertical band in the page's middle that the fewest text lines cross (normally none).
+    Full-width zones are already removed. Hanging question-number boxes are ignored here (see
+    _NUMBER_BOX_RE) and assigned to a column afterwards by assign_columns."""
+    text = [l for l in lines if not _is_number_box(l)]
+    if not text:
+        return None
     lo, hi = _GUTTER_SEARCH
     cover = [0] * (hi - lo + 1)
-    for l in lines:
+    for l in text:
         for x in range(max(lo, int(l["x0"]) + 1), min(hi, int(l["x1"])) + 1):
             cover[x - lo] += 1
     best = min(cover)
@@ -195,7 +226,43 @@ def find_gutter(lines):
             if i - run_start > best_run[1] - best_run[0]:
                 best_run = (run_start, i)
             run_start = None
-    return lo + (best_run[0] + best_run[1]) / 2
+    gutter = lo + (best_run[0] + best_run[1]) / 2
+    # Single column: no clean empty band (most lines run straight across the middle), or no
+    # real text on one side of it.
+    if best > max(1, _MAX_GUTTER_CROSSING * len(text)) or best_run[1] - best_run[0] < _MIN_GUTTER_WIDTH:
+        return None
+    left = sum(1 for l in text if l["x1"] <= gutter)
+    right = sum(1 for l in text if l["x0"] >= gutter)
+    if min(left, right) < 2:
+        return None
+    return gutter
+
+
+def assign_columns(lines, gutter):
+    """[(line, "left" | "right")]. Lines go by their centre; a hanging question-number box goes
+    with the first text line to its right on the same row (its own question's text), wherever
+    the gutter fell -- that's the whole fix for a right-column "3." sitting just past the
+    midpoint. A number with no text beside it falls back to its centre."""
+    if gutter is None:
+        return [(l, "left") for l in lines]
+
+    def by_centre(l):
+        return "left" if (l["x0"] + l["x1"]) / 2 < gutter else "right"
+
+    heights = sorted(l["y1"] - l["y0"] for l in lines)
+    tol = 0.45 * heights[len(heights) // 2] if heights else 0
+    out = []
+    for l in lines:
+        col = by_centre(l)
+        if _is_number_box(l):
+            cy = (l["y0"] + l["y1"]) / 2
+            beside = [m for m in lines if m is not l and not _is_number_box(m)
+                      and abs((m["y0"] + m["y1"]) / 2 - cy) <= tol
+                      and -5 <= m["x0"] - l["x1"] <= _NUMBER_TO_TEXT_GAP]
+            if beside:
+                col = by_centre(min(beside, key=lambda m: m["x0"]))
+        out.append((l, col))
+    return out
 
 
 def _box(lines):
@@ -287,9 +354,37 @@ def _strip_tags(row, col_right, tags, issues):
     return " ".join(kept)
 
 
+_CELL_START_RE = re.compile(r'^\(?[a-d][)\s]')
+
+
+def _merge_grid_wraps(rows):
+    """2x2 option grids: "(a) X  (b) Y" on one row, "(c) Z  (d) W" on the next. Reading each row
+    left to right already gives a, b, c, d; what breaks is a cell whose text WRAPS onto a line of
+    its own -- read row-wise, "(a) long text (b) Y" + "wrapped" would put "wrapped" into (b).
+    A markerless row right under a row of two or more option cells is split by x: each box goes
+    straight after the cell it sits under. Anything else is returned unchanged."""
+    out = []
+    for r in rows:
+        prev = out[-1] if out else None
+        cells = [l for l in prev if _CELL_START_RE.match(l["text"])] if prev else []
+        if (len(cells) >= 2 and not any(_CELL_START_RE.match(l["text"]) or _QSTART_RE.match(l["text"]) for l in r)
+                and min(l["x0"] for l in r) >= cells[0]["x0"] - 5):
+            merged = []
+            for i, cell in enumerate(cells):
+                nxt = cells[i + 1]["x0"] if i + 1 < len(cells) else float("inf")
+                merged.extend(l for l in prev if cell["x0"] <= l["x0"] < nxt)
+                merged.extend(l for l in r if (cell["x0"] - 5 if i else float("-inf")) <= l["x0"] < nxt - 5)
+            if len(merged) == len(prev) + len(r):
+                out[-1] = merged
+                continue
+        out.append(r)
+    return out
+
+
 def _fix_ocr_markers(text):
     # U+2212 minus / en dash -> the plain hyphen the book prints in "Class - Phylum - Tribe".
     text = text.replace("\u2212", "-").replace("\u2013", "-")
+    text = _GLUED_MARKER_RE.sub(r' (\1)', text)
     return _BARE_MARKER_RE.sub(r'(\1)', _OPEN_MARKER_RE.sub(r'(\1)', text))
 
 
@@ -404,16 +499,16 @@ def segment_page(ocr, figures=()):
     def band_of(l):
         return sum(1 for b in bounds if b <= l["y0"])
 
-    gutter = find_gutter(flow)
     groups = {}
-    for l in flow:
-        groups.setdefault((band_of(l), "left" if (l["x0"] + l["x1"]) / 2 < gutter else "right"), []).append(l)
+    for l, col in assign_columns(flow, find_gutter(flow)):
+        groups.setdefault((band_of(l), col), []).append(l)
+    for it in items:  # the zone items above
+        it["_col"] = "full"
 
     # 3. Within one band of one column: drop topic headings, then cut into questions at each
     #    hanging question number; anything above the first number continues an earlier question.
-    for (_, _col), glines in sorted(groups.items()):
+    for (_, col), glines in sorted(groups.items()):
         rows = _rows(glines)
-        col_left = min(r[0]["x0"] for r in rows)
         col_right = max(l["x1"] for l in glines)
 
         kept_rows, heading = [], None
@@ -438,6 +533,8 @@ def segment_page(ocr, figures=()):
         for r in kept_rows:
             first = r[0]
             m = _QSTART_RE.match(first["text"])
+            cy = (first["y0"] + first["y1"]) / 2
+            col_left = min(o[0]["x0"] for o in kept_rows if abs((o[0]["y0"] + o[0]["y1"]) / 2 - cy) <= _EDGE_WINDOW)
             hanging = first["x0"] <= col_left + _NUMBER_HANG
             if hanging and m:
                 chunks.append((int(m.group(1)), True, [r]))
@@ -458,10 +555,10 @@ def segment_page(ocr, figures=()):
             if not is_question:
                 text = _fix_ocr_markers(_join_rows(" ".join(l["text"] for l in r) for r in crows))
                 issues.extend(_suspicious_text(text))
-                items.append({"kind": "continuation", "text": text, "options": {}, "box_2d": box, "_ocr_issues": issues})
+                items.append({"kind": "continuation", "text": text, "options": {}, "box_2d": box, "_col": col, "_ocr_issues": issues})
                 continue
             tags = {"year_tag": None, "ncert_tag": None}
-            texts = [_strip_tags(r, col_right, tags, issues) for r in crows]
+            texts = [_strip_tags(r, col_right, tags, issues) for r in _merge_grid_wraps(crows)]
             m = _QSTART_RE.match(texts[0]) or re.match(r'^\S+\s*(.*)$', texts[0])
             texts[0] = (m.group(2) or "") if m.re is _QSTART_RE else m.group(1)
             full = _fix_ocr_markers(_join_rows(texts))
@@ -477,9 +574,131 @@ def segment_page(ocr, figures=()):
                 "year_tag": tags["year_tag"], "ncert_tag": tags["ncert_tag"],
                 "question_type": _question_type(stem),
                 "has_diagram": any(_overlaps(box, f) for f in figures),
-                "box_2d": box, "_ocr_issues": issues,
+                "box_2d": box, "_col": col, "_ocr_issues": issues,
             })
     return items, notes
+
+
+def order_ocr_items(items):
+    """process_pyq_scanned.order_page_items' reading order (bands split by full-width items; left
+    column, then right; a continuation first in its column), but using the column segment_page
+    actually measured ("_col") instead of that function's fixed page-midpoint split -- which
+    would misfile a question on a page whose gutter isn't centred. That function is shared with
+    the Gemini mode and left as is."""
+    if any("_col" not in it for it in items):
+        return order_page_items(items)[0]
+    full_tops = sorted(it["box_2d"][0] for it in items if it["_col"] == "full")
+
+    def key(idx):
+        it = items[idx]
+        ymin = it["box_2d"][0]
+        if it["_col"] == "full":
+            return (full_tops.index(ymin) * 2 + 1, 0, 0, ymin, idx)
+        band = sum(1 for t in full_tops if t < ymin)
+        return (band * 2, 0 if it["_col"] == "left" else 1, 0 if it["kind"] == "continuation" else 1, ymin, idx)
+
+    return [items[i] for i in sorted(range(len(items)), key=key)]
+
+
+# ---------------------------------------------------------------- safety net: polluted options
+
+# Things that never belong inside an option's text -- each means the next question (or its tags)
+# got glued onto this one. Seen live on DISHA Biological Classification page 1: Q2's options ended
+# up holding "5.", "NCERT |Page-19 & 20 /N-13 | 1998, 2003" and "3." before the column fix.
+_EMBEDDED_QNUM_RE = re.compile(r'(?:^|(?<=\s))(\d{1,3})\.(?=\s|$|[A-Z])')
+_EMBEDDED_NCERT_RE = re.compile(r'NCERT\s*\|[^|]*\|\s*(?:Ph\s*-?\s*I{1,3}\s*)?(?:19|20)\d{2}(?:\s*,\s*(?:19|20)?\d{2})*(?:\s*[A-Z]\b)?')
+_EMBEDDED_YEAR_RE = re.compile(r'(?:^|(?<=\s))(?:19|20)\d{2}(?:\s*,\s*(?:19|20)?\d{2})+(?=\s|$)')
+# A single state-exam year tag glued onto an option's end: "They are phagotrophs Kar.2013"
+# (DISHA Biological Classification Q90). Flagged only -- one year alone can be real option text.
+_TRAILING_TAG_RE = re.compile(r'\s*\b[A-Z][a-z]{1,5}\.?\s*(?:19|20)\d{2}$')
+# An option this many times longer than the longest of its siblings (and long in absolute terms)
+# is almost always carrying another question's text.
+_LONG_OPTION_RATIO = 3
+_LONG_OPTION_MIN = 80
+
+
+def _expected_numbers(seg, q):
+    """Numbers that could legitimately start right after q: from q+1 up to (not including) the
+    next number actually found in this segment, capped at q+5."""
+    if q["number"] is None:
+        return set()
+    later = [o["number"] for o in seg["questions"] if o["number"] is not None and o["number"] > q["number"]]
+    stop = min(later + [q["number"] + 6])
+    return set(range(q["number"] + 1, stop))
+
+
+def _resplit_polluted(seg):
+    """Runs after merge_document_items and before finalize_segments, on one segment. For each
+    option holding another question's start ("N." with N a missing next number), the text from
+    there on is cut out and parsed as question N -- stem, tags and its own (a)-(d) -- and
+    inserted right after. NCERT / multi-year tags left inside an option are stripped (and given to
+    the question if it has none). Every question touched is flagged; an option still far longer
+    than its siblings is flagged too. Never drops text: whatever can't be placed stays where it was."""
+    out = []
+    for q in seg["questions"]:
+        out.append(q)
+        expected = _expected_numbers(seg, q)
+        for letter in _LETTERS:
+            text = q["options"].get(letter, "")
+            m = next((m for m in _EMBEDDED_QNUM_RE.finditer(text) if int(m.group(1)) in expected), None)
+            if not m:
+                continue
+            tail = text[m.end():].strip()
+            first = _OPTION_MARKER_RE.search(tail)
+            new_opts = split_option_markers(tail[first.start():])[1] if first else {}
+            stem = tail[:first.start()] if first else tail
+            if not stem.strip() and not new_opts:
+                continue
+            q["options"][letter] = text[:m.start()].strip()
+            num = int(m.group(1))
+            expected.discard(num)
+            new_q = {
+                "number": num, "question": "", "options": {}, "year_tag": None, "ncert_tag": None,
+                "question_type": "mcq", "has_diagram": False, "page": q["page"], "continued": False,
+                "issues": [f"split out of Q{q['number']}'s option ({letter}) automatically -- check the stem and options against the printed page"],
+            }
+            new_q["question"] = _strip_option_tags(new_q, _normalize_ws(stem))
+            new_q["options"] = {l: _strip_option_tags(new_q, v) for l, v in new_opts.items()}
+            new_q["question_type"] = _question_type(new_q["question"])
+            q["issues"].append(f"option ({letter}) contained the start of Q{num}, which was split out into its own question -- check both")
+            out.append(new_q)
+    seg["questions"] = out
+    for q in out:
+        for letter in _LETTERS:
+            if q["options"].get(letter):
+                before = q["options"][letter]
+                q["options"][letter] = _strip_option_tags(q, before)
+                if q["options"][letter] != before:
+                    q["issues"].append(f"option ({letter}) contained an NCERT or year tag, which was removed -- check the option")
+                stray = [n.group(1) for n in _EMBEDDED_QNUM_RE.finditer(q["options"][letter])]
+                if stray:
+                    q["issues"].append(f"option ({letter}) contains what looks like a question number ({', '.join(s + '.' for s in stray)}) -- check it")
+                tail = _TRAILING_TAG_RE.search(q["options"][letter])
+                if tail and tail.start() > 0:
+                    q["issues"].append(f"option ({letter}) ends with what looks like a year tag ({tail.group(0).strip()!r}) -- check it")
+        lens = {l: len(v) for l, v in q["options"].items() if v}
+        for letter, n in lens.items():
+            others = [v for k, v in lens.items() if k != letter]
+            if others and n >= _LONG_OPTION_MIN and n > _LONG_OPTION_RATIO * max(others):
+                q["issues"].append(f"option ({letter}) is much longer than the other options -- it may hold another question's text")
+
+
+def _strip_option_tags(q, text):
+    m = _EMBEDDED_NCERT_RE.search(text)
+    if m:
+        tag = _NCERT_RE.search(m.group(0))
+        if tag and not q.get("ncert_tag"):
+            q["ncert_tag"] = re.sub(r'\s*/\s*', ' / ', _normalize_ws(tag.group(1)))
+        if tag and not q.get("year_tag") and _YEAR_TAG_RE.match(_normalize_ws(tag.group(2))):
+            q["year_tag"] = _normalize_ws(tag.group(2))
+        text = _normalize_ws(text[:m.start()] + " " + text[m.end():])
+    m = _EMBEDDED_YEAR_RE.search(text)
+    # Not when the years are the option's whole text ("(a) 1953, 1958" is a real answer).
+    if m and _normalize_ws(text[:m.start()] + text[m.end():]):
+        if not q.get("year_tag"):
+            q["year_tag"] = _normalize_ws(m.group(0))
+        text = _normalize_ws(text[:m.start()] + " " + text[m.end():])
+    return text
 
 
 # ---------------------------------------------------------------- entry point
@@ -504,7 +723,7 @@ def scan_ocr_pdf_bytes(pdf_bytes, subject, ocr_fn=None, figures_fn=None):
                 flagged.append({"page": idx + 1, "reason": f"OCR failed on this page: {e}. Nothing from this page is below."})
                 items, notes = [], []
             flagged.extend({"page": idx + 1, "reason": n[0].upper() + n[1:]} for n in notes)
-            ordered, _ = order_page_items(items)  # every OCR item has a real box
+            ordered = order_ocr_items(items)
             pages_items.append((idx + 1, ordered))
             if not {it.get("kind") for it in ordered} & {"question", "continuation", "answer_key"} \
                     and not any(f["page"] == idx + 1 for f in flagged):
@@ -515,6 +734,8 @@ def scan_ocr_pdf_bytes(pdf_bytes, subject, ocr_fn=None, figures_fn=None):
     secs = time.time() - t_start
 
     segments, page_flags = merge_document_items(pages_items)
+    for seg in segments:
+        _resplit_polluted(seg)
     questions, q_flags = finalize_segments(segments)
 
     # OCR-specific issues, attributed to whichever question each item ended up in (a
