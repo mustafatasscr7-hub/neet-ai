@@ -26,9 +26,13 @@ MB to GBs). The models (~31MB) ship inside the wheel -- no download at runtime.
 Built against DISHA_36_YEARS_BIOLOGY_11thTEST.pdf; every layout rule below cites the real line it
 was written for.
 """
+import hashlib
+import json
+import os
 import re
 import threading
 import time
+import uuid
 
 import fitz
 
@@ -53,6 +57,11 @@ LOW_CONFIDENCE = 0.80
 
 _engine = None
 _engine_lock = threading.Lock()
+# onnxruntime intra-op threads for the OCR and diagram sessions. None = onnxruntime's own default
+# (one per physical core), which is what a single in-process run uses. Page-pool workers set it so
+# N workers x threads doesn't oversubscribe the CPU. Verified on both DISHA PDFs: every thread
+# count tried gives byte-identical OCR lines, scores and boxes (see test_pyq_scanned_ocr.py).
+_ORT_THREADS = None
 
 
 def _get_engine():
@@ -62,8 +71,107 @@ def _get_engine():
             from rapidocr import RapidOCR  # lazy: the server imports this module even where it isn't installed
             # The angle classifier only matters for upside-down text lines; a scanned book page is
             # upright, so skipping it is pure speed.
-            _engine = RapidOCR(params={"Global.use_cls": False})
+            params = {"Global.use_cls": False}
+            if _ORT_THREADS:
+                params["EngineConfig.onnxruntime.intra_op_num_threads"] = _ORT_THREADS
+            _engine = RapidOCR(params=params)
         return _engine
+
+
+_figure_session = None
+
+
+def _get_figure_session():
+    """process_pyq_vision's shared DocLayout-YOLO session (unmodified, the one 3-column mode uses),
+    except inside a page-pool worker that needs its own thread count -- then the same model file
+    in a session of this process's own, so the shared one is never reconfigured."""
+    global _figure_session
+    from process_pyq_vision import _get_yolo_session, _YOLO_REPO_ID, _YOLO_FILENAME
+    if not _ORT_THREADS:
+        return _get_yolo_session()
+    with _engine_lock:
+        if _figure_session is None:
+            import onnxruntime as ort
+            from huggingface_hub import hf_hub_download
+            so = ort.SessionOptions()
+            so.intra_op_num_threads = _ORT_THREADS
+            _figure_session = ort.InferenceSession(hf_hub_download(repo_id=_YOLO_REPO_ID, filename=_YOLO_FILENAME),
+                                                   so, providers=["CPUExecutionProvider"])
+        return _figure_session
+
+
+# ---------------------------------------------------------------- per-page result cache
+#
+# A re-run of the same PDF (or the same page in another PDF) skips OCR and diagram detection
+# entirely. Keyed by the RENDERED page pixels -- what the engine actually reads -- plus everything
+# that can change what it returns: the library versions and this module's render/engine settings.
+# Upgrading rapidocr, onnxruntime or opencv therefore misses the cache instead of replaying stale
+# output. Only the raw engine output is cached; all the parsing above still runs on every scan, so
+# a rule change here never needs the cache cleared.
+OCR_CACHE_DIR = os.getenv(
+    "SCANNED_OCR_CACHE_DIR",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), ".scan_cache", "ocr_pages"),
+)
+_CACHE_SCHEMA = "1"
+
+
+def _cache_enabled():
+    return os.getenv("SCANNED_OCR_CACHE", "1") != "0"
+
+
+def _lib_version(name):
+    try:
+        from importlib.metadata import version
+        return version(name)
+    except Exception:
+        return "unknown"
+
+
+def ocr_engine_version():
+    return "|".join([f"schema={_CACHE_SCHEMA}", f"rapidocr={_lib_version('rapidocr')}",
+                     f"onnxruntime={_lib_version('onnxruntime')}", f"dpi={OCR_DPI}", "use_cls=False"])
+
+
+def figure_engine_version():
+    from process_pyq_vision import _YOLO_FILENAME, _YOLO_DPI, _YOLO_IMGSZ, _YOLO_CONF
+    import cv2
+    import numpy as np
+    return "|".join([f"schema={_CACHE_SCHEMA}", f"model={_YOLO_FILENAME}", f"dpi={_YOLO_DPI}",
+                     f"imgsz={_YOLO_IMGSZ}", f"conf={_YOLO_CONF}", f"onnxruntime={_lib_version('onnxruntime')}",
+                     f"opencv={cv2.__version__}", f"numpy={np.__version__}"])
+
+
+def pixmap_cache_key(pix, engine_version):
+    h = hashlib.sha256()
+    h.update(engine_version.encode("utf-8"))
+    h.update(f"\x00{pix.width}x{pix.height}x{pix.n}\x00".encode("ascii"))
+    h.update(pix.samples)
+    return h.hexdigest()
+
+
+def _cache_get(kind, key):
+    if not _cache_enabled():
+        return None
+    try:
+        with open(os.path.join(OCR_CACHE_DIR, kind, f"{key}.json"), "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def _cache_put(kind, key, value):
+    """Never fatal -- a read-only or full disk only means the page is read again next time."""
+    if not _cache_enabled():
+        return
+    folder = os.path.join(OCR_CACHE_DIR, kind)
+    try:
+        os.makedirs(folder, exist_ok=True)
+        tmp = os.path.join(folder, f"{key}.{os.getpid()}.{threading.get_ident()}.tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(value, f, ensure_ascii=False)
+        os.replace(tmp, os.path.join(folder, f"{key}.json"))
+    except OSError as e:
+        print(f"    Free OCR mode: could not write page cache ({e}) -- non-fatal")
 
 
 def ocr_available():
@@ -74,10 +182,16 @@ def ocr_available():
         return False
 
 
-def ocr_page(page):
-    """One rendered page -> {"width", "height", "lines": [{"text", "score", "box": [x0,y0,x1,y1] px}]}."""
+def _ocr_page_cached(page):
+    """ocr_page plus whether it came from the cache. Python floats round-trip through JSON
+    exactly, so a cached page is the same value the engine returned."""
     import numpy as np
     pix = page.get_pixmap(dpi=OCR_DPI)
+    key = pixmap_cache_key(pix, ocr_engine_version()) if _cache_enabled() else None
+    if key:
+        hit = _cache_get("ocr", key)
+        if hit is not None:
+            return hit, True
     img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
     if pix.n == 4:
         img = img[:, :, :3]
@@ -87,22 +201,41 @@ def ocr_page(page):
         xs = [float(p[0]) for p in box]
         ys = [float(p[1]) for p in box]
         lines.append({"text": text, "score": float(score), "box": [min(xs), min(ys), max(xs), max(ys)]})
-    return {"width": pix.width, "height": pix.height, "lines": lines}
+    out = {"width": pix.width, "height": pix.height, "lines": lines}
+    if key:
+        _cache_put("ocr", key, out)
+    return out, False
+
+
+def ocr_page(page):
+    """One rendered page -> {"width", "height", "lines": [{"text", "score", "box": [x0,y0,x1,y1] px}]}."""
+    return _ocr_page_cached(page)[0]
 
 
 def figure_boxes_1000(page):
     """Figure regions on the page in box_2d's 0-1000 space, via process_pyq_vision's existing
     DocLayout-YOLO helpers (unmodified, the same ones 3-column mode uses). Never fatal: without
-    them has_diagram just stays false, which the review UI's checkbox covers."""
+    them has_diagram just stays false, which the review UI's checkbox covers.
+
+    The boxes are numpy float32 (the model's own output dtype), and _overlaps' arithmetic then
+    runs in float32 -- so a cached page is restored AS float32, not as the float64 JSON gives
+    back, or a box right on the overlap threshold could flip has_diagram."""
     try:
         import numpy as np
         import cv2
         from PIL import Image
-        from process_pyq_vision import _get_yolo_session, _yolo_infer_figure_boxes, _YOLO_DPI
+        from process_pyq_vision import _yolo_infer_figure_boxes, _YOLO_DPI
         pix = page.get_pixmap(dpi=_YOLO_DPI)
+        key = pixmap_cache_key(pix, figure_engine_version()) if _cache_enabled() else None
+        hit = _cached_figures(key)
+        if hit is not None:
+            return hit
         arr = np.array(Image.frombytes("RGB", (pix.width, pix.height), pix.samples))
-        return [(y0 * 1000 / pix.height, x0 * 1000 / pix.width, y1 * 1000 / pix.height, x1 * 1000 / pix.width)
-                for x0, y0, x1, y1 in _yolo_infer_figure_boxes(_get_yolo_session(), arr, cv2, np)]
+        boxes = [(y0 * 1000 / pix.height, x0 * 1000 / pix.width, y1 * 1000 / pix.height, x1 * 1000 / pix.width)
+                 for x0, y0, x1, y1 in _yolo_infer_figure_boxes(_get_figure_session(), arr, cv2, np)]
+        if key and all(isinstance(v, np.float32) for b in boxes for v in b):
+            _cache_put("figures", key, [[float(v) for v in b] for b in boxes])
+        return boxes
     except Exception as e:
         print(f"    Free OCR mode: diagram detection unavailable for a page ({e}) -- non-fatal")
         return []
@@ -703,35 +836,275 @@ def _strip_option_tags(q, text):
 
 # ---------------------------------------------------------------- entry point
 
-def scan_ocr_pdf_bytes(pdf_bytes, subject, ocr_fn=None, figures_fn=None):
+def _cached_figures(key):
+    if not key:
+        return None
+    import numpy as np
+    hit = _cache_get("figures", key)
+    return None if hit is None else [tuple(np.float32(v) for v in box) for box in hit]
+
+
+def read_page_from_cache(page):
+    """read_page's result when everything it needs is already cached, else None -- without
+    touching either engine. Lets a re-run skip the page pool (and its start-up) entirely."""
+    if not _cache_enabled():
+        return None
+    ocr = _cache_get("ocr", pixmap_cache_key(page.get_pixmap(dpi=OCR_DPI), ocr_engine_version()))
+    if ocr is None:
+        return None
+    items, notes = segment_page(ocr, ())
+    if any(it["kind"] == "question" for it in items):
+        from process_pyq_vision import _YOLO_DPI
+        figures = _cached_figures(pixmap_cache_key(page.get_pixmap(dpi=_YOLO_DPI), figure_engine_version()))
+        if figures is None:
+            return None
+        items, notes = segment_page(ocr, figures)
+    return items, notes, True
+
+
+def read_page(page, ocr_fn=None, figures_fn=None):
+    """One page -> (items, notes, from_cache). Diagram detection only runs on a page that has at
+    least one question: figures feed nothing but a question item's has_diagram, so on a page with
+    none (answer key, solutions, a blank or banner-only page) its result can't change the output.
+    Segmenting twice costs ~0.02s; detection costs ~2s."""
+    if ocr_fn is None:
+        ocr, cached = _ocr_page_cached(page)
+    else:
+        ocr, cached = ocr_fn(page), False
+    items, notes = segment_page(ocr, ())
+    if any(it["kind"] == "question" for it in items):
+        items, notes = segment_page(ocr, (figures_fn or figure_boxes_1000)(page))
+    return items, notes, cached
+
+
+# ---------------------------------------------------------------- page pool
+#
+# Pages are independent until merge_document_items, so they're read in a pool of worker
+# PROCESSES (the engines are CPU-bound and hold the GIL between onnxruntime calls) and put back
+# in page order before anything downstream sees them. "spawn", not fork: the server process is
+# multi-threaded, and forking one is unsafe. Each worker loads its own engines, so the count is capped by SCANNED_OCR_WORKERS -- set it to 1 on a small
+# Railway instance to keep the old in-process, one-page-at-a-time behaviour.
+_DEFAULT_MAX_WORKERS = 4
+
+
+def _cpu_budget():
+    """Usable CPUs: the container's cgroup quota when there is one (Linux; os.cpu_count() reports
+    the HOST's cores there), else os.cpu_count()."""
+    n = os.cpu_count() or 1
+    try:
+        with open("/sys/fs/cgroup/cpu.max") as f:
+            quota, period = f.read().split()[:2]
+        if quota != "max":
+            n = min(n, max(1, int(int(quota) // int(period))))
+    except (OSError, ValueError):
+        pass
+    return n
+
+
+# Measured on the dev machine: peak RSS 1.46GB for one in-process reader, 4.52GB with 4 workers
+# -- ~0.77GB per worker (its own interpreter, imports and both models). Rounded up, and the
+# server itself keeps this much headroom.
+_WORKER_RAM_BYTES = int(0.9 * 2**30)
+_SERVER_RAM_RESERVE_BYTES = int(1.5 * 2**30)
+
+
+def _memory_budget_workers():
+    """How many workers the container's memory limit (cgroup v2 memory.max, Linux) leaves room
+    for, or None when there's no readable limit (e.g. local Windows)."""
+    try:
+        with open("/sys/fs/cgroup/memory.max") as f:
+            raw = f.read().strip()
+        if raw == "max":
+            return None
+        return max(1, (int(raw) - _SERVER_RAM_RESERVE_BYTES) // _WORKER_RAM_BYTES)
+    except (OSError, ValueError):
+        return None
+
+
+def ocr_worker_count(pages):
+    try:
+        cap = int(os.getenv("SCANNED_OCR_WORKERS", str(_DEFAULT_MAX_WORKERS)))
+    except ValueError:
+        cap = _DEFAULT_MAX_WORKERS
+    mem = _memory_budget_workers()
+    return max(1, min(cap, _cpu_budget(), pages, mem if mem is not None else cap))
+
+
+def _threads_per_worker(workers):
+    return max(1, _cpu_budget() // workers)
+
+
+# The pool outlives one scan: a worker's start-up (imports ~5.6s, both models ~4s, measured on
+# the dev machine) is paid once, not per PDF -- a fresh pool per scan measured no faster than one
+# page at a time on 4-10 page PDFs, the whole gain eaten by start-up. It shuts down after
+# SCANNED_OCR_POOL_IDLE seconds (default 10 min) with no scan running, handing the memory back.
+_POOL_IDLE_SECONDS = int(os.getenv("SCANNED_OCR_POOL_IDLE", "600"))
+_pool = None
+_pool_key = None
+_pool_users = 0
+_pool_timer = None
+_pool_lock = threading.Lock()
+
+
+def _pool_init(threads, warm):
+    global _ORT_THREADS
+    import logging
+    logging.getLogger("RapidOCR").setLevel(logging.WARNING)  # one model-load banner per worker otherwise
+    _ORT_THREADS = threads
+    if warm:  # load both models now, in parallel across workers, not on each worker's first page
+        try:
+            _get_engine()
+            _get_figure_session()
+        except Exception as e:
+            print(f"    Free OCR mode: worker warm-up failed ({e}) -- will retry on first page")
+
+
+def _pool_read(pdf_path, idx, ocr_fn, figures_fn):
+    # Opened per page (milliseconds) rather than kept open, so no worker holds the job's temp file.
+    try:
+        with fitz.open(pdf_path) as doc:
+            return idx, read_page(doc[idx], ocr_fn, figures_fn), None
+    except Exception as e:
+        return idx, None, str(e)
+
+
+def _acquire_pool(workers, warm):
+    global _pool, _pool_key, _pool_users, _pool_timer
+    import multiprocessing
+    from concurrent.futures import ProcessPoolExecutor
+    key = (workers, _threads_per_worker(workers), warm)
+    with _pool_lock:
+        if _pool_timer:
+            _pool_timer.cancel()
+            _pool_timer = None
+        if _pool is not None and _pool_key != key and _pool_users == 0:
+            _pool.shutdown(wait=False, cancel_futures=True)
+            _pool = None
+        if _pool is None:
+            _pool = ProcessPoolExecutor(workers, mp_context=multiprocessing.get_context("spawn"),
+                                        initializer=_pool_init, initargs=key[1:])
+            _pool_key = key
+        _pool_users += 1
+        return _pool
+
+
+def _release_pool(broken=False):
+    global _pool, _pool_users, _pool_timer
+    with _pool_lock:
+        _pool_users -= 1
+        if broken and _pool is not None:
+            _pool.shutdown(wait=False, cancel_futures=True)
+            _pool = None
+        if _pool is not None and _pool_users == 0:
+            _pool_timer = threading.Timer(_POOL_IDLE_SECONDS, shutdown_ocr_pool)
+            _pool_timer.daemon = True
+            _pool_timer.start()
+
+
+def shutdown_ocr_pool():
+    global _pool, _pool_timer
+    with _pool_lock:
+        if _pool is not None and _pool_users == 0:
+            _pool.shutdown(wait=False, cancel_futures=True)
+            _pool = None
+        _pool_timer = None
+
+
+def read_all_pages(pdf_bytes, page_count, ocr_fn=None, figures_fn=None, workers=1, progress=None):
+    """[(items, notes, from_cache) | error string] in page order, read `workers` at a time.
+    Fully cached pages are answered here first and never reach the pool. progress(done, total)
+    is called after every page. ocr_fn/figures_fn, when given, must be picklable (module-level)
+    for workers > 1."""
+    results = [None] * page_count
+    done = 0
+
+    def finish(idx, value):
+        nonlocal done
+        results[idx] = value
+        done += 1
+        if progress:
+            progress(done, page_count)
+
+    todo = list(range(page_count))
+    if ocr_fn is None and figures_fn is None and _cache_enabled():
+        with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+            for idx in todo:
+                try:
+                    hit = read_page_from_cache(doc[idx])
+                except Exception:
+                    hit = None
+                if hit is not None:
+                    finish(idx, hit)
+        todo = [i for i in todo if results[i] is None]
+
+    if workers > 1 and len(todo) > 1:
+        import tempfile
+        from concurrent.futures import as_completed
+        from concurrent.futures.process import BrokenProcessPool
+        fd, pdf_path = tempfile.mkstemp(suffix=".pdf", prefix="ocr-job-")
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(pdf_bytes)
+            pool = _acquire_pool(workers, warm=ocr_fn is None)
+            broken = False
+            try:
+                futures = [pool.submit(_pool_read, pdf_path, i, ocr_fn, figures_fn) for i in todo]
+                for fut in as_completed(futures):
+                    idx, value, err = fut.result()
+                    finish(idx, value if err is None else err)
+            except BrokenProcessPool as e:
+                # A worker died (most likely out of memory): finish the rest here, one at a time.
+                broken = True
+                print(f"    Free OCR mode: page pool failed ({e}) -- reading the remaining pages in-process")
+            finally:
+                _release_pool(broken)
+        finally:
+            try:
+                os.remove(pdf_path)
+            except OSError:
+                pass
+        todo = [i for i in todo if results[i] is None]
+    if todo:
+        with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+            for idx in todo:
+                try:
+                    finish(idx, read_page(doc[idx], ocr_fn, figures_fn))
+                except Exception as e:
+                    finish(idx, str(e))
+    return results
+
+
+def scan_ocr_pdf_bytes(pdf_bytes, subject, ocr_fn=None, figures_fn=None, workers=None, progress=None):
     """Entry point for /admin/scan-pdf with layout="scanned_ocr". Same return shape as the other
-    modes, plus "cost" (always $0) with timing. ocr_fn/figures_fn exist for tests."""
+    modes, plus "cost" (always $0) with timing. ocr_fn/figures_fn exist for tests. workers=None
+    picks ocr_worker_count(); progress(done, total) is called after each page is read."""
     if ocr_fn is None and not ocr_available():
         return {"error": "The free OCR engine isn't installed on this server (pip install rapidocr)."}
-    ocr_fn = ocr_fn or ocr_page
-    figures_fn = figures_fn or figure_boxes_1000
 
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    t_start = time.time()
-    flagged, pages_items = [], []
-    try:
-        for idx, page in enumerate(doc):
-            try:
-                items, notes = segment_page(ocr_fn(page), figures_fn(page))
-            except Exception as e:
-                print(f"    Free OCR mode: error on page {idx + 1}: {e}")
-                flagged.append({"page": idx + 1, "reason": f"OCR failed on this page: {e}. Nothing from this page is below."})
-                items, notes = [], []
-            flagged.extend({"page": idx + 1, "reason": n[0].upper() + n[1:]} for n in notes)
-            ordered = order_ocr_items(items)
-            pages_items.append((idx + 1, ordered))
-            if not {it.get("kind") for it in ordered} & {"question", "continuation", "answer_key"} \
-                    and not any(f["page"] == idx + 1 for f in flagged):
-                flagged.append({"page": idx + 1, "reason": "No questions, continuations or answer key were found on this scanned page. If it does have questions, check it manually."})
+    with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
         page_count = len(doc)
-    finally:
-        doc.close()
+    if workers is None:
+        # Injected test functions are often lambdas, which can't cross into a worker process.
+        workers = 1 if (ocr_fn or figures_fn) else ocr_worker_count(page_count)
+    t_start = time.time()
+    read = read_all_pages(pdf_bytes, page_count, ocr_fn, figures_fn, workers, progress)
     secs = time.time() - t_start
+
+    flagged, pages_items, pages_cached = [], [], 0
+    for idx, value in enumerate(read):
+        if isinstance(value, str):
+            print(f"    Free OCR mode: error on page {idx + 1}: {value}")
+            flagged.append({"page": idx + 1, "reason": f"OCR failed on this page: {value}. Nothing from this page is below."})
+            items, notes = [], []
+        else:
+            items, notes, cached = value
+            pages_cached += cached
+        flagged.extend({"page": idx + 1, "reason": n[0].upper() + n[1:]} for n in notes)
+        ordered = order_ocr_items(items)
+        pages_items.append((idx + 1, ordered))
+        if not {it.get("kind") for it in ordered} & {"question", "continuation", "answer_key"} \
+                and not any(f["page"] == idx + 1 for f in flagged):
+            flagged.append({"page": idx + 1, "reason": "No questions, continuations or answer key were found on this scanned page. If it does have questions, check it manually."})
 
     segments, page_flags = merge_document_items(pages_items)
     for seg in segments:
@@ -766,7 +1139,82 @@ def scan_ocr_pdf_bytes(pdf_bytes, subject, ocr_fn=None, figures_fn=None):
         flagged.append(f)
     flagged.sort(key=lambda f: f["page"])
 
-    cost = {"engine": OCR_ENGINE_NAME, "usd": 0.0, "pages_called": page_count, "pages_cached": 0,
+    cost = {"engine": OCR_ENGINE_NAME, "usd": 0.0, "pages_called": page_count, "pages_cached": pages_cached,
             "seconds": round(secs, 1), "seconds_per_page": round(secs / page_count, 1) if page_count else 0}
-    print(f"FREE OCR MODE: pages={page_count} secs={secs:.1f} cost=$0", flush=True)
+    print(f"FREE OCR MODE: pages={page_count} cached={pages_cached} workers={workers} secs={secs:.1f} cost=$0", flush=True)
     return {"questions": questions, "pages_scanned": page_count, "flagged_pages": flagged, "cost": cost}
+
+
+# ---------------------------------------------------------------- background jobs
+#
+# A 50-page chapter takes minutes even in parallel -- past what one HTTP request should be held
+# open for. The server starts a job and the review page polls its progress. Jobs live in this
+# process's memory (Railway runs one replica), so a server restart loses a running job; the page
+# then says so and the scan can just be started again (cached pages come back instantly).
+# One job runs at a time -- each already uses every core it's allowed -- and the rest queue.
+_JOB_TTL_SECONDS = 3600
+_jobs = {}
+_jobs_lock = threading.Lock()
+_job_slot = threading.Semaphore(1)
+
+
+def _prune_jobs(now):
+    for jid in [j for j, job in _jobs.items() if job["finished_at"] and now - job["finished_at"] > _JOB_TTL_SECONDS]:
+        del _jobs[jid]
+
+
+def start_ocr_job(pdf_bytes, subject, on_finish=None, scan_fn=None):
+    """Starts a background scan, returns its job id. on_finish(result) runs in the job thread when
+    it ends (result is the scan_ocr_pdf_bytes dict, or {"error": ...}). scan_fn is for tests."""
+    scan_fn = scan_fn or scan_ocr_pdf_bytes
+    with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+        total = len(doc)
+    job_id = uuid.uuid4().hex
+    now = time.time()
+    with _jobs_lock:
+        _prune_jobs(now)
+        _jobs[job_id] = {"status": "queued", "pages_done": 0, "pages_total": total, "result": None,
+                         "error": None, "created_at": now, "finished_at": None}
+
+    def progress(done, total_):
+        with _jobs_lock:
+            _jobs[job_id].update(pages_done=done, pages_total=total_)
+
+    def run():
+        with _job_slot:
+            with _jobs_lock:
+                _jobs[job_id]["status"] = "running"
+            try:
+                result = scan_fn(pdf_bytes, subject, progress=progress)
+            except Exception as e:
+                result = {"error": str(e)}
+            if on_finish:
+                try:
+                    on_finish(result)
+                except Exception as e:
+                    print(f"    Free OCR job {job_id}: on_finish failed ({e})")
+            with _jobs_lock:
+                job = _jobs[job_id]
+                if result.get("error"):
+                    job.update(status="error", error=result["error"])
+                else:
+                    job.update(status="done", result=result, pages_done=job["pages_total"])
+                job["finished_at"] = time.time()
+
+    threading.Thread(target=run, name=f"ocr-job-{job_id[:8]}", daemon=True).start()
+    return job_id
+
+
+def get_ocr_job(job_id):
+    """Snapshot of a job: {"status": queued|running|done|error, "pages_done", "pages_total",
+    "result" (when done), "error" (when failed)}, or None for an unknown/expired id."""
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        if job is None:
+            return None
+        out = {k: job[k] for k in ("status", "pages_done", "pages_total")}
+        if job["status"] == "done":
+            out["result"] = job["result"]
+        if job["status"] == "error":
+            out["error"] = job["error"]
+        return out

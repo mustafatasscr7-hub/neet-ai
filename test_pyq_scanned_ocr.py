@@ -425,7 +425,269 @@ def test_bioclass_replay():
     check("tilted pages: Q39-41 and Q49-51 found as their own questions", all(by[n]["question"] for n in (39, 40, 41, 49, 50, 51)))
 
 
+# ---------------------------------------------------------------- speed: pool, cache, diagram skip, jobs
+
+# Module-level (picklable) so the page pool's worker processes can run them.
+def slow_reversed_ocr(page):
+    """Page i holds Q(i+1); earlier pages are made SLOWER, so a pool finishes them out of order."""
+    import time as _t
+    n = page.parent.page_count
+    _t.sleep(0.15 * (n - page.number))
+    return page_of_question(page.number + 1)
+
+
+def page_of_question(num):
+    return page(*left_q(num, 100, f"Question {num} stem"))
+
+
+def no_figures(page):
+    return []
+
+
+def blank_pdf(n):
+    doc = fitz.open()
+    for _ in range(n):
+        doc.new_page()
+    data = doc.tobytes()
+    doc.close()
+    return data
+
+
+def test_parallel_pages_keep_page_order():
+    print("\n=== Page pool: results come back in page order, output identical to one-at-a-time ===")
+    pdf = blank_pdf(5)
+    seq_progress, par_progress = [], []
+    seq = po.scan_ocr_pdf_bytes(pdf, "Biology", ocr_fn=slow_reversed_ocr, figures_fn=no_figures, workers=1,
+                                progress=lambda d, t: seq_progress.append((d, t)))
+    par = po.scan_ocr_pdf_bytes(pdf, "Biology", ocr_fn=slow_reversed_ocr, figures_fn=no_figures, workers=3,
+                                progress=lambda d, t: par_progress.append((d, t)))
+    for r in (seq, par):
+        r["cost"].pop("seconds"), r["cost"].pop("seconds_per_page")
+    check("Q1..Q5 in page order from the pool", [q["question_number"] for q in par["questions"]] == [1, 2, 3, 4, 5],
+          detail=str([q["question_number"] for q in par["questions"]]))
+    check("each question on its own page", [q["source_page"] for q in par["questions"]] == [1, 2, 3, 4, 5])
+    check("pool output byte-identical to sequential", json.dumps(par, sort_keys=True) == json.dumps(seq, sort_keys=True))
+    check("progress reported once per page, ending at 5/5", par_progress == [(i, 5) for i in range(1, 6)] and seq_progress == par_progress,
+          detail=str(par_progress))
+    check("worker count capped by env var and page count", _with_env("SCANNED_OCR_WORKERS", "2", lambda: po.ocr_worker_count(50)) == min(2, po._cpu_budget())
+          and _with_env("SCANNED_OCR_WORKERS", "8", lambda: po.ocr_worker_count(1)) == 1)
+    real_mem = po._memory_budget_workers
+    po._memory_budget_workers = lambda: 1
+    try:
+        check("a container memory limit with room for 1 worker caps the pool at 1",
+              _with_env("SCANNED_OCR_WORKERS", "8", lambda: po.ocr_worker_count(50)) == 1)
+    finally:
+        po._memory_budget_workers = real_mem
+    r = po.read_all_pages(pdf, 5, ocr_fn=_raises_on_page_3, figures_fn=no_figures, workers=2)
+    check("a failing page in the pool becomes that page's error, others unaffected",
+          isinstance(r[2], str) and "boom" in r[2] and all(not isinstance(r[i], str) for i in (0, 1, 3, 4)))
+
+
+def _raises_on_page_3(page):
+    if page.number == 2:
+        raise RuntimeError("boom")
+    return page_of_question(page.number + 1)
+
+
+def _with_env(name, value, fn):
+    old = os.environ.get(name)
+    os.environ[name] = value
+    try:
+        return fn()
+    finally:
+        if old is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = old
+
+
+class _FakeOcrResult:
+    def __init__(self, text):
+        self.boxes = [[[10.0, 20.0], [110.5, 20.0], [110.5, 38.25], [10.0, 38.25]]]
+        self.txts = (text,)
+        self.scores = (0.9876543210123,)
+
+
+class _FakeEngine:
+    def __init__(self):
+        self.calls = 0
+
+    def __call__(self, img):
+        self.calls += 1
+        return _FakeOcrResult(f"call {self.calls}")
+
+
+def test_ocr_cache_hit_miss_invalidation():
+    print("\n=== OCR page cache: hit, miss, version invalidation, off switch ===")
+    import tempfile
+    real = (po._engine, po.OCR_CACHE_DIR, po._lib_version)
+    tmp = tempfile.mkdtemp()
+    po.OCR_CACHE_DIR = tmp
+    po._engine = fake = _FakeEngine()
+    doc = fitz.open()
+    doc.new_page().insert_text((72, 72), "page one")
+    doc.new_page().insert_text((72, 72), "page two")
+    p1, p2 = doc[0], doc[1]  # adding a page invalidates earlier page handles
+    try:
+        a, hit_a = po._ocr_page_cached(p1)
+        b, hit_b = po._ocr_page_cached(p1)
+        check("first read is a miss and runs the engine", not hit_a and fake.calls == 1)
+        check("second read of the same page is a hit, engine not run", hit_b and fake.calls == 1)
+        check("cached value identical, floats exact", json.dumps(a) == json.dumps(b) and b["lines"][0]["score"] == 0.9876543210123)
+        _, hit_c = po._ocr_page_cached(p2)
+        check("a different page image misses", not hit_c and fake.calls == 2)
+        po._lib_version = lambda name: "9.9.9" if name == "rapidocr" else real[2](name)
+        _, hit_d = po._ocr_page_cached(p1)
+        check("an OCR library version change invalidates the cache", not hit_d and fake.calls == 3)
+        po._lib_version = real[2]
+        _, hit_e = po._ocr_page_cached(p1)
+        check("back on the original version, the original entry hits again", hit_e and fake.calls == 3)
+        n = fake.calls
+        _with_env("SCANNED_OCR_CACHE", "0", lambda: po._ocr_page_cached(p1))
+        check("SCANNED_OCR_CACHE=0 bypasses the cache", fake.calls == n + 1)
+    finally:
+        po._engine, po.OCR_CACHE_DIR, po._lib_version = real
+        doc.close()
+
+
+def test_cached_rerun_skips_pool_and_pool_is_reused():
+    print("\n=== Re-run of a cached PDF never reaches the page pool; the pool is reused across scans ===")
+    import tempfile
+    import numpy as np
+    import process_pyq_vision as pv
+    real = (po._engine, po.OCR_CACHE_DIR, pv._yolo_infer_figure_boxes, po._get_figure_session, po._acquire_pool)
+    po.OCR_CACHE_DIR = tempfile.mkdtemp()
+    po._engine = fake = _FakeEngine()
+    pv._yolo_infer_figure_boxes = lambda *a: [(np.float32(1), np.float32(2), np.float32(3), np.float32(4))]
+    po._get_figure_session = lambda: None
+    doc = fitz.open()
+    for i in range(3):
+        doc.new_page().insert_text((72, 72), f"page {i}")
+    pdf = doc.tobytes()
+    doc.close()
+    try:
+        first = po.scan_ocr_pdf_bytes(pdf, "Biology", workers=1)
+        calls = fake.calls
+
+        def no_pool(*a, **k):
+            raise AssertionError("pool used for a fully cached PDF")
+
+        po._acquire_pool = no_pool
+        second = po.scan_ocr_pdf_bytes(pdf, "Biology", workers=4)
+        check("second run: every page from cache, engine not called, pool not touched",
+              second["cost"]["pages_cached"] == 3 and fake.calls == calls, detail=str(second.get("cost")))
+        for r in (first, second):
+            for k in ("seconds", "seconds_per_page", "pages_cached"):
+                r["cost"].pop(k)
+        check("cached re-run output identical to the first run", json.dumps(first, sort_keys=True) == json.dumps(second, sort_keys=True))
+    finally:
+        po._engine, po.OCR_CACHE_DIR, pv._yolo_infer_figure_boxes, po._get_figure_session, po._acquire_pool = real
+    a = po._acquire_pool(2, warm=False)
+    po._release_pool()
+    b = po._acquire_pool(2, warm=False)
+    po._release_pool()
+    check("the same warm pool serves the next scan", a is b)
+    po.shutdown_ocr_pool()
+    check("idle shutdown frees it", po._pool is None)
+
+
+def test_figure_cache_restores_float32():
+    print("\n=== Diagram cache: restored boxes are the same float32 values the model returned ===")
+    import tempfile
+    import numpy as np
+    import process_pyq_vision as pv
+    real = (po.OCR_CACHE_DIR, pv._yolo_infer_figure_boxes, po._get_figure_session)
+    po.OCR_CACHE_DIR = tempfile.mkdtemp()
+    calls = []
+
+    def fake_infer(session, arr, cv2, np_):
+        calls.append(1)
+        return [(np.float32(100.3), np.float32(200.7), np.float32(300.1), np.float32(400.9))]
+
+    pv._yolo_infer_figure_boxes = fake_infer
+    po._get_figure_session = lambda: None
+    doc = fitz.open()
+    pg = doc.new_page()
+    try:
+        first = po.figure_boxes_1000(pg)
+        second = po.figure_boxes_1000(pg)
+        check("second call served from cache", len(calls) == 1)
+        check("same values", first == second, detail=f"{first} vs {second}")
+        check("restored as numpy float32", all(type(v) is np.float32 for v in second[0]), detail=str([type(v) for v in second[0]]))
+    finally:
+        po.OCR_CACHE_DIR, pv._yolo_infer_figure_boxes, po._get_figure_session = real
+        doc.close()
+
+
+def test_diagram_detection_skipped_without_questions():
+    print("\n=== Diagram detection only runs on pages with a question ===")
+    key_page = page(L("ANSWER KEY", 400, 100, 600), L("1", 60, 130, 80), L("(b)", 100, 130, 130))
+    q_page = page(*left_q(1, 100, "Which diagram shows this?"))
+    calls = []
+
+    def figs(p):
+        calls.append(p.number)
+        return [(90, 40, 220, 470)]  # covers Q1's whole box
+
+    pages = [q_page, key_page]
+    r = po.scan_ocr_pdf_bytes(blank_pdf(2), "Biology", ocr_fn=lambda p: pages[p.number], figures_fn=figs, workers=1)
+    check("detection ran on the question page only", calls == [0], detail=str(calls))
+    check("figure still sets has_diagram on the question", r["questions"][0]["has_diagram"] is True)
+    items_with, _ = po.segment_page(key_page, [(0, 0, 1000, 1000)])
+    items_without, _ = po.segment_page(key_page, ())
+    check("on a question-less page, figures change nothing", items_with == items_without)
+
+
+def test_job_progress():
+    print("\n=== Background OCR job: queued -> running with progress -> done; errors; unknown id ===")
+    import threading as _th
+    import time as _t
+    step, release = _th.Event(), _th.Event()
+
+    def fake_scan(pdf_bytes, subject, progress=None):
+        progress(1, 3)
+        step.set()
+        release.wait(5)
+        progress(2, 3)
+        progress(3, 3)
+        return {"questions": [{"question_number": 1}], "pages_scanned": 3, "flagged_pages": [], "cost": {}}
+
+    finished = []
+    jid = po.start_ocr_job(blank_pdf(3), "Biology", on_finish=finished.append, scan_fn=fake_scan)
+    step.wait(5)
+    mid = po.get_ocr_job(jid)
+    check("running, 1 of 3 pages done", mid == {"status": "running", "pages_done": 1, "pages_total": 3}, detail=str(mid))
+    jid2 = po.start_ocr_job(blank_pdf(2), "Biology", scan_fn=lambda b, s, progress=None: {"error": "engine broke"})
+    _t.sleep(0.2)
+    check("a second job queues behind the running one", po.get_ocr_job(jid2)["status"] == "queued")
+    release.set()
+    done = _wait_for(lambda: po.get_ocr_job(jid)["status"] == "done")
+    end = po.get_ocr_job(jid)
+    check("done, 3 of 3, result attached", done and end["pages_done"] == 3 and end["result"]["pages_scanned"] == 3, detail=str(end))
+    check("on_finish got the result", len(finished) == 1 and finished[0]["pages_scanned"] == 3)
+    _wait_for(lambda: po.get_ocr_job(jid2)["status"] == "error")
+    err = po.get_ocr_job(jid2)
+    check("a failed scan reports status error with the message", err["status"] == "error" and err["error"] == "engine broke", detail=str(err))
+    check("unknown job id -> None", po.get_ocr_job("nope") is None)
+
+
+def _wait_for(cond, timeout=5):
+    import time as _t
+    end = _t.time() + timeout
+    while _t.time() < end:
+        if cond():
+            return True
+        _t.sleep(0.02)
+    return False
+
+
 if __name__ == "__main__":
+    test_parallel_pages_keep_page_order()
+    test_ocr_cache_hit_miss_invalidation()
+    test_cached_rerun_skips_pool_and_pool_is_reused()
+    test_figure_cache_restores_float32()
+    test_diagram_detection_skipped_without_questions()
+    test_job_progress()
     test_left_column_then_right_column()
     test_gutter_measured_per_page()
     test_hanging_numbers_near_midpoint()

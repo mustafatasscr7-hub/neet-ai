@@ -243,7 +243,7 @@ import requests as http_requests
 from process_pyq_vision import scan_pdf_bytes, scan_mock_test_pdf
 from process_pyq_book_3col import scan_book_pdf_bytes
 from process_pyq_scanned import scan_scanned_pdf_bytes, estimate_scanned_pdf_cost, DEFAULT_MAX_PAGES as SCANNED_DEFAULT_MAX_PAGES
-from process_pyq_scanned_ocr import scan_ocr_pdf_bytes
+from process_pyq_scanned_ocr import scan_ocr_pdf_bytes, start_ocr_job, get_ocr_job
 from utils.krutidev2unicode import kru2uni
 
 # Shared verbatim between INERT_PAIR_GUARD and _VERIFY_MCQ_HEDGE_SYSTEM further down
@@ -1155,7 +1155,7 @@ def verify_contractor_pdf_review(request: Request, x_admin_key: str = Header(Non
 
 def verify_admin_or_contractor_pdf(request: Request, x_admin_key: str = Header(None)):
     """Guards only the handful of work routes the isolated PDF-review tool actually needs
-    (pyq-chapters, scan-pdf, pyq-bulk-create, pyq-diagram-upload, pdf-mark-processed,
+    (pyq-chapters, scan-pdf, scan-pdf/ocr-job, pyq-bulk-create, pyq-diagram-upload, pdf-mark-processed,
     processed-pdfs, pdf-check-status, pyq-classifier-data) -- accepts EITHER the founder's real
     ADMIN_PASSWORD (so the original admin-pdf-review.html keeps working unchanged) OR
     CONTRACTOR_PDF_KEY. Every other admin route in the app (dozens of them -- user-plan overrides,
@@ -7455,6 +7455,36 @@ def admin_scan_pdf(req: ScanPdfRequest, _: None = Depends(verify_admin_or_contra
         _update_processed_pdf_row(processed_pdf_id, "failed", error_message=result["error"])
     result["processed_pdf_id"] = processed_pdf_id
     return result
+
+@app.post("/admin/scan-pdf/ocr-job")
+def admin_scan_pdf_ocr_job(req: ScanPdfRequest, _: None = Depends(verify_admin_or_contractor_pdf), __: None = Depends(rate_limiter(10, 300))):
+    """Free OCR mode as a background job: returns {job_id, pages_total} straight away, and the
+    review page polls /admin/scan-pdf/ocr-job/{job_id} -- so a long chapter never runs into the
+    request timeout. Same validation, processed_pdfs tracking and result shape as /admin/scan-pdf."""
+    if req.subject not in ("Biology", "Physics", "Chemistry"):
+        return {"error": "Invalid subject"}
+    try:
+        pdf_bytes = base64.b64decode(req.data)
+        with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+            page_count = len(doc)
+    except Exception:
+        return {"error": "Could not open PDF"}
+    processed_pdf_id = _create_processed_pdf_row(req.filename, req.subject) if req.filename else None
+
+    def on_finish(result):
+        if result.get("error"):
+            _update_processed_pdf_row(processed_pdf_id, "failed", error_message=result["error"])
+        result["processed_pdf_id"] = processed_pdf_id
+
+    job_id = start_ocr_job(pdf_bytes, req.subject, on_finish=on_finish)
+    return {"job_id": job_id, "pages_total": page_count, "processed_pdf_id": processed_pdf_id}
+
+@app.get("/admin/scan-pdf/ocr-job/{job_id}")
+def admin_scan_pdf_ocr_job_status(job_id: str, _: None = Depends(verify_admin_or_contractor_pdf)):
+    job = get_ocr_job(job_id)
+    if job is None:
+        return {"error": "This scan job is unknown or expired (the server may have restarted). Start the scan again -- pages already read come back from cache."}
+    return job
 
 @app.post("/admin/scan-pdf/estimate")
 def admin_scan_pdf_estimate(req: ScanPdfEstimateRequest, _: None = Depends(verify_admin_or_contractor_pdf), __: None = Depends(rate_limiter(20, 300))):

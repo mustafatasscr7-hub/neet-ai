@@ -57,6 +57,8 @@
   .scan-btn:hover:not(:disabled) { background: #3b7de8; }
   .scan-btn:disabled { opacity: 0.4; cursor: not-allowed; }
   #scanStatus { font-size: 12px; color: #4f8ef7; margin-top: 10px; display: none; }
+  #scanProgress { display: none; height: 4px; background: #1e1e1e; border-radius: 2px; margin-top: 8px; overflow: hidden; }
+  #scanProgressFill { height: 100%; width: 0; background: #4f8ef7; transition: width 0.3s; }
 
   #summaryBar { display: none; align-items: center; gap: 16px; flex-wrap: wrap; background: #111; border: 1px solid #1e1e1e; border-radius: 10px; padding: 14px 16px; margin-bottom: 16px; }
   .bottom-save-bar { display: flex; justify-content: flex-end; margin-top: 20px; padding-top: 16px; border-top: 1px solid #1e1e1e; }
@@ -269,6 +271,7 @@
       </div>
       <div id="scanBtnHint" style="font-size:11px;color:#666;margin-top:8px;">Pick a subject above and choose a PDF file to enable scanning.</div>
       <div id="scanStatus"></div>
+      <div id="scanProgress"><div id="scanProgressFill"></div></div>
       <div id="scanModeHint" style="display:none;font-size:12px;color:#4f8ef7;margin-top:8px;">Looks like scanned pages, try Scanned pages (free OCR) mode.</div>
     </div>
 
@@ -1644,7 +1647,7 @@
     scanBtn.disabled = true;
     statusEl.style.display = 'block';
     statusEl.textContent = layout === 'scanned_ocr'
-      ? 'Running free OCR... roughly 10-20 seconds per page.'
+      ? 'Starting free OCR...'
       : 'Scanning your PDF... this can take a while for many pages.';
     document.getElementById('flaggedPagesBanner').style.display = 'none';
     document.getElementById('scanModeHint').style.display = 'none';
@@ -1652,14 +1655,20 @@
       const b64 = await fileToBase64(file);
       const body = { subject: currentSubject, data: b64, filename: file.name, layout };
       if (layout === 'scanned') body.confirm_over_cap = confirmOverCap;
-      const res = await fetch(`${API_BASE}/admin/scan-pdf`, {
-        method: 'POST',
-        headers: authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify(body)
-      });
-      if (res.status === 401) return logout();
-      if (!res.ok) { statusEl.textContent = 'Scan failed: ' + await describeHttpError(res); return; }
-      const data = await res.json();
+      let data;
+      if (layout === 'scanned_ocr') {
+        data = await runOcrJob(body, statusEl);
+        if (!data) return;
+      } else {
+        const res = await fetch(`${API_BASE}/admin/scan-pdf`, {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify(body)
+        });
+        if (res.status === 401) return logout();
+        if (!res.ok) { statusEl.textContent = 'Scan failed: ' + await describeHttpError(res); return; }
+        data = await res.json();
+      }
       currentProcessedPdfId = data.processed_pdf_id || null;
       if (data.error) { statusEl.textContent = 'Scan failed: ' + data.error; return; }
       statusEl.style.display = 'none';
@@ -1683,7 +1692,8 @@
       renderFlaggedPagesBanner(data.flagged_pages || []);
       if (data.cost && layout === 'scanned_ocr') {
         statusEl.style.display = 'block';
-        statusEl.textContent = `Free OCR read ${data.cost.pages_called} page${data.cost.pages_called === 1 ? '' : 's'} in ${data.cost.seconds}s (${data.cost.seconds_per_page}s per page). Cost: $0.`;
+        const cachedNote = data.cost.pages_cached ? `, ${data.cost.pages_cached} from cache` : '';
+        statusEl.textContent = `Free OCR read ${data.cost.pages_called} page${data.cost.pages_called === 1 ? '' : 's'}${cachedNote} in ${data.cost.seconds}s (${data.cost.seconds_per_page}s per page). Cost: $0.`;
       } else if (data.cost) {
         statusEl.style.display = 'block';
         statusEl.textContent = `Read ${data.cost.pages_called} page${data.cost.pages_called === 1 ? '' : 's'} (${data.cost.pages_cached} from cache). Actual cost: $${data.cost.usd.toFixed(4)}.`;
@@ -1695,7 +1705,55 @@
     } catch (e) {
       statusEl.textContent = 'Scan failed — check connection and try again.';
     } finally {
+      document.getElementById('scanProgress').style.display = 'none';
       scanBtn.disabled = !currentSubject || !document.getElementById('pdfFile').files[0];
+    }
+  }
+
+  // Free OCR mode runs as a server-side job (a long chapter would outlast one request): start it,
+  // then poll pages done / total into the progress bar. Returns the same result object
+  // /admin/scan-pdf would, or null after showing the error.
+  async function runOcrJob(body, statusEl) {
+    const bar = document.getElementById('scanProgress');
+    const fill = document.getElementById('scanProgressFill');
+    const res = await fetch(`${API_BASE}/admin/scan-pdf/ocr-job`, {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(body)
+    });
+    if (res.status === 401) { logout(); return null; }
+    if (!res.ok) { statusEl.textContent = 'Scan failed: ' + await describeHttpError(res); return null; }
+    const start = await res.json();
+    if (start.error) { statusEl.textContent = 'Scan failed: ' + start.error; return null; }
+    fill.style.width = '0';
+    bar.style.display = 'block';
+    let misses = 0;
+    while (true) {
+      await new Promise(r => setTimeout(r, 2000));
+      let job;
+      try {
+        const poll = await fetch(`${API_BASE}/admin/scan-pdf/ocr-job/${encodeURIComponent(start.job_id)}`, { headers: authHeaders() });
+        if (poll.status === 401) { logout(); return null; }
+        if (!poll.ok) throw new Error(await describeHttpError(poll));
+        job = await poll.json();
+        misses = 0;
+      } catch (e) {
+        // A dropped poll isn't a failed scan -- the job keeps running server-side.
+        if (++misses >= 5) { statusEl.textContent = 'Lost contact with the server while scanning: ' + e.message; return null; }
+        continue;
+      }
+      if (job.error && !job.status) { statusEl.textContent = 'Scan failed: ' + job.error; return null; }
+      const total = job.pages_total || start.pages_total || 0;
+      const done = job.pages_done || 0;
+      fill.style.width = total ? `${Math.round(100 * done / total)}%` : '0';
+      if (job.status === 'queued') statusEl.textContent = 'Waiting for another free OCR scan to finish...';
+      else if (job.status === 'running') statusEl.textContent = `Running free OCR... ${done} of ${total} page${total === 1 ? '' : 's'} read.`;
+      else if (job.status === 'error') { statusEl.textContent = 'Scan failed: ' + job.error; return null; }
+      else if (job.status === 'done') {
+        const data = job.result;
+        if (data.error) { statusEl.textContent = 'Scan failed: ' + data.error; return null; }
+        return data;
+      }
     }
   }
 
