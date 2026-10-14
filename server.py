@@ -243,6 +243,7 @@ import requests as http_requests
 from process_pyq_vision import scan_pdf_bytes, scan_mock_test_pdf
 from process_pyq_book_3col import scan_book_pdf_bytes
 from process_pyq_scanned import scan_scanned_pdf_bytes, estimate_scanned_pdf_cost, DEFAULT_MAX_PAGES as SCANNED_DEFAULT_MAX_PAGES
+from process_pyq_scanned_ocr import scan_ocr_pdf_bytes
 from utils.krutidev2unicode import kru2uni
 
 # Shared verbatim between INERT_PAIR_GUARD and _VERIFY_MCQ_HEDGE_SYSTEM further down
@@ -925,6 +926,8 @@ class ScanPdfRequest(BaseModel):
     # auto-detected, so an existing PDF's scan can't silently switch pipelines.
     # "scanned" = process_pyq_scanned's image-only mode (no text layer; each page read by Gemini
     # vision) -- also never auto-selected, for the same reason.
+    # "scanned_ocr" = process_pyq_scanned_ocr's free variant of the same: local OCR + rules, $0,
+    # no model call (the OCR engine is imported lazily, so the server starts without it).
     layout: str = "standard"
     # Scanned mode only: a PDF over its per-run page cap is refused unless the admin confirmed.
     confirm_over_cap: bool = False
@@ -7419,7 +7422,7 @@ def admin_scan_pdf(req: ScanPdfRequest, _: None = Depends(verify_admin_or_contra
     # so this multi-second-to-multi-minute call doesn't block the event loop for other requests.
     if req.subject not in ("Biology", "Physics", "Chemistry"):
         return {"error": "Invalid subject"}
-    if req.layout not in ("standard", "3col_book", "scanned"):
+    if req.layout not in ("standard", "3col_book", "scanned", "scanned_ocr"):
         return {"error": "Invalid layout"}
     try:
         pdf_bytes = base64.b64decode(req.data)
@@ -7441,6 +7444,8 @@ def admin_scan_pdf(req: ScanPdfRequest, _: None = Depends(verify_admin_or_contra
     try:
         if req.layout == "scanned":
             result = scan_scanned_pdf_bytes(pdf_bytes, req.subject, confirm_over_cap=req.confirm_over_cap)
+        elif req.layout == "scanned_ocr":
+            result = scan_ocr_pdf_bytes(pdf_bytes, req.subject)
         else:
             result = scan_book_pdf_bytes(pdf_bytes, req.subject) if req.layout == "3col_book" else scan_pdf_bytes(pdf_bytes, req.subject)
     except Exception as e:

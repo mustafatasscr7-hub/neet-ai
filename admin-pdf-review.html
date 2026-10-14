@@ -257,6 +257,7 @@
           <option value="standard">Standard (official question papers)</option>
           <option value="3col_book">3-column book (coaching-book PYQ chapters)</option>
           <option value="scanned">Scanned pages (image-only)</option>
+          <option value="scanned_ocr">Scanned pages (free OCR)</option>
         </select>
       </div>
       <div class="upload-row">
@@ -1639,7 +1640,9 @@
     const scanBtn = document.getElementById('scanBtn');
     scanBtn.disabled = true;
     statusEl.style.display = 'block';
-    statusEl.textContent = 'Scanning your PDF... this can take a while for many pages.';
+    statusEl.textContent = layout === 'scanned_ocr'
+      ? 'Running free OCR... roughly 10-20 seconds per page.'
+      : 'Scanning your PDF... this can take a while for many pages.';
     document.getElementById('flaggedPagesBanner').style.display = 'none';
     document.getElementById('scanModeHint').style.display = 'none';
     try {
@@ -1675,7 +1678,10 @@
       updateSummaryBar();
       document.getElementById('summaryBar').style.display = 'flex';
       renderFlaggedPagesBanner(data.flagged_pages || []);
-      if (data.cost) {
+      if (data.cost && layout === 'scanned_ocr') {
+        statusEl.style.display = 'block';
+        statusEl.textContent = `Free OCR read ${data.cost.pages_called} page${data.cost.pages_called === 1 ? '' : 's'} in ${data.cost.seconds}s (${data.cost.seconds_per_page}s per page). Cost: $0.`;
+      } else if (data.cost) {
         statusEl.style.display = 'block';
         statusEl.textContent = `Read ${data.cost.pages_called} page${data.cost.pages_called === 1 ? '' : 's'} (${data.cost.pages_cached} from cache). Actual cost: $${data.cost.usd.toFixed(4)}.`;
       }
