@@ -274,9 +274,28 @@
     .fb-status { font-size: 12px; color: var(--fb-muted); }
     .fb-status.err { color: var(--fb-down); }
 
+    /* Session ratings sub-view (chat.html's "How is NEET-AI doing this session?" strip) */
+    .fb-subnav { margin-bottom: 16px; }
+    .sfa-stats { grid-template-columns: repeat(4, 1fr); }
+    .sfa-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; background: var(--fb-muted); }
+    .sfa-dot.good { background: var(--fb-up); }
+    .sfa-dot.bad { background: var(--fb-down); }
+    .sfa-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .sfa-table th { text-align: left; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--fb-muted); padding: 10px 14px; border-bottom: 1px solid var(--fb-border); }
+    .sfa-table td { padding: 11px 14px; border-bottom: 1px solid var(--fb-border); vertical-align: top; color: var(--fb-text); }
+    .sfa-table tr:last-child td { border-bottom: none; }
+    .sfa-rating { display: inline-flex; align-items: center; gap: 7px; font-weight: 600; white-space: nowrap; }
+    .sfa-rating.good { color: var(--fb-up); }
+    .sfa-rating.bad { color: var(--fb-down); }
+    .sfa-rating.fine { color: var(--fb-text-2); }
+    .sfa-comment { white-space: pre-wrap; word-break: break-word; line-height: 1.5; }
+    .sfa-nowrap { white-space: nowrap; color: var(--fb-muted); }
+    .sfa-table code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; color: var(--fb-text-2); }
+
     @media (max-width: 1100px) {
       .fb-split { grid-template-columns: 1fr; }
       .fb-detail { position: static; max-height: none; }
+      .sfa-stats { grid-template-columns: repeat(2, 1fr); }
     }
   
     /* Smooth fade-in on page load */
@@ -382,6 +401,34 @@
     </div>
 
     <div id="feedbackView" style="display:none;">
+      <div class="fb-seg fb-subnav" id="fbSubNav" role="group" aria-label="Feedback type">
+        <button type="button" data-sub="answers" aria-pressed="true">Answer ratings</button>
+        <button type="button" data-sub="session" aria-pressed="false">Session ratings</button>
+      </div>
+      <div id="fbSessionPane" style="display:none;">
+        <div class="fb-stats sfa-stats">
+          <div class="fb-stat"><span class="sfa-dot good" aria-hidden="true"></span><div><div class="num" id="sfaCountGood">–</div><div class="label">Good, all time</div></div></div>
+          <div class="fb-stat"><span class="sfa-dot fine" aria-hidden="true"></span><div><div class="num" id="sfaCountFine">–</div><div class="label">Fine, all time</div></div></div>
+          <div class="fb-stat"><span class="sfa-dot bad" aria-hidden="true"></span><div><div class="num" id="sfaCountBad">–</div><div class="label">Bad, all time</div></div></div>
+          <div class="fb-stat"><span class="sfa-dot bad" aria-hidden="true"></span><div><div class="num" id="sfaCountBadComment">–</div><div class="label">Bad with a comment</div></div></div>
+        </div>
+        <div class="fb-filters" role="group" aria-label="Session rating filters">
+          <div class="fb-seg" id="sfaRatingSeg">
+            <button type="button" data-rating="all" aria-pressed="true">All</button>
+            <button type="button" data-rating="bad" aria-pressed="false">Bad</button>
+            <button type="button" data-rating="fine" aria-pressed="false">Fine</button>
+            <button type="button" data-rating="good" aria-pressed="false">Good</button>
+          </div>
+          <div class="fb-dates">
+            <label for="sfaFrom">From</label><input type="date" id="sfaFrom"/>
+            <label for="sfaTo">to</label><input type="date" id="sfaTo"/>
+            <button type="button" class="fb-link-btn" id="sfaClearDates">Clear</button>
+          </div>
+          <div class="fb-total" id="sfaTotal" aria-live="polite"></div>
+        </div>
+        <div class="fb-list" id="sfaList"><div class="fb-empty">Loading...</div></div>
+      </div>
+      <div id="fbAnswersPane">
       <div class="fb-stats">
         <div class="fb-stat down"><span data-fb-icon="down"></span><div><div class="num" id="fbCountDown">–</div><div class="label">Thumbs down, all time</div></div></div>
         <div class="fb-stat pending"><span data-fb-icon="inbox"></span><div><div class="num" id="fbCountPending">–</div><div class="label">Thumbs down, unreviewed</div></div></div>
@@ -404,6 +451,7 @@
       <div class="fb-split">
         <div class="fb-list" id="fbList"><div class="fb-empty">Loading...</div></div>
         <div class="fb-detail" id="fbDetail"><div class="fb-detail-empty">Select a rating to see the full exchange.</div></div>
+      </div>
       </div>
     </div>
   </div>
@@ -766,7 +814,7 @@
       document.getElementById('tabFeedback').classList.toggle('active', view === 'feedback');
       document.getElementById('feedbackView').style.display = view === 'feedback' ? 'block' : 'none';
       if (view === 'reports') loadReports();
-      if (view === 'feedback') loadFeedback();
+      if (view === 'feedback') (fbSubView === 'session' ? loadSessionFeedback : loadFeedback)();
     }
 
     async function refreshReportsBadge() {
@@ -1116,6 +1164,94 @@
     document.getElementById('fbClearDates').addEventListener('click', () => {
       document.getElementById('fbFrom').value = ''; document.getElementById('fbTo').value = '';
       fbState.from = ''; fbState.to = ''; fbState.page = 1; loadFeedback();
+    });
+
+    // ---------- Session ratings (Feedback tab sub-view) ----------
+    // chat.html's "How is NEET-AI doing this session?" strip, backed by GET /admin/session-feedback.
+    // Read-only: no conversation text is stored with these, so there's no detail pane.
+    let fbSubView = 'answers';
+    const sfaState = { rating: 'all', from: '', to: '', page: 1, total: 0, pageSize: 25, items: [], counts: null };
+    const SFA_LABELS = { good: 'Good', fine: 'Fine', bad: 'Bad' };
+
+    function fbSwitchSubView(sub) {
+      fbSubView = sub;
+      document.querySelectorAll('#fbSubNav button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.sub === sub)));
+      document.getElementById('fbAnswersPane').style.display = sub === 'answers' ? 'block' : 'none';
+      document.getElementById('fbSessionPane').style.display = sub === 'session' ? 'block' : 'none';
+      (sub === 'session' ? loadSessionFeedback : loadFeedback)();
+    }
+
+    async function loadSessionFeedback() {
+      const list = document.getElementById('sfaList');
+      list.innerHTML = '<div class="fb-empty">Loading...</div>';
+      const params = new URLSearchParams({ rating: sfaState.rating, page: String(sfaState.page) });
+      if (sfaState.from) params.set('date_from', fbDayBoundary(sfaState.from, 0));
+      if (sfaState.to) params.set('date_to', fbDayBoundary(sfaState.to, 1));
+      let data;
+      try {
+        const res = await fetch(`${API_BASE}/admin/session-feedback?${params}`, { headers: authHeaders() });
+        if (res.status === 401) return logout();
+        data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          list.innerHTML = `<div class="fb-error">${escapeHtml(data.detail || 'Could not load session ratings.')}</div>`;
+          return;
+        }
+      } catch (e) {
+        list.innerHTML = '<div class="fb-error">Could not reach server.</div>';
+        return;
+      }
+      sfaState.items = data.items || [];
+      sfaState.total = data.total || 0;
+      sfaState.pageSize = data.page_size || 25;
+      sfaState.counts = data.counts || null;
+      const c = sfaState.counts;
+      document.getElementById('sfaCountGood').textContent = c ? c.good : '–';
+      document.getElementById('sfaCountFine').textContent = c ? c.fine : '–';
+      document.getElementById('sfaCountBad').textContent = c ? c.bad : '–';
+      document.getElementById('sfaCountBadComment').textContent = c ? c.bad_with_comment : '–';
+      document.getElementById('sfaTotal').textContent = `${sfaState.total} ${sfaState.total === 1 ? 'rating' : 'ratings'}`;
+      sfaRenderList();
+    }
+
+    function sfaRenderList() {
+      const list = document.getElementById('sfaList');
+      if (!sfaState.items.length) {
+        list.innerHTML = '<div class="fb-empty">No session ratings match these filters.</div>';
+        return;
+      }
+      const rows = sfaState.items.map(item => `<tr>
+          <td><span class="sfa-rating ${escapeHtml(item.rating)}"><span class="sfa-dot ${escapeHtml(item.rating)}" aria-hidden="true"></span>${escapeHtml(SFA_LABELS[item.rating] || item.rating)}</span></td>
+          <td class="sfa-comment">${item.comment ? escapeHtml(item.comment) : '<span class="fb-missing">No comment</span>'}</td>
+          <td class="sfa-nowrap">${escapeHtml(fbFormatDate(item.created_at))}</td>
+          <td><code title="${escapeHtml(item.user_id || '')}">${escapeHtml((item.user_id || '').slice(0, 8))}</code></td>
+          <td class="sfa-nowrap">${escapeHtml(String(item.ai_reply_count ?? ''))}</td>
+        </tr>`).join('');
+      const pages = Math.max(1, Math.ceil(sfaState.total / sfaState.pageSize));
+      list.innerHTML = `<table class="sfa-table">
+          <thead><tr><th scope="col">Rating</th><th scope="col">Comment</th><th scope="col">Date</th><th scope="col">User</th><th scope="col">Replies</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+        <div class="fb-pager">
+          <button type="button" id="sfaPrev" ${sfaState.page <= 1 ? 'disabled' : ''}>Previous</button>
+          <span>Page ${sfaState.page} of ${pages}</span>
+          <button type="button" id="sfaNext" ${sfaState.page >= pages ? 'disabled' : ''}>Next</button>
+        </div>`;
+      document.getElementById('sfaPrev').onclick = () => { sfaState.page--; loadSessionFeedback(); };
+      document.getElementById('sfaNext').onclick = () => { sfaState.page++; loadSessionFeedback(); };
+    }
+
+    document.querySelectorAll('#fbSubNav button').forEach(btn => btn.addEventListener('click', () => fbSwitchSubView(btn.dataset.sub)));
+    document.querySelectorAll('#sfaRatingSeg button').forEach(btn => btn.addEventListener('click', () => {
+      sfaState.rating = btn.dataset.rating;
+      document.querySelectorAll('#sfaRatingSeg button').forEach(b => b.setAttribute('aria-pressed', String(b === btn)));
+      sfaState.page = 1;
+      loadSessionFeedback();
+    }));
+    document.getElementById('sfaFrom').addEventListener('change', e => { sfaState.from = e.target.value; sfaState.page = 1; loadSessionFeedback(); });
+    document.getElementById('sfaTo').addEventListener('change', e => { sfaState.to = e.target.value; sfaState.page = 1; loadSessionFeedback(); });
+    document.getElementById('sfaClearDates').addEventListener('click', () => {
+      document.getElementById('sfaFrom').value = ''; document.getElementById('sfaTo').value = '';
+      sfaState.from = ''; sfaState.to = ''; sfaState.page = 1; loadSessionFeedback();
     });
 
     if (adminKey) {

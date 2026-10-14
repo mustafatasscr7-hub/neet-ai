@@ -9109,9 +9109,9 @@ async def feedback_comment(feedback_id: str, req: FeedbackCommentRequest, verifi
         raise HTTPException(status_code=404, detail="Feedback not found")
     return {"ok": True}
 
-async def _feedback_count(params: list) -> int:
+async def _feedback_count(params: list, table: str = "response_feedback") -> int:
     resp = await async_client.get(
-        f"{SUPABASE_URL}/rest/v1/response_feedback",
+        f"{SUPABASE_URL}/rest/v1/{table}",
         headers={**ADMIN_HEADERS, "Prefer": "count=exact"},
         params=params + [("select", "id"), ("limit", "1")]
     )
@@ -9119,6 +9119,17 @@ async def _feedback_count(params: list) -> int:
         raise RuntimeError(f"count failed ({resp.status_code})")
     tail = resp.headers.get("content-range", "").split("/")[-1]
     return int(tail) if tail.isdigit() else 0
+
+def _created_at_range_filters(date_from: Optional[str], date_to: Optional[str]) -> list:
+    """PostgREST created_at filters for the admin lists: date_from inclusive, date_to exclusive."""
+    filters = []
+    for name, value, op in (("date_from", date_from, "gte"), ("date_to", date_to, "lt")):
+        if value:
+            ts = _parse_iso_ts(value)
+            if not ts:
+                raise HTTPException(status_code=400, detail=f"Invalid {name}")
+            filters.append(("created_at", f"{op}.{ts.astimezone(timezone.utc).isoformat()}"))
+    return filters
 
 @app.get("/admin/feedback")
 async def admin_feedback_list(
@@ -9139,12 +9150,7 @@ async def admin_feedback_list(
         filters.append(("rating", f"eq.{rating}"))
     if reviewed != "all":
         filters.append(("reviewed", f"eq.{reviewed}"))
-    for name, value, op in (("date_from", date_from, "gte"), ("date_to", date_to, "lt")):
-        if value:
-            ts = _parse_iso_ts(value)
-            if not ts:
-                raise HTTPException(status_code=400, detail=f"Invalid {name}")
-            filters.append(("created_at", f"{op}.{ts.astimezone(timezone.utc).isoformat()}"))
+    filters += _created_at_range_filters(date_from, date_to)
     try:
         resp = await async_client.get(
             f"{SUPABASE_URL}/rest/v1/response_feedback",
@@ -9202,6 +9208,115 @@ async def admin_feedback_review(feedback_id: str, req: FeedbackReviewRequest, _:
     if not rows:
         raise HTTPException(status_code=404, detail="Feedback not found")
     return rows[0]
+
+# ---------- Session feedback ("How is NEET-AI doing this session?" strip) ----------
+# One rating per chat.html page session (Bad/Fine/Good + optional comment on Bad), stored in
+# session_feedback (create_session_feedback_table.sql). No conversation text is stored. The
+# 14-day/7-day "don't ask again" cooldowns are client-side UX; the server only enforces one write
+# per user per hour. Never log the comment -- it's free text from a student.
+SESSION_FEEDBACK_RATINGS = ("bad", "fine", "good")
+SESSION_FEEDBACK_COMMENT_MAX = 500
+SESSION_FEEDBACK_MIN_INTERVAL_SECONDS = 3600
+SESSION_FEEDBACK_SELECT = "id,user_id,rating,comment,chat_id,ai_reply_count,created_at"
+# User ids with a POST /session-feedback in progress -- closes the gap between the "rated in the
+# last hour?" lookup and the insert, so a double-submit can't slip two rows in.
+_session_feedback_inflight = set()
+
+class SessionFeedbackRequest(BaseModel):
+    rating: str
+    comment: Optional[str] = None
+    chat_id: Optional[str] = None
+    ai_reply_count: int = 0
+
+@app.post("/session-feedback")
+async def session_feedback_create(req: SessionFeedbackRequest, _: None = Depends(rate_limiter(10, 60)), verified_user_id: str = Depends(_get_verified_user_id)):
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if req.rating not in SESSION_FEEDBACK_RATINGS:
+        raise HTTPException(status_code=400, detail="rating must be 'bad', 'fine' or 'good'")
+    comment = (req.comment or "").strip()
+    if len(comment) > SESSION_FEEDBACK_COMMENT_MAX:
+        raise HTTPException(status_code=400, detail=f"Comment is too long ({SESSION_FEEDBACK_COMMENT_MAX} characters max)")
+    if req.chat_id is not None and not _is_uuid(req.chat_id):
+        raise HTTPException(status_code=400, detail="Invalid chat_id")
+    if not 0 <= req.ai_reply_count <= 100000:
+        raise HTTPException(status_code=400, detail="Invalid ai_reply_count")
+    if verified_user_id in _session_feedback_inflight:
+        raise HTTPException(status_code=429, detail="Feedback already sent recently")
+    _session_feedback_inflight.add(verified_user_id)
+    try:
+        since = datetime.now(timezone.utc) - timedelta(seconds=SESSION_FEEDBACK_MIN_INTERVAL_SECONDS)
+        recent = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/session_feedback", headers=ADMIN_HEADERS,
+            params={"user_id": f"eq.{verified_user_id}", "created_at": f"gte.{since.isoformat()}", "select": "id", "limit": 1}
+        )
+        if recent.status_code >= 400:
+            print(f"SESSION FEEDBACK LOOKUP FAILED: status={recent.status_code}", flush=True)
+            raise HTTPException(status_code=502, detail="Could not save feedback")
+        if recent.json():
+            raise HTTPException(status_code=429, detail="Feedback already sent recently")
+        resp = await async_client.post(
+            f"{SUPABASE_URL}/rest/v1/session_feedback",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
+            params={"select": "id,created_at"},
+            json={
+                "user_id": verified_user_id, "rating": req.rating, "comment": comment or None,
+                "chat_id": req.chat_id, "ai_reply_count": req.ai_reply_count,
+            }
+        )
+        if resp.status_code >= 400:
+            print(f"SESSION FEEDBACK INSERT FAILED: status={resp.status_code}", flush=True)
+            raise HTTPException(status_code=502, detail="Could not save feedback")
+        return resp.json()[0]
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"SESSION FEEDBACK ERROR: {type(e).__name__}", flush=True)
+        raise HTTPException(status_code=502, detail="Could not save feedback")
+    finally:
+        _session_feedback_inflight.discard(verified_user_id)
+
+@app.get("/admin/session-feedback")
+async def admin_session_feedback_list(
+    rating: str = "all", date_from: Optional[str] = None, date_to: Optional[str] = None,
+    page: int = 1, _: None = Depends(verify_admin)
+):
+    """Same shape as /admin/feedback: newest first, 25 per page, date_to exclusive."""
+    if rating not in SESSION_FEEDBACK_RATINGS + ("all",):
+        raise HTTPException(status_code=400, detail="rating must be bad, fine, good or all")
+    if page < 1 or page > 10000:
+        raise HTTPException(status_code=400, detail="Invalid page")
+    filters = [("rating", f"eq.{rating}")] if rating != "all" else []
+    filters += _created_at_range_filters(date_from, date_to)
+    try:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/session_feedback",
+            headers={**ADMIN_HEADERS, "Prefer": "count=exact"},
+            params=filters + [
+                ("select", SESSION_FEEDBACK_SELECT), ("order", "created_at.desc"),
+                ("limit", str(FEEDBACK_ADMIN_PAGE_SIZE)), ("offset", str((page - 1) * FEEDBACK_ADMIN_PAGE_SIZE)),
+            ]
+        )
+        if resp.status_code >= 400:
+            print(f"ADMIN SESSION FEEDBACK LIST FAILED: status={resp.status_code}", flush=True)
+            raise HTTPException(status_code=502, detail="Could not load session feedback")
+        tail = resp.headers.get("content-range", "").split("/")[-1]
+        total = int(tail) if tail.isdigit() else 0
+        good, fine, bad, bad_with_comment = await asyncio.gather(
+            _feedback_count([("rating", "eq.good")], "session_feedback"),
+            _feedback_count([("rating", "eq.fine")], "session_feedback"),
+            _feedback_count([("rating", "eq.bad")], "session_feedback"),
+            _feedback_count([("rating", "eq.bad"), ("comment", "not.is.null")], "session_feedback"),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"ADMIN SESSION FEEDBACK LIST ERROR: {type(e).__name__}", flush=True)
+        raise HTTPException(status_code=502, detail="Could not load session feedback")
+    return {
+        "items": resp.json(), "total": total, "page": page, "page_size": FEEDBACK_ADMIN_PAGE_SIZE,
+        "counts": {"good": good, "fine": fine, "bad": bad, "bad_with_comment": bad_with_comment},
+    }
 
 if __name__ == "__main__":
     import uvicorn

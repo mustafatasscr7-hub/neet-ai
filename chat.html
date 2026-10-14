@@ -1154,6 +1154,56 @@
     body.light-mode .feedback-comment-input::placeholder { color: #9a9aa5 !important; }
     body.light-mode .feedback-comment-close { color: #8a8a94 !important; }
     body.light-mode .feedback-comment-close:hover { color: #222228 !important; }
+    /* Session feedback strip ("How is NEET-AI doing this session?") -- one line just above the
+       input, see the "Session feedback strip" script section. Colours are custom properties on
+       .sfb itself (same approach as .upgrade-btn) and light mode only swaps them; the blue is the
+       shared --tint-blue / --tint-blue-text from tint-buttons.css. Opens and closes by animating
+       grid-template-rows 0fr <-> 1fr so the input never jumps, then goes visibility:hidden once
+       collapsed (plus `inert` from JS) so nothing inside is focusable while it's closed. */
+    .sfb {
+      --sfb-bg: #141414; --sfb-border: #26262b; --sfb-text: #b9b9c1; --sfb-strong: #e4e4ea;
+      --sfb-btn-border: #34343b; --sfb-muted: #8e8e97; --sfb-hover-bg: rgba(255,255,255,0.06); --sfb-input-bg: #0d0d0d;
+      display: grid; grid-template-rows: 0fr; max-width: 820px; margin: 0 auto;
+      opacity: 0; transform: translateY(6px); visibility: hidden;
+      transition: grid-template-rows 240ms ease, margin-bottom 240ms ease, opacity 200ms ease, transform 240ms ease, visibility 0s linear 240ms;
+    }
+    .sfb.is-open { grid-template-rows: 1fr; margin-bottom: 8px; opacity: 1; transform: none; visibility: visible; transition-delay: 0s; }
+    body.light-mode .sfb {
+      --sfb-bg: #ffffff; --sfb-border: #e2e2e8; --sfb-text: #4a4a55; --sfb-strong: #1f1f25;
+      --sfb-btn-border: #d4d4dc; --sfb-muted: #63636d; --sfb-hover-bg: rgba(0,0,0,0.04); --sfb-input-bg: #f5f5f7;
+    }
+    .sfb-clip { min-height: 0; overflow: hidden; }
+    .sfb-bar { display: flex; align-items: center; gap: 10px; min-height: 42px; padding: 5px 6px 5px 14px; background: var(--sfb-bg); border: 1px solid var(--sfb-border); border-radius: 12px; font-family: 'Inter', sans-serif; font-size: 13px; color: var(--sfb-text); }
+    /* Wraps by content, not a viewport breakpoint: the strip's width depends on the sidebar too,
+       so when the prompt and buttons don't fit on one line the buttons drop to a second line. */
+    .sfb-step { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; flex: 1; min-width: 0; }
+    .sfb-step[hidden], .sfb-close[hidden] { display: none; }
+    .sfb-prompt { flex: 1 1 auto; line-height: 1.4; }
+    .sfb-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+    .sfb-opt, .sfb-skip { background: transparent; border: 1px solid var(--sfb-btn-border); color: var(--sfb-strong); font: 500 12.5px 'Inter', sans-serif; padding: 5px 13px; border-radius: 999px; cursor: pointer; transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease; }
+    .sfb-opt:hover:not(:disabled), .sfb-opt.is-chosen { background: color-mix(in srgb, var(--tint-blue) 13%, transparent); border-color: color-mix(in srgb, var(--tint-blue) 45%, transparent); color: var(--tint-blue-text); }
+    .sfb-skip { border-color: transparent; color: var(--sfb-text); }
+    .sfb-skip:hover:not(:disabled) { background: var(--sfb-hover-bg); color: var(--sfb-strong); }
+    .sfb-send { font: 600 12.5px 'Inter', sans-serif; padding: 6px 14px; border-radius: 999px; cursor: pointer; }
+    .sfb-close { background: transparent; border: none; color: var(--sfb-muted); width: 30px; height: 30px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; transition: background-color 150ms ease, color 150ms ease; }
+    .sfb-close:hover { background: var(--sfb-hover-bg); color: var(--sfb-strong); }
+    .sfb-opt:focus-visible, .sfb-skip:focus-visible, .sfb-close:focus-visible { outline: 2px solid var(--tint-blue); outline-offset: 2px; }
+    .sfb button:disabled { cursor: default; }
+    .sfb button:disabled:not(.is-chosen) { opacity: 0.55; }
+    .sfb-label { flex-shrink: 0; color: var(--sfb-strong); }
+    .sfb-input { flex: 1 1 140px; min-width: 0; height: 30px; background: var(--sfb-input-bg); border: 1px solid var(--sfb-btn-border); border-radius: 8px; color: var(--sfb-strong); font: 13px 'Inter', sans-serif; padding: 0 10px; user-select: text; -webkit-user-select: text; }
+    .sfb-input::placeholder { color: var(--sfb-muted); }
+    .sfb-input:focus { outline: none; border-color: var(--tint-blue); box-shadow: 0 0 0 1px var(--tint-blue); }
+    .sfb-status { display: flex; align-items: center; gap: 8px; min-height: 30px; color: var(--sfb-strong); }
+    .sfb-status:empty { display: none; }
+    .sfb-status svg { color: var(--tint-blue-text); flex-shrink: 0; }
+    .sfb-sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+    /* Keep the scroll-to-latest button clear of the strip while it's open (strip + its margin). */
+    .main.sfb-open .scroll-to-bottom-btn { bottom: 200px; }
+    @media (prefers-reduced-motion: reduce) {
+      .sfb { transform: none; transition: opacity 150ms linear, visibility 0s linear 150ms; }
+      .sfb.is-open { transition-delay: 0s; }
+    }
     /* Retry regenerates in place: the previous answer stays visible but dimmed (never removed)
        until real new content actually arrives, so a failed/aborted retry always has something
        correct to fall back to instead of an empty bubble. */
@@ -1423,6 +1473,35 @@
     </button>
 
     <div class="input-area" id="inputArea" style="display:none">
+      <div class="sfb" id="sessionFeedback" role="group" aria-labelledby="sfbPrompt" inert>
+        <div class="sfb-clip">
+          <div class="sfb-bar">
+            <div class="sfb-step" id="sfbAsk">
+              <span class="sfb-prompt" id="sfbPrompt" data-i18n="chat.sfbPrompt">How is NEET-AI doing this session?</span>
+              <div class="sfb-actions">
+                <button type="button" class="sfb-opt" data-rating="bad" data-i18n="chat.sfbBad">Bad</button>
+                <button type="button" class="sfb-opt" data-rating="fine" data-i18n="chat.sfbFine">Fine</button>
+                <button type="button" class="sfb-opt" data-rating="good" data-i18n="chat.sfbGood">Good</button>
+              </div>
+            </div>
+            <div class="sfb-step" id="sfbCommentStep" hidden>
+              <label class="sfb-label" for="sfbComment" data-i18n="chat.sfbWhatWentWrong">What went wrong?</label>
+              <input type="text" class="sfb-input" id="sfbComment" maxlength="500" autocomplete="off" placeholder="Optional" data-i18n-placeholder="chat.sfbCommentPlaceholder" />
+              <div class="sfb-actions">
+                <button type="button" class="sfb-send btn-tint-blue" id="sfbSend" data-i18n="chat.sfbSend">Send</button>
+                <button type="button" class="sfb-skip" id="sfbSkip" data-i18n="chat.sfbSkip">Skip</button>
+              </div>
+            </div>
+            <div class="sfb-status" id="sfbStatus" aria-hidden="true"></div>
+            <button type="button" class="sfb-close" id="sfbClose" title="Close" data-i18n-title="chat.sfbClose">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+      <!-- Announces the thank-you / failure line; kept outside the strip and always rendered so
+           screen readers pick up the change even as the strip itself collapses. -->
+      <span class="sfb-sr" id="sfbLive" role="status"></span>
 <div class="input-wrapper">
        <div id="usageWarning" style="display:none;padding:6px;margin-bottom:6px;font-size:11px;color:#888;text-align:center;">
           <span data-i18n="chat.doubtsLeftWarning">Doubts left today</span>
@@ -1479,6 +1558,17 @@
     const API_BASE = 'https://neet-ai-production.up.railway.app'
     const { createClient } = supabase
     const client = createClient(SUPABASE_URL, SUPABASE_KEY)
+
+    // Session feedback strip ("How is NEET-AI doing this session?" above the input): every
+    // tunable number in one place. The logic is in the "Session feedback strip" section below.
+    const SESSION_FEEDBACK_CONFIG = {
+      minAiReplies: 5,          // AI replies received in this page session before it may show
+      ratedCooldownDays: 14,    // after Bad/Fine/Good, don't ask again for this long (all devices)
+      dismissedCooldownDays: 7, // after X / Escape, don't ask again for this long (this browser)
+      showDelayMs: 1500,        // settle time after a reply ends or a banner clears before it shows
+      thanksVisibleMs: 2000,    // how long the thank-you stays before fading out
+      commentMaxChars: 500,     // must match server.py's SESSION_FEEDBACK_COMMENT_MAX
+    };
     async function updateStreak() {
   const { data: { session } } = await client.auth.getSession();
   if (!session) return;
@@ -4797,6 +4887,209 @@ function plainTextFromMarkdown(text) {
       if (existing) existing.remove();
     }
 
+    // ---------- Session feedback strip ("How is NEET-AI doing this session?") ----------
+    // One line above the input, offered once the student has had SESSION_FEEDBACK_CONFIG
+    // .minAiReplies replies in this page session. Logged-in students only, never while an answer
+    // is streaming, and never alongside another banner (usage limit, Pro usage warning, doubts
+    // left, device warning) -- it waits for those to clear. Mock and personalised tests run on
+    // their own pages, which don't carry this strip at all.
+    //
+    // Bad/Fine/Good are saved through POST /session-feedback (user taken from the verified JWT).
+    // "Rated recently" is checked across devices by reading the student's own latest
+    // session_feedback row (RLS: own rows only); the X dismissal is per-browser, in localStorage.
+    // Escape and X both close without saving -- on the "What went wrong?" step too, since a Bad
+    // rating is only sent by Send or Skip.
+    const sfbEl = document.getElementById('sessionFeedback');
+    const SFB_BANNER_IDS = ['limitBanner', 'proUsageWarningBanner', 'usageWarning', 'deviceWarningBanner'];
+    const SFB_DAY_MS = 24 * 60 * 60 * 1000;
+    // phase: idle (not eligible yet) -> checking -> ask -> comment -> sending -> status (thank-you
+    // or failure line) -> done (settled for the rest of this page session).
+    const sfb = { replies: 0, phase: 'idle', userId: null, showTimer: null };
+
+    function sfbStoredTime(kind, userId) {
+      try { return parseInt(localStorage.getItem(`neetai_sfb_${kind}_${userId}`), 10) || 0; } catch (e) { return 0; }
+    }
+    function sfbStoreTime(kind, userId, ms) {
+      try { localStorage.setItem(`neetai_sfb_${kind}_${userId}`, String(ms)); } catch (e) {}
+    }
+
+    function sfbShouldShow() {
+      return ['ask', 'comment', 'sending', 'status'].includes(sfb.phase) && !isStreaming &&
+        !SFB_BANNER_IDS.some(id => {
+          const el = document.getElementById(id);
+          return el && getComputedStyle(el).display !== 'none';
+        });
+    }
+
+    // Hands focus back to the doubt input when the control holding it is about to disappear, so
+    // a keyboard user is never left on <body>. focusMessageInput() won't take focus from another
+    // text field, hence the blur first.
+    function sfbReturnFocus() {
+      if (!sfbEl.contains(document.activeElement)) return;
+      document.activeElement.blur();
+      focusMessageInput({ skipOnMobile: true });
+    }
+
+    function sfbSetOpen(open) {
+      if (sfbEl.classList.contains('is-open') === open) return;
+      if (!open) sfbReturnFocus();
+      const atBottom = chatWindow.scrollHeight - chatWindow.scrollTop - chatWindow.clientHeight < 40;
+      sfbEl.classList.toggle('is-open', open);
+      sfbEl.inert = !open;
+      document.querySelector('.main').classList.toggle('sfb-open', open);
+      // Opening pushes the chat up by the strip's height -- keep the latest message in view if
+      // the student was already at the bottom.
+      if (open && atBottom) setTimeout(() => chatWindow.scrollTo({ top: chatWindow.scrollHeight, behavior: 'smooth' }), 260);
+    }
+
+    // Hides immediately, but only shows after showDelayMs of the conditions holding -- so a banner
+    // that refreshUsageBanner() hides and re-shows around a network call can't flash the strip.
+    function sfbSync() {
+      if (!sfbShouldShow()) {
+        clearTimeout(sfb.showTimer);
+        sfb.showTimer = null;
+        sfbSetOpen(false);
+        return;
+      }
+      if (sfbEl.classList.contains('is-open') || sfb.showTimer) return;
+      sfb.showTimer = setTimeout(() => {
+        sfb.showTimer = null;
+        if (sfbShouldShow()) sfbSetOpen(true);
+      }, SESSION_FEEDBACK_CONFIG.showDelayMs);
+    }
+
+    // Called at the end of every streamAIResponse(), whether or not a reply arrived.
+    function sfbAfterStream(replyReceived) {
+      if (replyReceived) sfb.replies++;
+      if (sfb.phase === 'idle' && sfb.replies >= SESSION_FEEDBACK_CONFIG.minAiReplies) sfbActivate();
+      else sfbSync();
+    }
+
+    async function sfbActivate() {
+      sfb.phase = 'checking';
+      const { data: { session } } = await client.auth.getSession();
+      if (!session) { sfb.phase = 'idle'; return; }
+      const userId = session.user.id;
+      const cfg = SESSION_FEEDBACK_CONFIG;
+      const now = Date.now();
+      if (now - sfbStoredTime('dismissed', userId) < cfg.dismissedCooldownDays * SFB_DAY_MS ||
+          now - sfbStoredTime('rated', userId) < cfg.ratedCooldownDays * SFB_DAY_MS) {
+        sfb.phase = 'done';
+        return;
+      }
+      // Rated on another device? Fails closed: if this can't be checked, don't ask this session.
+      try {
+        const { data, error } = await client.from('session_feedback').select('created_at')
+          .eq('user_id', userId).order('created_at', { ascending: false }).limit(1);
+        if (error) throw error;
+        const latest = data && data[0] ? Date.parse(data[0].created_at) : 0;
+        if (latest && now - latest < cfg.ratedCooldownDays * SFB_DAY_MS) {
+          sfbStoreTime('rated', userId, latest);
+          sfb.phase = 'done';
+          return;
+        }
+      } catch (e) {
+        sfb.phase = 'done';
+        return;
+      }
+      sfb.userId = userId;
+      sfb.phase = 'ask';
+      sfbSync();
+    }
+
+    function sfbShowStep(step) {
+      document.getElementById('sfbAsk').hidden = step !== 'ask';
+      document.getElementById('sfbCommentStep').hidden = step !== 'comment';
+      document.getElementById('sfbClose').hidden = step === 'status';
+    }
+
+    function sfbShowStatus(ok) {
+      sfbReturnFocus();
+      sfb.phase = 'status';
+      sfbShowStep('status');
+      const message = t('chat', ok ? 'sfbThanks' : 'sfbSendFailed');
+      const status = document.getElementById('sfbStatus');
+      status.innerHTML = ok ? '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>' : '';
+      status.append(message);
+      document.getElementById('sfbLive').textContent = message;
+      setTimeout(() => { sfb.phase = 'done'; sfbSync(); }, SESSION_FEEDBACK_CONFIG.thanksVisibleMs);
+    }
+
+    async function sfbSubmit(rating, comment) {
+      if (sfb.phase === 'sending') return;
+      sfb.phase = 'sending';
+      // Captured before disabling: a disabled button can drop focus to <body>, which
+      // sfbReturnFocus() would no longer see as "inside the strip".
+      const hadFocus = sfbEl.contains(document.activeElement);
+      const controls = sfbEl.querySelectorAll('button, input');
+      controls.forEach(el => { el.disabled = true; });
+      let res = null;
+      try {
+        const { data: { session } } = await client.auth.getSession();
+        if (session) {
+          const conv = conversations.find(c => c.id === currentId || c.supabaseId === currentId);
+          res = await fetch(`${API_BASE}/session-feedback`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
+            body: JSON.stringify({ rating, comment: comment || null, chat_id: (conv && conv.supabaseId) || null, ai_reply_count: sfb.replies })
+          });
+        }
+      } catch (e) {}
+      controls.forEach(el => { el.disabled = false; });
+      if (hadFocus && !sfbEl.contains(document.activeElement)) focusMessageInput({ skipOnMobile: true });
+      // 429: already rated within the last hour (another tab or device) -- that rating stands, so
+      // close quietly and start the "rated" cooldown here too.
+      if (res && (res.ok || res.status === 429)) sfbStoreTime('rated', sfb.userId, Date.now());
+      if (res && res.status === 429) { sfb.phase = 'done'; sfbSync(); return; }
+      sfbShowStatus(!!(res && res.ok));
+    }
+
+    function sfbDismiss() {
+      if (!['ask', 'comment'].includes(sfb.phase)) return;
+      sfbStoreTime('dismissed', sfb.userId, Date.now());
+      sfb.phase = 'done';
+      sfbSync();
+    }
+
+    sfbEl.querySelectorAll('.sfb-opt').forEach(btn => btn.addEventListener('click', () => {
+      if (sfb.phase !== 'ask') return;
+      if (btn.dataset.rating === 'bad') {
+        sfb.phase = 'comment';
+        sfbShowStep('comment');
+        document.getElementById('sfbComment').focus();
+        return;
+      }
+      btn.classList.add('is-chosen');
+      sfbSubmit(btn.dataset.rating, null);
+    }));
+    const sfbCommentInput = document.getElementById('sfbComment');
+    const sfbSendComment = () => sfbSubmit('bad', sfbCommentInput.value.trim().slice(0, SESSION_FEEDBACK_CONFIG.commentMaxChars));
+    document.getElementById('sfbSend').addEventListener('click', sfbSendComment);
+    document.getElementById('sfbSkip').addEventListener('click', () => sfbSubmit('bad', null));
+    document.getElementById('sfbClose').addEventListener('click', sfbDismiss);
+    sfbCommentInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); sfbSendComment(); }
+    });
+    sfbEl.addEventListener('keydown', e => {
+      if (e.key === 'Escape') { e.preventDefault(); sfbDismiss(); }
+    });
+
+    // The banners are shown/hidden by setting style.display, and #deviceWarningBanner is only
+    // created on first use, so watch each banner's attributes plus <body>'s direct children.
+    const sfbWatchedBanners = new WeakSet();
+    const sfbBannerObserver = new MutationObserver(() => { sfbWatchBanners(); sfbSync(); });
+    function sfbWatchBanners() {
+      SFB_BANNER_IDS.forEach(id => {
+        const el = document.getElementById(id);
+        if (el && !sfbWatchedBanners.has(el)) {
+          sfbWatchedBanners.add(el);
+          sfbBannerObserver.observe(el, { attributes: true, attributeFilter: ['style', 'class', 'hidden'] });
+        }
+      });
+    }
+    sfbWatchBanners();
+    sfbBannerObserver.observe(document.body, { childList: true });
+
     async function retryMessage(btn) {
       if (isStreaming) return;
       const row = btn.closest('.message-row');
@@ -6935,6 +7228,8 @@ function plainTextFromMarkdown(text) {
       // !response.ok branch needs it -- see the addMessageRow(..., aiIndex) comment down there.
       const aiIndex = retryTarget ? retryTarget.aiIndex : currentConversation.length;
       isStreaming = true;
+      sfbSync(); // the session feedback strip never stays up while an answer streams
+      let replyReceived = false;
       document.getElementById('sendIcon').style.display = 'none';
       document.getElementById('stopIcon').style.display = 'block';
 
@@ -7105,6 +7400,7 @@ function plainTextFromMarkdown(text) {
           document.getElementById('stopIcon').style.display = 'none';
           scrollBottom();
           focusMessageInput();
+          sfbAfterStream(false);
           return;
         }
 
@@ -7571,6 +7867,7 @@ function plainTextFromMarkdown(text) {
         }
         refreshUsageBanner();
         }
+        replyReceived = true;
 
       } catch (error) {
         removeTypingRow();
@@ -7590,6 +7887,7 @@ function plainTextFromMarkdown(text) {
       scrollBottom();
       userScrolled = false;
       focusMessageInput();
+      sfbAfterStream(replyReceived);
     }
 
     // ---------- Device-session limit enforcement (Pro=1, Max=2 devices; Free unenforced) ----------

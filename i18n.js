@@ -676,7 +676,18 @@ const TRANSLATIONS = {
       thinkingPhrase3: 'Solving...',
       thinkingPhrase4: 'Working it out...',
       thinkingPhrase5: 'Analyzing...',
-      thinkingPhraseVerifying: 'Double-checking the numbers...'
+      thinkingPhraseVerifying: 'Double-checking the numbers...',
+      sfbPrompt: 'How is NEET-AI doing this session?',
+      sfbBad: 'Bad',
+      sfbFine: 'Fine',
+      sfbGood: 'Good',
+      sfbClose: 'Close',
+      sfbWhatWentWrong: 'What went wrong?',
+      sfbCommentPlaceholder: 'Optional',
+      sfbSend: 'Send',
+      sfbSkip: 'Skip',
+      sfbThanks: 'Thanks for your feedback',
+      sfbSendFailed: 'Couldn’t send feedback. Please try again later.'
     },
     hi: {
       newChat: 'नई चैट',
@@ -850,7 +861,18 @@ const TRANSLATIONS = {
       thinkingPhrase3: 'हल निकाल रहा हूँ...',
       thinkingPhrase4: 'समाधान तैयार कर रहा हूँ...',
       thinkingPhrase5: 'विश्लेषण कर रहा हूँ...',
-      thinkingPhraseVerifying: 'संख्याओं की दोबारा जाँच कर रहा हूँ...'
+      thinkingPhraseVerifying: 'संख्याओं की दोबारा जाँच कर रहा हूँ...',
+      sfbPrompt: 'इस सेशन में NEET-AI कैसा कर रहा है?',
+      sfbBad: 'खराब',
+      sfbFine: 'ठीक',
+      sfbGood: 'अच्छा',
+      sfbClose: 'बंद करें',
+      sfbWhatWentWrong: 'क्या गलत हुआ?',
+      sfbCommentPlaceholder: 'वैकल्पिक',
+      sfbSend: 'भेजें',
+      sfbSkip: 'छोड़ें',
+      sfbThanks: 'आपकी प्रतिक्रिया के लिए धन्यवाद',
+      sfbSendFailed: 'प्रतिक्रिया नहीं भेजी जा सकी। कृपया बाद में पुनः प्रयास करें।'
     }
   },
 
