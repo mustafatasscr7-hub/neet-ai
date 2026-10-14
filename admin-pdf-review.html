@@ -256,6 +256,7 @@
         <select id="pdfLayoutSelect" style="width:100%;max-width:300px;background:#0d0d0d;border:1px solid #2a2a2a;border-radius:8px;padding:8px 10px;color:#ececec;font-family:'Inter',sans-serif;font-size:13px;">
           <option value="standard">Standard (official question papers)</option>
           <option value="3col_book">3-column book (coaching-book PYQ chapters)</option>
+          <option value="scanned">Scanned pages (image-only)</option>
         </select>
       </div>
       <div class="upload-row">
@@ -264,6 +265,7 @@
       </div>
       <div id="scanBtnHint" style="font-size:11px;color:#666;margin-top:8px;">Pick a subject above and choose a PDF file to enable scanning.</div>
       <div id="scanStatus"></div>
+      <div id="scanModeHint" style="display:none;font-size:12px;color:#4f8ef7;margin-top:8px;">Looks like scanned pages, try Scanned pages mode.</div>
     </div>
 
     <div id="pasteModeSection" style="display:none;">
@@ -1589,10 +1591,47 @@
     }
   }
 
+  // Scanned mode only: every page is a paid Gemini vision call, so show the estimate (and the
+  // per-run page cap) before anything runs. Returns null if the admin cancelled, otherwise
+  // { confirmOverCap } to send with the scan.
+  async function confirmScannedRun(b64) {
+    const res = await fetch(`${API_BASE}/admin/scan-pdf/estimate`, {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ subject: currentSubject, data: b64 })
+    });
+    if (res.status === 401) { logout(); return null; }
+    if (!res.ok) throw new Error(await describeHttpError(res));
+    const est = await res.json();
+    if (est.error) throw new Error(est.error);
+    const overCap = est.pages > est.max_pages;
+    const lines = [
+      `${est.pages} page${est.pages === 1 ? '' : 's'}: ${est.uncached_pages} to read, ${est.cached_pages} already cached (free).`,
+      `Estimated cost: $${est.estimated_usd.toFixed(4)} (${est.model}).`
+    ];
+    if (overCap) lines.push(`\nThis is over the ${est.max_pages}-page cap for one run. Run all ${est.pages} pages anyway?`);
+    const ok = await showConfirmModal(lines.join('\n'), { confirmLabel: overCap ? 'Run anyway' : 'Run scan' });
+    return ok ? { confirmOverCap: overCap } : null;
+  }
+
   async function scanPdf() {
     const file = document.getElementById('pdfFile').files[0];
     if (!file || !currentSubject) return;
     if (!(await checkPdfAlreadyProcessed(file.name))) return;
+    const layout = document.getElementById('pdfLayoutSelect').value;
+    let confirmOverCap = false;
+    if (layout === 'scanned') {
+      const statusEl = document.getElementById('scanStatus');
+      try {
+        const choice = await confirmScannedRun(await fileToBase64(file));
+        if (!choice) return;
+        confirmOverCap = choice.confirmOverCap;
+      } catch (e) {
+        statusEl.style.display = 'block';
+        statusEl.textContent = 'Could not estimate cost: ' + e.message;
+        return;
+      }
+    }
     currentPdfFilename = file.name;
     currentProcessedPdfId = null;
     currentPdfQuestionsExtracted = 0;
@@ -1602,12 +1641,15 @@
     statusEl.style.display = 'block';
     statusEl.textContent = 'Scanning your PDF... this can take a while for many pages.';
     document.getElementById('flaggedPagesBanner').style.display = 'none';
+    document.getElementById('scanModeHint').style.display = 'none';
     try {
       const b64 = await fileToBase64(file);
+      const body = { subject: currentSubject, data: b64, filename: file.name, layout };
+      if (layout === 'scanned') body.confirm_over_cap = confirmOverCap;
       const res = await fetch(`${API_BASE}/admin/scan-pdf`, {
         method: 'POST',
         headers: authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ subject: currentSubject, data: b64, filename: file.name, layout: document.getElementById('pdfLayoutSelect').value })
+        body: JSON.stringify(body)
       });
       if (res.status === 401) return logout();
       if (!res.ok) { statusEl.textContent = 'Scan failed: ' + await describeHttpError(res); return; }
@@ -1623,7 +1665,9 @@
         correct_answer: q.correct_answer || '', question_type: q.question_type || 'mcq',
         has_diagram: !!q.has_diagram, diagram_url: null,
         option_a_diagram_url: null, option_b_diagram_url: null, option_c_diagram_url: null, option_d_diagram_url: null,
-        year: q.year, source_page: q.source_page, display_number: null,
+        year: q.year, source_page: q.source_page,
+        // Only scanned mode returns the printed question number; the other modes keep auto-numbering.
+        display_number: q.question_number != null ? String(q.question_number) : null,
         saved: false, savePending: false
       }));
       document.getElementById('statPageCount').textContent = data.pages_scanned || 0;
@@ -1631,6 +1675,13 @@
       updateSummaryBar();
       document.getElementById('summaryBar').style.display = 'flex';
       renderFlaggedPagesBanner(data.flagged_pages || []);
+      if (data.cost) {
+        statusEl.style.display = 'block';
+        statusEl.textContent = `Read ${data.cost.pages_called} page${data.cost.pages_called === 1 ? '' : 's'} (${data.cost.pages_cached} from cache). Actual cost: $${data.cost.usd.toFixed(4)}.`;
+      }
+      if (layout === 'standard' && (data.flagged_pages || []).some(f => (f.reason || '').startsWith('Extraction found little or no usable text'))) {
+        document.getElementById('scanModeHint').style.display = 'block';
+      }
       saveDraftNow(); // a fresh scan just replaced the whole batch -- worth persisting right away, not after a debounce delay
     } catch (e) {
       statusEl.textContent = 'Scan failed — check connection and try again.';

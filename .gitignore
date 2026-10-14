@@ -9,3 +9,4 @@ __pycache__/
 .env
 .vercel
 backups/
+.scan_cache/

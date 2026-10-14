@@ -1,0 +1,976 @@
+{
+ "_source": "Raw per-page Gemini responses (gemini-3.5-flash-lite, prompt scanned-v1) for pyq-pdfs/DISHA_36_YEARS_BIOLOGY_11thTEST.pdf, captured 2026-10-14. Replayed by test_pyq_scanned.py so the merge/flag logic is checked against real model output without an API call.",
+ "pages": [
+  {
+   "page": 1,
+   "usage": {
+    "input_tokens": 2260,
+    "output_tokens": 1621
+   },
+   "items": [
+    {
+     "kind": "chapter_start",
+     "title": "The Living World",
+     "box_2d": [
+      46,
+      353,
+      211,
+      726
+     ]
+    },
+    {
+     "kind": "question",
+     "number": 1,
+     "question": "It is much easier for a small animal to run uphill than for a large animal, because",
+     "options": {
+      "a": "it is easier to carry a small body weight.",
+      "b": "smaller animals have a higher metabolic rate.",
+      "c": "small animals have a lower $O_{2}$ requirement.",
+      "d": "the efficiency of muscles in large animals is less than in the small animals."
+     },
+     "year_tag": "2016",
+     "ncert_tag": null,
+     "question_type": "mcq",
+     "has_diagram": false,
+     "box_2d": [
+      539,
+      95,
+      640,
+      462
+     ]
+    },
+    {
+     "kind": "question",
+     "number": 2,
+     "question": "Which one of the following aspects is an exclusive characteristic of living things?",
+     "options": {
+      "a": "Isolated metabolic reactions occur in vitro",
+      "b": "Increase in mass from inside only",
+      "c": "Perception of events happening in the environment and their memory",
+      "d": "Increase in mass by accumulation of material both on surface as well as internally."
+     },
+     "year_tag": "2011",
+     "ncert_tag": null,
+     "question_type": "mcq",
+     "has_diagram": false,
+     "box_2d": [
+      642,
+      98,
+      757,
+      462
+     ]
+    },
+    {
+     "kind": "question",
+     "number": 3,
+     "question": "The living organisms can be unexceptionally distinguished from the non-living things on the basis of their ability for",
+     "options": {
+      "a": "interaction with the environment and progressive evolution",
+      "b": "reproduction",
+      "c": "growth and movement",
+      "d": "responsiveness to touch."
+     },
+     "year_tag": "2007",
+     "ncert_tag": "Page-5",
+     "question_type": "mcq",
+     "has_diagram": false,
+     "box_2d": [
+      758,
+      97,
+      877,
+      461
+     ]
+    },
+    {
+     "kind": "question",
+     "number": 4,
+     "question": "Biological organisation starts with",
+     "options": {
+      "a": "cellular level",
+      "b": "organismic level",
+      "c": "atomic level",
+      "d": "submicroscopic molecular level"
+     },
+     "year_tag": "2007",
+     "ncert_tag": null,
+     "question_type": "mcq",
+     "has_diagram": false,
+     "box_2d": [
+      490,
+      531,
+      558,
+      888
+     ]
+    },
+    {
+     "kind": "question",
+     "number": 5,
+     "question": "The most important feature of all living systems is to",
+     "options": {
+      "a": "utilize oxygen to generate energy",
+      "b": "replicate the genetic information",
+      "c": "produce gametes",
+      "d": "utilize solar energy for metabolic activities"
+     },
+     "year_tag": "2000",
+     "ncert_tag": null,
+     "question_type": "mcq",
+     "has_diagram": false,
+     "box_2d": [
+      561,
+      530,
+      640,
+      888
+     ]
+    },
+    {
+     "kind": "question",
+     "number": 6,
+     "question": "The book Genera Plantarum was written by",
+     "options": {
+      "a": "Bessy",
+      "b": "Hutchinson",
+      "c": "Engler and Prantl",
+      "d": "Bentham & Hooker"
+     },
+     "year_tag": "1999",
+     "ncert_tag": null,
+     "question_type": "mcq",
+     "has_diagram": false,
+     "box_2d": [
+      642,
+      530,
+      682,
+      889
+     ]
+    },
+    {
+     "kind": "question",
+     "number": 7,
+     "question": "Homeostasis is organism's",
+     "options": {
+      "a": "tendency to change with change in environment",
+      "b": "tendency to resist change",
+      "c": "disturbance in regulatory control",
+      "d": "plants and animal extracts used in homeopathy"
+     },
+     "year_tag": "1991",
+     "ncert_tag": null,
+     "question_type": "mcq",
+     "has_diagram": false,
+     "box_2d": [
+      684,
+      530,
+      751,
+      888
+     ]
+    },
+    {
+     "kind": "question",
+     "number": 8,
+     "question": "Static concept of species was put forward by",
+     "options": {
+      "a": "de Candolle",
+      "b": "Linnaeus",
+      "c": "Theophrastus",
+      "d": "Darwin"
+     },
+     "year_tag": "1988",
+     "ncert_tag": null,
+     "question_type": "mcq",
+     "has_diagram": false,
+     "box_2d": [
+      751,
+      531,
+      792,
+      888
+     ]
+    },
+    {
+     "kind": "question",
+     "number": 9,
+     "question": "In the taxonomic categories which hierarchial arrangement in ascending order is correct in case of animals?",
+     "options": {},
+     "year_tag": "2022",
+     "ncert_tag": "Page-10 / N-8",
+     "question_type": "mcq",
+     "has_diagram": false,
+     "box_2d": [
+      841,
+      530,
+      885,
+      890
+     ]
+    }
+   ]
+  },
+  {
+   "page": 2,
+   "usage": {
+    "input_tokens": 2260,
+    "output_tokens": 2681
+   },
+   "items": [
+    {
+     "kind": "continuation",
+     "text": "(a) Kingdom, Class, Phylum, Family, Order, Genus, Species\n(b) Kingdom, Order, Class, Phylum, Family, Genus, Species\n(c) Kingdom, Order, Phylum, Class, Family, Genus, Species\n(d) Kingdom, Phylum, Class, Order, Family, Genus, Species",
+     "options": {},
+     "box_2d": [
+      107,
+      155,
+      229,
+      541
+     ]
+    },
+    {
+     "kind": "question",
+     "number": 10,
+     "question": "Which one of the following belongs to the family Muscidae?",
+     "options": {
+      "a": "House fly",
+      "b": "Fire fly",
+      "c": "Grasshopper",
+      "d": "Cockroach"
+     },
+     "year_tag": "2021",
+     "ncert_tag": "Page-11 / N-8",
+     "question_type": "mcq",
+     "has_diagram": false,
+     "box_2d": [
+      227,
+      121,
+      287,
+      541
+     ]
+    },
+    {
+     "kind": "question",
+     "number": 11,
+     "question": "Which of the following is against the rules of ICBN?",
+     "options": {
+      "a": "Generic and specific names should be written starting with small letters.",
+      "b": "Hand written scientific names should be underlined.",
+      "c": "Every species should have a generic name and a specific epithet.",
+      "d": "Scientific names are in Latin and should be italized."
+     },
+     "year_tag": "2019",
+     "ncert_tag": "Page-6 / N-4",
+     "question_type": "mcq",
+     "has_diagram": false,
+     "box_2d": [
+      287,
+      123,
+      432,
+      541
+     ]
+    },
+    {
+     "kind": "question",
+     "number": 12,
+     "question": "Select the correctly written scientific name of Mango which was first described by Carolus Linnaeus:",
+     "options": {
+      "a": "Mangifera indica Car. Linn.",
+      "b": "Mangifera indica Linn.",
+      "c": "Mangifera indica",
+      "d": "Mangifera Indica"
+     },
+     "year_tag": "2019",
+     "ncert_tag": "Page-7 / N-8",
+     "question_type": "mcq",
+     "has_diagram": false,
+     "box_2d": [
+      432,
+      124,
+      536,
+      541
+     ]
+    },
+    {
+     "kind": "question",
+     "number": 13,
+     "question": "Nomenclature is governed by certain universal rules. Which one of the following is contrary to the rules of nomenclature?",
+     "options": {
+      "a": "Biological names can be written in any language",
+      "b": "The first word in a biological name represents the genus name, and the second is a specific epithet",
+      "c": "The names are written in Latin and are italicised",
+      "d": "When written by hand, the names are to be underlined"
+     },
+     "year_tag": "2016",
+     "ncert_tag": "Page-7 / N-4",
+     "question_type": "mcq",
+     "has_diagram": false,
+     "box_2d": [
+      536,
+      125,
+      697,
+      541
+     ]
+    },
+    {
+     "kind": "question",
+     "number": 14,
+     "question": "The common characteristics between tomato and potato will be maximum at the level of their",
+     "options": {
+      "a": "Genus",
+      "b": "Family",
+      "c": "Order",
+      "d": "Division"
+     },
+     "year_tag": "2013",
+     "ncert_tag": null,
+     "question_type": "mcq",
+     "has_diagram": false,
+     "box_2d": [
+      697,
+      130,
+      773,
+      541
+     ]
+    },
+    {
+     "kind": "question",
+     "number": 15,
+     "question": "Which one of the following organisms is scientifically correctly named, correctly printed according to the International Rules of Nomenclature and correctly described?",
+     "options": {
+      "a": "Musca domestica - The common house lizard, a reptile.",
+      "b": "Plasmodium falciparum - A protozoan pathogen causing the most serious type of malaria."
+     },
+     "year_tag": "2012",
+     "ncert_tag": null,
+     "question_type": "mcq",
+     "has_diagram": false,
+     "box_2d": [
+      773,
+      126,
+      892,
+      541
+     ]
+    },
+    {
+     "kind": "continuation",
+     "text": "(c) Felis tigris - The Indian tiger, well protected in Gir forests.\n(d) E.coli - Full name Entamoeba coli, a commonly occurring bacterium in human intestine.",
+     "options": {},
+     "box_2d": [
+      107,
+      603,
+      180,
+      976
+     ]
+    },
+    {
+     "kind": "question",
+     "number": 16,
+     "question": "Which one of the following animals is correctly matched with its particular named taxonomic category?",
+     "options": {
+      "a": "Tiger - tigris, the species",
+      "b": "Cuttle fish - mollusca, a class",
+      "c": "Humans - primata, the family",
+      "d": "Housefly - musca, an order"
+     },
+     "year_tag": "2011",
+     "ncert_tag": "Page-9 / N-7",
+     "question_type": "mcq",
+     "has_diagram": false,
+     "box_2d": [
+      180,
+      561,
+      286,
+      976
+     ]
+    },
+    {
+     "kind": "question",
+     "number": 17,
+     "question": "ICBN stands for",
+     "options": {
+      "a": "International Code of Botanical Nomenclature",
+      "b": "International congress of Biological Names",
+      "c": "Indian Code of Botanical Nomenclature",
+      "d": "Indian Congress of Biological Names."
+     },
+     "year_tag": "2010 M",
+     "ncert_tag": "Page-6 / N-4",
+     "question_type": "mcq",
+     "has_diagram": false,
+     "box_2d": [
+      286,
+      563,
+      362,
+      976
+     ]
+    },
+    {
+     "kind": "question",
+     "number": 18,
+     "question": "Phenetic classification is based on",
+     "options": {
+      "a": "sexual characteristics",
+      "b": "the ancestral lineage of existing organisms",
+      "c": "observable characteristics of existing organisms",
+      "d": "dendrograms based on DNA characteristics"
+     },
+     "year_tag": "2003, 04",
+     "ncert_tag": null,
+     "question_type": "mcq",
+     "has_diagram": false,
+     "box_2d": [
+      362,
+      563,
+      454,
+      976
+     ]
+    },
+    {
+     "kind": "question",
+     "number": 19,
+     "question": "Biosystematics aims at",
+     "options": {
+      "a": "identification and arrangement of organisms on the basis of their cytological characteristics",
+      "b": "the classification of organisms based on broad morphological characters",
+      "c": "delimiting various taxa of organisms and establishing their relationships",
+      "d": "the classification of organisms based on their evolutionary history and establishing their phylogeny on the totality of various parameters from all fields of studies"
+     },
+     "year_tag": "2003",
+     "ncert_tag": null,
+     "question_type": "mcq",
+     "has_diagram": false,
+     "box_2d": [
+      454,
+      566,
+      616,
+      976
+     ]
+    },
+    {
+     "kind": "question",
+     "number": 20,
+     "question": "Species are considered as",
+     "options": {
+      "a": "real units of classification devised by taxonomists",
+      "b": "real basic units of classification",
+      "c": "the lowest units of classification",
+      "d": "artificial concept of human mind which cannot be defined in absolute terms"
+     },
+     "year_tag": "2003, 1994",
+     "ncert_tag": "Page-8 / N-6",
+     "question_type": "mcq",
+     "has_diagram": false,
+     "box_2d": [
+      616,
+      565,
+      734,
+      976
+     ]
+    },
+    {
+     "kind": "question",
+     "number": 21,
+     "question": "What is true for individuals of same species?",
+     "options": {
+      "a": "Live in same niche",
+      "b": "Live in same habitat",
+      "c": "Interbreeding",
+      "d": "Live in different habitat"
+     },
+     "year_tag": "2002",
+     "ncert_tag": "Page-9 / N-6",
+     "question_type": "mcq",
+     "has_diagram": false,
+     "box_2d": [
+      734,
+      567,
+      811,
+      976
+     ]
+    },
+    {
+     "kind": "question",
+     "number": 22,
+     "question": "The practical purpose of classification of living organisms is to",
+     "options": {
+      "a": "explain the origin of living organisms",
+      "b": "trace the evolution of living organisms",
+      "c": "name the living organisms",
+      "d": "facilitate identification of unknown organisms"
+     },
+     "year_tag": "1999",
+     "ncert_tag": "Page-7 / N-5",
+     "question_type": "mcq",
+     "has_diagram": false,
+     "box_2d": [
+      811,
+      567,
+      902,
+      976
+     ]
+    }
+   ]
+  },
+  {
+   "page": 3,
+   "usage": {
+    "input_tokens": 2260,
+    "output_tokens": 2850
+   },
+   "items": [
+    {
+     "kind": "question",
+     "number": 23,
+     "question": "A taxon is",
+     "options": {
+      "a": "a group of related families",
+      "b": "a group of related species",
+      "c": "a type of living organisms",
+      "d": "a taxonomic group of any ranking"
+     },
+     "year_tag": "1990,91,92,96",
+     "ncert_tag": "Page-8 / N-6",
+     "question_type": "mcq",
+     "has_diagram": false,
+     "box_2d": [
+      [
+       112,
+       53,
+       185,
+       463
+      ]
+     ]
+    },
+    {
+     "kind": "question",
+     "number": 24,
+     "question": "Binomial nomenclature was introduced by",
+     "options": {
+      "a": "de Vries",
+      "b": "Carolus Linnaeus",
+      "c": "Huxley",
+      "d": "John Ray"
+     },
+     "year_tag": "1994",
+     "ncert_tag": "Page-6 / N-4",
+     "question_type": "mcq",
+     "has_diagram": false,
+     "box_2d": [
+      [
+       185,
+       53,
+       241,
+       463
+      ]
+     ]
+    },
+    {
+     "kind": "question",
+     "number": 25,
+     "question": "Binomial nomenclature consists of two words",
+     "options": {
+      "a": "Genus and species",
+      "b": "Order and family",
+      "c": "Family and genus",
+      "d": "Species and variety"
+     },
+     "year_tag": "1994",
+     "ncert_tag": "Page-6 / N-4",
+     "question_type": "mcq",
+     "has_diagram": false,
+     "box_2d": [
+      [
+       241,
+       53,
+       294,
+       463
+      ]
+     ]
+    },
+    {
+     "kind": "question",
+     "number": 26,
+     "question": "\"Taxonomy without phylogeny is similar to bones without flesh\" is the statement of",
+     "options": {
+      "a": "Oswald Tippo",
+      "b": "John Hutchinson",
+      "c": "Takhtajan",
+      "d": "Bentham and Hooker"
+     },
+     "year_tag": "1994",
+     "ncert_tag": null,
+     "question_type": "mcq",
+     "has_diagram": false,
+     "box_2d": [
+      [
+       294,
+       53,
+       353,
+       463
+      ]
+     ]
+    },
+    {
+     "kind": "question",
+     "number": 27,
+     "question": "Binomial nomenclature means",
+     "options": {
+      "a": "one name given by two scientists",
+      "b": "one scientific name consisting of a generic and specific epithet",
+      "c": "two names, one latinised, other of a person",
+      "d": "two names of same plant"
+     },
+     "year_tag": "1993",
+     "ncert_tag": "Page-6 / N-4",
+     "question_type": "mcq",
+     "has_diagram": false,
+     "box_2d": [
+      [
+       353,
+       53,
+       449,
+       463
+      ]
+     ]
+    },
+    {
+     "kind": "question",
+     "number": 28,
+     "question": "Linnaeus is credited with",
+     "options": {
+      "a": "binomial nomenclature",
+      "b": "theory of biogenesis",
+      "c": "discovery of microscope",
+      "d": "discovery of blood circulation"
+     },
+     "year_tag": "1993",
+     "ncert_tag": "Page-6 / N-4",
+     "question_type": "mcq",
+     "has_diagram": false,
+     "box_2d": [
+      [
+       449,
+       53,
+       517,
+       463
+      ]
+     ]
+    },
+    {
+     "kind": "question",
+     "number": 29,
+     "question": "The term phylum was given by",
+     "options": {
+      "a": "Cuvier",
+      "b": "Haeckel",
+      "c": "Theophrastus",
+      "d": "Linnaeus"
+     },
+     "year_tag": "1992",
+     "ncert_tag": null,
+     "question_type": "mcq",
+     "has_diagram": false,
+     "box_2d": [
+      [
+       517,
+       53,
+       558,
+       463
+      ]
+     ]
+    },
+    {
+     "kind": "question",
+     "number": 30,
+     "question": "Sequence of taxonomic categories is",
+     "options": {
+      "a": "Class - Phylum - Tribe - Order - Family - Genus - Species",
+      "b": "Division - Class - Family - Tribe - Order - Genus - Species",
+      "c": "Division - Class - Order - Family - Tribe - Genus - Species",
+      "d": "Phylum - Order - Class - Tribe - Family - Genus - Species"
+     },
+     "year_tag": "1992",
+     "ncert_tag": "Page-10 / N-8",
+     "question_type": "mcq",
+     "has_diagram": false,
+     "box_2d": [
+      [
+       558,
+       53,
+       695,
+       463
+      ]
+     ]
+    },
+    {
+     "kind": "question",
+     "number": 31,
+     "question": "An important criterion for modern day classification is",
+     "options": {
+      "a": "resemblances in morphology",
+      "b": "anatomical and physiological traits",
+      "c": "breeding habits",
+      "d": "presence or absence of notochord"
+     },
+     "year_tag": "1991",
+     "ncert_tag": null,
+     "question_type": "mcq",
+     "has_diagram": false,
+     "box_2d": [
+      [
+       695,
+       53,
+       781,
+       463
+      ]
+     ]
+    },
+    {
+     "kind": "question",
+     "number": 32,
+     "question": "Linnaeus evolved a system of nomenclature called",
+     "options": {
+      "a": "mononomial",
+      "b": "vernacular",
+      "c": "binomial",
+      "d": "polynomial"
+     },
+     "year_tag": "1990",
+     "ncert_tag": "Page-6 / N-4",
+     "question_type": "mcq",
+     "has_diagram": false,
+     "box_2d": [
+      [
+       781,
+       53,
+       834,
+       463
+      ]
+     ]
+    },
+    {
+     "kind": "question",
+     "number": 33,
+     "question": "Basic unit or smallest taxon of taxonomy/ classification is",
+     "options": {
+      "a": "species",
+      "b": "kingdom",
+      "c": "family",
+      "d": "variety"
+     },
+     "year_tag": "1990",
+     "ncert_tag": "Page-8 / N-6",
+     "question_type": "mcq",
+     "has_diagram": false,
+     "box_2d": [
+      [
+       834,
+       53,
+       891,
+       463
+      ]
+     ]
+    },
+    {
+     "kind": "question",
+     "number": 34,
+     "question": "The term \"New Systematics\" was introduced by",
+     "options": {
+      "a": "Bentham and Hooker",
+      "b": "Linnaeus",
+      "c": "Julian Huxley",
+      "d": "A.P. de Candolle"
+     },
+     "year_tag": "1988",
+     "ncert_tag": "Page-8 / N-5",
+     "question_type": "mcq",
+     "has_diagram": false,
+     "box_2d": [
+      [
+       112,
+       484,
+       169,
+       893
+      ]
+     ]
+    },
+    {
+     "kind": "question",
+     "number": 35,
+     "question": "Which of the following are true about the taxonomical aid 'key'?\n(i) Keys are based on the similarities and dissimilarities.\n(ii) Key is analytical in nature.\n(iii) Keys are based on the contrasting characters in pair called Couplet.\n(iv) Same key can be used for all taxonomic categories.\n(v) Each statement in the key is called Lead.\nChoose the most appropriate answer from the options given below :",
+     "options": {
+      "a": "(i), (iii), (iv) and (v) only",
+      "b": "(i), (ii) and (iii) only",
+      "c": "(ii), (iii) and (iv) only",
+      "d": "(i), (ii), (iii) and (v) only"
+     },
+     "year_tag": "Ph-II 2022",
+     "ncert_tag": "Page-13, 14",
+     "question_type": "statement_based",
+     "has_diagram": false,
+     "box_2d": [
+      [
+       218,
+       484,
+       456,
+       893
+      ]
+     ]
+    },
+    {
+     "kind": "question",
+     "number": 36,
+     "question": "The contrasting characteristics generally in a pair used for identification of animals in Taxonomic Key are referred to as :",
+     "options": {
+      "a": "Alternate",
+      "b": "Lead",
+      "c": "Couplet",
+      "d": "Doublet"
+     },
+     "year_tag": "2019",
+     "ncert_tag": "Page-13",
+     "question_type": "mcq",
+     "has_diagram": false,
+     "box_2d": [
+      [
+       456,
+       484,
+       524,
+       893
+      ]
+     ]
+    },
+    {
+     "kind": "question",
+     "number": 37,
+     "question": "Match the items given in Column I with those in Column II and select the correct option given below:\nColumn I | Column II\n(A) Herbarium | (i) It is a place having a collection of preserved plants and animals\n(B) Key | (ii) A list that enumerates methodically all the species found in an area with brief description aiding identification\n(C) Museum | (iii) Is a place where dried and pressed plant specimens mounted on sheets are kept\n(D) Catalogue | (iv) A booklet containing a list of characters and their alternates which are helpful in identification of various taxa.",
+     "options": {
+      "a": "",
+      "b": "",
+      "c": "",
+      "d": ""
+     },
+     "year_tag": "2018",
+     "ncert_tag": "Page-11 to 14",
+     "question_type": "match_column",
+     "has_diagram": false,
+     "box_2d": [
+      [
+       524,
+       484,
+       888,
+       893
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "page": 4,
+   "usage": {
+    "input_tokens": 2260,
+    "output_tokens": 856
+   },
+   "items": [
+    {
+     "kind": "continuation",
+     "text": "",
+     "options": {
+      "a": "(i) (iv) (iii) (ii)",
+      "b": "(iii) (ii) (i) (iv)",
+      "c": "(iii) (iv) (i) (ii)",
+      "d": "(ii) (iv) (iii) (i)"
+     },
+     "box_2d": [
+      [
+       93,
+       169,
+       172,
+       389
+      ]
+     ]
+    },
+    {
+     "kind": "question",
+     "number": 38,
+     "question": "Which one of the following is not a correct statement?",
+     "options": {
+      "a": "Botanical gardens have collection of living plants for reference.",
+      "b": "A museum has collection of photographs of plants and animals",
+      "c": "Key is taxonomic aid for identification of specimens.",
+      "d": "Herbarium houses dried, pressed and preserved plant specimens."
+     },
+     "year_tag": "2010 M",
+     "ncert_tag": "Page-12",
+     "question_type": "mcq",
+     "has_diagram": false,
+     "box_2d": [
+      [
+       89,
+       126,
+       235,
+       573
+      ]
+     ]
+    },
+    {
+     "kind": "answer_key",
+     "entries": {
+      "1": "b",
+      "2": "c",
+      "3": "a",
+      "4": "d",
+      "5": "b",
+      "6": "d",
+      "7": "b",
+      "8": "b",
+      "9": "d",
+      "10": "a",
+      "11": "a",
+      "12": "b",
+      "13": "a",
+      "14": "b",
+      "15": "b",
+      "16": "a",
+      "17": "a",
+      "18": "c",
+      "19": "d",
+      "20": "c",
+      "21": "c",
+      "22": "d",
+      "23": "d",
+      "24": "b",
+      "25": "a",
+      "26": "c",
+      "27": "b",
+      "28": "a",
+      "29": "b",
+      "30": "c",
+      "31": "b",
+      "32": "c",
+      "33": "a",
+      "34": "c",
+      "35": "d",
+      "36": "c",
+      "37": "c",
+      "38": "b"
+     },
+     "box_2d": [
+      [
+       268,
+       128,
+       348,
+       970
+      ]
+     ]
+    },
+    {
+     "kind": "solutions_start",
+     "box_2d": [
+      [
+       358,
+       345,
+       396,
+       755
+      ]
+     ]
+    }
+   ]
+  }
+ ]
+}

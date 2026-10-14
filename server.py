@@ -242,6 +242,7 @@ gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 import requests as http_requests
 from process_pyq_vision import scan_pdf_bytes, scan_mock_test_pdf
 from process_pyq_book_3col import scan_book_pdf_bytes
+from process_pyq_scanned import scan_scanned_pdf_bytes, estimate_scanned_pdf_cost, DEFAULT_MAX_PAGES as SCANNED_DEFAULT_MAX_PAGES
 from utils.krutidev2unicode import kru2uni
 
 # Shared verbatim between INERT_PAIR_GUARD and _VERIFY_MCQ_HEDGE_SYSTEM further down
@@ -922,7 +923,15 @@ class ScanPdfRequest(BaseModel):
     # "3col_book" = process_pyq_book_3col's layout for 3-column coaching-book PDFs (zero-padded
     # question numbers, lettered (a)-(d) options, printed "Ans. (x)") -- a separate module, never
     # auto-detected, so an existing PDF's scan can't silently switch pipelines.
+    # "scanned" = process_pyq_scanned's image-only mode (no text layer; each page read by Gemini
+    # vision) -- also never auto-selected, for the same reason.
     layout: str = "standard"
+    # Scanned mode only: a PDF over its per-run page cap is refused unless the admin confirmed.
+    confirm_over_cap: bool = False
+
+class ScanPdfEstimateRequest(BaseModel):
+    subject: str
+    data: str  # base64-encoded PDF bytes
 
 class PdfMarkProcessedRequest(BaseModel):
     id: int
@@ -7410,16 +7419,30 @@ def admin_scan_pdf(req: ScanPdfRequest, _: None = Depends(verify_admin_or_contra
     # so this multi-second-to-multi-minute call doesn't block the event loop for other requests.
     if req.subject not in ("Biology", "Physics", "Chemistry"):
         return {"error": "Invalid subject"}
-    if req.layout not in ("standard", "3col_book"):
+    if req.layout not in ("standard", "3col_book", "scanned"):
         return {"error": "Invalid layout"}
     try:
         pdf_bytes = base64.b64decode(req.data)
     except Exception:
         return {"error": "Could not decode PDF data"}
 
+    if req.layout == "scanned" and not req.confirm_over_cap:
+        # Checked BEFORE a processed_pdfs row is created, so a cap refusal (which the UI turns
+        # into a confirm prompt) doesn't leave a stray "processing" row behind.
+        try:
+            with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+                page_count = len(doc)
+        except Exception:
+            return {"error": "Could not open PDF"}
+        if page_count > SCANNED_DEFAULT_MAX_PAGES:
+            return {"error": f"This PDF has {page_count} pages, over the {SCANNED_DEFAULT_MAX_PAGES}-page cap for one scanned-mode run. Confirm to run it anyway.", "needs_confirmation": True, "pages": page_count}
+
     processed_pdf_id = _create_processed_pdf_row(req.filename, req.subject) if req.filename else None
     try:
-        result = scan_book_pdf_bytes(pdf_bytes, req.subject) if req.layout == "3col_book" else scan_pdf_bytes(pdf_bytes, req.subject)
+        if req.layout == "scanned":
+            result = scan_scanned_pdf_bytes(pdf_bytes, req.subject, confirm_over_cap=req.confirm_over_cap)
+        else:
+            result = scan_book_pdf_bytes(pdf_bytes, req.subject) if req.layout == "3col_book" else scan_pdf_bytes(pdf_bytes, req.subject)
     except Exception as e:
         _update_processed_pdf_row(processed_pdf_id, "failed", error_message=str(e))
         return {"error": str(e)}
@@ -7427,6 +7450,19 @@ def admin_scan_pdf(req: ScanPdfRequest, _: None = Depends(verify_admin_or_contra
         _update_processed_pdf_row(processed_pdf_id, "failed", error_message=result["error"])
     result["processed_pdf_id"] = processed_pdf_id
     return result
+
+@app.post("/admin/scan-pdf/estimate")
+def admin_scan_pdf_estimate(req: ScanPdfEstimateRequest, _: None = Depends(verify_admin_or_contractor_pdf), __: None = Depends(rate_limiter(20, 300))):
+    """Scanned mode's pre-run cost estimate: page count, how many pages are already cached (free
+    to re-run), and an estimated USD cost for the rest. No model call. Sync for the same reason as
+    admin_scan_pdf (page rendering is CPU work)."""
+    if req.subject not in ("Biology", "Physics", "Chemistry"):
+        return {"error": "Invalid subject"}
+    try:
+        pdf_bytes = base64.b64decode(req.data)
+        return estimate_scanned_pdf_cost(pdf_bytes, req.subject)
+    except Exception as e:
+        return {"error": f"Could not read PDF: {e}"}
 
 @app.get("/admin/pyq-classifier-data")
 async def admin_pyq_classifier_data(subject: str, _: None = Depends(verify_admin_or_contractor_pdf)):
