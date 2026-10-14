@@ -1340,7 +1340,7 @@ const TRANSLATIONS = {
       pleaseLoginSave: 'Please log in to save questions.',
       failedSaveQuestion: 'Failed to save question.',
       questionSaved: 'Question saved! ✅',
-      selectionExplain: '💡 Explain',
+      selectionExplain: 'Explain',
       selectionAskPlaceholder: 'Ask about this...'
     },
     hi: {
@@ -1370,7 +1370,7 @@ const TRANSLATIONS = {
       pleaseLoginSave: 'प्रश्न सहेजने के लिए कृपया लॉग इन करें।',
       failedSaveQuestion: 'प्रश्न सहेजने में विफल।',
       questionSaved: 'प्रश्न सहेजा गया! ✅',
-      selectionExplain: '💡 समझाएँ',
+      selectionExplain: 'समझाएँ',
       selectionAskPlaceholder: 'इसके बारे में पूछें...'
     }
   },
