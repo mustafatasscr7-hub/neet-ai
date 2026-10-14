@@ -256,8 +256,11 @@
         <select id="pdfLayoutSelect" style="width:100%;max-width:300px;background:#0d0d0d;border:1px solid #2a2a2a;border-radius:8px;padding:8px 10px;color:#ececec;font-family:'Inter',sans-serif;font-size:13px;">
           <option value="standard">Standard (official question papers)</option>
           <option value="3col_book">3-column book (coaching-book PYQ chapters)</option>
-          <option value="scanned">Scanned pages (image-only)</option>
           <option value="scanned_ocr">Scanned pages (free OCR)</option>
+          <!-- Gemini scanned mode: backend, /admin/scan-pdf/estimate and confirmScannedRun() are kept; hidden from the UI
+               in favour of free OCR (2026-10-14). To bring it back, restore:
+               <option value="scanned">Scanned pages (image-only)</option> -->
+
         </select>
       </div>
       <div class="upload-row">
@@ -266,7 +269,7 @@
       </div>
       <div id="scanBtnHint" style="font-size:11px;color:#666;margin-top:8px;">Pick a subject above and choose a PDF file to enable scanning.</div>
       <div id="scanStatus"></div>
-      <div id="scanModeHint" style="display:none;font-size:12px;color:#4f8ef7;margin-top:8px;">Looks like scanned pages, try Scanned pages mode.</div>
+      <div id="scanModeHint" style="display:none;font-size:12px;color:#4f8ef7;margin-top:8px;">Looks like scanned pages, try Scanned pages (free OCR) mode.</div>
     </div>
 
     <div id="pasteModeSection" style="display:none;">
