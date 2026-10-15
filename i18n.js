@@ -906,7 +906,15 @@ const TRANSLATIONS = {
       exitConfirmMessage: 'Are you sure you want to exit? You can resume this test later from where you left off.',
       resumePrompt: 'You have an unfinished mock test ({answered}/{total} answered). Resume where you left off?',
       resumeTest: 'Resume',
-      startFresh: 'Start Fresh'
+      startFresh: 'Start Fresh',
+      loginToTakeTest: 'Log in to take a test. Answers are checked on our server, so each test is linked to your account.',
+      logIn: 'Log in',
+      submitting: 'Submitting your test…',
+      submitFailed: "Couldn't submit your test. Your answers are kept, so check your connection and try again.",
+      retrySubmit: 'Try again',
+      backToTest: 'Back to test',
+      attemptGone: "This test can't be submitted from this account. Start a new test.",
+      tooManyStarts: 'Too many tests started in a short time. Please wait a few minutes and try again.'
     },
     hi: {
       chooseTest: 'अपना टेस्ट चुनें',
@@ -937,7 +945,15 @@ const TRANSLATIONS = {
       exitConfirmMessage: 'क्या आप वाकई बाहर निकलना चाहते हैं? आप बाद में इस टेस्ट को वहीं से जारी रख सकते हैं जहाँ आपने छोड़ा था।',
       resumePrompt: 'आपका एक अधूरा मॉक टेस्ट है ({answered}/{total} उत्तरित)। जहाँ से छोड़ा था वहीं से जारी रखें?',
       resumeTest: 'जारी रखें',
-      startFresh: 'नए सिरे से शुरू करें'
+      startFresh: 'नए सिरे से शुरू करें',
+      loginToTakeTest: 'टेस्ट देने के लिए लॉग इन करें। उत्तर हमारे सर्वर पर जाँचे जाते हैं, इसलिए हर टेस्ट आपके खाते से जुड़ा होता है।',
+      logIn: 'लॉग इन करें',
+      submitting: 'आपका टेस्ट जमा किया जा रहा है…',
+      submitFailed: 'आपका टेस्ट जमा नहीं हो सका। आपके उत्तर सुरक्षित हैं, इसलिए अपना कनेक्शन जाँचें और फिर से कोशिश करें।',
+      retrySubmit: 'फिर से कोशिश करें',
+      backToTest: 'टेस्ट पर वापस जाएँ',
+      attemptGone: 'यह टेस्ट इस खाते से जमा नहीं किया जा सकता। नया टेस्ट शुरू करें।',
+      tooManyStarts: 'कम समय में बहुत सारे टेस्ट शुरू किए गए। कृपया कुछ मिनट रुककर फिर से कोशिश करें।'
     }
   },
 
@@ -1053,7 +1069,8 @@ const TRANSLATIONS = {
       yourAnswer: 'Your answer:',
       statusCorrect: 'Correct (+4)',
       statusWrong: 'Wrong (-1)',
-      statusSkipped: 'Skipped (0)'
+      statusSkipped: 'Skipped (0)',
+      lateSubmission: 'Submitted after the time limit.'
     },
     hi: {
       scoreboardBtn: 'स्कोरबोर्ड',
@@ -1067,7 +1084,8 @@ const TRANSLATIONS = {
       yourAnswer: 'आपका उत्तर:',
       statusCorrect: 'सही (+4)',
       statusWrong: 'गलत (-1)',
-      statusSkipped: 'छोड़ा गया (0)'
+      statusSkipped: 'छोड़ा गया (0)',
+      lateSubmission: 'समय सीमा के बाद जमा किया गया।'
     }
   },
 

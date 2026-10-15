@@ -217,6 +217,23 @@
     /* Smooth fade-in on page load */
     body { animation: pageFadeIn 0.22s ease; }
     @keyframes pageFadeIn { from { opacity: 0; } to { opacity: 1; } }
+    /* Server-graded tests: the login prompt shown to guests and the "Submitting..." overlay. */
+    .secure-msg { color: #c8c8cc; font-size: 14px; line-height: 1.6; margin: 0; }
+    .secure-btn { background: #4f8ef71f; color: #8ab4fa; border: 1px solid #4f8ef766; padding: 10px 22px; border-radius: 8px; cursor: pointer; font: 600 14px 'Inter', sans-serif; }
+    .secure-btn:hover { background: #4f8ef733; }
+    .secure-btn-quiet { background: transparent; color: #a8a8b0; border: 1px solid #2a2a2a; padding: 10px 18px; border-radius: 8px; cursor: pointer; font: 500 14px 'Inter', sans-serif; }
+    .secure-btn:focus-visible, .secure-btn-quiet:focus-visible { outline: 2px solid #4f8ef7; outline-offset: 2px; }
+    .submitting-overlay { position: fixed; inset: 0; z-index: 2500; background: rgba(0,0,0,0.55); display: flex; align-items: center; justify-content: center; }
+    .submitting-box { display: flex; align-items: center; gap: 12px; background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 14px; padding: 18px 24px; color: #ececec; font: 500 14px 'Inter', sans-serif; }
+    .submitting-spinner { width: 16px; height: 16px; border-radius: 50%; border: 2px solid #3a3a3a; border-top-color: #4f8ef7; animation: submittingSpin 0.8s linear infinite; }
+    @keyframes submittingSpin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { .submitting-spinner { animation-duration: 2.4s; } }
+    body.light-mode .secure-msg { color: #33333b !important; }
+    body.light-mode .secure-btn { background: #4f8ef71a !important; color: #1d5fd6 !important; border-color: #4f8ef766 !important; }
+    body.light-mode .secure-btn-quiet { color: #55555f !important; border-color: #d5d5dd !important; }
+    body.light-mode .submitting-overlay { background: rgba(0,0,0,0.25) !important; }
+    body.light-mode .submitting-box { background: #ffffff !important; border-color: #e3e3ea !important; color: #16161d !important; }
+    body.light-mode .submitting-spinner { border-color: #e3e3ea !important; border-top-color: #4f8ef7 !important; }
   </style>
 </head>
 <body>
@@ -432,6 +449,13 @@
    let startTime = Date.now();
     let savedQuestions = new Set();
     let currentMockTestId = null; // id of the official test being taken, or null for random/personalised mode
+    // Server-graded tests (POST /mock-tests/attempts): questions arrive with no answer key, so
+    // nothing in the browser can reveal it before submit. currentAttemptId ties the submit to the
+    // attempt the server recorded; pendingSaves holds mid-test "Save" clicks (by question index),
+    // written to saved_questions after grading, once the correct answer is known.
+    let currentAttemptId = null;
+    let pendingSaves = new Set();
+    let submitInFlight = false;
     const ORIGINAL_START_SCREEN_HTML = document.getElementById('startScreen').innerHTML;
 
     // ---------------- In-progress local persistence (crash/refresh/close recovery) ----------------
@@ -468,7 +492,9 @@
       try {
         localStorage.setItem(currentMockProgressKey, JSON.stringify({
           mockTestId: currentMockTestId,
+          attemptId: currentAttemptId,
           questions, answers, marked, currentIndex,
+          pendingSaves: [...pendingSaves],
           endTimestamp: mockTestEndTimestamp,
           startTime,
           savedAt: Date.now()
@@ -487,9 +513,12 @@
     function resumeMockTestFromStorage(key, data) {
       currentMockProgressKey = key;
       currentMockTestId = data.mockTestId;
+      currentAttemptId = data.attemptId;
       questions = data.questions;
       answers = data.answers || {};
       marked = data.marked || {};
+      pendingSaves = new Set(data.pendingSaves || []);
+      savedQuestions = new Set(pendingSaves);
       startTime = data.startTime || Date.now();
       mockTestEndTimestamp = data.endTimestamp;
       totalSeconds = Math.max(0, Math.round((mockTestEndTimestamp - Date.now()) / 1000));
@@ -515,11 +544,17 @@
       const identity = await getMockTestIdentity();
       const prefix = `mocktest_progress_${identity}_`;
       let foundKey = null, foundData = null;
-      for (let i = 0; i < localStorage.length; i++) {
-        const k = localStorage.key(i);
+      // Snapshot of the keys first: entries get removed inside the loop, which would shift
+      // localStorage's indices and skip the next key.
+      const keys = [];
+      for (let i = 0; i < localStorage.length; i++) keys.push(localStorage.key(i));
+      for (const k of keys) {
         if (!k || !k.startsWith(prefix)) continue;
         try {
           const parsed = JSON.parse(localStorage.getItem(k));
+          // Progress saved before tests were graded on the server has no attemptId (and still
+          // carries every answer key): it can't be submitted any more, so it's dropped.
+          if (parsed && !parsed.attemptId) { localStorage.removeItem(k); continue; }
           if (parsed && Array.isArray(parsed.questions) && parsed.questions.length && (!foundData || parsed.savedAt > foundData.savedAt)) {
             foundKey = k;
             foundData = parsed;
@@ -579,16 +614,29 @@
     }
 
     // Load questions -- mockTestId picks a specific admin-uploaded official test;
-    // omitted/null falls back to the original random-sample-from-pyq endpoint.
+    // omitted/null is the random 180-question draw from pyq. Both go through
+    // POST /mock-tests/attempts: the server records the attempt and returns the questions with
+    // no answer key, plus its own deadline (the timer below counts down to that).
    async function loadQuestions(mockTestId) {
       try {
-        const url = mockTestId
-          ? `${API_BASE}/mock-tests/${mockTestId}/questions`
-          : 'https://neet-ai-production.up.railway.app/mock-test-questions';
-        const res = await fetch(url);
+        const { data: { session } } = await client.auth.getSession();
+        if (!session) { showLoginRequired(); return; }
+        const res = await fetch(`${API_BASE}/mock-tests/attempts`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
+          body: JSON.stringify(mockTestId ? { kind: 'official', mock_test_id: mockTestId } : { kind: 'random' })
+        });
+        if (res.status === 401) { showLoginRequired(); return; }
         const data = await res.json();
-        if (data.error) throw new Error(data.error);
+        if (res.status === 429) throw new Error(t('mocktest', 'tooManyStarts'));
+        if (!res.ok || !data.questions) throw new Error(data.detail || 'Failed to load questions');
         questions = data.questions;
+        currentAttemptId = data.attempt_id;
+        pendingSaves = new Set();
+        savedQuestions = new Set();
+        // Remaining time by the server's clock, so a wrong device clock can't stretch the test.
+        const remainingMs = Math.max(0, Date.parse(data.deadline_at) - Date.parse(data.server_now));
+        totalSeconds = Math.round(remainingMs / 1000);
         await ensureDifficulties(questions, mockTestId ? 'mock_test_questions' : 'pyq');
         // A genuinely fresh start -- clear any stale saved progress for this exact identity+test
         // combo first (e.g. a much older abandoned attempt the resume prompt was never shown
@@ -602,16 +650,34 @@
         renderQuestion(0);
         renderGrid();
         startTimer();
+        return true;
       } catch(e) {
+        const detail = e && e.message === t('mocktest', 'tooManyStarts') ? e.message : 'Make sure the backend server is running.';
         document.getElementById('startScreen').innerHTML = `
           <div style="text-align:center;">
             <h2 style="font-size:20px;color:#ef4444;margin-bottom:8px;">Failed to load questions</h2>
-            <p style="color:#555;font-size:13px;margin-bottom:24px;">Make sure the backend server is running.</p>
+            <p style="color:#555;font-size:13px;margin-bottom:24px;">${escapeHtmlMock(detail)}</p>
             <button onclick="window.location.reload()" style="background:#4f8ef7;border:none;color:white;padding:10px 24px;border-radius:8px;cursor:pointer;font-size:14px;">Try Again</button>
           </div>
         `;
         document.getElementById('startScreen').style.display = 'flex';
+        return false;
       }
+    }
+
+    // Tests are graded on the server against the student's account, so a guest is asked to log in
+    // instead of starting one.
+    function showLoginRequired() {
+      document.getElementById('startScreen').innerHTML = `
+        <div style="text-align:center;max-width:440px;padding:40px;">
+          <p class="secure-msg">${escapeHtmlMock(t('mocktest', 'loginToTakeTest'))}</p>
+          <div style="display:flex;gap:10px;justify-content:center;margin-top:24px;">
+            <button class="secure-btn" onclick="window.location.href='./login.html'">${escapeHtmlMock(t('mocktest', 'logIn'))}</button>
+            <button class="secure-btn-quiet" onclick="document.getElementById('startScreen').innerHTML = ORIGINAL_START_SCREEN_HTML; applyTranslations();">${escapeHtmlMock(t('mocktest', 'backToChoices'))}</button>
+          </div>
+        </div>
+      `;
+      document.getElementById('startScreen').style.display = 'flex';
     }
     
     // Timer
@@ -1144,50 +1210,55 @@ function formatQuestionTextInner(text) {
       document.getElementById('skippedCount').textContent = localizeNum(questions.length - Object.keys(answers).length);
     }
   
+// Mid-test "Save": the question has no answer key yet (the server only reveals it after
+// grading), so the save is queued and written by flushPendingSaves() right after submit, with the
+// correct answer filled in. The queue is part of the saved progress, so it survives a refresh.
 async function saveQuestionFromMock(index) {
-      const q = questions[index];
-      const SUPABASE_URL = 'https://hvhnfttrfouajlyhvunq.supabase.co';
-      const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh2aG5mdHRyZm91YWpseWh2dW5xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg5NDI1NTIsImV4cCI6MjA5NDUxODU1Mn0.8RaSu5yiTpQCEUGKrFO2y6oiRXSqdBehIz933j9Z7WA';
-      const { createClient } = supabase;
-      const client = createClient(SUPABASE_URL, SUPABASE_KEY);
       const { data: { session } } = await client.auth.getSession();
       if (!session) { alert('Please log in to save questions.'); return; }
-      const saveBtn = document.getElementById('saveBtn-' + index);
-      if (saveBtn) saveBtn.disabled = true;
-      const { error } = await client.from('saved_questions').insert({
-        user_id: session.user.id,
-        question_id: q.id,
-        question: q.question,
-        option_a: q.option_a,
-        option_b: q.option_b,
-        option_c: q.option_c,
-        option_d: q.option_d,
-        diagram_url: q.diagram_url,
-        option_a_diagram_url: q.option_a_diagram_url,
-        option_b_diagram_url: q.option_b_diagram_url,
-        option_c_diagram_url: q.option_c_diagram_url,
-        option_d_diagram_url: q.option_d_diagram_url,
-        correct_answer: q.correct_answer,
-        subject: q.subject,
-        chapter: q.chapter,
-        year: q.year,
-        source: 'Mock Test'
-      });
-      if (error) {
-        if (saveBtn) {
-          saveBtn.textContent = '❌ Failed, retry';
-          saveBtn.style.borderColor = '#ef4444';
-          saveBtn.style.color = '#ef4444';
-          saveBtn.disabled = false;
-        }
-        return;
-      }
+      pendingSaves.add(index);
       savedQuestions.add(index);
+      saveMockProgress();
+      const saveBtn = document.getElementById('saveBtn-' + index);
       if (saveBtn) {
-        saveBtn.textContent = '✅ Saved';
+        saveBtn.textContent = t('mocktest', 'saved');
         saveBtn.style.borderColor = '#4ade80';
         saveBtn.style.color = '#4ade80';
         saveBtn.disabled = true;
+      }
+    }
+
+    // results[i] is the graded question i (same order as served), carrying correct_answer.
+    async function flushPendingSaves(results) {
+      if (!pendingSaves.size) return;
+      try {
+        const { data: { session } } = await client.auth.getSession();
+        if (!session) return;
+        for (const index of pendingSaves) {
+          const q = results[index];
+          if (!q) continue;
+          await client.from('saved_questions').insert({
+            user_id: session.user.id,
+            question_id: q.id,
+            question: q.question,
+            option_a: q.option_a,
+            option_b: q.option_b,
+            option_c: q.option_c,
+            option_d: q.option_d,
+            diagram_url: q.diagram_url,
+            option_a_diagram_url: q.option_a_diagram_url,
+            option_b_diagram_url: q.option_b_diagram_url,
+            option_c_diagram_url: q.option_c_diagram_url,
+            option_d_diagram_url: q.option_d_diagram_url,
+            correct_answer: q.correct_answer,
+            subject: q.subject,
+            chapter: q.chapter,
+            year: q.year,
+            source: 'Mock Test'
+          });
+        }
+      } catch (e) {
+        console.log('Saved-question flush error:', e);
       }
     }
 
@@ -1210,50 +1281,77 @@ async function saveQuestionFromMock(index) {
       showConfirmModal(`You have answered ${answered} questions and skipped ${skipped}.\n\nSubmit the test?`, submitTest, 'Submit');
     }
 
+    // Graded on the server (POST /mock-tests/attempts/{id}/submit): the browser only sends the
+    // picked options keyed by question id. The server checks the attempt and its timer, scores it
+    // (+4 / -1 / 0, an unresolvable answer key counts as skipped), saves the mock_results row the
+    // scoreboard reads, and only then returns the answer key. A retry after a dropped connection
+    // replays the same saved result, so it can't double-count or change answers.
     async function submitTest() {
+      if (submitInFlight) return;
+      submitInFlight = true;
       clearInterval(timerInterval);
+      showSubmitting(true);
+      let res = null, data = null;
+      try {
+        const { data: { session } } = await client.auth.getSession();
+        const answersById = {};
+        Object.keys(answers).forEach(i => { if (questions[i]) answersById[String(questions[i].id)] = answers[i]; });
+        res = await fetch(`${API_BASE}/mock-tests/attempts/${encodeURIComponent(currentAttemptId)}/submit`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session ? session.access_token : ''}` },
+          body: JSON.stringify({ question_ids: questions.map(q => String(q.id)), answers: answersById })
+        });
+        data = await res.json().catch(() => null);
+      } catch (e) {}
+      showSubmitting(false);
+
+      if (!res || !res.ok || !data || !Array.isArray(data.results)) {
+        submitInFlight = false;
+        // 404: the attempt isn't this account's (signed out/in as someone else) or no longer
+        // exists -- nothing to retry. Anything else keeps every answer and offers a retry.
+        const gone = res && res.status === 404;
+        const retry = await showConfirmModal(t('mocktest', gone ? 'attemptGone' : 'submitFailed'), {
+          confirmLabel: t('mocktest', gone ? 'startFresh' : 'retrySubmit'),
+          cancelLabel: t('mocktest', 'backToTest')
+        });
+        if (gone) {
+          if (retry) { clearMockProgress(); window.location.reload(); }
+        } else if (retry) {
+          submitTest();
+        } else if (totalSeconds > 0) {
+          startTimer();
+        }
+        return;
+      }
+
       clearMockProgress(); // real submission -- the saved in-progress snapshot must not resurface for a future attempt
-      const timeTaken = Math.floor((Date.now() - startTime) / 1000);
-
-      // correct_answer comes through as either a letter ("b"), a 1-based number string ("2"),
-      // or the literal string "EMPTY" for a row whose answer was never resolved, depending on
-      // where the row originated -- same three shapes chat.html's PYQ-modal already normalizes
-      // for the identical reason. Without this, a digit/EMPTY-format row's userAnswer (always
-      // 'a'-'d') could never equal the raw stored value, silently marking every real student
-      // answer wrong regardless of what they actually picked. Purely defensive: a normal
-      // letter-format correct_answer maps to itself unchanged, so already-correct scoring for
-      // every question that isn't malformed is completely unaffected.
-      const numToLetter = { '1': 'a', '2': 'b', '3': 'c', '4': 'd' };
-      let correct = 0, wrong = 0, skipped = 0;
-      const results = questions.map((q, i) => {
-        const userAnswer = answers[i];
-        const raw = (q.correct_answer || '').toLowerCase().trim();
-        const correctAnswer = ['a', 'b', 'c', 'd'].includes(raw) ? raw : (numToLetter[raw] || null);
-        let status = 'skipped';
-        // Also lands here when the student DID pick an option but correctAnswer couldn't be
-        // determined (blank/'EMPTY'/unparseable) -- reusing the existing "skipped" bucket rather
-        // than inventing a new status mockresults.html has no styling or filter for; the
-        // important property is that this never counts as `wrong` and never costs the student
-        // negative marking for a data problem that isn't their fault.
-        if (!userAnswer || !correctAnswer) { skipped++; status = 'skipped'; }
-        else if (userAnswer === correctAnswer) { correct++; status = 'correct'; }
-        else { wrong++; status = 'wrong'; }
-        return { ...q, userAnswer, status };
-      });
-
-      const score = (correct * 4) - (wrong * 1);
-
       sessionStorage.setItem('mockTestResults', JSON.stringify({
-        score, correct, wrong, skipped,
-        total: questions.length,
-        timeTaken,
-        results,
+        score: data.score, correct: data.correct, wrong: data.wrong, skipped: data.skipped,
+        total: data.total,
+        timeTaken: data.time_taken,
+        results: data.results,
         date: new Date().toISOString(),
-        mockTestId: currentMockTestId
+        mockTestId: data.mock_test_id,
+        // Already in mock_results (written by the server) -- mockresults.html must not save again.
+        serverSaved: true,
+        late: data.late
       }));
 
-      await autoSaveMockMistakes(results);
+      await flushPendingSaves(data.results);
+      await autoSaveMockMistakes(data.results);
       window.location.href = './mockresults.html';
+    }
+
+    function showSubmitting(show) {
+      let el = document.getElementById('submittingOverlay');
+      if (!show) { if (el) el.remove(); return; }
+      if (el) return;
+      el = document.createElement('div');
+      el.id = 'submittingOverlay';
+      el.className = 'submitting-overlay';
+      el.setAttribute('role', 'status');
+      el.innerHTML = `<div class="submitting-box"><span class="submitting-spinner" aria-hidden="true"></span>${escapeHtmlMock(t('mocktest', 'submitting'))}</div>`;
+      document.body.appendChild(el);
     }
 
     async function autoSaveMockMistakes(results) {
@@ -1289,12 +1387,12 @@ async function saveQuestionFromMock(index) {
       }
     }
 
-    // "Full Mock Test" card's onclick. Guests (no session) and users with zero published
-    // official tests go straight to the existing random flow, unchanged. Logged-in users
-    // with un-taken official tests see a picker first; official tests take priority.
+    // "Full Mock Test" card's onclick. Guests are asked to log in (tests are graded on the server
+    // against their account). Users with zero published official tests go straight to the random
+    // flow; users with un-taken official tests see a picker first; official tests take priority.
     async function startTest() {
       const { data: { session } } = await client.auth.getSession();
-      if (!session) { beginLoadingQuestions(null); return; }
+      if (!session) { showLoginRequired(); return; }
       try {
         const res = await fetch(`${API_BASE}/mock-tests/available?user_id=${session.user.id}`, {
           headers: { 'Authorization': `Bearer ${session.access_token}` }
@@ -1364,9 +1462,12 @@ async function saveQuestionFromMock(index) {
         const el = document.getElementById('loadingDots');
         if (el) el.textContent = 'Please wait' + '.'.repeat(dots);
       }, 500);
-      loadQuestions(mockTestId).then(() => {
+      loadQuestions(mockTestId).then(started => {
         clearInterval(progressInterval);
         clearInterval(dotsInterval);
+        // Only uncover the test once it really started -- otherwise the login prompt or error
+        // that replaced this loading screen stays on top.
+        if (!started) return;
         loadBar.style.width = '100%';
         setTimeout(() => {
           document.getElementById('startScreenOverlay').style.display = 'none';

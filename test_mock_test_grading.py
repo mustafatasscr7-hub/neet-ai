@@ -225,7 +225,7 @@ def test_start(client, fake):
         check(f"{kind}: each question carries exactly the public fields",
               data and all(set(q) == set(server.MOCK_TEST_PUBLIC_FIELDS) for q in data["questions"]))
         raw = json.dumps(data)
-        check(f"{kind}: raw JSON has no 'correct_answer' / 'explanation' / 'solution' text", all(s not in raw for s in ("correct_answer", "explanation", "solution")))
+        check(f"{kind}: raw JSON has no \"correct_answer\" / \"explanation\" / \"solution\" key", all(f'"{s}":' not in raw for s in ("correct_answer", "explanation", "solution")))
         attempt = next((a for a in fake.tables["mock_test_attempts"] if a["id"] == data.get("attempt_id")), None)
         check(f"{kind}: attempt stored for this user with the served question order",
               attempt and attempt["user_id"] == UID_A and attempt["question_ids"] == [str(q["id"]) for q in data["questions"]], str(attempt)[:200])

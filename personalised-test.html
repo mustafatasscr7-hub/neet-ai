@@ -218,6 +218,8 @@
     .score-label { font-size: 13px; color: #666; margin-bottom: 8px; }
     .score-value { font-size: 64px; font-weight: 700; color: #4f8ef7; line-height: 1; margin-bottom: 4px; }
     .score-total { font-size: 20px; color: #444; margin-bottom: 24px; }
+    .late-note { font-size: 12.5px; color: #f5a35c; margin: -12px 0 20px; }
+    body.light-mode .late-note { color: #b45309 !important; }
     .score-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
     .stat-box { background: #0d0d0d; border-radius: 10px; padding: 16px; }
     .stat-box-value { font-size: 28px; font-weight: 700; margin-bottom: 4px; }
@@ -418,6 +420,27 @@
     /* Smooth fade-in on page load */
     body { animation: pageFadeIn 0.22s ease; }
     @keyframes pageFadeIn { from { opacity: 0; } to { opacity: 1; } }
+    /* Server-graded tests: the login prompt shown to guests and the "Submitting..." overlay. */
+    .secure-msg { color: #c8c8cc; font-size: 14px; line-height: 1.6; margin: 0; }
+    .secure-btn { background: #4f8ef71f; color: #8ab4fa; border: 1px solid #4f8ef766; padding: 10px 22px; border-radius: 8px; cursor: pointer; font: 600 14px 'Inter', sans-serif; }
+    .secure-btn:hover { background: #4f8ef733; }
+    .secure-btn-quiet { background: transparent; color: #a8a8b0; border: 1px solid #2a2a2a; padding: 10px 18px; border-radius: 8px; cursor: pointer; font: 500 14px 'Inter', sans-serif; }
+    .secure-btn:focus-visible, .secure-btn-quiet:focus-visible { outline: 2px solid #4f8ef7; outline-offset: 2px; }
+    .submitting-overlay { position: fixed; inset: 0; z-index: 2500; background: rgba(0,0,0,0.55); display: flex; align-items: center; justify-content: center; }
+    .submitting-box { display: flex; align-items: center; gap: 12px; background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 14px; padding: 18px 24px; color: #ececec; font: 500 14px 'Inter', sans-serif; }
+    .submitting-spinner { width: 16px; height: 16px; border-radius: 50%; border: 2px solid #3a3a3a; border-top-color: #4f8ef7; animation: submittingSpin 0.8s linear infinite; }
+    @keyframes submittingSpin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { .submitting-spinner { animation-duration: 2.4s; } }
+    body.light-mode .secure-msg { color: #33333b !important; }
+    body.light-mode .secure-btn { background: #4f8ef71a !important; color: #1d5fd6 !important; border-color: #4f8ef766 !important; }
+    body.light-mode .secure-btn-quiet { color: #55555f !important; border-color: #d5d5dd !important; }
+    body.light-mode .submitting-overlay { background: rgba(0,0,0,0.25) !important; }
+    body.light-mode .submitting-box { background: #ffffff !important; border-color: #e3e3ea !important; color: #16161d !important; }
+    body.light-mode .submitting-spinner { border-color: #e3e3ea !important; border-top-color: #4f8ef7 !important; }
+    .setup-notice.login-required { color: #e2e2e6; background: #4f8ef714; border-color: #4f8ef740; line-height: 1.6; }
+    .setup-login-link { color: #8ab4fa; font-weight: 600; margin-left: 4px; }
+    body.light-mode .setup-notice.login-required { color: #33333b !important; background: #4f8ef70f !important; border-color: #4f8ef740 !important; }
+    body.light-mode a.setup-login-link { color: #1d5fd6 !important; }
   </style>
 </head>
 <body>
@@ -605,6 +628,7 @@
         <div class="score-label" data-i18n="personalisedTest.yourScore">Your Score</div>
         <div class="score-value" id="scoreValue">0</div>
         <div class="score-total" id="scoreTotal">out of 0</div>
+        <div class="late-note" id="lateNote" hidden data-i18n="mockresults.lateSubmission">Submitted after the time limit.</div>
         <div class="score-stats">
           <div class="stat-box"><div class="stat-box-value" style="color:#4ade80;" id="correctCount">0</div><div class="stat-box-label" data-i18n="personalisedTest.correct">Correct</div></div>
           <div class="stat-box"><div class="stat-box-value" style="color:#ef4444;" id="wrongCount">0</div><div class="stat-box-label" data-i18n="personalisedTest.wrong">Wrong</div></div>
@@ -760,13 +784,9 @@
       document.getElementById('setupError').style.display = 'none';
       showSetupNotice('Preparing your test…');
       try {
-        const res = await fetch(`${API_BASE}/personalised-catalog-start`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ subject, test_number: testNumber })
-        });
-        const data = await res.json();
-        if (data.error || !data.questions || data.questions.length === 0) {
+        const data = await startSecureAttempt({ kind: 'personalised_catalog', subject, test_number: testNumber });
+        if (data === null) return;
+        if (!data) {
           hideSetupNotice();
           showSetupError('Could not load this test. Try another one.');
           return;
@@ -1120,12 +1140,50 @@
 
     function showSetupNotice(msg) {
       const el = document.getElementById('setupNotice');
+      el.classList.remove('login-required');
       el.textContent = msg;
       el.style.display = 'block';
     }
 
     function hideSetupNotice() {
       document.getElementById('setupNotice').style.display = 'none';
+    }
+
+    // Tests are graded on the server against the student's account, so a guest is asked to log in.
+    function showLoginRequired() {
+      const el = document.getElementById('setupNotice');
+      el.classList.add('login-required');
+      el.innerHTML = `<span>${escapeHtml(t('mocktest', 'loginToTakeTest'))}</span> <a href="./login.html" class="setup-login-link">${escapeHtml(t('mocktest', 'logIn'))}</a>`;
+      el.style.display = 'block';
+    }
+
+    // Starts a server-graded attempt (POST /mock-tests/attempts). Returns the response on success,
+    // null when it has already told the student why not (login, rate limit, unreachable), or
+    // false so the caller can show its own "no questions" message.
+    async function startSecureAttempt(body) {
+      const { data: { session } } = await client.auth.getSession();
+      if (!session) { showLoginRequired(); return null; }
+      let res, data = {};
+      try {
+        res = await fetch(`${API_BASE}/mock-tests/attempts`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
+          body: JSON.stringify(body)
+        });
+        data = await res.json().catch(() => ({}));
+      } catch (e) {
+        hideSetupNotice();
+        showSetupError('Could not reach the server. Make sure the backend is running.');
+        return null;
+      }
+      if (res.status === 401) { showLoginRequired(); return null; }
+      if (res.status === 429) { hideSetupNotice(); showSetupError(t('mocktest', 'tooManyStarts')); return null; }
+      if (!res.ok || !Array.isArray(data.questions) || !data.questions.length) return false;
+      data.receivedAt = Date.now();
+      currentAttempt = data;
+      pendingSaves = new Set();
+      savedQuestions = new Set();
+      return data;
     }
 
     async function generateTest() {
@@ -1142,14 +1200,10 @@
         : [{ subject: selectedSubject, chapters: Array.from(selectedChapters) }];
 
       try {
-        const res = await fetch(`${API_BASE}/personalised-test-questions`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ selections, count: selectedCount })
-        });
-        const data = await res.json();
+        const data = await startSecureAttempt({ kind: 'personalised', selections, count: selectedCount });
+        if (data === null) { updateGenerateBtnState(); return; }
 
-        if (data.error || !data.questions || data.questions.length === 0) {
+        if (!data) {
           hideSetupNotice();
           showSetupError('No active questions matched your selection. Try a different chapter or subject.');
           updateGenerateBtnState();
@@ -1185,6 +1239,12 @@
     let dangerAt = 0, warningAt = 0;
     let startTime = null;
     let savedQuestions = new Set();
+    // Server-graded tests (POST /mock-tests/attempts): questions arrive with no answer key.
+    // currentAttempt is that response (attempt id, duration, server deadline); pendingSaves holds
+    // mid-test "Save" clicks, written to saved_questions once grading has revealed the answers.
+    let currentAttempt = null;
+    let pendingSaves = new Set();
+    let submitInFlight = false;
 
     function startTest() {
       document.getElementById('setupScreen').style.display = 'none';
@@ -1199,9 +1259,12 @@
           (selectedChapters.size ? ` • ${localizeNum(selectedChapters.size)} chapter${selectedChapters.size === 1 ? '' : 's'}` : ' • All chapters');
       }
 
-      totalSeconds = Math.max(300, questions.length * 70);
-      dangerAt = Math.floor(totalSeconds * 0.15);
-      warningAt = Math.floor(totalSeconds * 0.35);
+      // The server set the duration (70s per question, min 5 min) and the deadline; count down to
+      // it by the server's clock, less however long the page took to get here.
+      const remainingMs = Date.parse(currentAttempt.deadline_at) - Date.parse(currentAttempt.server_now) - (Date.now() - currentAttempt.receivedAt);
+      totalSeconds = Math.max(0, Math.round(remainingMs / 1000));
+      dangerAt = Math.floor(currentAttempt.duration_seconds * 0.15);
+      warningAt = Math.floor(currentAttempt.duration_seconds * 0.35);
       startTime = Date.now();
 
       renderQuestion(0);
@@ -1732,46 +1795,54 @@
       document.getElementById('skippedCount').textContent = localizeNum(questions.length - Object.keys(answers).length);
     }
 
+    // Mid-test "Save": the question has no answer key yet (the server only reveals it after
+    // grading), so the save is queued and written by flushPendingSaves() right after submit, with
+    // the correct answer filled in.
     async function saveQuestionFromTest(index) {
-      const q = questions[index];
       const { data: { session } } = await client.auth.getSession();
       if (!session) { alert('Please log in to save questions.'); return; }
-      const saveBtn = document.getElementById('saveBtn-' + index);
-      if (saveBtn) saveBtn.disabled = true;
-      const { error } = await client.from('saved_questions').insert({
-        user_id: session.user.id,
-        question_id: q.id,
-        question: q.question,
-        option_a: q.option_a,
-        option_b: q.option_b,
-        option_c: q.option_c,
-        option_d: q.option_d,
-        diagram_url: q.diagram_url,
-        option_a_diagram_url: q.option_a_diagram_url,
-        option_b_diagram_url: q.option_b_diagram_url,
-        option_c_diagram_url: q.option_c_diagram_url,
-        option_d_diagram_url: q.option_d_diagram_url,
-        correct_answer: q.correct_answer,
-        subject: q.subject,
-        chapter: q.chapter,
-        year: q.year,
-        source: 'Personalised Test'
-      });
-      if (error) {
-        if (saveBtn) {
-          saveBtn.textContent = '❌ Failed, retry';
-          saveBtn.style.borderColor = '#ef4444';
-          saveBtn.style.color = '#ef4444';
-          saveBtn.disabled = false;
-        }
-        return;
-      }
+      pendingSaves.add(index);
       savedQuestions.add(index);
+      const saveBtn = document.getElementById('saveBtn-' + index);
       if (saveBtn) {
         saveBtn.textContent = '✅ Saved';
         saveBtn.style.borderColor = '#4ade80';
         saveBtn.style.color = '#4ade80';
         saveBtn.disabled = true;
+      }
+    }
+
+    // results[i] is the graded question i (same order as served), carrying correct_answer.
+    async function flushPendingSaves(results) {
+      if (!pendingSaves.size) return;
+      try {
+        const { data: { session } } = await client.auth.getSession();
+        if (!session) return;
+        for (const index of pendingSaves) {
+          const q = results[index];
+          if (!q) continue;
+          await client.from('saved_questions').insert({
+            user_id: session.user.id,
+            question_id: q.id,
+            question: q.question,
+            option_a: q.option_a,
+            option_b: q.option_b,
+            option_c: q.option_c,
+            option_d: q.option_d,
+            diagram_url: q.diagram_url,
+            option_a_diagram_url: q.option_a_diagram_url,
+            option_b_diagram_url: q.option_b_diagram_url,
+            option_c_diagram_url: q.option_c_diagram_url,
+            option_d_diagram_url: q.option_d_diagram_url,
+            correct_answer: q.correct_answer,
+            subject: q.subject,
+            chapter: q.chapter,
+            year: q.year,
+            source: 'Personalised Test'
+          });
+        }
+      } catch (e) {
+        console.log('Saved-question flush error:', e);
       }
     }
 
@@ -1791,33 +1862,74 @@
       showConfirmModal(`You have answered ${answered} questions and skipped ${skipped}.\n\nSubmit the test?`, submitTest, 'Submit');
     }
 
+    // Graded on the server (POST /mock-tests/attempts/{id}/submit): the browser only sends the
+    // picked options keyed by question id. The server checks the attempt and its timer, scores it
+    // (+4 / -1 / 0, an unresolvable answer key counts as skipped), saves the mock_results row the
+    // scoreboard reads, and only then returns the answer key. A retry after a dropped connection
+    // replays the same saved result.
     async function submitTest() {
+      if (submitInFlight) return;
+      submitInFlight = true;
       clearInterval(timerInterval);
-      const timeTaken = Math.floor((Date.now() - startTime) / 1000);
+      showSubmitting(true);
+      let res = null, data = null;
+      try {
+        const { data: { session } } = await client.auth.getSession();
+        const answersById = {};
+        Object.keys(answers).forEach(i => { if (questions[i]) answersById[String(questions[i].id)] = answers[i]; });
+        res = await fetch(`${API_BASE}/mock-tests/attempts/${encodeURIComponent(currentAttempt.attempt_id)}/submit`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session ? session.access_token : ''}` },
+          body: JSON.stringify({ question_ids: questions.map(q => String(q.id)), answers: answersById })
+        });
+        data = await res.json().catch(() => null);
+      } catch (e) {}
+      showSubmitting(false);
 
-      let correct = 0, wrong = 0, skipped = 0;
-      const results = questions.map((q, i) => {
-        const userAnswer = answers[i];
-        const correctAnswer = q.correct_answer ? q.correct_answer.toLowerCase().trim() : null;
-        let status = 'skipped';
-        if (!userAnswer) { skipped++; status = 'skipped'; }
-        else if (userAnswer === correctAnswer) { correct++; status = 'correct'; }
-        else { wrong++; status = 'wrong'; }
-        return { ...q, userAnswer, status };
-      });
+      if (!res || !res.ok || !data || !Array.isArray(data.results)) {
+        submitInFlight = false;
+        // 404: the attempt isn't this account's (signed out/in as someone else) -- nothing to
+        // retry. Anything else keeps every answer and offers a retry.
+        const gone = res && res.status === 404;
+        const retry = await showConfirmModal(t('mocktest', gone ? 'attemptGone' : 'submitFailed'), {
+          confirmLabel: t('mocktest', gone ? 'startFresh' : 'retrySubmit'),
+          cancelLabel: t('mocktest', 'backToTest')
+        });
+        if (gone) {
+          if (retry) window.location.reload();
+        } else if (retry) {
+          submitTest();
+        } else if (totalSeconds > 0) {
+          startTimer();
+        }
+        return;
+      }
 
-      const score = (correct * 4) - (wrong * 1);
       const resultData = {
-        score, correct, wrong, skipped,
-        total: questions.length,
-        timeTaken,
-        results,
-        date: new Date().toISOString()
+        score: data.score, correct: data.correct, wrong: data.wrong, skipped: data.skipped,
+        total: data.total,
+        timeTaken: data.time_taken,
+        results: data.results,
+        date: new Date().toISOString(),
+        late: data.late
       };
 
-      await autoSaveMistakes(results);
-      await saveResultToSupabase(resultData);
+      // mock_results was written by the server -- no client save here any more.
+      await flushPendingSaves(data.results);
+      await autoSaveMistakes(data.results);
       showResults(resultData);
+    }
+
+    function showSubmitting(show) {
+      let el = document.getElementById('submittingOverlay');
+      if (!show) { if (el) el.remove(); return; }
+      if (el) return;
+      el = document.createElement('div');
+      el.id = 'submittingOverlay';
+      el.className = 'submitting-overlay';
+      el.setAttribute('role', 'status');
+      el.innerHTML = `<div class="submitting-box"><span class="submitting-spinner" aria-hidden="true"></span>${escapeHtml(t('mocktest', 'submitting'))}</div>`;
+      document.body.appendChild(el);
     }
 
     async function autoSaveMistakes(results) {
@@ -1851,65 +1963,6 @@
       }
     }
 
-    // Trims each question object down to just what a review display needs before persisting --
-    // `results` entries are full pyq-table rows spread with userAnswer/status, which includes a
-    // 1536-float `embedding` column (~19KB of JSON per question, ~96% of the payload measured on
-    // a real 10-question test). Storing that in every mock_results row would balloon a 180-Q full
-    // mock test to several MB for data that review display never reads. Same helper as
-    // mockresults.html's saveResultToSupabase (duplicated, not shared, since these two files
-    // don't share a JS module).
-    function trimQuestionDetails(results) {
-      if (!results) return null;
-      return results.map(q => ({
-        id: q.id, subject: q.subject, chapter: q.chapter, year: q.year, difficulty: q.difficulty,
-        question: q.question,
-        option_a: q.option_a, option_b: q.option_b, option_c: q.option_c, option_d: q.option_d,
-        correct_answer: q.correct_answer,
-        diagram_url: q.diagram_url,
-        option_a_diagram_url: q.option_a_diagram_url, option_b_diagram_url: q.option_b_diagram_url,
-        option_c_diagram_url: q.option_c_diagram_url, option_d_diagram_url: q.option_d_diagram_url,
-        userAnswer: q.userAnswer, status: q.status
-      }));
-    }
-
-    async function saveResultToSupabase(data) {
-      try {
-        const { data: { session } } = await client.auth.getSession();
-        if (!session) return;
-        // Per-subject breakdown, not just a single-bucket dump of the overall
-        // score -- needed now that a test can span more than one subject, and
-        // more accurate than the old approach even for single-subject tests.
-        const subjectTally = { Biology: { correct: 0, wrong: 0 }, Physics: { correct: 0, wrong: 0 }, Chemistry: { correct: 0, wrong: 0 } };
-        data.results.forEach(q => {
-          if (!subjectTally[q.subject]) return;
-          if (q.status === 'correct') subjectTally[q.subject].correct++;
-          else if (q.status === 'wrong') subjectTally[q.subject].wrong++;
-        });
-        const subjectScore = {};
-        Object.keys(subjectTally).forEach(s => {
-          subjectScore[s] = Math.max(0, subjectTally[s].correct * 4 - subjectTally[s].wrong);
-        });
-        await client.from('mock_results').insert({
-          user_id: session.user.id,
-          score: Math.max(0, data.score),
-          correct: data.correct,
-          wrong: data.wrong,
-          skipped: data.skipped,
-          total: data.total,
-          time_taken: data.timeTaken,
-          subject_biology_score: subjectScore.Biology,
-          subject_physics_score: subjectScore.Physics,
-          subject_chemistry_score: subjectScore.Chemistry,
-          source: 'personalised',
-          // Same addition as mockresults.html's saveResultToSupabase -- see
-          // add_question_details_to_mock_results.sql for why this was missing before.
-          question_details: trimQuestionDetails(data.results),
-        });
-      } catch (e) {
-        console.log('Result save error:', e);
-      }
-    }
-
     // ---------- Results screen (adapted from mockresults.html) ----------
     let resultsData = null;
 
@@ -1921,6 +1974,7 @@
       const maxScore = data.total * 4;
       document.getElementById('scoreValue').textContent = localizeNum(Math.max(0, data.score));
       document.getElementById('scoreTotal').textContent = t('personalisedTest','outOfN').replace('{n}', localizeNum(maxScore));
+      document.getElementById('lateNote').hidden = !data.late;
       document.getElementById('correctCount').textContent = localizeNum(data.correct);
       document.getElementById('wrongCount').textContent = localizeNum(data.wrong);
       document.getElementById('skippedCount2').textContent = localizeNum(data.skipped);
