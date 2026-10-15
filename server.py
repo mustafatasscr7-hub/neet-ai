@@ -17,6 +17,7 @@ import fitz  # PyMuPDF -- page-count check for PDF tier limits
 from PIL import Image, ImageSequence  # chat image upload -- verify + re-encode real pixel data
 import base64
 import io
+import ipaddress
 import json
 import re
 from dotenv import load_dotenv
@@ -1101,11 +1102,54 @@ ADMIN_MAX_ATTEMPTS = 3
 ADMIN_COOLDOWN_SECONDS = 300  # 5 minutes
 _admin_login_attempts = {}  # ip -> {"count": int, "blocked_until": float}
 
+# Client IP: the one source for the admin 3-strike lockout, every per-IP rate limit, the guest daily
+# token budget (guest_usage_log is keyed on it), media_doubt_log.ip and session location lookups.
+#
+# TRUSTED_PROXY_COUNT = how many proxies sit in front of this app.
+#   0   -> no proxy (e.g. local dev): use the socket peer and ignore every forwarding header.
+#   N>0 -> behind a proxy that sets X-Real-IP, as Railway's edge does (default 2 = Railway):
+#          X-Real-IP if it holds a valid address -- Railway documents it as the client's remote IP
+#          and its edge replaces any copy the client sends. Failing that, the X-Forwarded-For entry
+#          N places from the right: proxies append, so anything further left may be client-made.
+# Railway's edge currently strips client X-Forwarded-For and rebuilds it as "<client>, <edge>"
+# (measured 2026-10-15, hence N=2). In 2024 it appended to the client's value instead, which made
+# the old "leftmost entry" rule spoofable. Never read Forwarded / True-Client-IP /
+# CF-Connecting-IP: Railway passes those through exactly as the client sent them.
+def _trusted_proxy_count() -> int:
+    raw = os.getenv("TRUSTED_PROXY_COUNT", "2")
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        print(f"TRUSTED_PROXY_COUNT={raw!r} is not a number, using 2", flush=True)
+        return 2
+
+TRUSTED_PROXY_COUNT = _trusted_proxy_count()
+
+def _parse_ip(value: str):
+    """Canonical address from one header value (tolerates IPv4:port and [IPv6]:port), or None."""
+    value = (value or "").strip().strip('"')
+    if value.startswith("[") and "]" in value:
+        value = value[1:value.index("]")]
+    elif value.count(":") == 1:
+        value = value.split(":", 1)[0]
+    try:
+        return str(ipaddress.ip_address(value))
+    except ValueError:
+        return None
+
 def _client_ip(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    peer = request.client.host if request.client else "unknown"
+    if TRUSTED_PROXY_COUNT <= 0:
+        return peer
+    real_ips = request.headers.getlist("x-real-ip")
+    # Last copy: if a client copy ever slips through next to the proxy's (a 2024 Railway bug),
+    # the proxy's own header is the one added after it.
+    ip = _parse_ip(real_ips[-1]) if real_ips else None
+    if ip:
+        return ip
+    hops = [h for value in request.headers.getlist("x-forwarded-for") for h in value.split(",")]
+    ip = _parse_ip(hops[-TRUSTED_PROXY_COUNT]) if len(hops) >= TRUSTED_PROXY_COUNT else None
+    return ip or peer
 
 def verify_admin(request: Request, x_admin_key: str = Header(None)):
     ip = _client_ip(request)
@@ -9322,4 +9366,6 @@ if __name__ == "__main__":
     import uvicorn
     import os
     port = int(os.environ.get("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    # proxy_headers=False: request.client stays the real socket peer, so _client_ip()'s fallback
+    # can't be rewritten from X-Forwarded-For by uvicorn (e.g. if FORWARDED_ALLOW_IPS="*" were set).
+    uvicorn.run(app, host="0.0.0.0", port=port, proxy_headers=False)
