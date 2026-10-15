@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.datastructures import MutableHeaders
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Union
 from contextlib import asynccontextmanager
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
@@ -20,6 +20,7 @@ import io
 import ipaddress
 import json
 import re
+import uuid
 from dotenv import load_dotenv
 import os
 import sys
@@ -6002,36 +6003,43 @@ async def list_diagrams(subject: str = "", class_num: int = 0, _: None = Depends
 # field, plus the pyq RLS lockdown migration -- every server.py reader of pyq, this one included,
 # is now on the service-role key rather than anon, which is why this switched too even though it
 # was never itself the anon-read path).
+# select=* used to also pull each row's `embedding` vector (used only by match_pyq's server-side
+# similarity search, never by the mock-test frontend) -- that alone made each of these queries ~6x
+# slower and ~30x heavier over the wire. The explicit column list is everything mocktest.html /
+# personalised-test.html read off a question object. Includes correct_answer: the legacy endpoints
+# below hand it out (old clients grade on the device); the secure /mock-tests/attempts path strips
+# it via MOCK_TEST_PUBLIC_FIELDS before anything reaches the browser.
+MOCK_QUESTION_COLUMNS = "id,subject,chapter,year,question,option_a,option_b,option_c,option_d,correct_answer,difficulty,diagram_url,option_a_diagram_url,option_b_diagram_url,option_c_diagram_url,option_d_diagram_url"
+
+async def _sample_random_mock_questions() -> list:
+    """Random full mock: 90 Biology + 45 Physics + 45 Chemistry from active pyq rows. Raises if a
+    fetch comes back as anything but a list of rows."""
+    import random
+    headers = {
+        "apikey": SUPABASE_SERVICE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"
+    }
+    # is_active=eq.true was missing here -- every other student-facing pyq query (pyqbank.html's
+    # chapter browser, etc.) already filters on it, but this random-sample endpoint didn't, so a
+    # question deactivated for a report (see /report-question) could still be handed out in a
+    # random mock test even though it had already disappeared from the PYQ Bank itself.
+    # Also ran sequentially before (3 blocking sync `requests.get()` calls back-to-back,
+    # each stalling the event loop) -- now fired concurrently via the shared async client.
+    bio_resp, phy_resp, che_resp = await asyncio.gather(
+        async_client.get(f"{SUPABASE_URL}/rest/v1/pyq", headers=headers, params={"subject": "eq.Biology", "is_active": "eq.true", "select": MOCK_QUESTION_COLUMNS, "limit": 200}),
+        async_client.get(f"{SUPABASE_URL}/rest/v1/pyq", headers=headers, params={"subject": "eq.Physics", "is_active": "eq.true", "select": MOCK_QUESTION_COLUMNS, "limit": 200}),
+        async_client.get(f"{SUPABASE_URL}/rest/v1/pyq", headers=headers, params={"subject": "eq.Chemistry", "is_active": "eq.true", "select": MOCK_QUESTION_COLUMNS, "limit": 200}),
+    )
+    bio, phy, che = bio_resp.json(), phy_resp.json(), che_resp.json()
+    bio_q = random.sample(bio, min(90, len(bio)))
+    phy_q = random.sample(phy, min(45, len(phy)))
+    che_q = random.sample(che, min(45, len(che)))
+    return bio_q + phy_q + che_q
+
 @app.get("/mock-test-questions")
 async def get_mock_test_questions(_: None = Depends(rate_limiter(20, 60))):
     try:
-        import random
-        headers = {
-            "apikey": SUPABASE_SERVICE_KEY,
-            "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"
-        }
-        # select=* used to also pull each row's `embedding` vector (used only by match_pyq's
-        # server-side similarity search, never by the mock-test frontend) -- that alone made
-        # each of these 3 queries ~6x slower and ~30x heavier over the wire. Same explicit
-        # column list already used by /mock-tests/{id}/questions, confirmed sufficient since
-        # mocktest.html only ever reads these fields off a question object.
-        cols = "id,subject,chapter,year,question,option_a,option_b,option_c,option_d,correct_answer,difficulty,diagram_url,option_a_diagram_url,option_b_diagram_url,option_c_diagram_url,option_d_diagram_url"
-        # is_active=eq.true was missing here -- every other student-facing pyq query (pyqbank.html's
-        # chapter browser, etc.) already filters on it, but this random-sample endpoint didn't, so a
-        # question deactivated for a report (see /report-question) could still be handed out in a
-        # random mock test even though it had already disappeared from the PYQ Bank itself.
-        # Also ran sequentially before (3 blocking sync `requests.get()` calls back-to-back,
-        # each stalling the event loop) -- now fired concurrently via the shared async client.
-        bio_resp, phy_resp, che_resp = await asyncio.gather(
-            async_client.get(f"{SUPABASE_URL}/rest/v1/pyq", headers=headers, params={"subject": "eq.Biology", "is_active": "eq.true", "select": cols, "limit": 200}),
-            async_client.get(f"{SUPABASE_URL}/rest/v1/pyq", headers=headers, params={"subject": "eq.Physics", "is_active": "eq.true", "select": cols, "limit": 200}),
-            async_client.get(f"{SUPABASE_URL}/rest/v1/pyq", headers=headers, params={"subject": "eq.Chemistry", "is_active": "eq.true", "select": cols, "limit": 200}),
-        )
-        bio, phy, che = bio_resp.json(), phy_resp.json(), che_resp.json()
-        bio_q = random.sample(bio, min(90, len(bio)))
-        phy_q = random.sample(phy, min(45, len(phy)))
-        che_q = random.sample(che, min(45, len(che)))
-        questions = bio_q + phy_q + che_q
+        questions = await _sample_random_mock_questions()
         return {"questions": questions, "total": len(questions)}
     except Exception as e:
         print(f"MOCK TEST QUESTIONS ERROR: {e}", flush=True)
@@ -6088,28 +6096,32 @@ async def get_available_mock_tests(user_id: str = "", verified_user_id: str = De
         print(f"AVAILABLE MOCK TESTS ERROR (user_id={user_id}): {e}", flush=True)
         return {"error": "Something went wrong. Please try again."}
 
+async def _fetch_official_mock_test(mock_test_id: int):
+    """The question-fetch response for a PUBLISHED official mock test (question_order), or None if
+    no published test has that id. Service-role key: mock_test_questions' anon SELECT policy
+    exposed correct_answer to anyone holding the page's anon key, so it is dropped by
+    create_mock_test_attempts_table.sql and this is the only reader. is_published is enforced
+    here explicitly since the service key bypasses RLS -- a draft test's questions must never be
+    fetchable, even by guessing its id."""
+    test_resp = await async_client.get(
+        f"{SUPABASE_URL}/rest/v1/mock_tests",
+        headers=ADMIN_HEADERS,
+        params={"id": f"eq.{mock_test_id}", "is_published": "eq.true", "select": "id"}
+    )
+    if test_resp.status_code >= 400 or not test_resp.json():
+        return None
+    return await async_client.get(
+        f"{SUPABASE_URL}/rest/v1/mock_test_questions",
+        headers=ADMIN_HEADERS,
+        params={"mock_test_id": f"eq.{mock_test_id}", "select": MOCK_QUESTION_COLUMNS, "order": "question_order.asc"}
+    )
+
 @app.get("/mock-tests/{mock_test_id}/questions")
 async def get_mock_test_questions_by_id(mock_test_id: int, _: None = Depends(rate_limiter(20, 60))):
     try:
-        headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
-        # Double-gated on is_published, on top of the RLS policy already enforcing it --
-        # a draft test's questions should never be fetchable even by guessing its id.
-        test_resp = await async_client.get(
-            f"{SUPABASE_URL}/rest/v1/mock_tests",
-            headers=headers,
-            params={"id": f"eq.{mock_test_id}", "is_published": "eq.true", "select": "id"}
-        )
-        if test_resp.status_code >= 400 or not test_resp.json():
+        response = await _fetch_official_mock_test(mock_test_id)
+        if response is None:
             return {"error": "Mock test not found"}
-        response = await async_client.get(
-            f"{SUPABASE_URL}/rest/v1/mock_test_questions",
-            headers=headers,
-            params={
-                "mock_test_id": f"eq.{mock_test_id}",
-                "select": "id,subject,chapter,year,question,option_a,option_b,option_c,option_d,correct_answer,difficulty,diagram_url,option_a_diagram_url,option_b_diagram_url,option_c_diagram_url,option_d_diagram_url",
-                "order": "question_order.asc"
-            }
-        )
         if response.status_code >= 400:
             return {"error": response.text}
         questions = response.json()
@@ -6229,6 +6241,56 @@ async def pyq_browse(subject: str, chapter: str, year: int = None, _: None = Dep
         print(f"PYQ BROWSE ERROR (subject={subject}, chapter={chapter}, year={year}): {e}", flush=True)
         return {"error": "Something went wrong. Please try again."}
 
+async def _sample_personalised_questions(selections: list, requested_count) -> tuple:
+    """(questions, count, available): `count` random active pyq rows (clamped to 1..50) from the
+    chosen subjects/chapters. Callers validate the subjects first."""
+    import random
+    # Lowered from 200 (scraping audit, 2026-09-19) -- no real personalised-test UI flow ever
+    # requested anywhere near that many in one call (the frontend's own preset buttons top out
+    # at 50, and its custom-count input is now capped to match -- see
+    # personalised-test.html's onCustomCountInput/customCountInput). 200 with select: "*" was
+    # needlessly returning far more than any legitimate use needed, including the (unused by
+    # the frontend) embedding vector column.
+    count = max(1, min(int(requested_count), 50))
+    # Service-role key: pyq's own anon SELECT policy was removed (scraping audit, 2026-09-19
+    # -> 09-20) -- this was left on the anon key when the count/select trim above shipped
+    # (RLS was still open at the time), switched now along with every other server.py reader.
+    headers = {
+        "apikey": SUPABASE_SERVICE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"
+    }
+    pool = []
+    seen_subjects = set()
+    for sel in selections:
+        if sel.subject in seen_subjects:
+            continue
+        seen_subjects.add(sel.subject)
+        params = {
+            "subject": f"eq.{sel.subject}",
+            "is_active": "eq.true",
+            "select": MOCK_QUESTION_COLUMNS,
+            "limit": 1000
+        }
+        chapters = [c.strip() for c in sel.chapters if c and c.strip()]
+        if chapters:
+            params["chapter"] = "in.(" + ",".join(chapters) + ")"
+        # await async_client, not the blocking http_requests (sync `requests`) this used to
+        # call -- same class of bug as /pyq-chapters' own fix (rate-limiter audit, 2026-09-20):
+        # a blocking call inside an async def handler ties up uvicorn's single event loop for
+        # its full duration, stalling every OTHER concurrent request to the server, not just
+        # this one. Up to 3 sequential blocking round trips per call here (one per selected
+        # subject), so this was actually the worse offender of the two despite being lower
+        # traffic than pyq-chapters.
+        response = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/pyq",
+            headers=headers,
+            params=params
+        )
+        pool.extend(response.json())
+    available = len(pool)
+    selected = random.sample(pool, min(count, available)) if available else []
+    return selected, count, available
+
 @app.post("/personalised-test-questions")
 async def get_personalised_test_questions(req: PersonalisedTestRequest, _: None = Depends(rate_limiter(20, 60))):
     if not req.selections:
@@ -6236,56 +6298,7 @@ async def get_personalised_test_questions(req: PersonalisedTestRequest, _: None 
     if any(sel.subject not in ("Biology", "Physics", "Chemistry") for sel in req.selections):
         return {"error": "Invalid subject"}
     try:
-        import random
-        # Lowered from 200 (scraping audit, 2026-09-19) -- no real personalised-test UI flow ever
-        # requested anywhere near that many in one call (the frontend's own preset buttons top out
-        # at 50, and its custom-count input is now capped to match -- see
-        # personalised-test.html's onCustomCountInput/customCountInput). 200 with select: "*" was
-        # needlessly returning far more than any legitimate use needed, including the (unused by
-        # the frontend) embedding vector column.
-        count = max(1, min(int(req.count), 50))
-        # Service-role key: pyq's own anon SELECT policy was removed (scraping audit, 2026-09-19
-        # -> 09-20) -- this was left on the anon key when the count/select trim above shipped
-        # (RLS was still open at the time), switched now along with every other server.py reader.
-        headers = {
-            "apikey": SUPABASE_SERVICE_KEY,
-            "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"
-        }
-        # Same explicit column list as /mock-test-questions' own `cols` -- confirmed against
-        # personalised-test.html (every place it reads a question field, including the
-        # save-report/mock-results-style review payloads) that these are the only ones ever used;
-        # trimmed off select: "*" 's everything-including-the-embedding-vector.
-        select_cols = "id,subject,chapter,year,question,option_a,option_b,option_c,option_d,correct_answer,difficulty,diagram_url,option_a_diagram_url,option_b_diagram_url,option_c_diagram_url,option_d_diagram_url"
-        pool = []
-        seen_subjects = set()
-        for sel in req.selections:
-            if sel.subject in seen_subjects:
-                continue
-            seen_subjects.add(sel.subject)
-            params = {
-                "subject": f"eq.{sel.subject}",
-                "is_active": "eq.true",
-                "select": select_cols,
-                "limit": 1000
-            }
-            chapters = [c.strip() for c in sel.chapters if c and c.strip()]
-            if chapters:
-                params["chapter"] = "in.(" + ",".join(chapters) + ")"
-            # await async_client, not the blocking http_requests (sync `requests`) this used to
-            # call -- same class of bug as /pyq-chapters' own fix (rate-limiter audit, 2026-09-20):
-            # a blocking call inside an async def handler ties up uvicorn's single event loop for
-            # its full duration, stalling every OTHER concurrent request to the server, not just
-            # this one. Up to 3 sequential blocking round trips per call here (one per selected
-            # subject), so this was actually the worse offender of the two despite being lower
-            # traffic than pyq-chapters.
-            response = await async_client.get(
-                f"{SUPABASE_URL}/rest/v1/pyq",
-                headers=headers,
-                params=params
-            )
-            pool.extend(response.json())
-        available = len(pool)
-        selected = random.sample(pool, min(count, available)) if available else []
+        selected, count, available = await _sample_personalised_questions(req.selections, req.count)
         return {"questions": selected, "requested": count, "available": available}
     except Exception as e:
         print(f"PERSONALISED TEST QUESTIONS ERROR: {e}", flush=True)
@@ -6319,54 +6332,386 @@ async def get_personalised_catalog(subject: str):
         print(f"PERSONALISED CATALOG ERROR (subject={subject}): {e}", flush=True)
         return {"error": "Something went wrong. Please try again."}
 
+async def _catalog_test_questions(subject: str, test_number: int, select: str):
+    """(questions, title) for one personalised_test_sets entry, or None if it doesn't exist. The
+    legacy endpoint passes select="*" (its historical response); the secure path passes
+    MOCK_QUESTION_COLUMNS."""
+    # Service-role key for both reads below -- personalised_test_sets and pyq. Originally only
+    # personalised_test_sets was switched here (pyq's own anon-read RLS was still an
+    # intentionally separate, parked decision at the time, since pyqbank.html read it directly
+    # too) -- now that pyq's anon SELECT has also been removed (2026-09-20), both use the same
+    # headers, so the separate pyq_headers variable this used to need is gone.
+    headers = {
+        "apikey": SUPABASE_SERVICE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"
+    }
+    # await async_client, not the blocking http_requests (sync `requests`) both of these used
+    # to call -- same class of bug as /pyq-chapters and /personalised-test-questions' own
+    # fixes (rate-limiter audit, 2026-09-20): a blocking call inside an async def handler ties
+    # up uvicorn's single event loop for its full duration, stalling every OTHER concurrent
+    # request to the server, not just this one.
+    set_response = await async_client.get(
+        f"{SUPABASE_URL}/rest/v1/personalised_test_sets",
+        headers=headers,
+        params={
+            "subject": f"eq.{subject}",
+            "test_number": f"eq.{test_number}",
+            "select": "question_ids,title",
+            "limit": 1
+        }
+    )
+    rows = set_response.json()
+    if not rows:
+        return None
+    question_ids = rows[0]["question_ids"]
+    id_list = ",".join(str(i) for i in question_ids)
+    questions_response = await async_client.get(
+        f"{SUPABASE_URL}/rest/v1/pyq",
+        headers=headers,
+        params={
+            "id": f"in.({id_list})",
+            "is_active": "eq.true",
+            "select": select
+        }
+    )
+    return questions_response.json(), rows[0]["title"]
+
 @app.post("/personalised-catalog-start")
 async def start_personalised_catalog_test(req: PersonalisedCatalogStartRequest, _: None = Depends(rate_limiter(20, 60))):
     if req.subject not in ("Biology", "Physics", "Chemistry"):
         return {"error": "Invalid subject"}
     try:
-        # Service-role key for both reads below -- personalised_test_sets and pyq. Originally only
-        # personalised_test_sets was switched here (pyq's own anon-read RLS was still an
-        # intentionally separate, parked decision at the time, since pyqbank.html read it directly
-        # too) -- now that pyq's anon SELECT has also been removed (2026-09-20), both use the same
-        # headers, so the separate pyq_headers variable this used to need is gone.
-        headers = {
-            "apikey": SUPABASE_SERVICE_KEY,
-            "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"
-        }
-        # await async_client, not the blocking http_requests (sync `requests`) both of these used
-        # to call -- same class of bug as /pyq-chapters and /personalised-test-questions' own
-        # fixes (rate-limiter audit, 2026-09-20): a blocking call inside an async def handler ties
-        # up uvicorn's single event loop for its full duration, stalling every OTHER concurrent
-        # request to the server, not just this one.
-        set_response = await async_client.get(
-            f"{SUPABASE_URL}/rest/v1/personalised_test_sets",
-            headers=headers,
-            params={
-                "subject": f"eq.{req.subject}",
-                "test_number": f"eq.{req.test_number}",
-                "select": "question_ids,title",
-                "limit": 1
-            }
-        )
-        rows = set_response.json()
-        if not rows:
+        found = await _catalog_test_questions(req.subject, req.test_number, "*")
+        if found is None:
             return {"error": "Test not found"}
-        question_ids = rows[0]["question_ids"]
-        id_list = ",".join(str(i) for i in question_ids)
-        questions_response = await async_client.get(
-            f"{SUPABASE_URL}/rest/v1/pyq",
-            headers=headers,
-            params={
-                "id": f"in.({id_list})",
-                "is_active": "eq.true",
-                "select": "*"
-            }
-        )
-        questions = questions_response.json()
-        return {"questions": questions, "title": rows[0]["title"]}
+        questions, title = found
+        return {"questions": questions, "title": title}
     except Exception as e:
         print(f"PERSONALISED CATALOG START ERROR (subject={req.subject}, test_number={req.test_number}): {e}", flush=True)
         return {"error": "Something went wrong. Please try again."}
+
+# ---------- Secure mock tests: server-side attempts and grading (web opt-in) ----------
+# The four question endpoints above still return correct_answer, unchanged: the mobile app grades
+# on the device and depends on that shape (MOCKTEST_GRADING_NOTES.md has the switch-over plan).
+# The web pages use this path instead:
+#   POST /mock-tests/attempts               picks the questions, records an attempt, returns the
+#                                           questions with NO answer field and the server deadline
+#   POST /mock-tests/attempts/{id}/submit   grades here, writes the same mock_results row the
+#                                           results pages already read, and only then returns the
+#                                           answers. A repeat submit replays the saved result.
+# The user always comes from the verified JWT, and the start time and score are never taken from
+# the client. Never log answers.
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name, str(default))
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        print(f"{name}={raw!r} is not a number, using {default}", flush=True)
+        return default
+
+MOCK_TEST_SUBMIT_GRACE_SECONDS = _env_int("MOCK_TEST_SUBMIT_GRACE_SECONDS", 60)
+MOCK_TEST_FULL_DURATION_SECONDS = 12000  # 3h20m -- mocktest.html's timer
+MOCK_TEST_MAX_QUESTIONS = 300
+MOCK_TEST_START_LIMIT = (10, 600)   # per user: starts per 10 minutes
+MOCK_TEST_SUBMIT_LIMIT = (30, 600)  # per user: submits (incl. replays) per 10 minutes
+# The only fields a question may carry before submission -- an allowlist, so a column added to
+# pyq/mock_test_questions later can't leak through by default.
+MOCK_TEST_PUBLIC_FIELDS = ("id", "subject", "chapter", "year", "question", "option_a", "option_b", "option_c", "option_d",
+                           "difficulty", "diagram_url", "option_a_diagram_url", "option_b_diagram_url",
+                           "option_c_diagram_url", "option_d_diagram_url")
+# Same per-question shape mockresults.html / personalised-test.html / the app already persist in
+# mock_results.question_details, so scoreboard.html renders server-graded attempts unchanged.
+MOCK_TEST_DETAIL_FIELDS = ("id", "subject", "chapter", "year", "difficulty", "question", "option_a", "option_b",
+                           "option_c", "option_d", "correct_answer", "diagram_url", "option_a_diagram_url",
+                           "option_b_diagram_url", "option_c_diagram_url", "option_d_diagram_url")
+MOCK_TEST_SUBJECTS = ("Biology", "Physics", "Chemistry")
+MOCK_TEST_KINDS = {"random": "pyq", "official": "mock_test_questions", "personalised": "pyq", "personalised_catalog": "pyq"}
+MOCK_TEST_ATTEMPTS_URL = f"{SUPABASE_URL}/rest/v1/mock_test_attempts"
+MOCK_RESULTS_URL = f"{SUPABASE_URL}/rest/v1/mock_results"
+_mock_test_user_buckets = {}  # "start:<user>" / "submit:<user>" -> [timestamps]
+
+class MockTestStartRequest(BaseModel):
+    kind: str
+    mock_test_id: Optional[int] = None                           # official
+    selections: Optional[List[PersonalisedTestSelection]] = None  # personalised
+    count: Optional[int] = None                                   # personalised
+    subject: Optional[str] = None                                 # personalised_catalog
+    test_number: Optional[int] = None                             # personalised_catalog
+
+class MockTestSubmitRequest(BaseModel):
+    question_ids: List[Union[str, int]]
+    answers: Dict[str, Optional[str]] = {}
+
+def _check_user_rate(bucket: str, user_id: str, limit: tuple):
+    max_requests, window = limit
+    key = f"{bucket}:{user_id}"
+    now = time.time()
+    stamps = [t for t in _mock_test_user_buckets.get(key, []) if now - t < window]
+    if len(stamps) >= max_requests:
+        raise HTTPException(status_code=429, detail="Too many requests — please slow down and try again shortly.")
+    stamps.append(now)
+    _mock_test_user_buckets[key] = stamps
+
+def _answer_letter(raw) -> Optional[str]:
+    """'a'-'d' from a stored correct_answer that may be a letter or a 1-based digit; None for blank,
+    'EMPTY' or anything else (graded as skipped, never wrong -- same rule as the web and app)."""
+    value = str(raw or "").strip().lower()
+    if value in ("a", "b", "c", "d"):
+        return value
+    return {"1": "a", "2": "b", "3": "c", "4": "d"}.get(value)
+
+def _mock_test_duration(kind: str, question_count: int) -> int:
+    if kind in ("random", "official"):
+        return MOCK_TEST_FULL_DURATION_SECONDS
+    return max(300, question_count * 70)  # personalised-test.html's timer
+
+# Attempt storage: three thin PostgREST calls on mock_test_attempts
+# (create_mock_test_attempts_table.sql), service-role key only -- students can read their own
+# attempts but never write them.
+async def _attempt_insert(row: dict) -> dict:
+    resp = await async_client.post(MOCK_TEST_ATTEMPTS_URL, headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"}, json=row)
+    if resp.status_code >= 400:
+        raise RuntimeError(f"attempt insert failed ({resp.status_code})")
+    return resp.json()[0]
+
+async def _attempt_get(attempt_id: str) -> Optional[dict]:
+    resp = await async_client.get(MOCK_TEST_ATTEMPTS_URL, headers=ADMIN_HEADERS, params={"id": f"eq.{attempt_id}", "select": "*", "limit": 1})
+    if resp.status_code >= 400:
+        raise RuntimeError(f"attempt read failed ({resp.status_code})")
+    rows = resp.json()
+    return rows[0] if rows else None
+
+async def _attempt_claim(attempt_id: str, user_id: str, fields: dict) -> Optional[dict]:
+    """Marks an unsubmitted attempt as submitted in one conditional PATCH; None if it was already
+    submitted (or isn't this user's), so two racing submits can never both grade."""
+    resp = await async_client.patch(
+        MOCK_TEST_ATTEMPTS_URL, headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
+        params={"id": f"eq.{attempt_id}", "user_id": f"eq.{user_id}", "submitted_at": "is.null"}, json=fields
+    )
+    if resp.status_code >= 400:
+        raise RuntimeError(f"attempt claim failed ({resp.status_code})")
+    rows = resp.json()
+    return rows[0] if rows else None
+
+async def _mock_result_get(result_id: str) -> Optional[dict]:
+    resp = await async_client.get(MOCK_RESULTS_URL, headers=ADMIN_HEADERS, params={"id": f"eq.{result_id}", "select": "*", "limit": 1})
+    if resp.status_code >= 400:
+        raise RuntimeError(f"result read failed ({resp.status_code})")
+    rows = resp.json()
+    return rows[0] if rows else None
+
+async def _grade_attempt(attempt: dict, answers: dict, submitted_at: datetime) -> dict:
+    """Grades against the stored keys and writes the mock_results row under the attempt's
+    pre-assigned result_id, so a retry after a crash re-inserts the same id instead of a duplicate."""
+    ids = attempt["question_ids"]
+    resp = await async_client.get(
+        f"{SUPABASE_URL}/rest/v1/{MOCK_TEST_KINDS[attempt['kind']]}", headers=ADMIN_HEADERS,
+        params={"id": f"in.({','.join(ids)})", "select": MOCK_QUESTION_COLUMNS}
+    )
+    if resp.status_code >= 400:
+        raise RuntimeError(f"answer key read failed ({resp.status_code})")
+    rows_by_id = {str(r["id"]): r for r in resp.json()}
+    tally = {s: {"correct": 0, "wrong": 0} for s in MOCK_TEST_SUBJECTS}
+    correct = wrong = skipped = 0
+    details = []
+    for qid in ids:
+        # A question deleted since the start has no key any more: kept as a skipped entry.
+        row = rows_by_id.get(qid, {"id": qid})
+        picked = answers.get(qid)
+        key = _answer_letter(row.get("correct_answer"))
+        if not picked or not key:
+            status = "skipped"
+            skipped += 1
+        elif picked == key:
+            status = "correct"
+            correct += 1
+        else:
+            status = "wrong"
+            wrong += 1
+        if status != "skipped" and row.get("subject") in tally:
+            tally[row["subject"]][status] += 1
+        details.append({**{f: row.get(f) for f in MOCK_TEST_DETAIL_FIELDS}, "userAnswer": picked, "status": status})
+    started = _parse_iso_ts(attempt["started_at"]) or submitted_at
+    result = {
+        "id": attempt["result_id"], "user_id": attempt["user_id"],
+        "score": max(0, correct * 4 - wrong), "correct": correct, "wrong": wrong, "skipped": skipped, "total": len(ids),
+        "time_taken": max(0, int((submitted_at - started).total_seconds())),
+        "subject_biology_score": max(0, tally["Biology"]["correct"] * 4 - tally["Biology"]["wrong"]),
+        "subject_physics_score": max(0, tally["Physics"]["correct"] * 4 - tally["Physics"]["wrong"]),
+        "subject_chemistry_score": max(0, tally["Chemistry"]["correct"] * 4 - tally["Chemistry"]["wrong"]),
+        "mock_test_id": attempt.get("mock_test_id"),
+        "question_details": details,
+    }
+    # Same `source` the web/app inserts use: 'personalised' for personalised tests, column default
+    # ('mock') otherwise.
+    if attempt["kind"] in ("personalised", "personalised_catalog"):
+        result["source"] = "personalised"
+    write = await async_client.post(MOCK_RESULTS_URL, headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"}, json=result)
+    if write.status_code == 409:  # a concurrent retry already wrote this result_id
+        existing = await _mock_result_get(attempt["result_id"])
+        if existing:
+            return existing
+    if write.status_code >= 400:
+        raise RuntimeError(f"result insert failed ({write.status_code})")
+    return write.json()[0]
+
+def _mock_test_submit_response(attempt: dict, result: dict, already_submitted: bool) -> dict:
+    details = result.get("question_details") or []
+    subjects = {s: {"correct": 0, "wrong": 0, "skipped": 0, "total": 0} for s in MOCK_TEST_SUBJECTS}
+    for q in details:
+        sd = subjects.get(q.get("subject"))
+        if sd:
+            sd["total"] += 1
+            sd[q.get("status") if q.get("status") in ("correct", "wrong") else "skipped"] += 1
+    for sd in subjects.values():
+        sd["score"] = max(0, sd["correct"] * 4 - sd["wrong"])
+    return {
+        "attempt_id": attempt["id"], "result_id": result["id"], "kind": attempt["kind"],
+        "mock_test_id": attempt.get("mock_test_id"), "already_submitted": already_submitted,
+        "late": bool(attempt.get("is_late")),
+        # Unclamped, like the score the pages always showed; mock_results.score stores max(0, ...).
+        "score": result["correct"] * 4 - result["wrong"],
+        "correct": result["correct"], "wrong": result["wrong"], "skipped": result["skipped"],
+        "total": result["total"], "time_taken": result["time_taken"],
+        "subjects": subjects, "results": details,
+    }
+
+@app.post("/mock-tests/attempts")
+async def mock_test_start(req: MockTestStartRequest, _: None = Depends(rate_limiter(20, 60)), verified_user_id: str = Depends(_get_verified_user_id)):
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if req.kind not in MOCK_TEST_KINDS:
+        raise HTTPException(status_code=400, detail="kind must be random, official, personalised or personalised_catalog")
+    extra = {}
+    if req.kind == "official" and req.mock_test_id is None:
+        raise HTTPException(status_code=400, detail="mock_test_id is required")
+    if req.kind == "personalised":
+        if not req.selections:
+            raise HTTPException(status_code=400, detail="No subjects selected")
+        if any(sel.subject not in MOCK_TEST_SUBJECTS for sel in req.selections):
+            raise HTTPException(status_code=400, detail="Invalid subject")
+    if req.kind == "personalised_catalog" and (req.subject not in MOCK_TEST_SUBJECTS or req.test_number is None):
+        raise HTTPException(status_code=400, detail="subject and test_number are required")
+    _check_user_rate("start", verified_user_id, MOCK_TEST_START_LIMIT)
+    try:
+        if req.kind == "random":
+            rows = await _sample_random_mock_questions()
+        elif req.kind == "official":
+            response = await _fetch_official_mock_test(req.mock_test_id)
+            if response is None:
+                raise HTTPException(status_code=404, detail="Mock test not found")
+            if response.status_code >= 400:
+                raise RuntimeError(f"official questions read failed ({response.status_code})")
+            rows = response.json()
+        elif req.kind == "personalised":
+            rows, count, available = await _sample_personalised_questions(req.selections, req.count if req.count is not None else 10)
+            extra = {"requested": count, "available": available}
+        else:
+            found = await _catalog_test_questions(req.subject, req.test_number, MOCK_QUESTION_COLUMNS)
+            if found is None:
+                raise HTTPException(status_code=404, detail="Test not found")
+            rows, title = found
+            extra = {"title": title}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"MOCK TEST START ERROR (kind={req.kind}): {type(e).__name__}", flush=True)
+        raise HTTPException(status_code=502, detail="Could not load questions. Please try again.")
+    seen, questions = set(), []
+    for row in rows if isinstance(rows, list) else []:
+        if isinstance(row, dict) and row.get("id") is not None and str(row["id"]) not in seen:
+            seen.add(str(row["id"]))
+            questions.append(row)
+    questions = questions[:MOCK_TEST_MAX_QUESTIONS]
+    if not questions:
+        raise HTTPException(status_code=404, detail="No questions matched this test")
+    started_at = datetime.now(timezone.utc)
+    duration = _mock_test_duration(req.kind, len(questions))
+    try:
+        attempt = await _attempt_insert({
+            "user_id": verified_user_id, "kind": req.kind,
+            "mock_test_id": req.mock_test_id if req.kind == "official" else None,
+            "question_ids": [str(q["id"]) for q in questions],
+            "duration_seconds": duration, "started_at": started_at.isoformat(),
+        })
+    except Exception as e:
+        print(f"MOCK TEST ATTEMPT CREATE ERROR: {type(e).__name__}", flush=True)
+        raise HTTPException(status_code=502, detail="Could not start the test. Please try again.")
+    return {
+        "attempt_id": attempt["id"], "kind": req.kind, "mock_test_id": attempt.get("mock_test_id"),
+        "questions": [{f: q.get(f) for f in MOCK_TEST_PUBLIC_FIELDS} for q in questions],
+        "total": len(questions), "duration_seconds": duration,
+        "started_at": started_at.isoformat(),
+        "deadline_at": (started_at + timedelta(seconds=duration)).isoformat(),
+        "server_now": datetime.now(timezone.utc).isoformat(),
+        "grace_seconds": MOCK_TEST_SUBMIT_GRACE_SECONDS,
+        **extra,
+    }
+
+@app.post("/mock-tests/attempts/{attempt_id}/submit")
+async def mock_test_submit(attempt_id: str, req: MockTestSubmitRequest, _: None = Depends(rate_limiter(30, 60)), verified_user_id: str = Depends(_get_verified_user_id)):
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if not _is_uuid(attempt_id):
+        raise HTTPException(status_code=404, detail="Attempt not found")
+    if not 1 <= len(req.question_ids) <= MOCK_TEST_MAX_QUESTIONS or len(req.answers) > MOCK_TEST_MAX_QUESTIONS:
+        raise HTTPException(status_code=400, detail="Invalid question_ids or answers")
+    _check_user_rate("submit", verified_user_id, MOCK_TEST_SUBMIT_LIMIT)
+    try:
+        attempt = await _attempt_get(attempt_id)
+    except Exception as e:
+        print(f"MOCK TEST SUBMIT READ ERROR: {type(e).__name__}", flush=True)
+        raise HTTPException(status_code=502, detail="Could not submit the test. Please try again.")
+    # Someone else's attempt looks exactly like a missing one -- no hint that the id exists.
+    if not attempt or attempt.get("user_id") != verified_user_id:
+        raise HTTPException(status_code=404, detail="Attempt not found")
+    if [str(q) for q in req.question_ids] != attempt["question_ids"]:
+        raise HTTPException(status_code=409, detail="These questions don't match this test attempt")
+    question_set = set(attempt["question_ids"])
+    answers = {}
+    for qid, value in req.answers.items():
+        if qid not in question_set:
+            raise HTTPException(status_code=400, detail="Answers include a question that isn't in this test")
+        letter = (value or "").strip().lower()
+        if letter and letter not in ("a", "b", "c", "d"):
+            raise HTTPException(status_code=400, detail="Each answer must be a, b, c, d or empty")
+        if letter:
+            answers[qid] = letter
+    try:
+        if not attempt.get("submitted_at"):
+            now = datetime.now(timezone.utc)
+            started = _parse_iso_ts(attempt["started_at"]) or now
+            deadline = started + timedelta(seconds=attempt["duration_seconds"] + MOCK_TEST_SUBMIT_GRACE_SECONDS)
+            claimed = await _attempt_claim(attempt_id, verified_user_id, {
+                "submitted_at": now.isoformat(), "answers": answers,
+                # Past the deadline: graded and saved, but flagged -- rejecting would throw away a
+                # real attempt (e.g. a laptop that slept through the timer and submitted on wake).
+                "is_late": now > deadline, "result_id": str(uuid.uuid4()),
+            })
+            if claimed:
+                result = await _grade_attempt(claimed, answers, now)
+                return _mock_test_submit_response(claimed, result, already_submitted=False)
+            attempt = await _attempt_get(attempt_id)  # lost the race: replay below
+        # Already submitted: return the saved result; the answers sent this time are ignored, so
+        # a repeat submit can't change anything. Waits briefly if the first submit is mid-grade.
+        for _wait in range(4):
+            result = await _mock_result_get(attempt["result_id"]) if attempt.get("result_id") else None
+            if result:
+                return _mock_test_submit_response(attempt, result, already_submitted=True)
+            submitted = _parse_iso_ts(attempt.get("submitted_at") or "")
+            if submitted and (datetime.now(timezone.utc) - submitted).total_seconds() > 30:
+                # The first submit was claimed but its result never got written (crash between
+                # the two steps): grade now from the answers stored at claim time.
+                result = await _grade_attempt(attempt, attempt.get("answers") or {}, submitted)
+                return _mock_test_submit_response(attempt, result, already_submitted=True)
+            await asyncio.sleep(1)
+            attempt = await _attempt_get(attempt_id)
+        raise HTTPException(status_code=409, detail="This test is still being graded. Please try again in a moment.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"MOCK TEST SUBMIT ERROR: {type(e).__name__}", flush=True)
+        raise HTTPException(status_code=502, detail="Could not submit the test. Please try again.")
 
 @app.get("/health")
 def health():
@@ -8620,6 +8965,7 @@ def admin_pdf_upload_history(_: None = Depends(verify_admin)):
         return {"error": str(e)}
 
 import re
+import uuid
 
 # Common exam-phrasing scaffolding that shows up in unrelated MCQs alike ("which of the
 # following is correct", "given below are two statements") -- left in, a plain word-overlap
