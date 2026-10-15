@@ -1,5 +1,8 @@
 <!DOCTYPE html>
-<html lang="en">
+<!-- DRAFT (2026-10-15), not yet reviewed by a lawyer: get legal review before publishing.
+     English and Hindi blocks must say the same thing. The support address lives only in legal.js
+     (SUPPORT_EMAIL). Device limits quoted below come from server.py's DEVICE_LIMITS. -->
+<html lang="en" data-bilingual data-title-en="Terms of Service — NEET-AI" data-title-hi="सेवा की शर्तें — NEET-AI">
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
@@ -8,6 +11,7 @@
   <link rel="icon" type="image/svg+xml" href="assets/logo.svg"/>
   <link rel="apple-touch-icon" href="assets/apple-touch-icon.png"/>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+  <script src="./legal.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: 'Inter', sans-serif; background: #0a0a0f; color: #ececec; line-height: 1.7; }
@@ -22,8 +26,20 @@
     ul { padding-left: 20px; margin-bottom: 16px; }
     li { font-size: 14px; color: #999; margin-bottom: 8px; }
     a { color: #7c5cff; text-decoration: none; }
+    strong { color: #ececec; font-weight: 600; }
     .back-btn { background: transparent; border: none; color: #555; cursor: pointer; font-size: 13px; font-family: 'Inter', sans-serif; padding: 0; }
     .back-btn:hover { color: #7c5cff; }
+    .lang-switch { display: flex; gap: 6px; }
+    .lang-switch button { background: transparent; border: 1px solid #222; color: #777; border-radius: 999px; padding: 4px 12px; font-family: 'Inter', sans-serif; font-size: 12.5px; font-weight: 500; cursor: pointer; }
+    .lang-switch button:hover { color: #ececec; }
+    .lang-switch button[aria-pressed="true"] { color: #fff; border-color: #7c5cff; }
+    html[data-lang="hi"] .lang-en, html:not([data-lang="hi"]) .lang-hi { display: none; }
+    .lang-hi p, .lang-hi li { line-height: 1.85; }
+    @media (max-width: 480px) {
+      .header { padding: 12px 16px; }
+      .container { padding: 40px 16px; }
+      h1 { font-size: 26px; }
+    }
 
     body.light-mode { background: #f7f7fa !important; color: #14141a !important; }
     body.light-mode .header { background: #ffffff !important; border-color: #e5e5ea !important; }
@@ -31,9 +47,12 @@
     body.light-mode h1, body.light-mode h2 { color: #0d0d0d !important; }
     body.light-mode .updated { color: #7a7a85 !important; }
     body.light-mode p, body.light-mode li { color: #45454f !important; }
+    body.light-mode strong { color: #14141a !important; }
     body.light-mode .back-btn { color: #6b6b76 !important; }
     body.light-mode .back-btn:hover { color: #7c5cff !important; }
-  
+    body.light-mode .lang-switch button { border-color: #dcdce2 !important; color: #6b6b76 !important; }
+    body.light-mode .lang-switch button[aria-pressed="true"] { color: #0d0d0d !important; border-color: #7c5cff !important; }
+
     /* Smooth fade-in on page load */
     body { animation: pageFadeIn 0.22s ease; }
     @keyframes pageFadeIn { from { opacity: 0; } to { opacity: 1; } }
@@ -42,64 +61,198 @@
 <body>
   <div class="header">
     <div style="display:flex;align-items:center;gap:16px;">
-      <button class="back-btn" onclick="history.back()">← Back</button>
+      <button class="back-btn" onclick="history.back()"><span class="lang-en">← Back</span><span class="lang-hi" lang="hi">← वापस</span></button>
       <span class="header-title">NEET<span>-AI</span></span>
+    </div>
+    <div class="lang-switch" role="group" aria-label="Language / भाषा">
+      <button type="button" data-lang="en" aria-pressed="true">English</button>
+      <button type="button" data-lang="hi" aria-pressed="false" lang="hi">हिंदी</button>
     </div>
   </div>
   <div class="container">
-    <h1>Terms of Service</h1>
-    <div class="updated">Last updated: July 5, 2026</div>
 
-    <p>These Terms of Service ("Terms") govern your use of NEET-AI, operated by Al-Hakimi United ("we", "us", or "our"). By accessing or using NEET-AI, you agree to be bound by these Terms.</p>
+    <!-- ===================== ENGLISH ===================== -->
+    <section class="lang-en">
+      <h1>Terms of Service</h1>
+      <div class="updated">NEET-AI by Al-Hakimi United · Effective date: 15 October 2026</div>
 
-    <h2>1. Acceptance of Terms</h2>
-    <p>By creating an account or using NEET-AI in any way, you confirm that you are at least 16 years old and agree to these Terms. If you are under 18, you confirm that you have parental or guardian consent.</p>
+      <p>These Terms are an agreement between you and Al-Hakimi United ("we", "us") for using NEET-AI on our website and Android app. By using NEET-AI you agree to them and to our <a href="./privacy.html">Privacy Policy</a>. If you don't agree, please don't use NEET-AI.</p>
 
-    <h2>2. Description of Service</h2>
-    <p>NEET-AI provides AI-powered educational assistance for NEET examination preparation, including:</p>
-    <ul>
-      <li>AI-generated doubt solving based on NCERT content</li>
-      <li>Previous year question (PYQ) bank access</li>
-      <li>Mock tests in NEET format</li>
-      <li>Personalised performance tracking</li>
-    </ul>
+      <h2>1. Who can use NEET-AI</h2>
+      <ul>
+        <li>You must be at least 13 years old.</li>
+        <li>If you're under 18, you need your parent's or legal guardian's consent. They must read and accept these Terms and the Privacy Policy for you, and they are responsible for your use of NEET-AI.</li>
+        <li>NEET-AI is for your own study. One account is for one person.</li>
+      </ul>
 
-    <h2>3. Free and Pro Plans</h2>
-    <p>NEET-AI offers a Free plan with limited features and a Pro plan with full access. Free plan users are limited to 5 AI questions per day. Pro plan features are available upon payment of the applicable subscription fee.</p>
+      <h2>2. Your account</h2>
+      <ul>
+        <li>Give accurate details and keep them up to date.</li>
+        <li>Keep your sign-in codes and password private. Never share an OTP with anyone; we will never ask you for it.</li>
+        <li>You're responsible for what happens on your account. Tell us straight away if you think someone else is using it.</li>
+        <li>Paid plans can stay signed in on a limited number of devices at a time (Pro: 1, Max: 2). Signing in on another device signs the oldest one out after a short warning.</li>
+      </ul>
 
-    <h2>4. User Responsibilities</h2>
-    <p>You agree to:</p>
-    <ul>
-      <li>Provide accurate information when creating your account</li>
-      <li>Keep your login credentials confidential</li>
-      <li>Use the service only for lawful educational purposes</li>
-      <li>Not attempt to reverse-engineer, scrape, or copy the service</li>
-      <li>Not share your account with others</li>
-    </ul>
+      <h2>3. Acceptable use</h2>
+      <p>Don't:</p>
+      <ul>
+        <li>Share, sell or rent your account, or let other people use your paid plan. This is what the device limits are for.</li>
+        <li>Create several accounts to get extra free usage or referral bonuses, or otherwise get around usage limits, device limits or rate limits.</li>
+        <li>Scrape, crawl, copy or bulk-download questions, answers, diagrams or other content, or use bots or automated tools to access NEET-AI.</li>
+        <li>Reverse-engineer, attack or overload NEET-AI, or try to access data that isn't yours.</li>
+        <li>Use NEET-AI to harass or abuse anyone, or upload content that is illegal, sexual, violent or hateful, or that you don't have the right to share.</li>
+        <li>Upload other people's personal data, such as someone else's photo or contact details.</li>
+        <li>Try to make the AI produce harmful content, or use NEET-AI to cheat in an exam.</li>
+        <li>Use NEET-AI content commercially, for example by republishing it in a coaching course, without our written permission.</li>
+      </ul>
+      <p>If you break these rules, we may remove content, limit features or suspend your account.</p>
 
-    <h2>5. Intellectual Property</h2>
-    <p>All content generated by NEET-AI's AI, including explanations, solutions, and study materials, is owned by Al-Hakimi United. NEET previous year questions are official NTA examination content and are used for educational reference purposes only.</p>
+      <h2>4. AI answers can be wrong</h2>
+      <p>NEET-AI's answers are generated by AI from NCERT-based material. They can contain mistakes, such as wrong steps, wrong options, or wrong or missing NCERT citations, even when they sound confident.</p>
+      <ul>
+        <li>NEET-AI is a study aid. It is not a substitute for your teachers, NCERT textbooks, or official NEET material from the National Testing Agency (NTA).</li>
+        <li>Check important facts in your NCERT textbook. For exam dates, eligibility, syllabus and rules, rely only on official NTA notices.</li>
+        <li>NEET-AI does not give medical advice.</li>
+        <li>When an answer or question is wrong, use the thumbs-down button or the Report option so we can fix it.</li>
+      </ul>
 
-    <h2>6. Accuracy Disclaimer</h2>
-    <p>NEET-AI's AI responses are generated based on NCERT content and may not always be 100% accurate. Always verify important information with official NCERT textbooks and consult a qualified teacher for critical exam preparation decisions. We are not liable for any errors in AI-generated content.</p>
+      <h2>5. Content ownership</h2>
+      <ul>
+        <li><strong>Your content stays yours.</strong> Questions, images, PDFs and notes you add belong to you. You give us permission to store and process them, and to send them to our service providers as described in the Privacy Policy, only to run, secure and improve NEET-AI.</li>
+        <li>Only upload content you have the right to share.</li>
+        <li>You may use the answers NEET-AI gives you for your own study.</li>
+        <li><strong>NEET-AI's content</strong> (the app and website, design, curated question bank, explanations, diagrams, mock tests and tags) belongs to us or our licensors. Past NEET questions come from public NTA exams and are used for educational reference, and NCERT material belongs to NCERT. We don't claim ownership of either.</li>
+        <li>If you think content on NEET-AI infringes your rights, email us.</li>
+      </ul>
 
-    <h2>7. Payment and Refunds</h2>
-    <p>Pro plan subscriptions are billed monthly or annually. All payments are processed securely. Refund requests must be made within 7 days of payment. We reserve the right to modify pricing with 30 days' notice.</p>
+      <h2>6. Plans and usage limits</h2>
+      <ul>
+        <li>The Free plan has a daily AI usage limit. Guests (not logged in) get a smaller one.</li>
+        <li>Pro and Max plans have higher limits and more features, as shown on the <a href="./pricing.html">pricing page</a>.</li>
+        <li>We may change plans, features and limits over time. We'll tell you before a change that reduces what a paid plan includes.</li>
+        <li>We may limit unusual usage that suggests abuse or automated access.</li>
+        <li>Bonus tokens from referrals have no cash value and can't be transferred.</li>
+      </ul>
+      <!-- PAYMENTS PLACEHOLDER: replace this paragraph with payment, billing, renewal, cancellation
+           and refund terms (and the payment processor) before Razorpay goes live. -->
+      <p><strong>Payments:</strong> online payment for paid plans isn't live yet. Payment, billing, renewal and refund terms will be added here before it launches.</p>
 
-    <h2>8. Termination</h2>
-    <p>We reserve the right to suspend or terminate accounts that violate these Terms, engage in fraudulent activity, or misuse the service. You may cancel your account at any time.</p>
+      <h2>7. Suspension and termination</h2>
+      <ul>
+        <li>You can stop using NEET-AI and <a href="./delete-account.html">delete your account</a> at any time.</li>
+        <li>We may suspend or close your account if you break these Terms, misuse NEET-AI, or if the law requires it. Where reasonable, we'll tell you why.</li>
+        <li>We may change or stop parts of NEET-AI. If we shut NEET-AI down completely, we'll give notice where we reasonably can.</li>
+      </ul>
 
-    <h2>9. Limitation of Liability</h2>
-    <p>NEET-AI is an educational tool and does not guarantee NEET exam success. To the maximum extent permitted by applicable law, Al-Hakimi United shall not be liable for any indirect, incidental, or consequential damages arising from your use of the service.</p>
+      <h2>8. Limitation of liability</h2>
+      <ul>
+        <li>NEET-AI is provided "as is" and "as available". We don't guarantee that it will always be available or free of errors, or that it will improve your marks, rank or NEET result.</li>
+        <li>To the extent the law allows, we aren't liable for indirect or consequential loss, or for loss caused by relying on an AI answer, and our total liability to you is limited to the amount you paid us for NEET-AI in the 12 months before the claim.</li>
+        <li>Nothing in these Terms limits rights you have under Indian law that can't be limited, such as your rights under the Consumer Protection Act, 2019.</li>
+      </ul>
 
-    <h2>10. Governing Law</h2>
-    <p>These Terms are governed by the laws of India. Any disputes arising from these Terms shall be subject to the exclusive jurisdiction of the courts of Kuwait City, Kuwait.</p>
+      <h2>9. Governing law</h2>
+      <!-- Consider naming one city's courts (where Al-Hakimi United is registered) instead of
+           "the competent courts in India" -- ask the lawyer. -->
+      <p>These Terms are governed by the laws of India, and disputes will be decided by the competent courts in India. Before going to court, please contact us so we can try to resolve the issue.</p>
 
-    <h2>11. Changes to Terms</h2>
-    <p>We may update these Terms from time to time. Continued use of NEET-AI after changes constitutes acceptance of the new Terms.</p>
+      <h2>10. Changes to these Terms</h2>
+      <p>We may update these Terms. We'll change the effective date and, for significant changes, tell you in the app or on the website before they take effect. If you keep using NEET-AI after that, the new Terms apply. If you don't agree, stop using NEET-AI and delete your account.</p>
 
-    <h2>12. Contact</h2>
-    <p>For questions about these Terms, contact us at: <a href="mailto:mustafatasscr7@gmail.com">mustafatasscr7@gmail.com</a></p>
+      <h2>11. Contact</h2>
+      <p>For questions about these Terms, email <a class="support-email-link" href="#"><span class="support-email"></span></a>.</p>
+      <p>These Terms are available in English and Hindi. If the two versions differ, the English version applies.</p>
+    </section>
+
+    <!-- ===================== HINDI ===================== -->
+    <section class="lang-hi" lang="hi">
+      <h1>सेवा की शर्तें</h1>
+      <div class="updated">NEET-AI, Al-Hakimi United द्वारा · प्रभावी तिथि: 15 अक्टूबर 2026</div>
+
+      <p>ये शर्तें हमारी वेबसाइट और Android ऐप पर NEET-AI के उपयोग के लिए आपके और Al-Hakimi United ("हम") के बीच एक समझौता हैं। NEET-AI का उपयोग करके आप इन शर्तों और हमारी <a href="./privacy.html">गोपनीयता नीति</a> से सहमत होते हैं। अगर आप सहमत नहीं हैं, तो कृपया NEET-AI का उपयोग न करें।</p>
+
+      <h2>1. NEET-AI का उपयोग कौन कर सकता है</h2>
+      <ul>
+        <li>आपकी उम्र कम से कम 13 वर्ष होनी चाहिए।</li>
+        <li>अगर आपकी उम्र 18 वर्ष से कम है, तो आपको अपने माता-पिता या क़ानूनी अभिभावक की सहमति चाहिए। उन्हें आपकी ओर से ये शर्तें और गोपनीयता नीति पढ़कर स्वीकार करनी होंगी, और NEET-AI के आपके उपयोग की ज़िम्मेदारी उनकी होगी।</li>
+        <li>NEET-AI आपकी अपनी पढ़ाई के लिए है। एक खाता एक ही व्यक्ति के लिए है।</li>
+      </ul>
+
+      <h2>2. आपका खाता</h2>
+      <ul>
+        <li>सही जानकारी दें और उसे अपडेट रखें।</li>
+        <li>अपने साइन-इन कोड और पासवर्ड गोपनीय रखें। OTP किसी के साथ साझा न करें; हम इसे आपसे कभी नहीं माँगेंगे।</li>
+        <li>आपके खाते पर होने वाली गतिविधि की ज़िम्मेदारी आपकी है। अगर आपको लगे कि कोई और आपका खाता उपयोग कर रहा है, तो तुरंत हमें बताएँ।</li>
+        <li>पेड प्लान एक समय में सीमित डिवाइस पर ही साइन इन रह सकते हैं (प्रो: 1, मैक्स: 2)। किसी और डिवाइस पर साइन इन करने पर, थोड़ी देर की चेतावनी के बाद, सबसे पुराना डिवाइस साइन आउट हो जाता है।</li>
+      </ul>
+
+      <h2>3. स्वीकार्य उपयोग</h2>
+      <p>ये न करें:</p>
+      <ul>
+        <li>अपना खाता साझा करना, बेचना या किराए पर देना, या दूसरों को अपने पेड प्लान का उपयोग करने देना। डिवाइस सीमाएँ इसी के लिए हैं।</li>
+        <li>ज़्यादा मुफ़्त उपयोग या रेफ़रल बोनस पाने के लिए कई खाते बनाना, या किसी और तरीके से उपयोग सीमा, डिवाइस सीमा या रेट लिमिट से बचना।</li>
+        <li>प्रश्न, उत्तर, डायग्राम या अन्य सामग्री को स्क्रेप, क्रॉल, कॉपी या बड़ी मात्रा में डाउनलोड करना, या NEET-AI तक पहुँचने के लिए बॉट या ऑटोमेटेड टूल का उपयोग करना।</li>
+        <li>NEET-AI को रिवर्स-इंजीनियर करना, उस पर हमला करना या उसे ओवरलोड करना, या ऐसा डेटा देखने की कोशिश करना जो आपका नहीं है।</li>
+        <li>NEET-AI का उपयोग किसी को परेशान करने या उसके साथ दुर्व्यवहार करने के लिए करना, या ऐसी सामग्री अपलोड करना जो ग़ैरक़ानूनी, यौन, हिंसक या नफ़रत भरी हो, या जिसे साझा करने का अधिकार आपके पास न हो।</li>
+        <li>दूसरों का व्यक्तिगत डेटा अपलोड करना, जैसे किसी और की फ़ोटो या संपर्क जानकारी।</li>
+        <li>AI से हानिकारक सामग्री बनवाने की कोशिश करना, या परीक्षा में नकल के लिए NEET-AI का उपयोग करना।</li>
+        <li>हमारी लिखित अनुमति के बिना NEET-AI की सामग्री का व्यावसायिक उपयोग करना, जैसे उसे किसी कोचिंग कोर्स में दोबारा प्रकाशित करना।</li>
+      </ul>
+      <p>इन नियमों को तोड़ने पर हम सामग्री हटा सकते हैं, सुविधाएँ सीमित कर सकते हैं या आपका खाता निलंबित कर सकते हैं।</p>
+
+      <h2>4. AI के उत्तर गलत हो सकते हैं</h2>
+      <p>NEET-AI के उत्तर NCERT पर आधारित सामग्री से AI द्वारा बनाए जाते हैं। इनमें गलतियाँ हो सकती हैं, जैसे गलत स्टेप, गलत विकल्प, या गलत या छूटे हुए NCERT संदर्भ, तब भी जब वे पूरे भरोसे के साथ लिखे लगें।</p>
+      <ul>
+        <li>NEET-AI पढ़ाई में मदद का एक साधन है। यह आपके शिक्षकों, NCERT पाठ्यपुस्तकों, या राष्ट्रीय परीक्षा एजेंसी (NTA) की आधिकारिक NEET सामग्री का विकल्प नहीं है।</li>
+        <li>ज़रूरी तथ्य अपनी NCERT पाठ्यपुस्तक में जाँचें। परीक्षा की तारीख़ों, पात्रता, सिलेबस और नियमों के लिए केवल NTA की आधिकारिक सूचनाओं पर भरोसा करें।</li>
+        <li>NEET-AI चिकित्सा सलाह नहीं देता।</li>
+        <li>कोई उत्तर या प्रश्न गलत हो, तो थम्स-डाउन बटन या रिपोर्ट विकल्प का उपयोग करें, ताकि हम उसे ठीक कर सकें।</li>
+      </ul>
+
+      <h2>5. सामग्री का स्वामित्व</h2>
+      <ul>
+        <li><strong>आपकी सामग्री आपकी ही रहती है।</strong> आपके जोड़े गए प्रश्न, इमेज, PDF और नोट आपके हैं। आप हमें इन्हें रखने और प्रोसेस करने, और गोपनीयता नीति में बताए अनुसार हमारे सेवा प्रदाताओं को भेजने की अनुमति देते हैं, केवल NEET-AI को चलाने, सुरक्षित रखने और बेहतर बनाने के लिए।</li>
+        <li>केवल वही सामग्री अपलोड करें जिसे साझा करने का अधिकार आपके पास है।</li>
+        <li>NEET-AI से मिले उत्तरों का उपयोग आप अपनी पढ़ाई के लिए कर सकते हैं।</li>
+        <li><strong>NEET-AI की अपनी सामग्री</strong> (ऐप और वेबसाइट, डिज़ाइन, चुना हुआ प्रश्न बैंक, व्याख्याएँ, डायग्राम, मॉक टेस्ट और टैग) हमारी या हमारे लाइसेंसदाताओं की है। पिछले वर्षों के NEET प्रश्न NTA की सार्वजनिक परीक्षाओं से हैं और शैक्षिक संदर्भ के लिए उपयोग किए गए हैं, और NCERT सामग्री NCERT की है। हम इन दोनों पर स्वामित्व का दावा नहीं करते।</li>
+        <li>अगर आपको लगता है कि NEET-AI पर कोई सामग्री आपके अधिकारों का उल्लंघन करती है, तो हमें ईमेल करें।</li>
+      </ul>
+
+      <h2>6. प्लान और उपयोग सीमाएँ</h2>
+      <ul>
+        <li>मुफ़्त प्लान में रोज़ की AI उपयोग सीमा होती है। गेस्ट (बिना लॉग इन) की सीमा इससे कम होती है।</li>
+        <li>प्रो और मैक्स प्लान में ज़्यादा सीमा और ज़्यादा सुविधाएँ हैं, जैसा <a href="./pricing.html">प्राइसिंग पेज</a> पर दिखाया गया है।</li>
+        <li>हम समय के साथ प्लान, सुविधाएँ और सीमाएँ बदल सकते हैं। किसी पेड प्लान में मिलने वाली चीज़ें कम करने वाले बदलाव से पहले हम आपको बताएँगे।</li>
+        <li>दुरुपयोग या ऑटोमेटेड एक्सेस जैसा लगने वाला असामान्य उपयोग हम सीमित कर सकते हैं।</li>
+        <li>रेफ़रल से मिले बोनस टोकन का कोई नकद मूल्य नहीं है और इन्हें ट्रांसफ़र नहीं किया जा सकता।</li>
+      </ul>
+      <p><strong>भुगतान:</strong> पेड प्लान के लिए ऑनलाइन भुगतान अभी शुरू नहीं हुआ है। इसके शुरू होने से पहले भुगतान, बिलिंग, रिन्यूअल और रिफ़ंड की शर्तें यहाँ जोड़ी जाएँगी।</p>
+
+      <h2>7. निलंबन और खाता बंद करना</h2>
+      <ul>
+        <li>आप कभी भी NEET-AI का उपयोग बंद कर सकते हैं और <a href="./delete-account.html">अपना खाता हटा</a> सकते हैं।</li>
+        <li>अगर आप इन शर्तों को तोड़ते हैं, NEET-AI का दुरुपयोग करते हैं, या क़ानून ऐसा माँगता है, तो हम आपका खाता निलंबित या बंद कर सकते हैं। जहाँ उचित हो, हम कारण बताएँगे।</li>
+        <li>हम NEET-AI के कुछ हिस्से बदल या बंद कर सकते हैं। अगर हम NEET-AI को पूरी तरह बंद करते हैं, तो जहाँ संभव हो, पहले सूचना देंगे।</li>
+      </ul>
+
+      <h2>8. दायित्व की सीमा</h2>
+      <ul>
+        <li>NEET-AI "जैसा है" और "जैसा उपलब्ध है" के आधार पर दिया जाता है। हम यह गारंटी नहीं देते कि यह हमेशा उपलब्ध या त्रुटिरहित रहेगा, या इससे आपके अंक, रैंक या NEET का परिणाम बेहतर होगा।</li>
+        <li>क़ानून जितनी अनुमति देता है, उस हद तक हम अप्रत्यक्ष या परिणामी नुकसान, या AI के किसी उत्तर पर भरोसा करने से हुए नुकसान के लिए ज़िम्मेदार नहीं हैं, और आपके प्रति हमारा कुल दायित्व उस राशि तक सीमित है जो आपने दावे से पहले के 12 महीनों में NEET-AI के लिए हमें चुकाई।</li>
+        <li>इन शर्तों में कुछ भी भारतीय क़ानून के तहत आपके उन अधिकारों को सीमित नहीं करता जिन्हें सीमित नहीं किया जा सकता, जैसे उपभोक्ता संरक्षण अधिनियम, 2019 के तहत आपके अधिकार।</li>
+      </ul>
+
+      <h2>9. लागू क़ानून</h2>
+      <p>ये शर्तें भारत के क़ानूनों द्वारा शासित हैं, और विवादों का निर्णय भारत की सक्षम अदालतें करेंगी। अदालत जाने से पहले कृपया हमसे संपर्क करें, ताकि हम मामला सुलझाने की कोशिश कर सकें।</p>
+
+      <h2>10. इन शर्तों में बदलाव</h2>
+      <p>हम ये शर्तें अपडेट कर सकते हैं। हम प्रभावी तिथि बदलेंगे, और बड़े बदलावों के लागू होने से पहले आपको ऐप या वेबसाइट पर बताएँगे। उसके बाद भी NEET-AI का उपयोग जारी रखने पर नई शर्तें लागू होंगी। अगर आप सहमत नहीं हैं, तो NEET-AI का उपयोग बंद करें और अपना खाता हटा दें।</p>
+
+      <h2>11. संपर्क</h2>
+      <p>इन शर्तों के बारे में प्रश्नों के लिए <a class="support-email-link" href="#"><span class="support-email"></span></a> पर ईमेल करें।</p>
+      <p>ये शर्तें अंग्रेज़ी और हिंदी में उपलब्ध हैं। दोनों में अंतर होने पर अंग्रेज़ी संस्करण लागू होगा।</p>
+    </section>
+
   </div>
   <script src="./theme.js"></script>
 </body>

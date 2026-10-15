@@ -1,5 +1,10 @@
 <!DOCTYPE html>
-<html lang="en">
+<!-- DRAFT (2026-10-15), not yet reviewed by a lawyer: get legal review before publishing.
+     What this page says is collected, who processes it and how long it's kept must match the code
+     -- see LEGAL_DATA_AUDIT.md, server.py's ACCOUNT_DELETE_TABLES / ACCOUNT_ANONYMISE_COLUMNS and
+     delete-account.html. English and Hindi blocks must say the same thing. The support address
+     lives only in legal.js (SUPPORT_EMAIL). -->
+<html lang="en" data-bilingual data-title-en="Privacy Policy — NEET-AI" data-title-hi="गोपनीयता नीति — NEET-AI">
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
@@ -8,6 +13,7 @@
   <link rel="icon" type="image/svg+xml" href="assets/logo.svg"/>
   <link rel="apple-touch-icon" href="assets/apple-touch-icon.png"/>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+  <script src="./legal.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: 'Inter', sans-serif; background: #0a0a0f; color: #ececec; line-height: 1.7; }
@@ -18,22 +24,38 @@
     h1 { font-size: 32px; font-weight: 700; color: #fff; margin-bottom: 8px; letter-spacing: -0.5px; }
     .updated { font-size: 13px; color: #555; margin-bottom: 48px; }
     h2 { font-size: 18px; font-weight: 600; color: #fff; margin: 36px 0 12px; }
+    h3 { font-size: 15px; font-weight: 600; color: #ddd; margin: 24px 0 8px; }
     p { font-size: 14px; color: #999; margin-bottom: 16px; }
     ul { padding-left: 20px; margin-bottom: 16px; }
     li { font-size: 14px; color: #999; margin-bottom: 8px; }
     a { color: #7c5cff; text-decoration: none; }
-    .back-btn { background: transparent; border: none; color: #555; cursor: pointer; font-size: 13px; font-family: 'Inter', sans-serif; padding: 0; }
-    .back-btn:hover { color: #7c5cff; }
+    strong { color: #ececec; font-weight: 600; }
+    .summary { background: #111118; border: 1px solid #1f1f2a; border-radius: 12px; padding: 18px 20px 4px; }
+    .summary h2 { font-size: 15px; margin-top: 0; }
+    .lang-switch { display: flex; gap: 6px; }
+    .lang-switch button { background: transparent; border: 1px solid #222; color: #777; border-radius: 999px; padding: 4px 12px; font-family: 'Inter', sans-serif; font-size: 12.5px; font-weight: 500; cursor: pointer; }
+    .lang-switch button:hover { color: #ececec; }
+    .lang-switch button[aria-pressed="true"] { color: #fff; border-color: #7c5cff; }
+    html[data-lang="hi"] .lang-en, html:not([data-lang="hi"]) .lang-hi { display: none; }
+    .lang-hi p, .lang-hi li { line-height: 1.85; }
+    @media (max-width: 480px) {
+      .header { padding: 12px 16px; }
+      .container { padding: 40px 16px; }
+      h1 { font-size: 26px; }
+    }
 
     body.light-mode { background: #f7f7fa !important; color: #14141a !important; }
     body.light-mode .header { background: #ffffff !important; border-color: #e5e5ea !important; }
     body.light-mode .header-title { color: #0d0d0d !important; }
     body.light-mode h1, body.light-mode h2 { color: #0d0d0d !important; }
+    body.light-mode h3 { color: #26262e !important; }
     body.light-mode .updated { color: #7a7a85 !important; }
     body.light-mode p, body.light-mode li { color: #45454f !important; }
-    body.light-mode .back-btn { color: #6b6b76 !important; }
-    body.light-mode .back-btn:hover { color: #7c5cff !important; }
-  
+    body.light-mode strong { color: #14141a !important; }
+    body.light-mode .summary { background: #ffffff !important; border-color: #e5e5ea !important; }
+    body.light-mode .lang-switch button { border-color: #dcdce2 !important; color: #6b6b76 !important; }
+    body.light-mode .lang-switch button[aria-pressed="true"] { color: #0d0d0d !important; border-color: #7c5cff !important; }
+
     /* Smooth fade-in on page load */
     body { animation: pageFadeIn 0.22s ease; }
     @keyframes pageFadeIn { from { opacity: 0; } to { opacity: 1; } }
@@ -44,64 +66,352 @@
     <div style="display:flex;align-items:center;gap:16px;">
       <span class="header-title">NEET<span>-AI</span></span>
     </div>
+    <div class="lang-switch" role="group" aria-label="Language / भाषा">
+      <button type="button" data-lang="en" aria-pressed="true">English</button>
+      <button type="button" data-lang="hi" aria-pressed="false" lang="hi">हिंदी</button>
+    </div>
   </div>
   <div class="container">
-    <h1>Privacy Policy</h1>
-    <div class="updated">Last updated: July 5, 2026</div>
 
-    <p>This Privacy Policy describes how Al-Hakimi United ("we", "us", or "our") collects, uses, and protects your information when you use NEET-AI ("the Service"). By using NEET-AI, you agree to the collection and use of information in accordance with this policy.</p>
+    <!-- ===================== ENGLISH ===================== -->
+    <section class="lang-en">
+      <h1>Privacy Policy</h1>
+      <div class="updated">NEET-AI by Al-Hakimi United · Effective date: 15 October 2026</div>
 
-    <h2>1. Information We Collect</h2>
-    <p>We collect the following types of information:</p>
-    <ul>
-      <li><strong>Account information:</strong> Name and email address when you register via Google or email.</li>
-      <li><strong>Usage data:</strong> Questions asked, questions answered, mock test scores, saved questions, and study activity.</li>
-      <li><strong>Device information:</strong> Browser type, operating system, and IP address for security and analytics purposes.</li>
-    </ul>
+      <p>This policy explains what personal data NEET-AI collects through our website and Android app, why we use it, who processes it for us, how long we keep it, and the rights you have under India's Digital Personal Data Protection Act, 2023 (the "DPDP Act"). Al-Hakimi United ("we", "us") runs NEET-AI and decides how your data is used, which makes us the "Data Fiduciary" under the DPDP Act.</p>
 
-    <h2>2. How We Use Your Information</h2>
-    <p>We use the information we collect to:</p>
-    <ul>
-      <li>Provide and improve the NEET-AI service</li>
-      <li>Personalise your learning experience</li>
-      <li>Track your progress, streaks, and mock test performance</li>
-      <li>Communicate service updates and important notices</li>
-      <li>Analyse usage patterns to improve our AI and content</li>
-    </ul>
+      <div class="summary">
+        <h2>In short</h2>
+        <ul>
+          <li>We collect what we need to run your account and answer your doubts: your phone number or email, an optional name, your chats and uploads, and your study activity.</li>
+          <li>To answer a doubt, we send your question, and any image or PDF you attach, to third-party AI providers. Some of them are outside India, including in China.</li>
+          <li>We don't sell your data, show ads, or use advertising trackers.</li>
+          <li>You can delete your account and all its data at any time.</li>
+        </ul>
+      </div>
 
-    <h2>3. Data Storage</h2>
-    <p>Your data is stored securely using Supabase (PostgreSQL database hosted on AWS Mumbai region). We implement industry-standard security measures to protect your personal information from unauthorized access, alteration, or disclosure.</p>
+      <h2>1. Data we collect</h2>
+      <h3>Account details</h3>
+      <ul>
+        <li><strong>Phone number</strong>, to sign you in with a one-time SMS code.</li>
+        <li><strong>Email address and password</strong>, if you sign up with email or link an email. Our sign-in provider stores passwords in hashed form; we never see them.</li>
+        <li><strong>Name</strong> (optional). You can set a display name. If you sign in with Google on the website, we receive your Google name and email.</li>
+        <li><strong>Account ID</strong>, a random identifier for your account.</li>
+      </ul>
+      <h3>What you create in NEET-AI</h3>
+      <ul>
+        <li><strong>Chats:</strong> the doubts you type or dictate, the AI's answers (including earlier versions when you press Retry), text you quote from an answer, chat titles and pins, and timestamps.</li>
+        <li><strong>Images and PDFs</strong> you attach to a doubt, including photos taken with the app's camera.</li>
+        <li><strong>Study activity:</strong> saved questions, mock test and personalised test attempts (your answers, scores and timings), and study streaks.</li>
+        <li><strong>Feedback and reports:</strong> thumbs up or down on answers (stored with the question and answer it refers to, and any comment you add), session ratings with an optional comment, and reports about a question or diagram with an optional note.</li>
+      </ul>
+      <h3>Plan, usage and referrals</h3>
+      <ul>
+        <li>Your plan (Free, Pro or Max), your daily AI usage, bonus tokens, your referral code, and which accounts referred you or were referred by you.</li>
+      </ul>
+      <h3>Devices and sessions</h3>
+      <ul>
+        <li>A random device ID created by the app or your browser, a device label (for example your phone model, or your browser and operating system), your approximate location (city and region) looked up from your IP address when you sign in on a device, and when each device signed in and was last active. We use these for plan device limits and to show your Active Sessions list.</li>
+      </ul>
+      <h3>If you use NEET-AI without logging in</h3>
+      <ul>
+        <li>Your IP address and a daily usage count, to apply the guest usage limit. If you log in the same day, that day's usage moves to your account.</li>
+      </ul>
+      <h3>Records of image and PDF doubts</h3>
+      <ul>
+        <li>For every image or PDF doubt we keep a record with your account ID (or IP address for guests), a fingerprint (hash), the type and size of each file, and the AI's answer, so we can investigate wrong answers and abuse.</li>
+      </ul>
+      <h3>Technical data</h3>
+      <ul>
+        <li>Our hosting providers keep standard server logs (IP address, time, the address requested, errors). Our own logs include your account ID when something goes wrong; they don't include the text of your questions.</li>
+        <li>The website loads fonts from Google Fonts and code libraries from jsDelivr. These services receive your IP address and browser details when a page loads.</li>
+      </ul>
+      <h3>Stored only on your device</h3>
+      <ul>
+        <li>Language, theme, text size and font, answer style and personalisation settings, the app's study reminder setting and time, and whether you've seen the intro or a rating prompt. Study reminders are notifications scheduled on your device; nothing about them is sent to us.</li>
+        <li><strong>Voice input:</strong> your phone's or browser's speech service (for example Google's) turns your speech into text. We receive only the text you send, never audio.</li>
+        <li><strong>Read aloud</strong> uses your device's own text-to-speech.</li>
+      </ul>
+      <h3>What we don't collect</h3>
+      <ul>
+        <li>Contacts, precise (GPS) location, advertising IDs, payment card details, or data from other apps. The app's crash-reporting tool is switched off.</li>
+      </ul>
 
-    <h2>4. Third-Party Services</h2>
-    <p>NEET-AI uses the following third-party services:</p>
-    <ul>
-      <li><strong>Supabase:</strong> Database and authentication</li>
-      <li><strong>Anthropic Claude API:</strong> AI-powered responses</li>
-      <li><strong>OpenAI API:</strong> Text embeddings for search</li>
-      <li><strong>Google OAuth:</strong> Sign-in with Google</li>
-    </ul>
-    <p>Each third-party service has its own privacy policy governing the use of your information.</p>
+      <h2>2. How we use your data</h2>
+      <ul>
+        <li>To create your account, sign you in and keep your account secure.</li>
+        <li>To answer your doubts, find matching NCERT content and diagrams, and save your chats, questions and results so you can come back to them.</li>
+        <li>To personalise answers, only while <strong>Personalize my AI tutor</strong> is on in Settings: we use your first name and the chapters you've found hardest in saved questions and mock tests. You can turn it off at any time.</li>
+        <li>To run plans and limits: daily usage limits, the guest limit, device limits and referral rewards.</li>
+        <li>To prevent abuse and fraud, for example with rate limits and by protecting OTP sign-in.</li>
+        <li>To fix and improve NEET-AI: we review feedback, reports and image/PDF doubt records to correct wrong answers and question content.</li>
+        <li>To send service messages, such as sign-in codes and account emails. We don't send marketing messages.</li>
+        <li>To comply with the law.</li>
+      </ul>
+      <p>We process your data on the basis of the consent you give when you create an account or use NEET-AI, and for the legitimate uses the DPDP Act allows (such as complying with the law). You can withdraw your consent at any time; see "Your rights" below.</p>
 
-    <h2>5. Data Retention</h2>
-    <p>We retain your personal data for as long as your account is active. You can delete your account and associated data at any time from Settings &gt; Privacy in the app or on the website. See <a href="./delete-account.html">Delete Your Account</a> for the steps, what is deleted, and how to request deletion if you can't log in.</p>
+      <h2>3. How AI answers your doubts</h2>
+      <p>NEET-AI's answers are written by AI models run by other companies. When you ask a doubt:</p>
+      <ul>
+        <li>The text of your question, the last few messages of that chat and a short summary of earlier messages are sent to an AI provider. If personalisation is on, your first name and the names of your weak chapters are sent too.</li>
+        <li>Images and PDFs you attach are sent to Google's Gemini.</li>
+        <li>OpenAI or Google also turns your question text into a search vector (an "embedding") so we can find matching NCERT content and diagrams.</li>
+      </ul>
+      <p>The AI providers we use:</p>
+      <ul>
+        <li><strong>DeepSeek</strong> (servers in China): most text answers.</li>
+        <li><strong>Alibaba Cloud Model Studio, Qwen models</strong> (Singapore region): text answers during DeepSeek's busy hours, or when DeepSeek fails.</li>
+        <li><strong>Google Gemini API</strong> (USA and other countries): image and PDF doubts, some question solutions and diagrams, and search for Hindi questions.</li>
+        <li><strong>OpenAI</strong> (USA): search vectors for English questions.</li>
+      </ul>
+      <p>These providers process your content to produce the answer and keep it under their own terms. Some keep inputs for a period for safety monitoring, and some, including DeepSeek, say they may use it to improve their models. Please don't put your phone number, address or other personal details in your doubts or uploads.</p>
+      <p>Answers to common questions may be kept in a shared answer cache and reused for other students. The cache holds a fingerprint of the question and the answer, not who asked it. Personalised answers are never cached for others.</p>
 
-    <h2>6. Your Rights</h2>
-    <p>You have the right to:</p>
-    <ul>
-      <li>Access the personal information we hold about you</li>
-      <li>Request correction of inaccurate data</li>
-      <li>Request deletion of your account and data</li>
-      <li>Withdraw consent for data processing at any time</li>
-    </ul>
+      <h2>4. Who processes your data</h2>
+      <p>We don't sell your personal data or share it for advertising. We use these service providers, which process it on our behalf:</p>
+      <ul>
+        <li><strong>Supabase</strong> (database, sign-in, file storage): all account data, chats and uploads. India (AWS Mumbai).</li>
+        <li><strong>Railway</strong> (our server): every request passes through it, including questions, uploads and your IP address. USA.</li>
+        <li><strong>Vercel</strong> (website hosting): IP address and browser details. Global network.</li>
+        <li><strong>The AI providers in section 3</strong>: the content described there. China, Singapore, USA.</li>
+        <li><strong>Twilio</strong>, through Supabase: your phone number, to send the sign-in SMS. USA.</li>
+        <li><strong>Google Sign-In</strong>, if you choose it on the website.</li>
+        <li><strong>ip-api.com</strong>: your IP address, to look up the city and region shown in Active Sessions.</li>
+        <li><strong>Expo</strong>: delivers app updates, and receives your IP address, app version and a random install ID.</li>
+        <li><strong>Telegram</strong>: an internal alert to our team when every AI provider fails at once. It includes your account ID but none of your content.</li>
+        <li><strong>Google Play</strong>: distributes the app and shows the in-app rating prompt, under Google's own privacy policy.</li>
+      </ul>
+      <p>We may also disclose data when the law requires it, for example to a court or a government authority.</p>
 
-    <h2>7. Children's Privacy</h2>
-    <p>NEET-AI is designed for students aged 16 and above. We do not knowingly collect personal information from children under 13. If you believe a child under 13 has provided us with personal information, please contact us immediately.</p>
+      <h2>5. Where your data is stored</h2>
+      <p>Our main database and your uploaded files are stored in India (Mumbai). Our server runs in the USA, and the AI and other providers above process data in China, Singapore, the USA and other countries. The DPDP Act allows personal data to be transferred outside India unless the Government restricts a particular country, and we will follow any such restriction. By using NEET-AI you understand that your data will be processed outside India as described here.</p>
 
-    <h2>8. Changes to This Policy</h2>
-    <p>We may update this Privacy Policy from time to time. We will notify you of any changes by posting the new policy on this page and updating the "Last updated" date.</p>
+      <h2>6. How long we keep data</h2>
+      <ul>
+        <li><strong>Account details, chats, saved questions, test results, streaks, feedback and settings:</strong> until you delete them or delete your account.</li>
+        <li><strong>Images and PDFs you upload:</strong> until you delete your account.</li>
+        <li><strong>Signed-in devices:</strong> until you log that device out or delete your account.</li>
+        <!-- BEFORE PUBLISHING: the one-year limit below needs a scheduled cleanup job (usage_log,
+             guest_usage_log, media_doubt_log, max_usage_alerts, provider_usage_log). Nothing deletes
+             these rows automatically today -- see LEGAL_DATA_AUDIT.md. -->
+        <li><strong>Daily usage records, guest IP usage records and image/PDF doubt records:</strong> up to one year, then deleted.</li>
+        <li><strong>Server logs at our hosting providers:</strong> for the limited period each provider sets.</li>
+        <li>When you delete your account, your data is removed from our live database straight away and from automatic backups within 30 days. Reports you sent, referral records and AI cost records (token counts only) are kept with your name and ID removed, as listed on the <a href="./delete-account.html">Delete Your Account</a> page.</li>
+        <li>We may keep some records for longer where the law requires it, and only for as long as it requires.</li>
+        <li>AI providers keep what they receive under their own terms.</li>
+      </ul>
 
-    <h2>9. Contact Us</h2>
-    <p>If you have any questions about this Privacy Policy or your data, please contact us at: <a href="mailto:mustafatasscr7@gmail.com">mustafatasscr7@gmail.com</a></p>
+      <h2>7. Deleting your account</h2>
+      <p>You can permanently delete your account and its data at any time from <strong>Settings &gt; Privacy &gt; Delete Account</strong> in the app or on the website. If you can't log in, <a class="support-email-link" data-subject="Delete my account" href="#">email us</a>. See <a href="./delete-account.html">Delete Your Account</a> for the steps and exactly what is deleted.</p>
+      <p>Without deleting your account, you can also delete single chats and saved questions, log other devices out from Active Sessions, and turn off personalisation.</p>
+
+      <h2>8. Your rights</h2>
+      <p>Under the DPDP Act you can:</p>
+      <ul>
+        <li>Ask for a summary of the personal data we hold about you, how we use it, and who we share it with.</li>
+        <li>Correct, complete or update your data. You can edit your name, email and phone number in <strong>Settings &gt; Account</strong>.</li>
+        <li>Ask us to erase your data, or delete your account yourself.</li>
+        <li>Withdraw your consent as easily as you gave it, by deleting your account or, for personalisation, by turning it off. Withdrawing doesn't affect processing done before it.</li>
+        <li>Nominate another person to exercise these rights for you if you die or become unable to.</li>
+        <li>Raise a grievance with us and, if you're not satisfied with our response, complain to the Data Protection Board of India.</li>
+      </ul>
+      <p>To make a request, email us from the email address on your account, or include the phone number you sign in with, so we can find your account. We may ask you to confirm the request is yours. We respond within 90 days at the latest.</p>
+
+      <h2>9. Children and students under 18</h2>
+      <p>NEET-AI is made for NEET aspirants, and many of them are under 18. Under the DPDP Act, anyone under 18 is a child, and their data needs the consent of a parent or lawful guardian.</p>
+      <ul>
+        <li>You must be at least 13 years old to use NEET-AI.</li>
+        <li>If you're under 18, use NEET-AI only with your parent's or guardian's consent. By letting you use NEET-AI, they agree to this policy and our <a href="./terms.html">Terms of Service</a>.</li>
+        <li>A parent or guardian can contact us at any time to see, correct or delete their child's data.</li>
+        <li>We don't show ads, don't sell children's data, and don't use it for targeted advertising.</li>
+      </ul>
+      <p>If we learn that a child under 13 is using NEET-AI, or that someone under 18 is using it without consent, we may delete the account.</p>
+
+      <h2>10. Security</h2>
+      <ul>
+        <li>All data between your device and NEET-AI is encrypted in transit (HTTPS).</li>
+        <li>Database access rules let each student read only their own data, and our server keys are never sent to your device.</li>
+        <li>Rate limits and limits on sign-in codes help prevent abuse.</li>
+        <li>Uploaded images and PDFs are stored at long, random web addresses that aren't listed anywhere. Anyone who has the exact address can open the file, so don't share these links.</li>
+        <li>No system is perfectly secure. If a personal data breach affects you, we will tell you and the Data Protection Board as the law requires.</li>
+      </ul>
+
+      <h2>11. Changes to this policy</h2>
+      <p>We may update this policy as NEET-AI changes. We'll change the effective date above and, for significant changes, tell you in the app or on the website before they take effect.</p>
+
+      <h2>12. Contact and Grievance Officer</h2>
+      <p>For questions, requests or complaints about your data, contact our Grievance Officer at <a class="support-email-link" data-subject="Privacy request" href="#"><span class="support-email"></span></a>. We'll reply as soon as we can, and within 90 days at the latest.</p>
+      <p>This policy is available in English and Hindi. If the two versions differ, the English version applies.</p>
+    </section>
+
+    <!-- ===================== HINDI ===================== -->
+    <section class="lang-hi" lang="hi">
+      <h1>गोपनीयता नीति</h1>
+      <div class="updated">NEET-AI, Al-Hakimi United द्वारा · प्रभावी तिथि: 15 अक्टूबर 2026</div>
+
+      <p>यह नीति बताती है कि NEET-AI हमारी वेबसाइट और Android ऐप के ज़रिए कौन-सा व्यक्तिगत डेटा इकट्ठा करता है, उसका उपयोग क्यों करता है, हमारी ओर से उसे कौन प्रोसेस करता है, हम उसे कितने समय तक रखते हैं, और भारत के डिजिटल व्यक्तिगत डेटा संरक्षण अधिनियम, 2023 ("DPDP अधिनियम") के तहत आपके क्या अधिकार हैं। NEET-AI को Al-Hakimi United ("हम") चलाता है और यही तय करता है कि आपके डेटा का उपयोग कैसे हो, इसलिए DPDP अधिनियम के तहत हम "डेटा फ़िड्यूशियरी" हैं।</p>
+
+      <div class="summary">
+        <h2>संक्षेप में</h2>
+        <ul>
+          <li>हम उतना ही डेटा लेते हैं जितना आपका खाता चलाने और आपके डाउट हल करने के लिए ज़रूरी है: आपका फ़ोन नंबर या ईमेल, वैकल्पिक नाम, आपकी चैट और अपलोड, और आपकी पढ़ाई से जुड़ी गतिविधि।</li>
+          <li>डाउट का उत्तर देने के लिए हम आपका प्रश्न, और साथ में लगाई गई कोई भी इमेज या PDF, बाहरी AI कंपनियों को भेजते हैं। इनमें से कुछ भारत के बाहर हैं, चीन सहित।</li>
+          <li>हम आपका डेटा बेचते नहीं, विज्ञापन नहीं दिखाते, और विज्ञापन ट्रैकर का उपयोग नहीं करते।</li>
+          <li>आप कभी भी अपना खाता और उसका सारा डेटा हटा सकते हैं।</li>
+        </ul>
+      </div>
+
+      <h2>1. हम कौन-सा डेटा इकट्ठा करते हैं</h2>
+      <h3>खाते की जानकारी</h3>
+      <ul>
+        <li><strong>फ़ोन नंबर</strong>, SMS पर भेजे गए वन-टाइम कोड से आपको साइन इन कराने के लिए।</li>
+        <li><strong>ईमेल पता और पासवर्ड</strong>, अगर आप ईमेल से साइन अप करते हैं या ईमेल जोड़ते हैं। हमारी साइन-इन सेवा पासवर्ड को हैश किए गए रूप में रखती है; हम उसे कभी नहीं देखते।</li>
+        <li><strong>नाम</strong> (वैकल्पिक)। आप अपना डिस्प्ले नाम रख सकते हैं। वेबसाइट पर Google से साइन इन करने पर हमें आपका Google नाम और ईमेल मिलता है।</li>
+        <li><strong>खाता ID</strong>, आपके खाते की एक रैंडम पहचान।</li>
+      </ul>
+      <h3>NEET-AI में आप जो बनाते हैं</h3>
+      <ul>
+        <li><strong>चैट:</strong> आपके टाइप किए या बोले गए डाउट, AI के उत्तर ("पुनः प्रयास करें" दबाने पर बने पुराने संस्करण भी), उत्तर से कोट किया गया टेक्स्ट, चैट के शीर्षक और पिन, और समय।</li>
+        <li>डाउट के साथ लगाई गई <strong>इमेज और PDF</strong>, ऐप के कैमरे से ली गई फ़ोटो सहित।</li>
+        <li><strong>पढ़ाई की गतिविधि:</strong> सहेजे गए प्रश्न, मॉक टेस्ट और पर्सनलाइज़्ड टेस्ट के प्रयास (आपके उत्तर, स्कोर और समय), और पढ़ाई की स्ट्रीक।</li>
+        <li><strong>फ़ीडबैक और रिपोर्ट:</strong> उत्तरों पर थम्स अप या डाउन (जिस प्रश्न और उत्तर पर दिया गया, उसके साथ, और आपकी टिप्पणी सहित), सेशन रेटिंग और वैकल्पिक टिप्पणी, और किसी प्रश्न या डायग्राम की रिपोर्ट और वैकल्पिक नोट।</li>
+      </ul>
+      <h3>प्लान, उपयोग और रेफ़रल</h3>
+      <ul>
+        <li>आपका प्लान (मुफ़्त, प्रो या मैक्स), रोज़ का AI उपयोग, बोनस टोकन, आपका रेफ़रल कोड, और किन खातों ने आपको रेफ़र किया या आपने किन्हें रेफ़र किया।</li>
+      </ul>
+      <h3>डिवाइस और सेशन</h3>
+      <ul>
+        <li>ऐप या आपके ब्राउज़र द्वारा बनाई गई एक रैंडम डिवाइस ID, डिवाइस का लेबल (जैसे आपके फ़ोन का मॉडल, या ब्राउज़र और ऑपरेटिंग सिस्टम), किसी डिवाइस पर साइन इन करते समय आपके IP पते से पता लगाया गया अनुमानित स्थान (शहर और राज्य), और हर डिवाइस ने कब साइन इन किया और आख़िरी बार कब सक्रिय था। इनका उपयोग प्लान की डिवाइस सीमा लागू करने और आपकी "सक्रिय सेशन" सूची दिखाने के लिए होता है।</li>
+      </ul>
+      <h3>बिना लॉग इन किए उपयोग करने पर</h3>
+      <ul>
+        <li>आपका IP पता और रोज़ के उपयोग की गिनती, ताकि गेस्ट उपयोग सीमा लागू हो सके। अगर आप उसी दिन लॉग इन करते हैं, तो उस दिन का उपयोग आपके खाते में चला जाता है।</li>
+      </ul>
+      <h3>इमेज और PDF डाउट के रिकॉर्ड</h3>
+      <ul>
+        <li>हर इमेज या PDF डाउट के लिए हम एक रिकॉर्ड रखते हैं, जिसमें आपकी खाता ID (गेस्ट के लिए IP पता), हर फ़ाइल का फ़िंगरप्रिंट (हैश), प्रकार और साइज़, और AI का उत्तर होता है, ताकि गलत उत्तरों और दुरुपयोग की जाँच की जा सके।</li>
+      </ul>
+      <h3>तकनीकी डेटा</h3>
+      <ul>
+        <li>हमारी होस्टिंग कंपनियाँ सामान्य सर्वर लॉग रखती हैं (IP पता, समय, माँगा गया पता, त्रुटियाँ)। कुछ गड़बड़ होने पर हमारे अपने लॉग में आपकी खाता ID होती है; उनमें आपके प्रश्नों का टेक्स्ट नहीं होता।</li>
+        <li>वेबसाइट Google Fonts से फ़ॉन्ट और jsDelivr से कोड लाइब्रेरी लोड करती है। पेज लोड होते समय इन सेवाओं को आपका IP पता और ब्राउज़र की जानकारी मिलती है।</li>
+      </ul>
+      <h3>सिर्फ़ आपके डिवाइस पर रखा जाने वाला डेटा</h3>
+      <ul>
+        <li>भाषा, थीम, टेक्स्ट साइज़ और फ़ॉन्ट, उत्तर की शैली और पर्सनलाइज़ेशन सेटिंग, ऐप में पढ़ाई रिमाइंडर की सेटिंग और समय, और आपने इंट्रो या रेटिंग का संदेश देखा है या नहीं। पढ़ाई रिमाइंडर आपके डिवाइस पर ही शेड्यूल होते हैं; उनके बारे में हमें कुछ नहीं भेजा जाता।</li>
+        <li><strong>वॉइस इनपुट:</strong> आपके फ़ोन या ब्राउज़र की स्पीच सेवा (जैसे Google की) आपकी आवाज़ को टेक्स्ट में बदलती है। हमें केवल वह टेक्स्ट मिलता है जो आप भेजते हैं, आवाज़ कभी नहीं।</li>
+        <li><strong>पढ़कर सुनाने</strong> के लिए आपके डिवाइस का अपना टेक्स्ट-टू-स्पीच उपयोग होता है।</li>
+      </ul>
+      <h3>हम क्या इकट्ठा नहीं करते</h3>
+      <ul>
+        <li>कॉन्टैक्ट, सटीक (GPS) स्थान, विज्ञापन ID, पेमेंट कार्ड की जानकारी, या दूसरे ऐप का डेटा। ऐप का क्रैश-रिपोर्टिंग टूल बंद है।</li>
+      </ul>
+
+      <h2>2. हम आपके डेटा का उपयोग कैसे करते हैं</h2>
+      <ul>
+        <li>आपका खाता बनाने, आपको साइन इन कराने और आपके खाते को सुरक्षित रखने के लिए।</li>
+        <li>आपके डाउट का उत्तर देने, मिलती-जुलती NCERT सामग्री और डायग्राम ढूँढने, और आपकी चैट, प्रश्न और परिणाम सहेजने के लिए, ताकि आप बाद में उन पर लौट सकें।</li>
+        <li>उत्तरों को आपके अनुसार ढालने के लिए, केवल तब जब सेटिंग्स में <strong>मेरे AI शिक्षक को वैयक्तिकृत करें</strong> चालू हो: हम आपका पहला नाम और वे अध्याय उपयोग करते हैं जो सहेजे गए प्रश्नों और मॉक टेस्ट में आपको सबसे कठिन लगे। आप इसे कभी भी बंद कर सकते हैं।</li>
+        <li>प्लान और सीमाएँ चलाने के लिए: रोज़ की उपयोग सीमा, गेस्ट सीमा, डिवाइस सीमा और रेफ़रल इनाम।</li>
+        <li>दुरुपयोग और धोखाधड़ी रोकने के लिए, जैसे रेट लिमिट और OTP साइन-इन की सुरक्षा।</li>
+        <li>NEET-AI को ठीक करने और बेहतर बनाने के लिए: हम फ़ीडबैक, रिपोर्ट और इमेज/PDF डाउट के रिकॉर्ड देखकर गलत उत्तर और प्रश्नों की सामग्री सुधारते हैं।</li>
+        <li>सेवा से जुड़े संदेश भेजने के लिए, जैसे साइन-इन कोड और खाते से जुड़े ईमेल। हम मार्केटिंग संदेश नहीं भेजते।</li>
+        <li>क़ानून का पालन करने के लिए।</li>
+      </ul>
+      <p>हम आपका डेटा उस सहमति के आधार पर प्रोसेस करते हैं जो आप खाता बनाते समय या NEET-AI का उपयोग करते समय देते हैं, और उन वैध उपयोगों के लिए जिनकी DPDP अधिनियम अनुमति देता है (जैसे क़ानून का पालन)। आप कभी भी अपनी सहमति वापस ले सकते हैं; नीचे "आपके अधिकार" देखें।</p>
+
+      <h2>3. AI आपके डाउट का उत्तर कैसे देता है</h2>
+      <p>NEET-AI के उत्तर दूसरी कंपनियों के AI मॉडल लिखते हैं। जब आप डाउट पूछते हैं:</p>
+      <ul>
+        <li>आपके प्रश्न का टेक्स्ट, उस चैट के पिछले कुछ संदेश और उससे पहले के संदेशों का छोटा सारांश एक AI कंपनी को भेजा जाता है। अगर पर्सनलाइज़ेशन चालू है, तो आपका पहला नाम और आपके कमज़ोर अध्यायों के नाम भी भेजे जाते हैं।</li>
+        <li>आपकी लगाई गई इमेज और PDF, Google के Gemini को भेजी जाती हैं।</li>
+        <li>OpenAI या Google आपके प्रश्न के टेक्स्ट को एक सर्च वेक्टर ("एम्बेडिंग") में भी बदलते हैं, ताकि हम मिलती-जुलती NCERT सामग्री और डायग्राम ढूँढ सकें।</li>
+      </ul>
+      <p>हम ये AI कंपनियाँ उपयोग करते हैं:</p>
+      <ul>
+        <li><strong>DeepSeek</strong> (सर्वर चीन में): ज़्यादातर टेक्स्ट उत्तर।</li>
+        <li><strong>Alibaba Cloud Model Studio, Qwen मॉडल</strong> (सिंगापुर क्षेत्र): DeepSeek के व्यस्त घंटों में, या DeepSeek के विफल होने पर, टेक्स्ट उत्तर।</li>
+        <li><strong>Google Gemini API</strong> (अमेरिका और अन्य देश): इमेज और PDF डाउट, कुछ प्रश्नों के हल और डायग्राम, और हिंदी प्रश्नों की खोज।</li>
+        <li><strong>OpenAI</strong> (अमेरिका): अंग्रेज़ी प्रश्नों के लिए सर्च वेक्टर।</li>
+      </ul>
+      <p>ये कंपनियाँ उत्तर बनाने के लिए आपकी सामग्री प्रोसेस करती हैं और उसे अपनी शर्तों के अनुसार रखती हैं। कुछ सुरक्षा निगरानी के लिए इनपुट कुछ समय तक रखती हैं, और कुछ, DeepSeek सहित, कहती हैं कि वे इसका उपयोग अपने मॉडल सुधारने के लिए कर सकती हैं। कृपया अपने डाउट या अपलोड में अपना फ़ोन नंबर, पता या अन्य निजी जानकारी न डालें।</p>
+      <p>आम प्रश्नों के उत्तर एक साझा उत्तर कैश में रखे जा सकते हैं और दूसरे छात्रों के लिए दोबारा उपयोग हो सकते हैं। कैश में प्रश्न का फ़िंगरप्रिंट और उत्तर होता है, यह नहीं कि किसने पूछा। पर्सनलाइज़्ड उत्तर कभी दूसरों के लिए कैश नहीं होते।</p>
+
+      <h2>4. आपका डेटा कौन प्रोसेस करता है</h2>
+      <p>हम आपका व्यक्तिगत डेटा बेचते नहीं, और न ही विज्ञापन के लिए साझा करते हैं। हम इन सेवा प्रदाताओं का उपयोग करते हैं, जो हमारी ओर से डेटा प्रोसेस करते हैं:</p>
+      <ul>
+        <li><strong>Supabase</strong> (डेटाबेस, साइन-इन, फ़ाइल स्टोरेज): खाते का सारा डेटा, चैट और अपलोड। भारत (AWS मुंबई)।</li>
+        <li><strong>Railway</strong> (हमारा सर्वर): हर अनुरोध इससे होकर जाता है, प्रश्न, अपलोड और आपका IP पता सहित। अमेरिका।</li>
+        <li><strong>Vercel</strong> (वेबसाइट होस्टिंग): IP पता और ब्राउज़र की जानकारी। वैश्विक नेटवर्क।</li>
+        <li><strong>खंड 3 में बताई गई AI कंपनियाँ</strong>: वहाँ बताई गई सामग्री। चीन, सिंगापुर, अमेरिका।</li>
+        <li><strong>Twilio</strong>, Supabase के ज़रिए: साइन-इन SMS भेजने के लिए आपका फ़ोन नंबर। अमेरिका।</li>
+        <li><strong>Google साइन-इन</strong>, अगर आप वेबसाइट पर इसे चुनते हैं।</li>
+        <li><strong>ip-api.com</strong>: "सक्रिय सेशन" में दिखने वाला शहर और राज्य पता करने के लिए आपका IP पता।</li>
+        <li><strong>Expo</strong>: ऐप अपडेट पहुँचाता है, और इसे आपका IP पता, ऐप का वर्शन और एक रैंडम इंस्टॉल ID मिलती है।</li>
+        <li><strong>Telegram</strong>: सभी AI कंपनियों के एक साथ विफल होने पर हमारी टीम को भेजा जाने वाला आंतरिक अलर्ट। इसमें आपकी खाता ID होती है, पर आपकी कोई सामग्री नहीं।</li>
+        <li><strong>Google Play</strong>: ऐप उपलब्ध कराता है और ऐप में रेटिंग का संदेश दिखाता है, Google की अपनी गोपनीयता नीति के तहत।</li>
+      </ul>
+      <p>क़ानून की माँग होने पर हम डेटा प्रकट भी कर सकते हैं, जैसे किसी अदालत या सरकारी प्राधिकरण को।</p>
+
+      <h2>5. आपका डेटा कहाँ रखा जाता है</h2>
+      <p>हमारा मुख्य डेटाबेस और आपकी अपलोड की गई फ़ाइलें भारत (मुंबई) में रखी जाती हैं। हमारा सर्वर अमेरिका में चलता है, और ऊपर बताई गई AI और अन्य कंपनियाँ चीन, सिंगापुर, अमेरिका और अन्य देशों में डेटा प्रोसेस करती हैं। DPDP अधिनियम भारत के बाहर व्यक्तिगत डेटा भेजने की अनुमति देता है, जब तक सरकार किसी विशेष देश पर रोक न लगाए, और हम ऐसी किसी भी रोक का पालन करेंगे। NEET-AI का उपयोग करके आप समझते हैं कि आपका डेटा यहाँ बताए अनुसार भारत के बाहर प्रोसेस होगा।</p>
+
+      <h2>6. हम डेटा कितने समय तक रखते हैं</h2>
+      <ul>
+        <li><strong>खाते की जानकारी, चैट, सहेजे गए प्रश्न, टेस्ट के परिणाम, स्ट्रीक, फ़ीडबैक और सेटिंग:</strong> जब तक आप उन्हें या अपना खाता नहीं हटाते।</li>
+        <li><strong>आपकी अपलोड की गई इमेज और PDF:</strong> जब तक आप अपना खाता नहीं हटाते।</li>
+        <li><strong>साइन-इन किए गए डिवाइस:</strong> जब तक आप उस डिवाइस को लॉग आउट नहीं करते या खाता नहीं हटाते।</li>
+        <li><strong>रोज़ के उपयोग के रिकॉर्ड, गेस्ट IP उपयोग रिकॉर्ड और इमेज/PDF डाउट के रिकॉर्ड:</strong> अधिकतम एक वर्ष, फिर हटा दिए जाते हैं।</li>
+        <li><strong>होस्टिंग कंपनियों के सर्वर लॉग:</strong> हर कंपनी द्वारा तय सीमित अवधि तक।</li>
+        <li>खाता हटाने पर आपका डेटा हमारे लाइव डेटाबेस से तुरंत और ऑटोमैटिक बैकअप से 30 दिनों के भीतर हट जाता है। आपकी भेजी गई रिपोर्ट, रेफ़रल रिकॉर्ड और AI लागत के रिकॉर्ड (केवल टोकन की संख्या) आपका नाम और ID हटाकर रखे जाते हैं, जैसा <a href="./delete-account.html">अपना खाता हटाएँ</a> पेज (अंग्रेज़ी में) पर बताया गया है।</li>
+        <li>जहाँ क़ानून की माँग हो, हम कुछ रिकॉर्ड ज़्यादा समय तक रख सकते हैं, और केवल उतने समय तक जितना क़ानून माँगता है।</li>
+        <li>AI कंपनियाँ जो प्राप्त करती हैं, उसे अपनी शर्तों के अनुसार रखती हैं।</li>
+      </ul>
+
+      <h2>7. अपना खाता हटाना</h2>
+      <p>आप ऐप या वेबसाइट में <strong>सेटिंग्स &gt; गोपनीयता &gt; खाता हटाएँ</strong> से कभी भी अपना खाता और उसका डेटा स्थायी रूप से हटा सकते हैं। अगर आप लॉग इन नहीं कर पा रहे हैं, तो <a class="support-email-link" data-subject="Delete my account" href="#">हमें ईमेल करें</a>। तरीका और ठीक-ठीक क्या हटता है, यह <a href="./delete-account.html">अपना खाता हटाएँ</a> पेज (अंग्रेज़ी में) पर देखें।</p>
+      <p>खाता हटाए बिना भी आप अलग-अलग चैट और सहेजे गए प्रश्न हटा सकते हैं, "सक्रिय सेशन" से दूसरे डिवाइस लॉग आउट कर सकते हैं, और पर्सनलाइज़ेशन बंद कर सकते हैं।</p>
+
+      <h2>8. आपके अधिकार</h2>
+      <p>DPDP अधिनियम के तहत आप:</p>
+      <ul>
+        <li>हमारे पास मौजूद अपने व्यक्तिगत डेटा का सारांश माँग सकते हैं, और यह भी कि हम उसका उपयोग कैसे करते हैं और उसे किसके साथ साझा करते हैं।</li>
+        <li>अपना डेटा सुधार, पूरा या अपडेट कर सकते हैं। <strong>सेटिंग्स &gt; खाता</strong> में आप अपना नाम, ईमेल और फ़ोन नंबर बदल सकते हैं।</li>
+        <li>हमसे अपना डेटा मिटाने को कह सकते हैं, या खुद अपना खाता हटा सकते हैं।</li>
+        <li>अपनी सहमति उतनी ही आसानी से वापस ले सकते हैं जितनी आसानी से दी थी: खाता हटाकर, या पर्सनलाइज़ेशन के लिए उसे बंद करके। सहमति वापस लेने से उससे पहले हुई प्रोसेसिंग पर असर नहीं पड़ता।</li>
+        <li>अपनी मृत्यु या असमर्थता की स्थिति में इन अधिकारों का उपयोग करने के लिए किसी अन्य व्यक्ति को नामित कर सकते हैं।</li>
+        <li>हमसे शिकायत कर सकते हैं, और हमारे जवाब से संतुष्ट न होने पर भारतीय डेटा संरक्षण बोर्ड (Data Protection Board of India) से शिकायत कर सकते हैं।</li>
+      </ul>
+      <p>अनुरोध करने के लिए अपने खाते वाले ईमेल पते से हमें ईमेल करें, या जिस फ़ोन नंबर से आप साइन इन करते हैं वह लिखें, ताकि हम आपका खाता ढूँढ सकें। हम यह पुष्टि करने के लिए कह सकते हैं कि अनुरोध आपका ही है। हम अधिकतम 90 दिनों के भीतर जवाब देते हैं।</p>
+
+      <h2>9. बच्चे और 18 वर्ष से कम उम्र के छात्र</h2>
+      <p>NEET-AI NEET की तैयारी करने वाले छात्रों के लिए बना है, और उनमें से कई 18 वर्ष से कम उम्र के हैं। DPDP अधिनियम के तहत 18 वर्ष से कम उम्र का हर व्यक्ति बच्चा माना जाता है, और उसके डेटा के लिए माता-पिता या क़ानूनी अभिभावक की सहमति ज़रूरी है।</p>
+      <ul>
+        <li>NEET-AI का उपयोग करने के लिए आपकी उम्र कम से कम 13 वर्ष होनी चाहिए।</li>
+        <li>अगर आपकी उम्र 18 वर्ष से कम है, तो NEET-AI का उपयोग केवल अपने माता-पिता या अभिभावक की सहमति से करें। आपको NEET-AI का उपयोग करने देकर वे इस नीति और हमारी <a href="./terms.html">सेवा की शर्तों</a> से सहमत होते हैं।</li>
+        <li>माता-पिता या अभिभावक कभी भी हमसे संपर्क करके अपने बच्चे का डेटा देख, सुधार या हटा सकते हैं।</li>
+        <li>हम विज्ञापन नहीं दिखाते, बच्चों का डेटा नहीं बेचते, और उसका उपयोग लक्षित विज्ञापन के लिए नहीं करते।</li>
+      </ul>
+      <p>अगर हमें पता चलता है कि 13 वर्ष से कम उम्र का कोई बच्चा NEET-AI का उपयोग कर रहा है, या 18 वर्ष से कम उम्र का कोई व्यक्ति बिना सहमति के इसका उपयोग कर रहा है, तो हम वह खाता हटा सकते हैं।</p>
+
+      <h2>10. सुरक्षा</h2>
+      <ul>
+        <li>आपके डिवाइस और NEET-AI के बीच का सारा डेटा ट्रांज़िट में एन्क्रिप्ट होता है (HTTPS)।</li>
+        <li>डेटाबेस के एक्सेस नियम हर छात्र को केवल उसका अपना डेटा पढ़ने देते हैं, और हमारे सर्वर की कुंजियाँ कभी आपके डिवाइस पर नहीं भेजी जातीं।</li>
+        <li>रेट लिमिट और साइन-इन कोड की सीमाएँ दुरुपयोग रोकने में मदद करती हैं।</li>
+        <li>अपलोड की गई इमेज और PDF लंबे, रैंडम वेब पतों पर रखी जाती हैं जो कहीं सूचीबद्ध नहीं हैं। जिसके पास सटीक पता हो, वह फ़ाइल खोल सकता है, इसलिए ये लिंक साझा न करें।</li>
+        <li>कोई भी सिस्टम पूरी तरह सुरक्षित नहीं होता। अगर कोई व्यक्तिगत डेटा उल्लंघन (ब्रीच) आपको प्रभावित करता है, तो हम क़ानून के अनुसार आपको और डेटा संरक्षण बोर्ड को सूचित करेंगे।</li>
+      </ul>
+
+      <h2>11. इस नीति में बदलाव</h2>
+      <p>NEET-AI में बदलाव के साथ हम यह नीति अपडेट कर सकते हैं। हम ऊपर दी गई प्रभावी तिथि बदलेंगे, और बड़े बदलावों के लागू होने से पहले आपको ऐप या वेबसाइट पर बताएँगे।</p>
+
+      <h2>12. संपर्क और शिकायत अधिकारी</h2>
+      <p>अपने डेटा से जुड़े प्रश्नों, अनुरोधों या शिकायतों के लिए हमारे शिकायत अधिकारी (Grievance Officer) से <a class="support-email-link" data-subject="Privacy request" href="#"><span class="support-email"></span></a> पर संपर्क करें। हम जितनी जल्दी हो सके, और अधिकतम 90 दिनों के भीतर जवाब देंगे।</p>
+      <p>यह नीति अंग्रेज़ी और हिंदी में उपलब्ध है। दोनों में अंतर होने पर अंग्रेज़ी संस्करण लागू होगा।</p>
+    </section>
+
   </div>
   <script src="./theme.js"></script>
 </body>

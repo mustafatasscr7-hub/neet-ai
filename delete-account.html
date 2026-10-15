@@ -10,7 +10,9 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
   <!-- Public account-deletion page -- the "Delete account URL" in Play Console's Data safety form.
        Same look as privacy.html. What's listed as deleted/kept here must match server.py's
-       ACCOUNT_DELETE_TABLES / ACCOUNT_ANONYMISE_COLUMNS (POST /account/delete). -->
+       ACCOUNT_DELETE_TABLES / ACCOUNT_ANONYMISE_COLUMNS (POST /account/delete). The support
+       address lives only in legal.js (SUPPORT_EMAIL). -->
+  <script src="./legal.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: 'Inter', sans-serif; background: #0a0a0f; color: #ececec; line-height: 1.7; }
@@ -66,7 +68,7 @@
     </ol>
 
     <h2>Can't log in?</h2>
-    <p>Email <a class="support-email-link" href="#"><span class="support-email"></span></a> with the subject "Delete my account". Send it from the email address on your account, or include the phone number you log in with, so we can find your account. We delete it within 30 days and reply to confirm.</p>
+    <p>Email <a class="support-email-link" data-subject="Delete my account" href="#"><span class="support-email"></span></a> with the subject "Delete my account". Send it from the email address on your account, or include the phone number you log in with, so we can find your account. We delete it within 30 days and reply to confirm.</p>
 
     <h2>What is deleted</h2>
     <ul>
@@ -86,16 +88,8 @@
     <p>None of these can be linked back to you once your account is deleted. Copies in our database provider's automatic backups expire within 30 days.</p>
 
     <h2>Questions</h2>
-    <p>See our <a href="./privacy.html">Privacy Policy</a>, or email <a class="support-email-link" href="#"><span class="support-email"></span></a>.</p>
+    <p>See our <a href="./privacy.html">Privacy Policy</a>, or email <a class="support-email-link" data-subject="Delete my account" href="#"><span class="support-email"></span></a>.</p>
   </div>
-  <script>
-    // The one place this page's support address lives (temporary address -- change it here).
-    const SUPPORT_EMAIL = 'neetai0123@gmail.com';
-    document.querySelectorAll('.support-email').forEach((el) => { el.textContent = SUPPORT_EMAIL; });
-    document.querySelectorAll('.support-email-link').forEach((el) => {
-      el.href = `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent('Delete my account')}`;
-    });
-  </script>
   <script src="./theme.js"></script>
 </body>
 </html>
