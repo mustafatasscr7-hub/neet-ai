@@ -1,5 +1,9 @@
 <!DOCTYPE html>
-<!-- DRAFT (2026-10-15), not yet reviewed by a lawyer: get legal review before publishing.
+<!-- DRAFT (2026-10-15; storage location, retention, private uploads and the DB-IP location lookup
+     updated 2026-10-16), not yet reviewed by a lawyer: get legal review before publishing.
+     Section 6's periods are enforced by retention_cleanup.sql (pg_cron) -- publish only once that
+     is scheduled and migrate_chat_uploads_private.py --delete-public has run. Name no server or
+     provider country (owner's decision, 2026-10-16).
      What this page says is collected, who processes it and how long it's kept must match the code
      -- see LEGAL_DATA_AUDIT.md, server.py's ACCOUNT_DELETE_TABLES / ACCOUNT_ANONYMISE_COLUMNS and
      delete-account.html. English and Hindi blocks must say the same thing. The support address
@@ -84,7 +88,9 @@
         <h2>In short</h2>
         <ul>
           <li>We collect what we need to run your account and answer your doubts: your phone number or email, an optional name, your chats and uploads, and your study activity.</li>
-          <li>To answer a doubt, we send your question, and any image or PDF you attach, to third-party AI providers. Some of them are outside India, including in China.</li>
+          <li>To answer a doubt, we send your question, and any image or PDF you attach, to third-party AI providers.</li>
+          <li>Your data is stored in India. Our service providers may process it in other countries.</li>
+          <li>We keep each kind of data only for a set time (section 6), and your uploads are private to you.</li>
           <li>We don't sell your data, show ads, or use advertising trackers.</li>
           <li>You can delete your account and all its data at any time.</li>
         </ul>
@@ -111,7 +117,8 @@
       </ul>
       <h3>Devices and sessions</h3>
       <ul>
-        <li>A random device ID created by the app or your browser, a device label (for example your phone model, or your browser and operating system), your approximate location (city and region) looked up from your IP address when you sign in on a device, and when each device signed in and was last active. We use these for plan device limits and to show your Active Sessions list.</li>
+        <li>A random device ID created by the app or your browser, a device label (for example your phone model, or your browser and operating system), your approximate location (city and region), and when each device signed in and was last active. We use these for plan device limits and to show your Active Sessions list.</li>
+        <li>The approximate location is worked out from your IP address when you sign in on a device, by our own server using a location database it keeps itself (<a href="https://db-ip.com">IP Geolocation by DB-IP</a>). Your IP address isn't sent to another company for this, and we store only the city and region, not the IP address.</li>
       </ul>
       <h3>If you use NEET-AI without logging in</h3>
       <ul>
@@ -159,10 +166,10 @@
       </ul>
       <p>The AI providers we use:</p>
       <ul>
-        <li><strong>DeepSeek</strong> (servers in China): most text answers.</li>
-        <li><strong>Alibaba Cloud Model Studio, Qwen models</strong> (Singapore region): text answers during DeepSeek's busy hours, or when DeepSeek fails.</li>
-        <li><strong>Google Gemini API</strong> (USA and other countries): image and PDF doubts, some question solutions and diagrams, and search for Hindi questions.</li>
-        <li><strong>OpenAI</strong> (USA): search vectors for English questions.</li>
+        <li><strong>DeepSeek</strong>: most text answers.</li>
+        <li><strong>Alibaba Cloud Model Studio, Qwen models</strong>: text answers during DeepSeek's busy hours, or when DeepSeek fails.</li>
+        <li><strong>Google Gemini API</strong>: image and PDF doubts, some question solutions and diagrams, and search for Hindi questions.</li>
+        <li><strong>OpenAI</strong>: search vectors for English questions.</li>
       </ul>
       <p>These providers process your content to produce the answer and keep it under their own terms. Some keep inputs for a period for safety monitoring, and some, including DeepSeek, say they may use it to improve their models. Please don't put your phone number, address or other personal details in your doubts or uploads.</p>
       <p>Answers to common questions may be kept in a shared answer cache and reused for other students. The cache holds a fingerprint of the question and the answer, not who asked it. Personalised answers are never cached for others.</p>
@@ -170,13 +177,12 @@
       <h2>4. Who processes your data</h2>
       <p>We don't sell your personal data or share it for advertising. We use these service providers, which process it on our behalf:</p>
       <ul>
-        <li><strong>Supabase</strong> (database, sign-in, file storage): all account data, chats and uploads. India (AWS Mumbai).</li>
-        <li><strong>Railway</strong> (our server): every request passes through it, including questions, uploads and your IP address. USA.</li>
-        <li><strong>Vercel</strong> (website hosting): IP address and browser details. Global network.</li>
-        <li><strong>The AI providers in section 3</strong>: the content described there. China, Singapore, USA.</li>
-        <li><strong>Twilio</strong>, through Supabase: your phone number, to send the sign-in SMS. USA.</li>
+        <li><strong>Supabase</strong> (database, sign-in, file storage): all account data, chats and uploads.</li>
+        <li><strong>Railway</strong> (our server): every request passes through it, including questions, uploads and your IP address.</li>
+        <li><strong>Vercel</strong> (website hosting): IP address and browser details.</li>
+        <li><strong>The AI providers in section 3</strong>: the content described there.</li>
+        <li><strong>Twilio</strong>, through Supabase: your phone number, to send the sign-in SMS.</li>
         <li><strong>Google Sign-In</strong>, if you choose it on the website.</li>
-        <li><strong>ip-api.com</strong>: your IP address, to look up the city and region shown in Active Sessions.</li>
         <li><strong>Expo</strong>: delivers app updates, and receives your IP address, app version and a random install ID.</li>
         <li><strong>Telegram</strong>: an internal alert to our team when every AI provider fails at once. It includes your account ID but none of your content.</li>
         <li><strong>Google Play</strong>: distributes the app and shows the in-app rating prompt, under Google's own privacy policy.</li>
@@ -184,19 +190,21 @@
       <p>We may also disclose data when the law requires it, for example to a court or a government authority.</p>
 
       <h2>5. Where your data is stored</h2>
-      <p>Our main database and your uploaded files are stored in India (Mumbai). Our server runs in the USA, and the AI and other providers above process data in China, Singapore, the USA and other countries. The DPDP Act allows personal data to be transferred outside India unless the Government restricts a particular country, and we will follow any such restriction. By using NEET-AI you understand that your data will be processed outside India as described here.</p>
+      <p>Your data is stored in India: our database and the files you upload are kept there. To run NEET-AI, our service providers, including our server host and the AI providers in section 3, may process your data in other countries. The DPDP Act allows personal data to be transferred outside India unless the Government restricts a particular country, and we will follow any such restriction. By using NEET-AI you understand that your data may be processed outside India as described here.</p>
 
       <h2>6. How long we keep data</h2>
       <ul>
-        <li><strong>Account details, chats, saved questions, test results, streaks, feedback and settings:</strong> until you delete them or delete your account.</li>
-        <li><strong>Images and PDFs you upload:</strong> until you delete your account.</li>
-        <li><strong>Signed-in devices:</strong> until you log that device out or delete your account.</li>
-        <!-- BEFORE PUBLISHING: the one-year limit below needs a scheduled cleanup job (usage_log,
-             guest_usage_log, media_doubt_log, max_usage_alerts, provider_usage_log). Nothing deletes
-             these rows automatically today -- see LEGAL_DATA_AUDIT.md. -->
-        <li><strong>Daily usage records, guest IP usage records and image/PDF doubt records:</strong> up to one year, then deleted.</li>
+        <li><strong>Account details, your plan and referral code, chats, saved questions, mock and personalised test results, study streaks and settings:</strong> until you delete them or delete your account. We don't delete them on a schedule.</li>
+        <li><strong>Photos and PDFs you upload:</strong> for as long as they're part of one of your chats. If you delete that chat, or a file never ends up in a chat, we delete the file within 7 days.</li>
+        <li><strong>Guest usage records</strong> (your IP address and a daily count, when you use NEET-AI without logging in): 30 days.</li>
+        <li><strong>Signed-in devices</strong> (device ID, device label, approximate location): 90 days after the device was last active.</li>
+        <li><strong>Records of image and PDF doubts:</strong> 90 days.</li>
+        <li><strong>Daily usage records for your account:</strong> 12 months.</li>
+        <li><strong>AI cost records</strong> (token counts, none of your content): 24 months. We remove your account ID from them after 12 months.</li>
+        <li><strong>Feedback on answers, session ratings, and reports about a question or diagram:</strong> after 12 months we remove your account ID and the link to your chat, and keep the content (your comment or note, and for a vote the question and answer it was about) to keep improving NEET-AI.</li>
+        <li><strong>Shared answer cache:</strong> no time limit. It isn't linked to you (see section 3).</li>
         <li><strong>Server logs at our hosting providers:</strong> for the limited period each provider sets.</li>
-        <li>When you delete your account, your data is removed from our live database straight away and from automatic backups within 30 days. Reports you sent, referral records and AI cost records (token counts only) are kept with your name and ID removed, as listed on the <a href="./delete-account.html">Delete Your Account</a> page.</li>
+        <li>When you delete your account, your data is removed from our database straight away, and we don't keep backup copies of it. Reports you sent, referral records and AI cost records (token counts only) are kept with your name and ID removed, as listed on the <a href="./delete-account.html">Delete Your Account</a> page.</li>
         <li>We may keep some records for longer where the law requires it, and only for as long as it requires.</li>
         <li>AI providers keep what they receive under their own terms.</li>
       </ul>
@@ -232,7 +240,7 @@
         <li>All data between your device and NEET-AI is encrypted in transit (HTTPS).</li>
         <li>Database access rules let each student read only their own data, and our server keys are never sent to your device.</li>
         <li>Rate limits and limits on sign-in codes help prevent abuse.</li>
-        <li>Uploaded images and PDFs are stored at long, random web addresses that aren't listed anywhere. Anyone who has the exact address can open the file, so don't share these links.</li>
+        <li>Images and PDFs you upload are stored privately. Only you can open them, through links our server creates for your account that stop working after an hour.</li>
         <li>No system is perfectly secure. If a personal data breach affects you, we will tell you and the Data Protection Board as the law requires.</li>
       </ul>
 
@@ -255,7 +263,9 @@
         <h2>संक्षेप में</h2>
         <ul>
           <li>हम उतना ही डेटा लेते हैं जितना आपका खाता चलाने और आपके डाउट हल करने के लिए ज़रूरी है: आपका फ़ोन नंबर या ईमेल, वैकल्पिक नाम, आपकी चैट और अपलोड, और आपकी पढ़ाई से जुड़ी गतिविधि।</li>
-          <li>डाउट का उत्तर देने के लिए हम आपका प्रश्न, और साथ में लगाई गई कोई भी इमेज या PDF, बाहरी AI कंपनियों को भेजते हैं। इनमें से कुछ भारत के बाहर हैं, चीन सहित।</li>
+          <li>डाउट का उत्तर देने के लिए हम आपका प्रश्न, और साथ में लगाई गई कोई भी इमेज या PDF, बाहरी AI कंपनियों को भेजते हैं।</li>
+          <li>आपका डेटा भारत में रखा जाता है। हमारे सेवा प्रदाता इसे दूसरे देशों में प्रोसेस कर सकते हैं।</li>
+          <li>हम हर तरह का डेटा केवल एक तय समय तक रखते हैं (खंड 6), और आपके अपलोड केवल आपके लिए निजी हैं।</li>
           <li>हम आपका डेटा बेचते नहीं, विज्ञापन नहीं दिखाते, और विज्ञापन ट्रैकर का उपयोग नहीं करते।</li>
           <li>आप कभी भी अपना खाता और उसका सारा डेटा हटा सकते हैं।</li>
         </ul>
@@ -282,7 +292,8 @@
       </ul>
       <h3>डिवाइस और सेशन</h3>
       <ul>
-        <li>ऐप या आपके ब्राउज़र द्वारा बनाई गई एक रैंडम डिवाइस ID, डिवाइस का लेबल (जैसे आपके फ़ोन का मॉडल, या ब्राउज़र और ऑपरेटिंग सिस्टम), किसी डिवाइस पर साइन इन करते समय आपके IP पते से पता लगाया गया अनुमानित स्थान (शहर और राज्य), और हर डिवाइस ने कब साइन इन किया और आख़िरी बार कब सक्रिय था। इनका उपयोग प्लान की डिवाइस सीमा लागू करने और आपकी "सक्रिय सेशन" सूची दिखाने के लिए होता है।</li>
+        <li>ऐप या आपके ब्राउज़र द्वारा बनाई गई एक रैंडम डिवाइस ID, डिवाइस का लेबल (जैसे आपके फ़ोन का मॉडल, या ब्राउज़र और ऑपरेटिंग सिस्टम), आपका अनुमानित स्थान (शहर और राज्य), और हर डिवाइस ने कब साइन इन किया और आख़िरी बार कब सक्रिय था। इनका उपयोग प्लान की डिवाइस सीमा लागू करने और आपकी "सक्रिय सेशन" सूची दिखाने के लिए होता है।</li>
+        <li>अनुमानित स्थान किसी डिवाइस पर साइन इन करते समय आपके IP पते से पता लगाया जाता है, हमारे अपने सर्वर द्वारा, उस स्थान डेटाबेस से जिसे सर्वर खुद रखता है (<a href="https://db-ip.com">IP Geolocation by DB-IP</a>)। इसके लिए आपका IP पता किसी दूसरी कंपनी को नहीं भेजा जाता, और हम केवल शहर और राज्य रखते हैं, IP पता नहीं।</li>
       </ul>
       <h3>बिना लॉग इन किए उपयोग करने पर</h3>
       <ul>
@@ -330,10 +341,10 @@
       </ul>
       <p>हम ये AI कंपनियाँ उपयोग करते हैं:</p>
       <ul>
-        <li><strong>DeepSeek</strong> (सर्वर चीन में): ज़्यादातर टेक्स्ट उत्तर।</li>
-        <li><strong>Alibaba Cloud Model Studio, Qwen मॉडल</strong> (सिंगापुर क्षेत्र): DeepSeek के व्यस्त घंटों में, या DeepSeek के विफल होने पर, टेक्स्ट उत्तर।</li>
-        <li><strong>Google Gemini API</strong> (अमेरिका और अन्य देश): इमेज और PDF डाउट, कुछ प्रश्नों के हल और डायग्राम, और हिंदी प्रश्नों की खोज।</li>
-        <li><strong>OpenAI</strong> (अमेरिका): अंग्रेज़ी प्रश्नों के लिए सर्च वेक्टर।</li>
+        <li><strong>DeepSeek</strong>: ज़्यादातर टेक्स्ट उत्तर।</li>
+        <li><strong>Alibaba Cloud Model Studio, Qwen मॉडल</strong>: DeepSeek के व्यस्त घंटों में, या DeepSeek के विफल होने पर, टेक्स्ट उत्तर।</li>
+        <li><strong>Google Gemini API</strong>: इमेज और PDF डाउट, कुछ प्रश्नों के हल और डायग्राम, और हिंदी प्रश्नों की खोज।</li>
+        <li><strong>OpenAI</strong>: अंग्रेज़ी प्रश्नों के लिए सर्च वेक्टर।</li>
       </ul>
       <p>ये कंपनियाँ उत्तर बनाने के लिए आपकी सामग्री प्रोसेस करती हैं और उसे अपनी शर्तों के अनुसार रखती हैं। कुछ सुरक्षा निगरानी के लिए इनपुट कुछ समय तक रखती हैं, और कुछ, DeepSeek सहित, कहती हैं कि वे इसका उपयोग अपने मॉडल सुधारने के लिए कर सकती हैं। कृपया अपने डाउट या अपलोड में अपना फ़ोन नंबर, पता या अन्य निजी जानकारी न डालें।</p>
       <p>आम प्रश्नों के उत्तर एक साझा उत्तर कैश में रखे जा सकते हैं और दूसरे छात्रों के लिए दोबारा उपयोग हो सकते हैं। कैश में प्रश्न का फ़िंगरप्रिंट और उत्तर होता है, यह नहीं कि किसने पूछा। पर्सनलाइज़्ड उत्तर कभी दूसरों के लिए कैश नहीं होते।</p>
@@ -341,13 +352,12 @@
       <h2>4. आपका डेटा कौन प्रोसेस करता है</h2>
       <p>हम आपका व्यक्तिगत डेटा बेचते नहीं, और न ही विज्ञापन के लिए साझा करते हैं। हम इन सेवा प्रदाताओं का उपयोग करते हैं, जो हमारी ओर से डेटा प्रोसेस करते हैं:</p>
       <ul>
-        <li><strong>Supabase</strong> (डेटाबेस, साइन-इन, फ़ाइल स्टोरेज): खाते का सारा डेटा, चैट और अपलोड। भारत (AWS मुंबई)।</li>
-        <li><strong>Railway</strong> (हमारा सर्वर): हर अनुरोध इससे होकर जाता है, प्रश्न, अपलोड और आपका IP पता सहित। अमेरिका।</li>
-        <li><strong>Vercel</strong> (वेबसाइट होस्टिंग): IP पता और ब्राउज़र की जानकारी। वैश्विक नेटवर्क।</li>
-        <li><strong>खंड 3 में बताई गई AI कंपनियाँ</strong>: वहाँ बताई गई सामग्री। चीन, सिंगापुर, अमेरिका।</li>
-        <li><strong>Twilio</strong>, Supabase के ज़रिए: साइन-इन SMS भेजने के लिए आपका फ़ोन नंबर। अमेरिका।</li>
+        <li><strong>Supabase</strong> (डेटाबेस, साइन-इन, फ़ाइल स्टोरेज): खाते का सारा डेटा, चैट और अपलोड।</li>
+        <li><strong>Railway</strong> (हमारा सर्वर): हर अनुरोध इससे होकर जाता है, प्रश्न, अपलोड और आपका IP पता सहित।</li>
+        <li><strong>Vercel</strong> (वेबसाइट होस्टिंग): IP पता और ब्राउज़र की जानकारी।</li>
+        <li><strong>खंड 3 में बताई गई AI कंपनियाँ</strong>: वहाँ बताई गई सामग्री।</li>
+        <li><strong>Twilio</strong>, Supabase के ज़रिए: साइन-इन SMS भेजने के लिए आपका फ़ोन नंबर।</li>
         <li><strong>Google साइन-इन</strong>, अगर आप वेबसाइट पर इसे चुनते हैं।</li>
-        <li><strong>ip-api.com</strong>: "सक्रिय सेशन" में दिखने वाला शहर और राज्य पता करने के लिए आपका IP पता।</li>
         <li><strong>Expo</strong>: ऐप अपडेट पहुँचाता है, और इसे आपका IP पता, ऐप का वर्शन और एक रैंडम इंस्टॉल ID मिलती है।</li>
         <li><strong>Telegram</strong>: सभी AI कंपनियों के एक साथ विफल होने पर हमारी टीम को भेजा जाने वाला आंतरिक अलर्ट। इसमें आपकी खाता ID होती है, पर आपकी कोई सामग्री नहीं।</li>
         <li><strong>Google Play</strong>: ऐप उपलब्ध कराता है और ऐप में रेटिंग का संदेश दिखाता है, Google की अपनी गोपनीयता नीति के तहत।</li>
@@ -355,16 +365,21 @@
       <p>क़ानून की माँग होने पर हम डेटा प्रकट भी कर सकते हैं, जैसे किसी अदालत या सरकारी प्राधिकरण को।</p>
 
       <h2>5. आपका डेटा कहाँ रखा जाता है</h2>
-      <p>हमारा मुख्य डेटाबेस और आपकी अपलोड की गई फ़ाइलें भारत (मुंबई) में रखी जाती हैं। हमारा सर्वर अमेरिका में चलता है, और ऊपर बताई गई AI और अन्य कंपनियाँ चीन, सिंगापुर, अमेरिका और अन्य देशों में डेटा प्रोसेस करती हैं। DPDP अधिनियम भारत के बाहर व्यक्तिगत डेटा भेजने की अनुमति देता है, जब तक सरकार किसी विशेष देश पर रोक न लगाए, और हम ऐसी किसी भी रोक का पालन करेंगे। NEET-AI का उपयोग करके आप समझते हैं कि आपका डेटा यहाँ बताए अनुसार भारत के बाहर प्रोसेस होगा।</p>
+      <p>आपका डेटा भारत में रखा जाता है: हमारा डेटाबेस और आपकी अपलोड की गई फ़ाइलें वहीं रहती हैं। NEET-AI चलाने के लिए हमारे सेवा प्रदाता, जिनमें हमारा सर्वर होस्ट और खंड 3 में बताई गई AI कंपनियाँ शामिल हैं, आपका डेटा दूसरे देशों में प्रोसेस कर सकते हैं। DPDP अधिनियम भारत के बाहर व्यक्तिगत डेटा भेजने की अनुमति देता है, जब तक सरकार किसी विशेष देश पर रोक न लगाए, और हम ऐसी किसी भी रोक का पालन करेंगे। NEET-AI का उपयोग करके आप समझते हैं कि आपका डेटा यहाँ बताए अनुसार भारत के बाहर प्रोसेस हो सकता है।</p>
 
       <h2>6. हम डेटा कितने समय तक रखते हैं</h2>
       <ul>
-        <li><strong>खाते की जानकारी, चैट, सहेजे गए प्रश्न, टेस्ट के परिणाम, स्ट्रीक, फ़ीडबैक और सेटिंग:</strong> जब तक आप उन्हें या अपना खाता नहीं हटाते।</li>
-        <li><strong>आपकी अपलोड की गई इमेज और PDF:</strong> जब तक आप अपना खाता नहीं हटाते।</li>
-        <li><strong>साइन-इन किए गए डिवाइस:</strong> जब तक आप उस डिवाइस को लॉग आउट नहीं करते या खाता नहीं हटाते।</li>
-        <li><strong>रोज़ के उपयोग के रिकॉर्ड, गेस्ट IP उपयोग रिकॉर्ड और इमेज/PDF डाउट के रिकॉर्ड:</strong> अधिकतम एक वर्ष, फिर हटा दिए जाते हैं।</li>
+        <li><strong>खाते की जानकारी, आपका प्लान और रेफ़रल कोड, चैट, सहेजे गए प्रश्न, मॉक और पर्सनलाइज़्ड टेस्ट के परिणाम, पढ़ाई की स्ट्रीक और सेटिंग:</strong> जब तक आप उन्हें या अपना खाता नहीं हटाते। हम इन्हें किसी तय समय पर अपने-आप नहीं हटाते।</li>
+        <li><strong>आपकी अपलोड की गई फ़ोटो और PDF:</strong> जब तक वे आपकी किसी चैट का हिस्सा हैं। अगर आप वह चैट हटा देते हैं, या कोई फ़ाइल किसी चैट तक नहीं पहुँचती, तो हम वह फ़ाइल 7 दिनों के भीतर हटा देते हैं।</li>
+        <li><strong>गेस्ट उपयोग के रिकॉर्ड</strong> (बिना लॉग इन किए उपयोग करने पर आपका IP पता और रोज़ की गिनती): 30 दिन।</li>
+        <li><strong>साइन-इन किए गए डिवाइस</strong> (डिवाइस ID, डिवाइस का लेबल, अनुमानित स्थान): डिवाइस के आख़िरी बार सक्रिय होने के 90 दिन बाद तक।</li>
+        <li><strong>इमेज और PDF डाउट के रिकॉर्ड:</strong> 90 दिन।</li>
+        <li><strong>आपके खाते के रोज़ के उपयोग के रिकॉर्ड:</strong> 12 महीने।</li>
+        <li><strong>AI लागत के रिकॉर्ड</strong> (टोकन की संख्या, आपकी कोई सामग्री नहीं): 24 महीने। 12 महीने बाद हम इनसे आपकी खाता ID हटा देते हैं।</li>
+        <li><strong>उत्तरों पर फ़ीडबैक, सेशन रेटिंग, और किसी प्रश्न या डायग्राम की रिपोर्ट:</strong> 12 महीने बाद हम इनसे आपकी खाता ID और आपकी चैट से इनका जुड़ाव हटा देते हैं, और NEET-AI को बेहतर बनाते रहने के लिए सामग्री (आपकी टिप्पणी या नोट, और वोट के मामले में वह प्रश्न और उत्तर जिस पर वोट दिया गया) रखते हैं।</li>
+        <li><strong>साझा उत्तर कैश:</strong> कोई समय-सीमा नहीं। यह आपसे जुड़ा नहीं है (खंड 3 देखें)।</li>
         <li><strong>होस्टिंग कंपनियों के सर्वर लॉग:</strong> हर कंपनी द्वारा तय सीमित अवधि तक।</li>
-        <li>खाता हटाने पर आपका डेटा हमारे लाइव डेटाबेस से तुरंत और ऑटोमैटिक बैकअप से 30 दिनों के भीतर हट जाता है। आपकी भेजी गई रिपोर्ट, रेफ़रल रिकॉर्ड और AI लागत के रिकॉर्ड (केवल टोकन की संख्या) आपका नाम और ID हटाकर रखे जाते हैं, जैसा <a href="./delete-account.html">अपना खाता हटाएँ</a> पेज (अंग्रेज़ी में) पर बताया गया है।</li>
+        <li>खाता हटाने पर आपका डेटा हमारे डेटाबेस से तुरंत हट जाता है, और हम उसकी कोई बैकअप कॉपी नहीं रखते। आपकी भेजी गई रिपोर्ट, रेफ़रल रिकॉर्ड और AI लागत के रिकॉर्ड (केवल टोकन की संख्या) आपका नाम और ID हटाकर रखे जाते हैं, जैसा <a href="./delete-account.html">अपना खाता हटाएँ</a> पेज (अंग्रेज़ी में) पर बताया गया है।</li>
         <li>जहाँ क़ानून की माँग हो, हम कुछ रिकॉर्ड ज़्यादा समय तक रख सकते हैं, और केवल उतने समय तक जितना क़ानून माँगता है।</li>
         <li>AI कंपनियाँ जो प्राप्त करती हैं, उसे अपनी शर्तों के अनुसार रखती हैं।</li>
       </ul>
@@ -400,7 +415,7 @@
         <li>आपके डिवाइस और NEET-AI के बीच का सारा डेटा ट्रांज़िट में एन्क्रिप्ट होता है (HTTPS)।</li>
         <li>डेटाबेस के एक्सेस नियम हर छात्र को केवल उसका अपना डेटा पढ़ने देते हैं, और हमारे सर्वर की कुंजियाँ कभी आपके डिवाइस पर नहीं भेजी जातीं।</li>
         <li>रेट लिमिट और साइन-इन कोड की सीमाएँ दुरुपयोग रोकने में मदद करती हैं।</li>
-        <li>अपलोड की गई इमेज और PDF लंबे, रैंडम वेब पतों पर रखी जाती हैं जो कहीं सूचीबद्ध नहीं हैं। जिसके पास सटीक पता हो, वह फ़ाइल खोल सकता है, इसलिए ये लिंक साझा न करें।</li>
+        <li>आपकी अपलोड की गई इमेज और PDF निजी रूप से रखी जाती हैं। उन्हें केवल आप खोल सकते हैं, उन लिंक से जो हमारा सर्वर आपके खाते के लिए बनाता है और जो एक घंटे बाद काम करना बंद कर देते हैं।</li>
         <li>कोई भी सिस्टम पूरी तरह सुरक्षित नहीं होता। अगर कोई व्यक्तिगत डेटा उल्लंघन (ब्रीच) आपको प्रभावित करता है, तो हम क़ानून के अनुसार आपको और डेटा संरक्षण बोर्ड को सूचित करेंगे।</li>
       </ul>
 
