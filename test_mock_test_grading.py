@@ -182,8 +182,8 @@ def walk_keys(value):
 
 
 def reset_limits():
-    server._rate_limit_buckets.clear()
-    server._mock_test_user_buckets.clear()
+    server._rate_buckets.clear()
+    server._rate_windows.clear()
 
 
 def start(client, body, headers=AUTH_A):
@@ -380,7 +380,6 @@ def test_rate_limits(client):
     reset_limits()
     codes = [client.post("/mock-tests/attempts", json={"kind": "personalised_catalog", "subject": "Biology", "test_number": 1}, headers=AUTH_A).status_code for _ in range(11)]
     check("10 starts per 10 minutes, the 11th is 429", codes[:10] == [200] * 10 and codes[10] == 429, str(codes))
-    server._rate_limit_buckets.clear()
     check("another student is unaffected", client.post("/mock-tests/attempts", json={"kind": "personalised_catalog", "subject": "Biology", "test_number": 1}, headers=AUTH_B).status_code == 200)
     reset_limits()
 

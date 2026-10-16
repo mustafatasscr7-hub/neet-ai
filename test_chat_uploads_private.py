@@ -121,8 +121,8 @@ def jpeg_b64():
 
 
 def reset():
-    server._rate_limit_buckets.clear()
-    server._mock_test_user_buckets.clear()
+    server._rate_buckets.clear()
+    server._rate_windows.clear()
     server._chat_upload_url_cache.clear()
 
 

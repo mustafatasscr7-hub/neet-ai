@@ -149,7 +149,9 @@ app.add_middleware(
     allow_origins=["https://neet-ai-jet.vercel.app"],
     allow_origin_regex=_LOCALHOST_ORIGIN_REGEX,
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "X-Admin-Key", "Authorization"],
+    # X-Device-Id: api-device.js adds it to every website call for per-device rate limits -- same
+    # preflight trap as Authorization above if it were missing.
+    allow_headers=["Content-Type", "X-Admin-Key", "Authorization", "X-Device-Id"],
     expose_headers=["X-Cache"],
 )
 
@@ -1235,36 +1237,137 @@ def verify_admin_or_contractor_pdf(request: Request, x_admin_key: str = Header(N
 async def contractor_pdf_review_verify(_: None = Depends(verify_contractor_pdf_review)):
     return {"ok": True}
 
-# ---------- Rate limiting for paid-API endpoints (per IP, per route) ----------
-_rate_limit_buckets = {}  # "ip:path" -> [timestamps]
+# ---------- Rate limiting ----------
+# Carrier NAT puts many students behind one public IP, so limits are keyed on who is asking, not
+# where from. For each limited route, in order:
+#   1. a verified account -- routes that already check the login token use by="account";
+#   2. else the X-Device-Id header (see _device_id), plus a per-IP guest ceiling of
+#      GUEST_IP_CEILING_MULTIPLIER x the route's limit, summed over every request on that route
+#      from the IP that isn't keyed to an account -- a new made-up device id per request gets one
+#      IP no further than that ceiling;
+#   3. else the IP itself at the route's own limit (old clients, scripts): the pre-device behaviour.
+# Before any of those, RATE_BACKSTOP_PER_MINUTE caps everything one IP sends to limited routes.
+# It runs before the Supabase token check, so a flood of junk tokens never reaches Supabase Auth.
+# IPv6 addresses are keyed by their /64 (_ip_key). Buckets are keyed on the route template
+# (/mock-tests/{mock_test_id}/questions), so a new id in the URL doesn't get a fresh limit.
+#
+# Counters live in this process's memory: exact with one replica and one uvicorn worker (today,
+# see railway.json and uvicorn.run at the bottom). With N replicas or workers each one counts on
+# its own and limits loosen up to N x -- move _rate_buckets to Redis (INCR + EXPIRE) before scaling
+# out. Every push restarts the process, which resets them. The daily token budgets are in Supabase
+# and unaffected by either.
+RATE_LIMIT_DETAIL = "Too many requests — please slow down and try again shortly."
+RATE_BACKSTOP_PER_MINUTE = 1200
+GUEST_IP_CEILING_MULTIPLIER = 10
+RATE_BUCKET_CAP = 200_000  # past this, unseen device ids use the IP key until the sweep frees room
+RATE_SWEEP_INTERVAL_SECONDS = 60
+_rate_buckets = {}  # key -> timestamps inside the key's window, oldest first (never empty)
+_rate_windows = {}  # key -> its window in seconds, for the sweep
+_rate_last_sweep = 0.0
 
-def rate_limiter(max_requests: int = 15, window_seconds: int = 60):
-    def dependency(request: Request):
-        ip = _client_ip(request)
-        key = f"{ip}:{request.url.path}"
-        now = time.time()
-        timestamps = [t for t in _rate_limit_buckets.get(key, []) if now - t < window_seconds]
-        if len(timestamps) >= max_requests:
-            raise HTTPException(status_code=429, detail="Too many requests — please slow down and try again shortly.")
-        timestamps.append(now)
-        _rate_limit_buckets[key] = timestamps
+_DEVICE_ID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|dev-[0-9a-z][0-9a-z-]{4,59}")
+
+def _device_id(request: Request) -> str:
+    """The X-Device-Id header if it has the shape the website and app generate (crypto.randomUUID,
+    or the 'dev-<base36>-<base36>' fallback both use), else "". Nothing proves it's real, so it is
+    only ever used to split an IP's guest allowance into per-device shares: it never lifts a total
+    past the per-IP ceilings and is never used where a verified account exists. The strict shape
+    also keeps it safe inside a PostgREST filter."""
+    value = (request.headers.get("x-device-id") or "").strip().lower()
+    return value if _DEVICE_ID_RE.fullmatch(value) else ""
+
+def _ip_key(ip: str) -> str:
+    """Rate-limit key for an address: IPv4 as-is, IPv6 as its /64 -- one home or phone connection
+    gets a whole /64 and can rotate through addresses inside it."""
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return ip
+    if addr.version == 6:
+        if addr.ipv4_mapped:
+            return str(addr.ipv4_mapped)
+        return str(ipaddress.ip_network(f"{addr}/64", strict=False))
+    return ip
+
+def _rate_sweep(now: float):
+    """Drops buckets whose newest request has left their window, at most once a minute."""
+    global _rate_last_sweep
+    if now - _rate_last_sweep < RATE_SWEEP_INTERVAL_SECONDS:
+        return
+    _rate_last_sweep = now
+    for key in [k for k, stamps in _rate_buckets.items() if now - stamps[-1] >= _rate_windows[k]]:
+        del _rate_buckets[key]
+        del _rate_windows[key]
+
+def _rate_take(limits) -> "str | None":
+    """Counts one request against every (key, max_requests, window_seconds) in `limits` and returns
+    None -- or, when any key is already at its limit, counts nothing and returns that key. Callers
+    are async and never await in between, so this runs without interleaving on the event loop."""
+    now = time.time()
+    _rate_sweep(now)
+    kept = []
+    for key, max_requests, window in limits:
+        stamps = [t for t in _rate_buckets.get(key, ()) if now - t < window]
+        if len(stamps) >= max_requests:
+            return key
+        kept.append((key, window, stamps))
+    for key, window, stamps in kept:
+        stamps.append(now)
+        _rate_buckets[key] = stamps
+        _rate_windows[key] = window
+    return None
+
+async def _rate_backstop(request: Request):
+    if _rate_take([(f"all:{_ip_key(_client_ip(request))}", RATE_BACKSTOP_PER_MINUTE, 60)]):
+        raise HTTPException(status_code=429, detail=RATE_LIMIT_DETAIL)
+
+def _rate_limit_keys(request: Request, max_requests: int, window_seconds: int, user_id: str, by: str) -> list:
+    route = request.scope.get("route")
+    path = getattr(route, "path", None) or request.url.path
+    ip = _ip_key(_client_ip(request))
+    if by == "ip":
+        return [(f"ip:{ip}:{path}", max_requests, window_seconds)]
+    if user_id:
+        return [(f"u:{user_id}:{path}", max_requests, window_seconds)]
+    ceiling = (f"g:{ip}:{path}", max_requests * GUEST_IP_CEILING_MULTIPLIER, window_seconds)
+    device = _device_id(request)
+    if device:
+        key = f"d:{device}:{path}"
+        if key in _rate_buckets or len(_rate_buckets) < RATE_BUCKET_CAP:
+            return [ceiling, (key, max_requests, window_seconds)]
+    return [ceiling, (f"ip:{ip}:{path}", max_requests, window_seconds)]
+
+def rate_limit(max_requests: int, window_seconds: int, by: str = "device"):
+    """FastAPI dependency. by="account" only on routes that also Depends(_get_verified_user_id) --
+    FastAPI caches that per request, so Supabase is still asked once; a request without a valid
+    token falls through to the device/IP keys. by="device" on routes that don't check login (a
+    logged-in student there is limited per device). by="ip" for admin routes."""
+    if by == "account":
+        async def dependency(request: Request, _: None = Depends(_rate_backstop), verified_user_id: str = Depends(_get_verified_user_id)):
+            if _rate_take(_rate_limit_keys(request, max_requests, window_seconds, verified_user_id, by)):
+                raise HTTPException(status_code=429, detail=RATE_LIMIT_DETAIL)
+    else:
+        async def dependency(request: Request, _: None = Depends(_rate_backstop)):
+            if _rate_take(_rate_limit_keys(request, max_requests, window_seconds, "", by)):
+                raise HTTPException(status_code=429, detail=RATE_LIMIT_DETAIL)
+    dependency.rate_limit_spec = (max_requests, window_seconds, by)  # read by test_rate_limits.py
     return dependency
 
-# ---------- Rate limiting for phone OTP sends, per phone number ----------
-# Separate from rate_limiter() above (which is per-IP): a phone number can be
-# targeted from many IPs, and one IP can try many numbers, so both axes need
-# their own cap. IP is covered by rate_limiter(3, 600) on the route itself.
-_otp_phone_buckets = {}  # phone -> [timestamps]
-OTP_MAX_PER_PHONE = 3
-OTP_PHONE_WINDOW_SECONDS = 600  # 10 minutes
+# ---------- Rate limiting for phone OTP sends ----------
+# Per phone number (a number can be targeted from many IPs) and, loosely, per IP (one IP can try
+# many numbers -- but under carrier NAT many real students share it). Supabase's own Auth rate
+# limits sit behind these and are the hard SMS cap: anyone can call Supabase's /otp directly with
+# the public anon key, which skips this route entirely.
+OTP_PHONE_LIMITS = ((3, 600), (10, 86400))  # (sends, window seconds)
+OTP_IP_LIMITS = ((60, 600), (300, 86400))
 
-def _check_phone_otp_limit(phone: str):
-    now = time.time()
-    timestamps = [t for t in _otp_phone_buckets.get(phone, []) if now - t < OTP_PHONE_WINDOW_SECONDS]
-    if len(timestamps) >= OTP_MAX_PER_PHONE:
+def _check_otp_limits(phone: str, ip: str):
+    blocked = _rate_take([(f"otp-phone:{window}:{phone}", sends, window) for sends, window in OTP_PHONE_LIMITS]
+                         + [(f"otp-ip:{window}:{_ip_key(ip)}", sends, window) for sends, window in OTP_IP_LIMITS])
+    if blocked and blocked.startswith("otp-phone:"):
         raise HTTPException(status_code=429, detail="Too many OTP requests for this number — please wait a few minutes and try again.")
-    timestamps.append(now)
-    _otp_phone_buckets[phone] = timestamps
+    if blocked:
+        raise HTTPException(status_code=429, detail=RATE_LIMIT_DETAIL)
 
 ADMIN_HEADERS = {
     "apikey": SUPABASE_SERVICE_KEY,
@@ -5476,7 +5579,7 @@ async def stream_solve_response_with_diagram(req: SolveRequest, cached_solution,
         yield f"Error: {str(e)}"
 
 @app.post("/solve")
-async def solve_question(req: SolveRequest, request: Request, _: None = Depends(rate_limiter(15, 60)), verified_user_id: str = Depends(_get_verified_user_id)):
+async def solve_question(req: SolveRequest, request: Request, _: None = Depends(rate_limit(15, 60, by="account")), verified_user_id: str = Depends(_get_verified_user_id)):
     ip = _client_ip(request)
     # Overwritten in place (not a separate variable) so every downstream read of req.user_id --
     # including inside stream_solve_response_with_diagram, which takes the whole `req` object and
@@ -5498,12 +5601,12 @@ async def solve_question(req: SolveRequest, request: Request, _: None = Depends(
 
 
 @app.post("/auth/send-otp")
-async def send_otp(req: PhoneOtpRequest, _: None = Depends(rate_limiter(3, 600))):
+async def send_otp(req: PhoneOtpRequest, request: Request, _: None = Depends(_rate_backstop)):
     phone = req.phone.strip()
     if not phone.startswith("+") or not phone[1:].isdigit() or len(phone) < 8:
         raise HTTPException(status_code=400, detail="Enter a valid phone number in international format, e.g. +919876543210.")
 
-    _check_phone_otp_limit(phone)
+    _check_otp_limits(phone, _client_ip(request))
 
     try:
         response = http_requests.post(
@@ -5525,7 +5628,7 @@ async def send_otp(req: PhoneOtpRequest, _: None = Depends(rate_limiter(3, 600))
     return {"success": True}
 
 @app.post("/chat")
-async def chat(message: Message, request: Request, _: None = Depends(rate_limiter(15, 60)), verified_user_id: str = Depends(_get_verified_user_id)):
+async def chat(message: Message, request: Request, _: None = Depends(rate_limit(15, 60, by="account")), verified_user_id: str = Depends(_get_verified_user_id)):
     ip = _client_ip(request)
     # Same reasoning as /solve: overwritten in place so every downstream use (budget check, PDF
     # tier limits, stream_response and everything it threads this into) uses the verified
@@ -5570,7 +5673,7 @@ def _clean_title(raw: str, fallback: str = "New Chat") -> str:
     return cleaned or fallback
 
 @app.post("/title")
-async def generate_title(message: Message, request: Request, _: None = Depends(rate_limiter(15, 60)), verified_user_id: str = Depends(_get_verified_user_id)):
+async def generate_title(message: Message, request: Request, _: None = Depends(rate_limit(15, 60, by="account")), verified_user_id: str = Depends(_get_verified_user_id)):
     ip = _client_ip(request)
     message.user_id = verified_user_id
     await enforce_daily_budget(message.user_id, ip)
@@ -5622,7 +5725,7 @@ async def generate_title(message: Message, request: Request, _: None = Depends(r
 # uncached since it shipped, and a per-answer summary cache would be new infra for a cheap,
 # infrequent call -- not worth adding for this.
 @app.post("/summarize-answer")
-async def summarize_answer(req: SummarizeAnswerRequest, request: Request, _: None = Depends(rate_limiter(15, 60)), verified_user_id: str = Depends(_get_verified_user_id)):
+async def summarize_answer(req: SummarizeAnswerRequest, request: Request, _: None = Depends(rate_limit(15, 60, by="account")), verified_user_id: str = Depends(_get_verified_user_id)):
     ip = _client_ip(request)
     req.user_id = verified_user_id
     await enforce_daily_budget(req.user_id, ip)
@@ -5802,17 +5905,17 @@ UNLIMITED_REPORT_USER_IDS = {"105c4f7f-ec62-492d-a4b5-2a6e5bf31b5f"}
 
 def _ist_today_start_utc_iso() -> str:
     # datetime.min.time() (not a bare `time` import) deliberately -- `time` the module is
-    # already imported above for rate_limiter's time.time() calls, and `from datetime import
+    # already imported above for the rate limiter's time.time() calls, and `from datetime import
     # time` would silently shadow it.
     today = date.fromisoformat(_ist_today())
     ist_midnight = datetime.combine(today, datetime.min.time(), tzinfo=IST)
     return ist_midnight.astimezone(timezone.utc).isoformat()
 
 # Logged-in students only (need to know who, both to prevent spam and to rate-limit) -- the
-# generic per-IP rate_limiter below guards against rapid-fire bursts, this endpoint's own
+# per-account rate_limit below guards against rapid-fire bursts, this endpoint's own
 # per-user daily count enforces the actual 20/day business rule on top of that.
 @app.post("/report-question")
-async def report_question(req: ReportQuestionRequest, _: None = Depends(rate_limiter(20, 60)), verified_user_id: str = Depends(_get_verified_user_id)):
+async def report_question(req: ReportQuestionRequest, _: None = Depends(rate_limit(20, 60, by="account")), verified_user_id: str = Depends(_get_verified_user_id)):
     # Same IDOR class as /referral/status -- every real call site already requires a session
     # before submitting a report, so this is a real 401, not a behavior change for them.
     if not verified_user_id:
@@ -5888,7 +5991,7 @@ DIAGRAM_REPORT_SOURCES = {"chat", "library"}
 # (not blended with question reports) rather than querying both tables on every submit -- 20/day
 # is already a generous anti-spam ceiling for a feature this size on its own.
 @app.post("/report-diagram")
-async def report_diagram(req: ReportDiagramRequest, _: None = Depends(rate_limiter(20, 60)), verified_user_id: str = Depends(_get_verified_user_id)):
+async def report_diagram(req: ReportDiagramRequest, _: None = Depends(rate_limit(20, 60, by="account")), verified_user_id: str = Depends(_get_verified_user_id)):
     # Same IDOR class as /referral/status -- see /report-question's identical comment above.
     if not verified_user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -5922,7 +6025,7 @@ async def report_diagram(req: ReportDiagramRequest, _: None = Depends(rate_limit
         return {"error": "Something went wrong. Please try again."}
 
 @app.post("/pyq")
-async def get_pyq(message: Message, _: None = Depends(rate_limiter(15, 60))):
+async def get_pyq(message: Message, _: None = Depends(rate_limit(15, 60))):
     results, match_type = await search_pyq(message.text, chapter=message.chapter)
     return {"pyqs": results, "match_type": match_type}
 
@@ -5934,7 +6037,7 @@ async def get_pyq(message: Message, _: None = Depends(rate_limiter(15, 60))):
 # year rather than a negative/nonsensical count -- the frontend is expected to treat null as "not
 # usable for date-based pricing yet" and fall back to flat annual pricing for that year.
 @app.get("/neet-exam-dates")
-async def get_neet_exam_dates(_: None = Depends(rate_limiter(30, 60))):
+async def get_neet_exam_dates(_: None = Depends(rate_limit(30, 60))):
     try:
         response = await async_client.get(
             f"{SUPABASE_URL}/rest/v1/neet_exam_dates",
@@ -6011,7 +6114,7 @@ DIAGRAM_MATCH_THRESHOLD = 0.5
 # that's a same-second race with negligible cost (one extra ~$0.00002 embedding call), not a
 # correctness issue.
 @app.post("/diagram-match")
-async def diagram_match(req: DiagramMatchRequest, _: None = Depends(rate_limiter(15, 60))):
+async def diagram_match(req: DiagramMatchRequest, _: None = Depends(rate_limit(15, 60))):
     try:
         chapter = None
         candidate = extract_chapter_candidate(req.answer)
@@ -6061,7 +6164,7 @@ async def diagram_match(req: DiagramMatchRequest, _: None = Depends(rate_limiter
 # caller-supplied param, so this can never leak an unreviewed diagram to a student regardless
 # of what query params are sent.
 @app.get("/diagrams")
-async def list_diagrams(subject: str = "", class_num: int = 0, _: None = Depends(rate_limiter(30, 60))):
+async def list_diagrams(subject: str = "", class_num: int = 0, _: None = Depends(rate_limit(30, 60))):
     try:
         params = {
             "select": "id,subject,class,chapter,name,description,name_hi,description_hi,image_url,importance_rating",
@@ -6131,7 +6234,7 @@ async def _sample_random_mock_questions() -> list:
     return bio_q + phy_q + che_q
 
 @app.get("/mock-test-questions")
-async def get_mock_test_questions(_: None = Depends(rate_limiter(20, 60))):
+async def get_mock_test_questions(_: None = Depends(rate_limit(20, 60))):
     try:
         questions = await _sample_random_mock_questions()
         return {"questions": questions, "total": len(questions)}
@@ -6211,7 +6314,7 @@ async def _fetch_official_mock_test(mock_test_id: int):
     )
 
 @app.get("/mock-tests/{mock_test_id}/questions")
-async def get_mock_test_questions_by_id(mock_test_id: int, _: None = Depends(rate_limiter(20, 60))):
+async def get_mock_test_questions_by_id(mock_test_id: int, _: None = Depends(rate_limit(20, 60))):
     try:
         response = await _fetch_official_mock_test(mock_test_id)
         if response is None:
@@ -6225,7 +6328,7 @@ async def get_mock_test_questions_by_id(mock_test_id: int, _: None = Depends(rat
         return {"error": "Something went wrong. Please try again."}
 
 @app.get("/pyq-chapters")
-async def get_pyq_chapters(subject: str, _: None = Depends(rate_limiter(30, 60))):
+async def get_pyq_chapters(subject: str, _: None = Depends(rate_limit(30, 60))):
     if subject not in ("Biology", "Physics", "Chemistry"):
         return {"error": "Invalid subject"}
     try:
@@ -6309,7 +6412,7 @@ async def get_pyq_chapters(subject: str, _: None = Depends(rate_limiter(30, 60))
 # costs nothing for genuine use and closes off this endpoint ever becoming a fresh bulk-read path
 # itself. year is optional, matching the year-filter dropdown on the chapter's own question view.
 @app.get("/pyq-browse")
-async def pyq_browse(subject: str, chapter: str, year: int = None, _: None = Depends(rate_limiter(30, 60))):
+async def pyq_browse(subject: str, chapter: str, year: int = None, _: None = Depends(rate_limit(30, 60))):
     if subject not in ("Biology", "Physics", "Chemistry"):
         return {"error": "Invalid subject"}
     if not chapter.strip():
@@ -6386,7 +6489,7 @@ async def _sample_personalised_questions(selections: list, requested_count) -> t
     return selected, count, available
 
 @app.post("/personalised-test-questions")
-async def get_personalised_test_questions(req: PersonalisedTestRequest, _: None = Depends(rate_limiter(20, 60))):
+async def get_personalised_test_questions(req: PersonalisedTestRequest, _: None = Depends(rate_limit(20, 60))):
     if not req.selections:
         return {"error": "No subjects selected"}
     if any(sel.subject not in ("Biology", "Physics", "Chemistry") for sel in req.selections):
@@ -6471,7 +6574,7 @@ async def _catalog_test_questions(subject: str, test_number: int, select: str):
     return questions_response.json(), rows[0]["title"]
 
 @app.post("/personalised-catalog-start")
-async def start_personalised_catalog_test(req: PersonalisedCatalogStartRequest, _: None = Depends(rate_limiter(20, 60))):
+async def start_personalised_catalog_test(req: PersonalisedCatalogStartRequest, _: None = Depends(rate_limit(20, 60))):
     if req.subject not in ("Biology", "Physics", "Chemistry"):
         return {"error": "Invalid subject"}
     try:
@@ -6522,7 +6625,6 @@ MOCK_TEST_SUBJECTS = ("Biology", "Physics", "Chemistry")
 MOCK_TEST_KINDS = {"random": "pyq", "official": "mock_test_questions", "personalised": "pyq", "personalised_catalog": "pyq"}
 MOCK_TEST_ATTEMPTS_URL = f"{SUPABASE_URL}/rest/v1/mock_test_attempts"
 MOCK_RESULTS_URL = f"{SUPABASE_URL}/rest/v1/mock_results"
-_mock_test_user_buckets = {}  # "start:<user>" / "submit:<user>" -> [timestamps]
 
 class MockTestStartRequest(BaseModel):
     kind: str
@@ -6538,13 +6640,8 @@ class MockTestSubmitRequest(BaseModel):
 
 def _check_user_rate(bucket: str, user_id: str, limit: tuple):
     max_requests, window = limit
-    key = f"{bucket}:{user_id}"
-    now = time.time()
-    stamps = [t for t in _mock_test_user_buckets.get(key, []) if now - t < window]
-    if len(stamps) >= max_requests:
-        raise HTTPException(status_code=429, detail="Too many requests — please slow down and try again shortly.")
-    stamps.append(now)
-    _mock_test_user_buckets[key] = stamps
+    if _rate_take([(f"{bucket}:{user_id}", max_requests, window)]):
+        raise HTTPException(status_code=429, detail=RATE_LIMIT_DETAIL)
 
 def _answer_letter(raw) -> Optional[str]:
     """'a'-'d' from a stored correct_answer that may be a letter or a 1-based digit; None for blank,
@@ -6671,7 +6768,7 @@ def _mock_test_submit_response(attempt: dict, result: dict, already_submitted: b
     }
 
 @app.post("/mock-tests/attempts")
-async def mock_test_start(req: MockTestStartRequest, _: None = Depends(rate_limiter(20, 60)), verified_user_id: str = Depends(_get_verified_user_id)):
+async def mock_test_start(req: MockTestStartRequest, _: None = Depends(rate_limit(20, 60, by="account")), verified_user_id: str = Depends(_get_verified_user_id)):
     if not verified_user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
     if req.kind not in MOCK_TEST_KINDS:
@@ -6743,7 +6840,7 @@ async def mock_test_start(req: MockTestStartRequest, _: None = Depends(rate_limi
     }
 
 @app.post("/mock-tests/attempts/{attempt_id}/submit")
-async def mock_test_submit(attempt_id: str, req: MockTestSubmitRequest, _: None = Depends(rate_limiter(30, 60)), verified_user_id: str = Depends(_get_verified_user_id)):
+async def mock_test_submit(attempt_id: str, req: MockTestSubmitRequest, _: None = Depends(rate_limit(30, 60, by="account")), verified_user_id: str = Depends(_get_verified_user_id)):
     if not verified_user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
     if not _is_uuid(attempt_id):
@@ -7362,7 +7459,7 @@ def classify_difficulty(question: str, option_a: str, option_b: str, option_c: s
 ALLOWED_DIFFICULTY_TABLES = {"pyq", "mock_test_questions"}
 
 @app.post("/classify-difficulty")
-async def classify_difficulty_endpoint(req: ClassifyDifficultyRequest, _: None = Depends(rate_limiter(30, 60))):
+async def classify_difficulty_endpoint(req: ClassifyDifficultyRequest, _: None = Depends(rate_limit(30, 60))):
     """The on-display trigger: called by every student-facing page right after it loads a batch
     of questions. Reads current difficulty for all requested ids in one query: already-set ones
     are returned as-is (zero DeepSeek calls), null ones get classified now and cached before
@@ -7570,7 +7667,7 @@ class EnsureCorrectAnswerRequest(BaseModel):
     user_id: str = ""
 
 @app.post("/ensure-correct-answer")
-async def ensure_correct_answer_endpoint(req: EnsureCorrectAnswerRequest, _: None = Depends(rate_limiter(30, 60))):
+async def ensure_correct_answer_endpoint(req: EnsureCorrectAnswerRequest, _: None = Depends(rate_limit(30, 60))):
     try:
         resp = await async_client.get(
             f"{SUPABASE_URL}/rest/v1/pyq",
@@ -7758,7 +7855,7 @@ class ChatAlternateMethodRequest(BaseModel):
     user_id: str = ""
 
 @app.post("/chat-alternate-method")
-async def chat_alternate_method_endpoint(req: ChatAlternateMethodRequest, request: Request, _: None = Depends(rate_limiter(20, 60))):
+async def chat_alternate_method_endpoint(req: ChatAlternateMethodRequest, request: Request, _: None = Depends(rate_limit(20, 60))):
     if not req.question or not req.primary_answer:
         return {"alternate_method": ""}
 
@@ -7817,7 +7914,7 @@ class SolveAlternateMethodRequest(BaseModel):
     user_id: str = ""
 
 @app.post("/solve-alternate-method")
-async def solve_alternate_method_endpoint(req: SolveAlternateMethodRequest, request: Request, _: None = Depends(rate_limiter(20, 60)), verified_user_id: str = Depends(_get_verified_user_id)):
+async def solve_alternate_method_endpoint(req: SolveAlternateMethodRequest, request: Request, _: None = Depends(rate_limit(20, 60, by="account")), verified_user_id: str = Depends(_get_verified_user_id)):
     # Mirrors /solve, not /referral/status -- guests can view alternate methods same as the
     # primary solution (no login wall here, ever), so this never 401s on a missing token. Only
     # stops trusting the client's own user_id for token-usage attribution, same IDOR class the
@@ -7900,7 +7997,7 @@ def _update_processed_pdf_row(row_id, status: str, questions_extracted=None, err
         pass
 
 @app.post("/admin/scan-pdf")
-def admin_scan_pdf(req: ScanPdfRequest, _: None = Depends(verify_admin_or_contractor_pdf), __: None = Depends(rate_limiter(10, 300))):
+def admin_scan_pdf(req: ScanPdfRequest, _: None = Depends(verify_admin_or_contractor_pdf), __: None = Depends(rate_limit(10, 300, by="ip"))):
     # Deliberately sync (not async def): FastAPI runs sync path functions in a thread pool,
     # so this multi-second-to-multi-minute call doesn't block the event loop for other requests.
     if req.subject not in ("Biology", "Physics", "Chemistry"):
@@ -7940,7 +8037,7 @@ def admin_scan_pdf(req: ScanPdfRequest, _: None = Depends(verify_admin_or_contra
     return result
 
 @app.post("/admin/scan-pdf/ocr-job")
-def admin_scan_pdf_ocr_job(req: ScanPdfRequest, _: None = Depends(verify_admin_or_contractor_pdf), __: None = Depends(rate_limiter(10, 300))):
+def admin_scan_pdf_ocr_job(req: ScanPdfRequest, _: None = Depends(verify_admin_or_contractor_pdf), __: None = Depends(rate_limit(10, 300, by="ip"))):
     """Free OCR mode as a background job: returns {job_id, pages_total} straight away, and the
     review page polls /admin/scan-pdf/ocr-job/{job_id} -- so a long chapter never runs into the
     request timeout. Same validation, processed_pdfs tracking and result shape as /admin/scan-pdf."""
@@ -7970,7 +8067,7 @@ def admin_scan_pdf_ocr_job_status(job_id: str, _: None = Depends(verify_admin_or
     return job
 
 @app.post("/admin/scan-pdf/estimate")
-def admin_scan_pdf_estimate(req: ScanPdfEstimateRequest, _: None = Depends(verify_admin_or_contractor_pdf), __: None = Depends(rate_limiter(20, 300))):
+def admin_scan_pdf_estimate(req: ScanPdfEstimateRequest, _: None = Depends(verify_admin_or_contractor_pdf), __: None = Depends(rate_limit(20, 300, by="ip"))):
     """Scanned mode's pre-run cost estimate: page count, how many pages are already cached (free
     to re-run), and an estimated USD cost for the rest. No model call. Sync for the same reason as
     admin_scan_pdf (page rendering is CPU work)."""
@@ -8270,7 +8367,7 @@ MAX_CHAT_IMAGE_BYTES = 8 * 1024 * 1024
 # once, unlike a text message which is always exactly one -- while still comfortably covering a
 # student attaching several images across a session.
 @app.post("/chat-image-upload")
-async def chat_image_upload(body: ChatImageUploadRequest, _: None = Depends(rate_limiter(10, 60)), verified_user_id: str = Depends(_get_verified_user_id)):
+async def chat_image_upload(body: ChatImageUploadRequest, _: None = Depends(rate_limit(10, 60, by="account")), verified_user_id: str = Depends(_get_verified_user_id)):
     # Same IDOR class as /referral/status -- every real call site already requires a session
     # before attempting an upload, so this is a real 401, not a silent "not logged in" 200.
     if not verified_user_id:
@@ -8336,7 +8433,7 @@ async def chat_image_upload(body: ChatImageUploadRequest, _: None = Depends(rate
 # answered by /chat but silently never persisted for reload.
 MAX_CHAT_PDF_BYTES = 20 * 1024 * 1024
 @app.post("/chat-pdf-upload")
-async def chat_pdf_upload(body: ChatPdfUploadRequest, _: None = Depends(rate_limiter(10, 60)), verified_user_id: str = Depends(_get_verified_user_id)):
+async def chat_pdf_upload(body: ChatPdfUploadRequest, _: None = Depends(rate_limit(10, 60, by="account")), verified_user_id: str = Depends(_get_verified_user_id)):
     # Same IDOR class as /referral/status -- see /chat-image-upload's identical comment above.
     if not verified_user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -8442,7 +8539,7 @@ async def _account_collect_upload_paths(user_id: str) -> Dict[str, set]:
     return {DIAGRAMS_BUCKET: public, CHAT_UPLOADS_BUCKET: private}
 
 @app.post("/account/delete")
-async def account_delete(body: AccountDeleteRequest, _: None = Depends(rate_limiter(3, 3600)), verified_user_id: str = Depends(_get_verified_user_id)):
+async def account_delete(body: AccountDeleteRequest, _: None = Depends(rate_limit(3, 3600, by="account")), verified_user_id: str = Depends(_get_verified_user_id)):
     if not verified_user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
     if body.confirm != "DELETE":
@@ -8940,7 +9037,7 @@ def admin_mock_test_create(req: MockTestCreateRequest, _: None = Depends(verify_
     return {"mock_test_id": mock_test_id}
 
 @app.post("/admin/mock-test-scan")
-def admin_mock_test_scan(req: MockTestScanRequest, _: None = Depends(verify_admin), __: None = Depends(rate_limiter(5, 300))):
+def admin_mock_test_scan(req: MockTestScanRequest, _: None = Depends(verify_admin), __: None = Depends(rate_limit(5, 300, by="ip"))):
     # Sync (not async def), same reasoning as /admin/scan-pdf: this call is ~3x the vision
     # work of a single-subject scan, so it's rate-limited lower (5/300s vs 10/300s there).
     missing = [s for s in ("Physics", "Chemistry", "Biology") if s not in req.ranges]
@@ -9822,7 +9919,7 @@ class SessionFeedbackRequest(BaseModel):
     ai_reply_count: int = 0
 
 @app.post("/session-feedback")
-async def session_feedback_create(req: SessionFeedbackRequest, _: None = Depends(rate_limiter(10, 60)), verified_user_id: str = Depends(_get_verified_user_id)):
+async def session_feedback_create(req: SessionFeedbackRequest, _: None = Depends(rate_limit(10, 60, by="account")), verified_user_id: str = Depends(_get_verified_user_id)):
     if not verified_user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
     if req.rating not in SESSION_FEEDBACK_RATINGS:

@@ -144,8 +144,8 @@ def test_admin_lockout(client):
 
 
 def test_rate_limit(client):
-    print("\n# per-IP rate limit (POST /session-feedback: 10 per 60s) keys on the real client")
-    server._rate_limit_buckets.clear()
+    print("\n# no-device fallback rate limit (POST /session-feedback: 10 per 60s) keys on the real client")
+    server._rate_buckets.clear()
     body = {"rating": "good", "ai_reply_count": 5}
     codes = [client.post("/session-feedback", json=body, headers=railway_append(SPOOFS[i])).status_code for i in range(10)]
     check("10 requests, a new spoofed entry each time -> all reach the handler (401, no token)", codes == [401] * 10, str(codes))
@@ -153,10 +153,11 @@ def test_rate_limit(client):
     check("11th with a fresh spoof is rate limited (429)", r.status_code == 429, f"{r.status_code} {r.text}")
     r = client.post("/session-feedback", json=body, headers=[("X-Real-IP", REAL), ("X-Forwarded-For", "1.1.1.1, 2.2.2.2, 3.3.3.3")])
     check("several spoofed entries and a short chain: still the same bucket (429)", r.status_code == 429, str(r.status_code))
-    check("one bucket, keyed on the real IP", list(server._rate_limit_buckets) == [f"{REAL}:/session-feedback"], str(list(server._rate_limit_buckets)))
+    expected = {f"all:{REAL}", f"g:{REAL}:/session-feedback", f"ip:{REAL}:/session-feedback"}
+    check("buckets keyed on the real IP only", set(server._rate_buckets) == expected, str(list(server._rate_buckets)))
     r = client.post("/session-feedback", json=body, headers=railway_append(SPOOFS[11], real=OTHER))
     check("a different real client still gets through", r.status_code == 401, str(r.status_code))
-    server._rate_limit_buckets.clear()
+    server._rate_buckets.clear()
 
 
 def test_guest_budget_key(client):
