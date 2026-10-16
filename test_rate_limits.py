@@ -79,6 +79,7 @@ class FakeSupabase:
         self.auth_calls = 0
         self.requests = []
         self.rows = {}  # (table, key value, usage_date) -> row
+        self.tables = {}  # any other table -> rows every GET of it returns
 
     def row(self, table, key, day):
         return self.rows.setdefault((table, key, day), {USAGE_KEYS[table]: key, "usage_date": day, "tokens_used": 0, "limit_reached_at": None})
@@ -114,7 +115,7 @@ class FakeSupabase:
                     r.update(json.loads(request.content))
                 return httpx.Response(204)
             return httpx.Response(200, json=[dict(r) for r in matches])
-        return httpx.Response(200, json=[])
+        return httpx.Response(200, json=self.tables.get(table, []) if request.method == "GET" else [])
 
 
 def reset():
@@ -163,7 +164,7 @@ def test_route_table():
         ("POST", "/personalised-test-questions"): (20, 60, "device"), ("POST", "/personalised-catalog-start"): (20, 60, "device"),
         ("POST", "/admin/scan-pdf"): (10, 300, "ip"), ("POST", "/admin/scan-pdf/ocr-job"): (10, 300, "ip"),
         ("POST", "/admin/scan-pdf/estimate"): (20, 300, "ip"), ("POST", "/admin/mock-test-scan"): (5, 300, "ip"),
-        ("POST", "/chat-alternate-method"): (20, 60, "device"),
+        ("POST", "/chat-alternate-method"): (20, 60, "account"),
         ("GET", "/guest-usage-status"): (30, 60, "device"),
     }
     found = {}
@@ -455,6 +456,44 @@ def test_guest_budget(client, fake):
         reset()
 
 
+def test_chat_alternate_method(client, fake):
+    print("\n# /chat-alternate-method: logged in only, verified account billed, budget checked")
+    generated = []
+    original = server.generate_alternate_method
+
+    def fake_generate(question, primary_answer, options_context="", language="en"):
+        generated.append(question)
+        return "Use energy conservation instead.", 700
+
+    server.generate_alternate_method = fake_generate
+    body = {"question": "block on a ramp", "primary_answer": "kinematics answer", "language": "en", "user_id": UID_B}
+    try:
+        reset()
+        r = client.post("/chat-alternate-method", json=body, headers=at(IP1, device=DEV1))
+        check("no login token -> 401, nothing generated", r.status_code == 401 and not generated, f"{r.status_code} {generated}")
+        r = client.post("/chat-alternate-method", json=body, headers=at(IP1, [("Authorization", "Bearer forged")]))
+        check("invalid token -> 401", r.status_code == 401)
+        a_before, b_before = fake.tokens("usage_log", UID_A), fake.tokens("usage_log", UID_B)
+        r = client.post("/chat-alternate-method", json=body, headers=at(IP1, AUTH_A))
+        check("logged in -> generated", r.status_code == 200 and r.json()["alternate_method"].startswith("Use energy"), r.text)
+        check("billed to the verified account (A), not the body's user_id (B)",
+              fake.tokens("usage_log", UID_A) - a_before == 700 and fake.tokens("usage_log", UID_B) == b_before)
+        row = fake.row("usage_log", UID_A, server._ist_today())
+        row["tokens_used"], row["limit_reached_at"] = server.DAILY_TOKEN_BUDGET_FREE, server.datetime.now(server.timezone.utc).isoformat()
+        generated.clear()
+        r = client.post("/chat-alternate-method", json=body, headers=at(IP1, AUTH_A))
+        check("over the daily budget -> 402, nothing generated", r.status_code == 402 and not generated, f"{r.status_code} {generated}")
+        fake.tables["answer_cache"] = [{"alternate_method": "cached method"}]
+        r = client.post("/chat-alternate-method", json=body, headers=at(IP1, AUTH_A))
+        check("an already-cached method is still served past the cap (costs nothing)",
+              r.status_code == 200 and r.json() == {"alternate_method": "cached method"} and not generated, r.text)
+    finally:
+        server.generate_alternate_method = original
+        fake.tables.pop("answer_cache", None)
+        fake.rows.pop(("usage_log", UID_A, server._ist_today()), None)
+        reset()
+
+
 def test_cors(client):
     print("\n# CORS preflight allows X-Device-Id from the website")
     r = client.options("/chat", headers={"Origin": "https://neet-ai-jet.vercel.app", "Access-Control-Request-Method": "POST",
@@ -480,6 +519,7 @@ if __name__ == "__main__":
     test_backstop(tc, fake)
     test_sweep_and_cap(tc)
     test_guest_budget(tc, fake)
+    test_chat_alternate_method(tc, fake)
     test_cors(tc)
     print(f"\nTOTAL: {len(_passed)} passed, {len(_failed)} failed")
     sys.exit(1 if _failed else 0)

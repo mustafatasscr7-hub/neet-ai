@@ -7909,7 +7909,14 @@ class ChatAlternateMethodRequest(BaseModel):
     user_id: str = ""
 
 @app.post("/chat-alternate-method")
-async def chat_alternate_method_endpoint(req: ChatAlternateMethodRequest, request: Request, _: None = Depends(rate_limit(20, 60))):
+async def chat_alternate_method_endpoint(req: ChatAlternateMethodRequest, request: Request, _: None = Depends(rate_limit(20, 60, by="account")), verified_user_id: str = Depends(_get_verified_user_id)):
+    # Logged-in only. This used to accept anyone, never checked the daily budget, and billed its
+    # tokens to whatever user_id the request body named -- so a caller could run paid generations
+    # with no limit and charge them to another student's account. The identity now comes only from
+    # the verified token (a body user_id is ignored), and the budget is checked before generating.
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    req.user_id = verified_user_id
     if not req.question or not req.primary_answer:
         return {"alternate_method": ""}
 
@@ -7928,13 +7935,15 @@ async def chat_alternate_method_endpoint(req: ChatAlternateMethodRequest, reques
     if rows and rows[0].get("alternate_method") is not None:
         return {"alternate_method": rows[0]["alternate_method"]}
 
+    # Only a fresh generation costs anything, so a cached method above stays free even past the cap.
+    await enforce_daily_budget(req.user_id)
     loop = asyncio.get_event_loop()
     text, tokens = await loop.run_in_executor(None, generate_alternate_method, req.question, req.primary_answer, "", req.language)
     if text is None:
         return {"alternate_method": ""}
 
     if tokens:
-        await log_token_usage(req.user_id, tokens, _client_ip(request))
+        await log_token_usage(req.user_id, tokens)
 
     # PATCH, never upsert/insert: a row only exists here at all if the primary answer went
     # through the SHARED cache (personalize=false or guest) -- writing a new row keyed on this

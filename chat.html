@@ -7225,17 +7225,19 @@ function plainTextFromMarkdown(text) {
     // per question_hash server-side (see /chat-alternate-method), so a repeat view of the same
     // question costs zero extra DeepSeek calls. Returns '' both when there's genuinely no
     // alternate method and when the request fails -- either way, no button should appear.
+    // Logged-in only: the server bills it to the verified account and checks its daily budget, so
+    // a guest (no session) never asks.
     async function ensureAlternateMethod(questionText, primaryAnswer, language) {
       try {
         const { data: { session } } = await client.auth.getSession();
+        if (!session) return '';
         const res = await fetch(`${API_BASE}/chat-alternate-method`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
           body: JSON.stringify({
             question: questionText,
             primary_answer: primaryAnswer,
-            language,
-            user_id: session?.user?.id || ''
+            language
           })
         });
         const data = await res.json();
