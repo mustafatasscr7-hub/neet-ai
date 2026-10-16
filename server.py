@@ -926,8 +926,8 @@ class SetUserPlanRequest(BaseModel):
     plan: str  # "free", "pro", or "max"
 
 class RegisterReferralRequest(BaseModel):
-    referred_id: str
     referral_code: str
+    referred_id: Optional[str] = None  # ignored -- older clients still send it; see /referral/register
 
 class ScanPdfRequest(BaseModel):
     subject: str
@@ -7078,11 +7078,17 @@ async def referral_my_code(verified_user_id: str = Depends(_get_verified_user_id
         raise HTTPException(status_code=502, detail="Could not load referral code")
 
 @app.post("/referral/register")
-async def referral_register(req: RegisterReferralRequest):
+async def referral_register(req: RegisterReferralRequest, verified_user_id: str = Depends(_get_verified_user_id)):
+    # The referred account is the one the login token belongs to. This used to trust a body
+    # referred_id with no login at all -- the same IDOR class as /referral/status -- so anyone could
+    # tie any account to any code. A body referred_id is now ignored.
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    referred_id = verified_user_id
     referrer_id = await _user_id_from_referral_code(req.referral_code)
     if not referrer_id:
         return {"error": "Invalid referral code"}
-    if referrer_id == req.referred_id:
+    if referrer_id == referred_id:
         return {"error": "You can't refer yourself"}
     try:
         # referred_id is UNIQUE at the database level (see the migration) -- this insert is the
@@ -7095,7 +7101,7 @@ async def referral_register(req: RegisterReferralRequest):
         resp = await async_client.post(
             f"{SUPABASE_URL}/rest/v1/referrals",
             headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
-            json={"referrer_id": referrer_id, "referred_id": req.referred_id, "referral_code": req.referral_code.strip().upper()}
+            json={"referrer_id": referrer_id, "referred_id": referred_id, "referral_code": req.referral_code.strip().upper()}
         )
         if resp.status_code == 409:
             return {"error": "This account has already used a referral code"}
@@ -7103,7 +7109,7 @@ async def referral_register(req: RegisterReferralRequest):
             return {"error": resp.text}
         return {"success": True}
     except Exception as e:
-        print(f"REFERRAL REGISTER ERROR (referrer_id={referrer_id}, referred_id={req.referred_id}): {e}", flush=True)
+        print(f"REFERRAL REGISTER ERROR (referrer_id={referrer_id}, referred_id={referred_id}): {e}", flush=True)
         return {"error": "Something went wrong. Please try again."}
 
 @app.get("/referral/status")

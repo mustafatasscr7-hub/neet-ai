@@ -391,17 +391,13 @@
           showError(error.message)
         } else {
           const referralCode = document.getElementById('referralCodeInput').value.trim()
-          // Best-effort: the account is already created at this point regardless of whether
-          // this succeeds, so a bad/reused code should never block or scare the new user --
-          // just don't grant a reward that was never earned. Errors are swallowed silently.
+          // /referral/register takes the account from the login token, and an email signup has no
+          // session until the address is confirmed -- so keep the code here and chat.html
+          // registers it on the first signed-in load (registerPendingReferral). Best-effort: a
+          // bad/reused code never blocks or scares the new user, it just earns no reward.
           if (referralCode && data.user) {
-            try {
-              await fetch(`${AUTH_API_BASE}/referral/register`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ referred_id: data.user.id, referral_code: referralCode })
-              })
-            } catch (e) { console.warn('Referral registration failed:', e) }
+            try { localStorage.setItem('pendingReferralCode', referralCode) }
+            catch (e) { console.warn('Could not keep the referral code:', e) }
           }
           showSuccess(t('login','accountCreated'))
         }

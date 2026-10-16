@@ -6961,6 +6961,24 @@ function plainTextFromMarkdown(text) {
       } catch (e) { /* best-effort -- a failed merge just means refreshUsageBanner reflects pre-merge state */ }
     }
 
+    // A referral code typed at email signup (login.html keeps it, since there's no session until
+    // the address is confirmed). The server ties it to the account in the login token. Any real
+    // answer -- registered, invalid code, already referred -- clears it; a 401, 429, server error
+    // or network failure keeps it for the next signed-in load.
+    async function registerPendingReferral(accessToken) {
+      let code = null;
+      try { code = localStorage.getItem('pendingReferralCode'); } catch (e) { return; }
+      if (!code) return;
+      try {
+        const res = await fetch(`${API_BASE}/referral/register`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${accessToken}` },
+          body: JSON.stringify({ referral_code: code })
+        });
+        if (res.ok) localStorage.removeItem('pendingReferralCode');
+      } catch (e) { /* network error -- try again next load */ }
+    }
+
     // Reflects the freshly-resolved userPlan into every bit of UI that assumes free-vs-pro --
     // called by refreshUsageBanner() right after it learns the real plan, so this stays a single
     // source of truth instead of each caller re-deciding what "upgraded" should hide or show.
@@ -8453,6 +8471,7 @@ function plainTextFromMarkdown(text) {
           emailEl.style.display = 'block';
         }
         mergeGuestUsage(user.id, session.access_token).then(refreshUsageBanner);
+        registerPendingReferral(session.access_token);
         updateStreak().then(() => {
   client.from('user_streaks').select('current_streak').eq('user_id', user.id).single().then(({ data }) => {
     if (data && data.current_streak > 0) {
