@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!-- DRAFT (2026-10-15; storage location, retention, private uploads and the DB-IP location lookup
-     updated 2026-10-16), not yet reviewed by a lawyer: get legal review before publishing.
+     updated 2026-10-16; guest device IDs and rate limits 2026-10-17), not yet reviewed by a lawyer: get legal review before publishing.
      Section 6's periods are enforced by retention_cleanup.sql (pg_cron) -- publish only once that
      is scheduled and migrate_chat_uploads_private.py --delete-public has run. Name no server or
      provider country (owner's decision, 2026-10-16).
@@ -117,12 +117,12 @@
       </ul>
       <h3>Devices and sessions</h3>
       <ul>
-        <li>A random device ID created by the app or your browser, a device label (for example your phone model, or your browser and operating system), your approximate location (city and region), and when each device signed in and was last active. We use these for plan device limits and to show your Active Sessions list.</li>
+        <li>A random device ID created by the app or your browser, a device label (for example your phone model, or your browser and operating system), your approximate location (city and region), and when each device signed in and was last active. We use these for plan device limits and to show your Active Sessions list. The device ID is also sent with each request to our server, so rate limits apply per device and students who share one network aren't limited together.</li>
         <li>The approximate location is worked out from your IP address when you sign in on a device, by our own server using a location database it keeps itself (<a href="https://db-ip.com">IP Geolocation by DB-IP</a>). Your IP address isn't sent to another company for this, and we store only the city and region, not the IP address.</li>
       </ul>
       <h3>If you use NEET-AI without logging in</h3>
       <ul>
-        <li>Your IP address and a daily usage count, to apply the guest usage limit. If you log in the same day, that day's usage moves to your account.</li>
+        <li>A random device ID with a daily usage count for that device, and your IP address with a daily total for all guests using it, to apply the guest usage limit. If you log in the same day on the same device, that device's usage for the day moves to your account.</li>
       </ul>
       <h3>Records of image and PDF doubts</h3>
       <ul>
@@ -150,7 +150,7 @@
         <li>To answer your doubts, find matching NCERT content and diagrams, and save your chats, questions and results so you can come back to them.</li>
         <li>To personalise answers, only while <strong>Personalize my AI tutor</strong> is on in Settings: we use your first name and the chapters you've found hardest in saved questions and mock tests. You can turn it off at any time.</li>
         <li>To run plans and limits: daily usage limits, the guest limit, device limits and referral rewards.</li>
-        <li>To prevent abuse and fraud, for example with rate limits and by protecting OTP sign-in.</li>
+        <li>To prevent abuse and fraud, for example with rate limits and by protecting OTP sign-in. Rate-limit counts (by account, device ID, phone number or IP address) are kept only in our server's memory and cleared within a day.</li>
         <li>To fix and improve NEET-AI: we review feedback, reports and image/PDF doubt records to correct wrong answers and question content.</li>
         <li>To send service messages, such as sign-in codes and account emails. We don't send marketing messages.</li>
         <li>To comply with the law.</li>
@@ -196,7 +196,7 @@
       <ul>
         <li><strong>Account details, your plan and referral code, chats, saved questions, mock and personalised test results, study streaks and settings:</strong> until you delete them or delete your account. We don't delete them on a schedule.</li>
         <li><strong>Photos and PDFs you upload:</strong> for as long as they're part of one of your chats. If you delete that chat, or a file never ends up in a chat, we delete the file within 7 days.</li>
-        <li><strong>Guest usage records</strong> (your IP address and a daily count, when you use NEET-AI without logging in): 30 days.</li>
+        <li><strong>Guest usage records</strong> (your device ID or IP address and a daily count, when you use NEET-AI without logging in): 30 days.</li>
         <li><strong>Signed-in devices</strong> (device ID, device label, approximate location): 90 days after the device was last active.</li>
         <li><strong>Records of image and PDF doubts:</strong> 90 days.</li>
         <li><strong>Daily usage records for your account:</strong> 12 months.</li>
@@ -292,12 +292,12 @@
       </ul>
       <h3>डिवाइस और सेशन</h3>
       <ul>
-        <li>ऐप या आपके ब्राउज़र द्वारा बनाई गई एक रैंडम डिवाइस ID, डिवाइस का लेबल (जैसे आपके फ़ोन का मॉडल, या ब्राउज़र और ऑपरेटिंग सिस्टम), आपका अनुमानित स्थान (शहर और राज्य), और हर डिवाइस ने कब साइन इन किया और आख़िरी बार कब सक्रिय था। इनका उपयोग प्लान की डिवाइस सीमा लागू करने और आपकी "सक्रिय सेशन" सूची दिखाने के लिए होता है।</li>
+        <li>ऐप या आपके ब्राउज़र द्वारा बनाई गई एक रैंडम डिवाइस ID, डिवाइस का लेबल (जैसे आपके फ़ोन का मॉडल, या ब्राउज़र और ऑपरेटिंग सिस्टम), आपका अनुमानित स्थान (शहर और राज्य), और हर डिवाइस ने कब साइन इन किया और आख़िरी बार कब सक्रिय था। इनका उपयोग प्लान की डिवाइस सीमा लागू करने और आपकी "सक्रिय सेशन" सूची दिखाने के लिए होता है। डिवाइस ID हमारे सर्वर को भेजे जाने वाले हर अनुरोध के साथ भी जाती है, ताकि रेट लिमिट हर डिवाइस पर अलग लगे और एक ही नेटवर्क वाले छात्रों पर एक साथ न लगे।</li>
         <li>अनुमानित स्थान किसी डिवाइस पर साइन इन करते समय आपके IP पते से पता लगाया जाता है, हमारे अपने सर्वर द्वारा, उस स्थान डेटाबेस से जिसे सर्वर खुद रखता है (<a href="https://db-ip.com">IP Geolocation by DB-IP</a>)। इसके लिए आपका IP पता किसी दूसरी कंपनी को नहीं भेजा जाता, और हम केवल शहर और राज्य रखते हैं, IP पता नहीं।</li>
       </ul>
       <h3>बिना लॉग इन किए उपयोग करने पर</h3>
       <ul>
-        <li>आपका IP पता और रोज़ के उपयोग की गिनती, ताकि गेस्ट उपयोग सीमा लागू हो सके। अगर आप उसी दिन लॉग इन करते हैं, तो उस दिन का उपयोग आपके खाते में चला जाता है।</li>
+        <li>एक रैंडम डिवाइस ID और उस डिवाइस के रोज़ के उपयोग की गिनती, और आपका IP पता और उसे उपयोग करने वाले सभी गेस्ट के रोज़ के उपयोग का कुल योग, ताकि गेस्ट उपयोग सीमा लागू हो सके। अगर आप उसी दिन उसी डिवाइस पर लॉग इन करते हैं, तो उस डिवाइस का उस दिन का उपयोग आपके खाते में चला जाता है।</li>
       </ul>
       <h3>इमेज और PDF डाउट के रिकॉर्ड</h3>
       <ul>
@@ -325,7 +325,7 @@
         <li>आपके डाउट का उत्तर देने, मिलती-जुलती NCERT सामग्री और डायग्राम ढूँढने, और आपकी चैट, प्रश्न और परिणाम सहेजने के लिए, ताकि आप बाद में उन पर लौट सकें।</li>
         <li>उत्तरों को आपके अनुसार ढालने के लिए, केवल तब जब सेटिंग्स में <strong>मेरे AI शिक्षक को वैयक्तिकृत करें</strong> चालू हो: हम आपका पहला नाम और वे अध्याय उपयोग करते हैं जो सहेजे गए प्रश्नों और मॉक टेस्ट में आपको सबसे कठिन लगे। आप इसे कभी भी बंद कर सकते हैं।</li>
         <li>प्लान और सीमाएँ चलाने के लिए: रोज़ की उपयोग सीमा, गेस्ट सीमा, डिवाइस सीमा और रेफ़रल इनाम।</li>
-        <li>दुरुपयोग और धोखाधड़ी रोकने के लिए, जैसे रेट लिमिट और OTP साइन-इन की सुरक्षा।</li>
+        <li>दुरुपयोग और धोखाधड़ी रोकने के लिए, जैसे रेट लिमिट और OTP साइन-इन की सुरक्षा। रेट लिमिट की गिनती (खाते, डिवाइस ID, फ़ोन नंबर या IP पते के हिसाब से) केवल हमारे सर्वर की मेमोरी में रहती है और एक दिन के भीतर मिट जाती है।</li>
         <li>NEET-AI को ठीक करने और बेहतर बनाने के लिए: हम फ़ीडबैक, रिपोर्ट और इमेज/PDF डाउट के रिकॉर्ड देखकर गलत उत्तर और प्रश्नों की सामग्री सुधारते हैं।</li>
         <li>सेवा से जुड़े संदेश भेजने के लिए, जैसे साइन-इन कोड और खाते से जुड़े ईमेल। हम मार्केटिंग संदेश नहीं भेजते।</li>
         <li>क़ानून का पालन करने के लिए।</li>
@@ -371,7 +371,7 @@
       <ul>
         <li><strong>खाते की जानकारी, आपका प्लान और रेफ़रल कोड, चैट, सहेजे गए प्रश्न, मॉक और पर्सनलाइज़्ड टेस्ट के परिणाम, पढ़ाई की स्ट्रीक और सेटिंग:</strong> जब तक आप उन्हें या अपना खाता नहीं हटाते। हम इन्हें किसी तय समय पर अपने-आप नहीं हटाते।</li>
         <li><strong>आपकी अपलोड की गई फ़ोटो और PDF:</strong> जब तक वे आपकी किसी चैट का हिस्सा हैं। अगर आप वह चैट हटा देते हैं, या कोई फ़ाइल किसी चैट तक नहीं पहुँचती, तो हम वह फ़ाइल 7 दिनों के भीतर हटा देते हैं।</li>
-        <li><strong>गेस्ट उपयोग के रिकॉर्ड</strong> (बिना लॉग इन किए उपयोग करने पर आपका IP पता और रोज़ की गिनती): 30 दिन।</li>
+        <li><strong>गेस्ट उपयोग के रिकॉर्ड</strong> (बिना लॉग इन किए उपयोग करने पर आपकी डिवाइस ID या IP पता, और रोज़ की गिनती): 30 दिन।</li>
         <li><strong>साइन-इन किए गए डिवाइस</strong> (डिवाइस ID, डिवाइस का लेबल, अनुमानित स्थान): डिवाइस के आख़िरी बार सक्रिय होने के 90 दिन बाद तक।</li>
         <li><strong>इमेज और PDF डाउट के रिकॉर्ड:</strong> 90 दिन।</li>
         <li><strong>आपके खाते के रोज़ के उपयोग के रिकॉर्ड:</strong> 12 महीने।</li>

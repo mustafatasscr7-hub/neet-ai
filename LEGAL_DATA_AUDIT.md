@@ -40,13 +40,14 @@ only removed by the user's own actions or by `POST /account/delete`.
 | Bonus tokens | Referrals | Reward | `bonus_tokens` | Until account deletion | Supabase |
 | Referral code / referral links | Referral program | Reward, abuse checks | `user_referral_codes`, `referrals` (referrer_id, referred_id, status) | Codes deleted on account deletion; `referrals` kept with the id nulled | Supabase |
 | Device ID, device label, approx. location, sign-in/last-active times | `/session/heartbeat` (web every page; app every 45 s) | Pro/Max device limits, Active Sessions list | `active_sessions` (random ID from localStorage / SecureStore; label = phone model or browser+OS; "City, Region" from IP, the IP itself is not stored) | 90 days after last activity (logged-out/kicked rows included); deleted on account deletion | Supabase. Location looked up on our server in DB-IP's offline database: **no third party receives the IP** (replaced ip-api.com 2026-10-16) |
-| Guest IP + daily tokens | Guest `/chat` | Guest limit | `guest_usage_log` (IP, IST date, tokens) | 30 days (keyed by IP, not touched by account deletion) | Supabase |
+| Guest device ID / IP + daily tokens | Guest `/chat`, `/solve`, `/title`, `/summarize-answer` | Guest limit (14,000 tokens per device per day; 280,000 per IP per day across all guests) | `guest_device_usage_log` (device ID, IST date, tokens) and `guest_usage_log` (IP, IST date, tokens; the per-IP total). Clients without a device ID: IP only | 30 days (not touched by account deletion; logging in moves that day's device usage to the account) | Supabase |
+| Rate-limit counters | Every limited API route, `/auth/send-otp` | Abuse / flood protection | Server memory only (never written anywhere): counts keyed by account, device ID (`X-Device-Id` header), phone number or IP address | Cleared within a day (longest window: OTP's 24h; every deploy restarts the process and clears them) | None |
 | Supabase sign-in log | Supabase Auth | Auth audit trail | `auth.audit_log_entries` (sign-in events, IP address) | 12 months | Supabase |
 | Shared answer cache / embedding cache | Non-personalised `/chat` | Cost/latency | `answer_cache` (question hash → answer), `embedding_cache` (question hash → embedding vector), `pyq_solution_cache` | No limit (not personal) | Supabase; not linked to a user |
 | Server logs | Railway stdout | Debugging | Railway logs: user IDs + errors, no question text (checked `print(` calls) | Railway's log retention | Railway |
 | Server error events | `sentry_sdk` (send_default_pii=False) | Debugging | Sentry, **only if `SENTRY_DSN` is set on Railway** (empty in local `.env`; Railway unknown) | Sentry plan retention | Sentry (if on) |
 | "All AI providers down" alert | Server | Ops | Telegram message: endpoint, user_id, error text | Telegram | Telegram (only if bot token set on Railway; empty locally) |
-| On-device only | Web localStorage: `neet_lang`, `theme`, `fontSize`, `chatFont`, `answerStyle`, `personalize`, `showQuestionTimer`, `sidebarWidth`, `deviceId`, session-feedback dismissals. App: `deviceId` (SecureStore), `studyReminder.*`, `rateUs.*`, `intro.seen.v1`, PYQ chapter-count cache | Preferences | Device | Until cleared | None (except `deviceId`, sent to heartbeat) |
+| On-device only | Web localStorage: `neet_lang`, `theme`, `fontSize`, `chatFont`, `answerStyle`, `personalize`, `showQuestionTimer`, `sidebarWidth`, `deviceId`, session-feedback dismissals. App: `deviceId` (SecureStore), `studyReminder.*`, `rateUs.*`, `intro.seen.v1`, PYQ chapter-count cache | Preferences | Device | Until cleared | None (except `deviceId`, sent to heartbeat and as the `X-Device-Id` header on API calls) |
 | Study reminders | App | Local notifications | `expo-notifications` scheduled locally; **no push token is requested or sent** | n/a | None |
 | Voice input | Web Speech API / `expo-speech-recognition` pinned to Google's speech service | Dictation | Audio handled by the OS/browser speech service; we receive text only | n/a | Google (OS service, not us) |
 | Read aloud | `speechSynthesis` / `expo-speech` | TTS | On-device | n/a | None |
@@ -70,7 +71,7 @@ through the Storage API via pg_net, with the service key in Vault. Every run wri
 | Until the user deletes it or the account | `chats`, `saved_questions`, `mock_results`, `mock_test_attempts`, `user_streaks` |
 | While linked from one of the owner's chats; unlinked files deleted once 7 days old | `chat-uploads` bucket. "Linked" = the file's 32-character name appears in one of **its owner's** chats (every stored link form contains it). `chat_upload_refs` (kept by a trigger on `chats`) finds candidates fast; each one is re-checked against the chats before deletion, and a trigger error never blocks a chat save |
 | Deleted accounts: removed immediately | `POST /account/delete` (unchanged, now also covers the private bucket). **No backups**: the project is on Supabase Free, which takes none (owner, 2026-10-16). Storage files are never in Supabase backups on any plan |
-| 30 days | `guest_usage_log` |
+| 30 days | `guest_usage_log`, `guest_device_usage_log` |
 | 90 days after last activity | `active_sessions` |
 | 90 days | `media_doubt_log` |
 | 12 months | `usage_log`, `max_usage_alerts`, `auth.audit_log_entries` (owner chose 12 months; see section 6 on its size) |
@@ -285,7 +286,7 @@ Over-declaring is safe; under-declaring gets apps pulled.
 | App activity | Other actions | No | No | | | | |
 | Web browsing | Web browsing history | No | No | | | | |
 | App info and performance | Crash logs, diagnostics, other performance data | No (Sentry off; switch to **Yes / Analytics** if `EXPO_PUBLIC_SENTRY_DSN` is ever set) | No | | | | |
-| Device or other IDs | Device or other IDs | Yes (random per-install device ID for device limits; Expo update client ID) | No | No | Required | App functionality; Fraud prevention, security, and compliance | — |
+| Device or other IDs | Device or other IDs | Yes (random per-install device ID for device limits and per-device rate limits; Expo update client ID) | No | No | Required | App functionality; Fraud prevention, security, and compliance | — |
 
 ## 6. Sizing for 5,000 active students (2026-10-16)
 
@@ -316,8 +317,8 @@ Not changed by this work. These break or cost money at 5,000:
 | Storage: chat uploads (kept while linked) | ~410 MB/day, ~12 GB/month | 1 GB: full in ~3 days | 100 GB: ~8 months, then $0.021/GB-month |
 | Egress: viewing uploads | ~1.2 GB/day, ~37 GB/month | 5 GB/month | 250 GB/month |
 | `auth.audit_log_entries` (12 months) | If Supabase logs each hourly token refresh: 100k+ rows/day, tens of millions | | Check the count in `retention_cleanup.sql` PART 3. A shorter period, or turning off database audit logs in Auth settings, may be needed |
-| Per-IP rate limits (`/chat` 15/min, uploads 10/min) | Indian carriers put many users behind one shared IP, so students get false "Too many requests" | | Key logged-in limits by user id |
-| `_rate_limit_buckets` in server.py | One entry per IP and endpoint, never pruned: slow memory growth | | Prune old keys |
+| Per-IP rate limits (`/chat` 15/min, uploads 10/min) | Indian carriers put many users behind one shared IP, so students get false "Too many requests" | | Done 2026-10-17: keyed by account, else device ID with a 10x per-IP ceiling (server.py `rate_limit`) |
+| `_rate_limit_buckets` in server.py | One entry per IP and endpoint, never pruned: slow memory growth | | Done 2026-10-17: `_rate_buckets` swept every 60 s, capped at 200k |
 
 Above 5,000:
 - Raise the cleanup caps (`p_max_batches`) if the run summaries say "capped" every day.
