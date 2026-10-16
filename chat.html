@@ -1035,6 +1035,9 @@
        an ancestor -- confirmed live as the actual cause of the reported clipped/overlapping
        bubbles, not a hypothetical. overflow-wrap/word-break (already on .message-bubble, missing
        here) let a long word actually break instead of setting that oversized minimum at all. */
+    /* Stands in for a sent image whose file can't be loaded any more (setChatUploadImage). */
+    .chat-img-unavailable { width: 160px; height: 110px; box-sizing: border-box; display: flex; align-items: center; justify-content: center; text-align: center; padding: 8px; border: 1px solid #2a2a3a; border-radius: 12px; color: #999; font-size: 12px; }
+    body.light-mode .chat-img-unavailable { border-color: #e2e2e8 !important; color: #777 !important; }
     .quoted-context-box { position: relative; width: fit-content; max-width: 220px; max-height: 92px; overflow: hidden; background: rgba(255,255,255,0.06); border-left: 2px solid #8a8a8a; border-radius: 10px; padding: 8px 22px 8px 10px; font-size: 12px; line-height: 1.45; color: #999; margin-bottom: 6px; min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
     .quoted-context-box .quote-text { white-space: normal; }
     .quoted-context-box .quote-dismiss { position: absolute; top: 4px; right: 5px; background: transparent; border: none; color: #666; cursor: pointer; font-size: 12px; line-height: 1; padding: 2px; opacity: 0.7; }
@@ -2048,11 +2051,100 @@ let selectedImages = [];
     // reload) -- it re-fetches from the persisted Storage URL instead.
     const rawAttachmentCache = new WeakMap();
 
-    // Fetches a Storage URL and resolves it to a base64 data-URL body (no MIME prefix) -- shared
-    // by both the image and PDF fallback paths below, which only differ in what they do with the
-    // decoded result.
+    // Chat attachments live in a private bucket (since 2026-10-16). msg.images / msg.pdf hold a
+    // chat-upload:// reference -- or, in older chats, the old public URL, or a signed URL an old
+    // app build saved -- never a link anyone can open. resolveChatUpload turns one into a 1-hour
+    // signed URL from /chat-uploads/sign (server.py, own files only). Every request made in the
+    // same tick (all the thumbnails of a conversation being rendered) goes out as ONE batched call,
+    // and URLs are reused until 5 minutes before they expire. If signing fails or the file isn't in
+    // the private bucket, an https value is used as-is: an old public link keeps working for as
+    // long as its public copy exists. Anything else that isn't a reference (a just-sent message's
+    // local data: URL) passes straight through.
+    const CHAT_UPLOAD_REF_RE = /^chat-upload:\/\/|\/storage\/v1\/object\/(?:public\/ncert-daigrams\/chat-uploads\/|sign\/chat-uploads\/)/;
+    const chatUploadUrlCache = new Map(); // ref -> { url, expiresAt }
+    let chatUploadQueue = new Map();      // ref -> [resolve, ...], sent with the next batch
+    let chatUploadFlushTimer = null;
+
+    function isChatUploadRef(value) {
+      return typeof value === 'string' && CHAT_UPLOAD_REF_RE.test(value);
+    }
+
+    function resolveChatUpload(ref, force) {
+      if (!isChatUploadRef(ref)) return Promise.resolve(ref || null);
+      const hit = chatUploadUrlCache.get(ref);
+      if (!force && hit && hit.expiresAt - Date.now() > 5 * 60 * 1000) return Promise.resolve(hit.url);
+      return new Promise(resolve => {
+        if (!chatUploadQueue.has(ref)) chatUploadQueue.set(ref, []);
+        chatUploadQueue.get(ref).push(resolve);
+        if (!chatUploadFlushTimer) chatUploadFlushTimer = setTimeout(flushChatUploadQueue, 0);
+      });
+    }
+
+    async function flushChatUploadQueue() {
+      const batch = chatUploadQueue;
+      chatUploadQueue = new Map();
+      chatUploadFlushTimer = null;
+      const refs = [...batch.keys()];
+      const signed = {};
+      try {
+        const { data: { session } } = await client.auth.getSession();
+        if (session) {
+          for (let i = 0; i < refs.length; i += 100) {
+            const res = await fetch(`${API_BASE}/chat-uploads/sign`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
+              body: JSON.stringify({ refs: refs.slice(i, i + 100) })
+            });
+            if (!res.ok) break;
+            const json = await res.json();
+            const expiresAt = Date.now() + (json.expires_in || 0) * 1000;
+            Object.entries(json.urls || {}).forEach(([ref, url]) => {
+              if (!url) return;
+              signed[ref] = url;
+              chatUploadUrlCache.set(ref, { url, expiresAt });
+            });
+          }
+        }
+      } catch (e) {
+        // network error -- falls back below, same as an unsigned ref
+      }
+      batch.forEach((waiters, ref) => {
+        const url = signed[ref] || (/^https:\/\//.test(ref) ? ref : null);
+        waiters.forEach(resolve => resolve(url));
+      });
+    }
+
+    // Points a thumbnail <img> at an attachment. On a load error it re-signs once (the URL may
+    // have expired while the tab sat open); if that still fails -- the file is gone, e.g. an old
+    // public link after the move -- the image is swapped for a small "Image not available" box.
+    function setChatUploadImage(img, ref) {
+      if (!isChatUploadRef(ref)) { img.src = ref; return; }
+      let retried = false;
+      const giveUp = () => {
+        img.onerror = null;
+        const box = document.createElement('div');
+        box.className = 'chat-img-unavailable';
+        box.setAttribute('data-i18n', 'chat.attachmentUnavailable');
+        box.textContent = t('chat', 'attachmentUnavailable');
+        img.replaceWith(box);
+      };
+      img.onerror = async () => {
+        if (retried) return giveUp();
+        retried = true;
+        const fresh = await resolveChatUpload(ref, true);
+        if (fresh && fresh !== img.src) img.src = fresh;
+        else giveUp();
+      };
+      resolveChatUpload(ref).then(url => { if (url) img.src = url; else giveUp(); });
+    }
+
+    // Fetches an attachment URL and resolves it to a base64 data-URL body (no MIME prefix) --
+    // shared by both the image and PDF fallback paths below, which only differ in what they do with
+    // the decoded result. Throws on an HTTP error rather than base64-ing Storage's JSON error body
+    // and resending THAT as the student's image.
     async function fetchUrlAsBase64(url) {
       const res = await fetch(url);
+      if (!res.ok) throw new Error(`attachment fetch ${res.status}`);
       const blob = await res.blob();
       const dataUrl = await new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -2065,7 +2157,7 @@ let selectedImages = [];
 
     // Shared by retryMessage/editMessage. Tries the current-session cache first (fast, no
     // network, works even for a failed/guest upload); falls back to re-fetching from each
-    // attachment's own persisted Storage URL otherwise (the only thing that survives a reload) --
+    // attachment's own persisted reference otherwise (the only thing that survives a reload) --
     // images and PDF are resolved independently of each other, not mutually exclusive, since a
     // reload can leave either one (or both) needing the network fallback.
     async function getResendAttachments(userMsg) {
@@ -2074,7 +2166,9 @@ let selectedImages = [];
       const result = { images: [], pdf: null };
       if (userMsg && userMsg.images && userMsg.images.length) {
         try {
-          result.images = await Promise.all(userMsg.images.map(async (url) => {
+          result.images = await Promise.all(userMsg.images.map(async (ref) => {
+            const url = await resolveChatUpload(ref);
+            if (!url) throw new Error('attachment unavailable');
             const dataUrl = await fetchUrlAsBase64(url);
             return { data: dataUrl.split(',')[1], type: dataUrl.split(';')[0].split(':')[1] };
           }));
@@ -2084,7 +2178,9 @@ let selectedImages = [];
       }
       if (userMsg && userMsg.pdf) {
         try {
-          const dataUrl = await fetchUrlAsBase64(userMsg.pdf);
+          const url = await resolveChatUpload(userMsg.pdf);
+          if (!url) throw new Error('attachment unavailable');
+          const dataUrl = await fetchUrlAsBase64(url);
           result.pdf = dataUrl.split(',')[1];
         } catch (e) {
           result.pdf = null;
@@ -2167,7 +2263,10 @@ let selectedImages = [];
           body: JSON.stringify({ data: base64, media_type, user_id: session.user.id })
         });
         const json = await res.json();
-        return json.url || null;
+        // json.ref = the private-bucket reference to persist. json.url alone only comes from a
+        // backend older than this page (a deploy still rolling out) -- an old public URL, still
+        // understood everywhere a reference is.
+        return json.ref || json.url || null;
       } catch (e) {
         return null;
       }
@@ -2188,7 +2287,7 @@ let selectedImages = [];
           body: JSON.stringify({ data: base64, user_id: session.user.id })
         });
         const json = await res.json();
-        return json.url || null;
+        return json.ref || json.url || null; // see uploadChatImageForPersistence
       } catch (e) {
         return null;
       }
@@ -4637,16 +4736,21 @@ let selectedImages = [];
       } else {
         // sendMessage renders a fresh image send through this exact same branch (seeding
         // msgObj.images with local data URLs before calling this function, then swapping in the
-        // real Storage URLs afterward once upload finishes -- see its own comment), so a reload
-        // shows the identical thumbnail row + Copy/Edit actions a live send already had, instead
-        // of a separate reload-only rendering.
+        // real attachment references afterward once upload finishes -- see its own comment), so a
+        // reload shows the identical thumbnail row + Copy/Edit actions a live send already had,
+        // instead of a separate reload-only rendering. setChatUploadImage signs each reference
+        // (one batched call for the whole conversation).
         if (msgObj && msgObj.images && msgObj.images.length) {
           const imgWrap = document.createElement('div');
           imgWrap.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end;margin-bottom:8px;';
-          imgWrap.innerHTML = msgObj.images.map(url =>
-            `<img class="chat-img-thumb" src="${url}" style="max-width:200px;max-height:200px;border-radius:12px;border:1px solid #2a2a3a;display:block;cursor:zoom-in;"/>`
-          ).join('');
-          imgWrap.querySelectorAll('.chat-img-thumb').forEach(el => { el.onclick = () => showImageLightbox(el.src); });
+          msgObj.images.forEach(ref => {
+            const img = document.createElement('img');
+            img.className = 'chat-img-thumb';
+            img.style.cssText = 'max-width:200px;max-height:200px;border-radius:12px;border:1px solid #2a2a3a;display:block;cursor:zoom-in;';
+            img.onclick = () => { if (img.src) showImageLightbox(img.src); };
+            imgWrap.appendChild(img);
+            setChatUploadImage(img, ref);
+          });
           contentWrapper.appendChild(imgWrap);
         }
         // A quoted "Ask about this" selection used to vanish the moment the message sent --

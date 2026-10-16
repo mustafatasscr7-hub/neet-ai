@@ -4,6 +4,7 @@ from starlette.datastructures import MutableHeaders
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Union
+from collections import OrderedDict
 from contextlib import asynccontextmanager
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
@@ -4384,14 +4385,14 @@ _IMAGE_CORRECTION_RE = re.compile(
 _IMAGE_CORRECTION_MAX_CHARS = 150
 
 def _detect_image_correction(text: str, history: list, images: list, pdf) -> Optional[list]:
-    """Returns the list of image URL(s) to re-fetch if this message looks like a correction of
+    """Returns the image reference(s) to re-fetch if this message looks like a correction of
     the immediately preceding image-based answer, else None. Requires ALL of:
     - This message has no image/PDF of its own -- a genuinely new image already gets a real vision
       call through the normal branch below; this is only for a plain-text follow-up.
     - The immediately preceding history entry is the AI's own reply (i.e. nothing else happened
       between the image and now -- not "immediately after" if any other exchange came between).
-    - The turn directly before THAT is a user turn that actually included an image (its Storage
-      URL(s), persisted by the client onto that turn's own history entry).
+    - The turn directly before THAT is a user turn that actually included an image (its chat
+      upload reference(s), persisted by the client onto that turn's own history entry).
     - This message is short -- a long message reads as a genuinely new, developed question, not a
       quick correction.
     - This message contains a common correction-style phrase (regex above) -- catches the real
@@ -4427,10 +4428,17 @@ class _RefetchedImageAttachment:
         self.data = data
         self.media_type = media_type
 
-async def _refetch_images_as_attachments(urls: list) -> list:
+async def _refetch_images_as_attachments(refs: list, user_id: str) -> list:
+    """Downloads the student's own earlier images with the service key. `refs` come from the
+    client-supplied history, so they're only ever resolved inside user_id's private folder -- this
+    used to GET whatever URL the history held, which let any caller (guests included) make the
+    server fetch an arbitrary address. Anything else is skipped."""
     attachments = []
-    for url in (urls or [])[:3]:
-        resp = await async_client.get(url)
+    for ref in (refs or [])[:3]:
+        path = _chat_upload_path(ref, user_id)
+        if not path or path.endswith(".pdf"):
+            continue
+        resp = await async_client.get(f"{SUPABASE_URL}/storage/v1/object/{CHAT_UPLOADS_BUCKET}/{path}", headers=ADMIN_HEADERS, timeout=30)
         resp.raise_for_status()
         mime = resp.headers.get("content-type", "image/png").split(";")[0].strip()
         attachments.append(_RefetchedImageAttachment(base64.b64encode(resp.content).decode("ascii"), mime))
@@ -4495,7 +4503,7 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
     correction_image_urls = _detect_image_correction(text, history, images, pdf)
     if correction_image_urls:
         try:
-            refetched = await _refetch_images_as_attachments(correction_image_urls)
+            refetched = await _refetch_images_as_attachments(correction_image_urls, user_id)
         except Exception:
             refetched = []
         if refetched:
@@ -8037,15 +8045,137 @@ async def admin_convert_krutidev(req: KrutiDevConvertRequest, _: None = Depends(
     except Exception:
         return {"converted": req.text, "success": False}
 
+# ---------- Private chat attachments ----------
+# Students' images and PDFs live in a PRIVATE bucket (since 2026-10-16, created by
+# create_chat_uploads_bucket.sql). They used to sit in the public DIAGRAMS_BUCKET under
+# chat-uploads/, where anyone holding the URL could open a student's photo. Objects are keyed
+# <user_id>/<hex>.<ext> (PDFs under <user_id>/pdfs/) and only the service key can read them:
+# clients get short-lived signed URLs from /chat-uploads/sign, which only ever signs paths inside
+# the caller's own folder.
+#
+# chats.messages stores a stable reference, chat-upload://<user_id>/[pdfs/]<hex>.<ext>, never a
+# URL that expires. Two older forms are still in real chats and are accepted wherever a reference
+# is (_chat_upload_path):
+#   - public URLs from before the move, .../object/public/ncert-daigrams/chat-uploads/[<user_id>/][pdfs/]<hex>.<ext>.
+#     The flat ones (no user id in the path) were copied into their owner's folder by
+#     migrate_chat_uploads_private.py, so they resolve against the CALLER's folder.
+#   - signed URLs, which app builds from before the move save because they only read `url`.
+CHAT_UPLOADS_BUCKET = "chat-uploads"
+CHAT_UPLOAD_REF_PREFIX = "chat-upload://"
+CHAT_UPLOAD_URL_TTL_SECONDS = 3600
+CHAT_UPLOAD_SIGN_MAX_REFS = 100  # per request; clients batch a whole conversation into one call
+CHAT_UPLOAD_SIGN_LIMIT = (120, 60)  # per student, not per IP -- carrier NAT puts many students on one IP
+# Signed URLs are reused while at least 10 minutes are left, so a student reopening a chat gets
+# the SAME URL and their browser/app image cache hits instead of re-downloading every picture
+# (and the bucket isn't re-signed on every chat open). Bounded LRU: ~400 bytes an entry.
+CHAT_UPLOAD_URL_MIN_REMAINING = 600
+CHAT_UPLOAD_URL_CACHE_MAX = 20000
+_chat_upload_url_cache: "OrderedDict[str, tuple]" = OrderedDict()  # path -> (signed url, expires at)
+_CHAT_UPLOAD_UUID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+_CHAT_UPLOAD_REF_RE = re.compile(
+    rf"(?:chat-upload://(?P<uid>{_CHAT_UPLOAD_UUID})/"
+    rf"|{re.escape(SUPABASE_URL or '')}/storage/v1/object/public/{DIAGRAMS_BUCKET}/chat-uploads/(?:(?P<pub_uid>{_CHAT_UPLOAD_UUID})/)?"
+    rf"|{re.escape(SUPABASE_URL or '')}/storage/v1/object/sign/{CHAT_UPLOADS_BUCKET}/(?P<sign_uid>{_CHAT_UPLOAD_UUID})/)"
+    r"(?P<pdfs>pdfs/)?(?P<hex>[0-9a-f]{32})\.(?P<ext>jpg|jpeg|png|webp|gif|pdf)(?:\?\S*)?"  # .jpeg: Sept 2026 uploads
+)
+
+def _chat_upload_path(ref, user_id: str) -> Optional[str]:
+    """CHAT_UPLOADS_BUCKET key for any stored form of a chat attachment, or None if it isn't one,
+    or it's in another student's folder. chats rows are client-writable, so a reference is never
+    trusted to name its own owner: it only ever resolves inside user_id's folder."""
+    if not user_id or not isinstance(ref, str):
+        return None
+    m = _CHAT_UPLOAD_REF_RE.fullmatch(ref.strip())
+    if not m or (m["ext"] == "pdf") != bool(m["pdfs"]):
+        return None
+    owner = m["uid"] or m["pub_uid"] or m["sign_uid"] or user_id
+    if owner != user_id:
+        return None
+    return f"{owner}/{m['pdfs'] or ''}{m['hex']}.{m['ext']}"
+
+async def _sign_chat_upload_paths(paths) -> Dict[str, tuple]:
+    """{path: (signed url, expires at)} for every path that exists; missing objects are left out.
+    One Storage call per CHAT_UPLOAD_SIGN_MAX_REFS uncached paths. Raises if Storage itself fails."""
+    now = time.time()
+    out, missing = {}, []
+    for path in dict.fromkeys(paths):
+        hit = _chat_upload_url_cache.get(path)
+        if hit and hit[1] - now >= CHAT_UPLOAD_URL_MIN_REMAINING:
+            _chat_upload_url_cache.move_to_end(path)
+            out[path] = hit
+        else:
+            missing.append(path)
+    for i in range(0, len(missing), CHAT_UPLOAD_SIGN_MAX_REFS):
+        resp = await async_client.post(
+            f"{SUPABASE_URL}/storage/v1/object/sign/{CHAT_UPLOADS_BUCKET}", headers=ADMIN_HEADERS, timeout=15,
+            json={"expiresIn": CHAT_UPLOAD_URL_TTL_SECONDS, "paths": missing[i:i + CHAT_UPLOAD_SIGN_MAX_REFS]}
+        )
+        if resp.status_code >= 400:
+            raise RuntimeError(f"storage sign: {resp.status_code} {resp.text[:200]}")
+        for item in resp.json():
+            # A missing object comes back per path as {"error": "...", "signedURL": null}.
+            if item.get("signedURL") and not item.get("error"):
+                entry = (f"{SUPABASE_URL}/storage/v1{item['signedURL']}", now + CHAT_UPLOAD_URL_TTL_SECONDS)
+                _chat_upload_url_cache[item["path"]] = entry
+                _chat_upload_url_cache.move_to_end(item["path"])
+                out[item["path"]] = entry
+    while len(_chat_upload_url_cache) > CHAT_UPLOAD_URL_CACHE_MAX:
+        _chat_upload_url_cache.popitem(last=False)
+    return out
+
+def _forget_chat_upload_urls(user_id: str):
+    for path in [p for p in _chat_upload_url_cache if p.startswith(f"{user_id}/")]:
+        del _chat_upload_url_cache[path]
+
+async def _store_chat_upload(path: str, file_bytes: bytes, media_type: str) -> dict:
+    """Writes one attachment to the private bucket and returns what both upload endpoints answer:
+    the reference to save on the message, plus a signed URL for app builds from before the move,
+    which only read `url` (they save it, so it works for CHAT_UPLOAD_URL_TTL_SECONDS)."""
+    response = await async_client.post(
+        f"{SUPABASE_URL}/storage/v1/object/{CHAT_UPLOADS_BUCKET}/{path}", timeout=60,
+        headers={**ADMIN_HEADERS, "Content-Type": media_type, "cache-control": f"max-age={CHAT_UPLOAD_URL_TTL_SECONDS}"},
+        content=file_bytes
+    )
+    if response.status_code >= 400:
+        return {"error": response.text}
+    try:
+        signed = await _sign_chat_upload_paths([path])
+    except Exception:
+        signed = {}
+    return {"ref": CHAT_UPLOAD_REF_PREFIX + path, "url": signed[path][0] if path in signed else None}
+
+class ChatUploadSignRequest(BaseModel):
+    refs: List[str]
+
+@app.post("/chat-uploads/sign")
+async def chat_uploads_sign(body: ChatUploadSignRequest, verified_user_id: str = Depends(_get_verified_user_id)):
+    """Signed URLs for a student's own chat attachments: {"urls": {ref: url or null}, "expires_in"}.
+    null = not theirs, not an attachment reference, or the file is gone (deleted chat swept by
+    the retention job, or an account deleted on another device). expires_in is the shortest
+    lifetime left among the returned URLs, so a client can refresh them all at once."""
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    _check_user_rate("upload-sign", verified_user_id, CHAT_UPLOAD_SIGN_LIMIT)
+    refs = list(dict.fromkeys(body.refs))[:CHAT_UPLOAD_SIGN_MAX_REFS]
+    paths = {ref: _chat_upload_path(ref, verified_user_id) for ref in refs}
+    try:
+        signed = await _sign_chat_upload_paths([p for p in paths.values() if p])
+    except Exception as e:
+        print(f"CHAT UPLOAD SIGN ERROR (user_id={verified_user_id}): {e}", flush=True)
+        raise HTTPException(status_code=502, detail="Could not load attachments")
+    now = time.time()
+    lifetimes = [signed[p][1] - now for p in paths.values() if p in signed]
+    return {
+        "urls": {ref: signed[p][0] if p in signed else None for ref, p in paths.items()},
+        "expires_in": int(min(lifetimes)) if lifetimes else CHAT_UPLOAD_URL_TTL_SECONDS,
+    }
+
 # Student-submitted chat image attachments -- previously never persisted at all: the message
 # object saved to chats.messages only ever carried {role, text}, so an attached image displayed
 # fine for the live session (rendered straight from in-memory base64) but vanished on the next
-# page load with no way to recover it. Reuses DIAGRAMS_BUCKET (already a public bucket, already
-# verified working) under a chat-uploads/ prefix rather than requiring a second bucket be created
-# manually in the Supabase dashboard just for this. No admin gate -- any logged-in student can
-# call this for their own attachment -- same trust model as the rest of this codebase's student-
-# facing endpoints (a plain user_id field, no server-side session/JWT verification), not a new
-# relaxation introduced here.
+# page load with no way to recover it. Stored in the private CHAT_UPLOADS_BUCKET above. No admin
+# gate -- any logged-in student can call this for their own attachment, identified only by the
+# verified Bearer token.
 MAX_CHAT_IMAGE_BYTES = 8 * 1024 * 1024
 # Every other student-facing endpoint here has a rate limiter -- this one didn't, despite being
 # the most expensive-per-call (a real binary write to Supabase Storage, up to MAX_CHAT_IMAGE_BYTES
@@ -8100,24 +8230,12 @@ async def chat_image_upload(body: ChatImageUploadRequest, _: None = Depends(rate
     except Exception:
         return {"error": "Only image attachments can be uploaded"}
     file_bytes = out.getvalue()
-    import uuid
-    # Per-user folder (since 2026-10-13) so /account/delete can find every upload by listing
-    # chat-uploads/<user_id>/ -- earlier uploads sit flat under chat-uploads/ with no owner in the
-    # path, which /account/delete can only find via the URLs stored in that user's chats.
-    path = f"chat-uploads/{verified_user_id}/{uuid.uuid4().hex}.{ext}"
+    # Per-user folder so /account/delete can find every upload by listing <user_id>/. Async write:
+    # the old blocking requests.post here stalled every other request (including streaming
+    # answers) for as long as an upload to Storage took.
+    path = f"{verified_user_id}/{uuid.uuid4().hex}.{ext}"
     try:
-        response = http_requests.post(
-            f"{SUPABASE_URL}/storage/v1/object/{DIAGRAMS_BUCKET}/{path}",
-            headers={
-                "apikey": SUPABASE_SERVICE_KEY,
-                "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
-                "Content-Type": media_type
-            },
-            data=file_bytes
-        )
-        if response.status_code >= 400:
-            return {"error": response.text}
-        return {"url": f"{SUPABASE_URL}/storage/v1/object/public/{DIAGRAMS_BUCKET}/{path}"}
+        return await _store_chat_upload(path, file_bytes, media_type)
     except Exception as e:
         print(f"CHAT IMAGE UPLOAD ERROR (user_id={body.user_id}): {e}", flush=True)
         return {"error": "Something went wrong. Please try again."}
@@ -8126,10 +8244,10 @@ async def chat_image_upload(body: ChatImageUploadRequest, _: None = Depends(rate
 # in-memory for the model call and never persisted anywhere, so there was no URL to store on the
 # message object -- unlike an image, a PDF-based message had NO way to survive a page reload for
 # Retry/Edit (getResendAttachments's own session cache is the only thing that ever worked, and
-# only within the same browser session). Mirrors /chat-image-upload exactly: same bucket, same
-# chat-uploads/ prefix convention (under a pdfs/ subfolder), same trust model, same rate limiter
-# shape. Matches the largest PDF_LIMITS tier (max: 20MB) -- this used to be 15MB, so a Max
-# student's 15-20MB PDF was answered by /chat but silently never persisted for reload.
+# only within the same browser session). Mirrors /chat-image-upload exactly: same private bucket
+# (under a pdfs/ subfolder), same trust model, same rate limiter shape. Matches the largest
+# PDF_LIMITS tier (max: 20MB) -- this used to be 15MB, so a Max student's 15-20MB PDF was
+# answered by /chat but silently never persisted for reload.
 MAX_CHAT_PDF_BYTES = 20 * 1024 * 1024
 @app.post("/chat-pdf-upload")
 async def chat_pdf_upload(body: ChatPdfUploadRequest, _: None = Depends(rate_limiter(10, 60)), verified_user_id: str = Depends(_get_verified_user_id)):
@@ -8143,22 +8261,10 @@ async def chat_pdf_upload(body: ChatPdfUploadRequest, _: None = Depends(rate_lim
         return {"error": "Could not decode PDF data"}
     if len(file_bytes) > MAX_CHAT_PDF_BYTES:
         return {"error": "PDF too large"}
-    import uuid
     # Per-user folder -- see /chat-image-upload's identical comment above.
-    path = f"chat-uploads/{verified_user_id}/pdfs/{uuid.uuid4().hex}.pdf"
+    path = f"{verified_user_id}/pdfs/{uuid.uuid4().hex}.pdf"
     try:
-        response = http_requests.post(
-            f"{SUPABASE_URL}/storage/v1/object/{DIAGRAMS_BUCKET}/{path}",
-            headers={
-                "apikey": SUPABASE_SERVICE_KEY,
-                "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
-                "Content-Type": "application/pdf"
-            },
-            data=file_bytes
-        )
-        if response.status_code >= 400:
-            return {"error": response.text}
-        return {"url": f"{SUPABASE_URL}/storage/v1/object/public/{DIAGRAMS_BUCKET}/{path}"}
+        return await _store_chat_upload(path, file_bytes, "application/pdf")
     except Exception as e:
         print(f"CHAT PDF UPLOAD ERROR (user_id={body.user_id}): {e}", flush=True)
         return {"error": "Something went wrong. Please try again."}
@@ -8192,7 +8298,7 @@ ACCOUNT_ANONYMISE_COLUMNS = [
     ("question_reports", "user_id"), ("diagram_reports", "user_id"),
     ("provider_usage_log", "user_id"), ("referrals", "referrer_id"), ("referrals", "referred_id"),
 ]
-_LEGACY_CHAT_UPLOAD_RE = re.compile(r"chat-uploads/(?:pdfs/)?[0-9a-f]{32}\.(?:jpg|png|webp|gif|pdf)")
+_LEGACY_CHAT_UPLOAD_RE = re.compile(r"chat-uploads/(?:pdfs/)?[0-9a-f]{32}\.(?:jpg|jpeg|png|webp|gif|pdf)")
 
 def _account_rows_affected(resp) -> int:
     try:
@@ -8200,12 +8306,30 @@ def _account_rows_affected(resp) -> int:
     except ValueError:
         return 0
 
-async def _account_collect_upload_paths(user_id: str) -> set:
-    """Every chat-upload storage path this student owns: everything listed under their own
-    chat-uploads/<user_id>/ folder, plus legacy flat-layout uploads referenced in their chats.
+async def _account_list_storage_folder(bucket: str, folder: str) -> set:
+    paths, offset = set(), 0
+    while True:
+        resp = await async_client.post(
+            f"{SUPABASE_URL}/storage/v1/object/list/{bucket}", headers=ADMIN_HEADERS, timeout=30,
+            json={"prefix": folder, "limit": 1000, "offset": offset}
+        )
+        if resp.status_code >= 400:
+            raise RuntimeError(f"storage list {bucket}/{folder}: {resp.status_code} {resp.text[:200]}")
+        items = resp.json()
+        # Sub-folders (e.g. pdfs/) come back as id-less entries -- listed separately by the caller.
+        paths.update(f"{folder}/{item['name']}" for item in items if item.get("id"))
+        if len(items) < 1000:
+            return paths
+        offset += 1000
+
+async def _account_collect_upload_paths(user_id: str) -> Dict[str, set]:
+    """{bucket: paths} for every chat upload this student owns: their whole folder in the private
+    CHAT_UPLOADS_BUCKET, plus anything still in the old public location -- their
+    chat-uploads/<user_id>/ folder there and legacy flat-layout uploads referenced in their chats.
+    The public part finds nothing once migrate_chat_uploads_private.py --delete-public has run.
     A URL pointing into a DIFFERENT student's folder is never collected (chats are client-
     writable, so a crafted message must not be able to get someone else's file deleted)."""
-    paths = set()
+    public = set()
     url_re = re.compile(re.escape(f"/storage/v1/object/public/{DIAGRAMS_BUCKET}/") + r"(chat-uploads/[A-Za-z0-9/._-]+)")
     own_prefix = f"chat-uploads/{user_id}/"
     offset = 0
@@ -8220,26 +8344,16 @@ async def _account_collect_upload_paths(user_id: str) -> set:
         for row in rows:
             for p in url_re.findall(json.dumps(row.get("messages"))):
                 if p.startswith(own_prefix) or _LEGACY_CHAT_UPLOAD_RE.fullmatch(p):
-                    paths.add(p)
+                    public.add(p)
         if len(rows) < 100:
             break
         offset += 100
     for folder in (f"chat-uploads/{user_id}", f"chat-uploads/{user_id}/pdfs"):
-        offset = 0
-        while True:
-            resp = await async_client.post(
-                f"{SUPABASE_URL}/storage/v1/object/list/{DIAGRAMS_BUCKET}", headers=ADMIN_HEADERS, timeout=30,
-                json={"prefix": folder, "limit": 1000, "offset": offset}
-            )
-            if resp.status_code >= 400:
-                raise RuntimeError(f"storage list {folder}: {resp.status_code} {resp.text[:200]}")
-            items = resp.json()
-            # Sub-folders (e.g. pdfs/) come back as id-less entries -- listed separately above.
-            paths.update(f"{folder}/{item['name']}" for item in items if item.get("id"))
-            if len(items) < 1000:
-                break
-            offset += 1000
-    return paths
+        public |= await _account_list_storage_folder(DIAGRAMS_BUCKET, folder)
+    private = set()
+    for folder in (user_id, f"{user_id}/pdfs"):
+        private |= await _account_list_storage_folder(CHAT_UPLOADS_BUCKET, folder)
+    return {DIAGRAMS_BUCKET: public, CHAT_UPLOADS_BUCKET: private}
 
 @app.post("/account/delete")
 async def account_delete(body: AccountDeleteRequest, _: None = Depends(rate_limiter(3, 3600)), verified_user_id: str = Depends(_get_verified_user_id)):
@@ -8266,15 +8380,18 @@ async def account_delete(body: AccountDeleteRequest, _: None = Depends(rate_limi
                 raise RuntimeError(f"{table}.{column} anonymise: {resp.status_code} {resp.text[:200]}")
             summary[f"{table}.{column}=null"] = _account_rows_affected(resp)
 
-        upload_paths = sorted(await _account_collect_upload_paths(user_id))
-        for i in range(0, len(upload_paths), 100):
-            resp = await async_client.request(
-                "DELETE", f"{SUPABASE_URL}/storage/v1/object/{DIAGRAMS_BUCKET}", headers=ADMIN_HEADERS, timeout=30,
-                json={"prefixes": upload_paths[i:i + 100]}
-            )
-            if resp.status_code >= 400:
-                raise RuntimeError(f"storage delete: {resp.status_code} {resp.text[:200]}")
-        summary["uploads"] = len(upload_paths)
+        uploads = await _account_collect_upload_paths(user_id)
+        for bucket, bucket_paths in uploads.items():
+            upload_paths = sorted(bucket_paths)
+            for i in range(0, len(upload_paths), 100):
+                resp = await async_client.request(
+                    "DELETE", f"{SUPABASE_URL}/storage/v1/object/{bucket}", headers=ADMIN_HEADERS, timeout=30,
+                    json={"prefixes": upload_paths[i:i + 100]}
+                )
+                if resp.status_code >= 400:
+                    raise RuntimeError(f"storage delete {bucket}: {resp.status_code} {resp.text[:200]}")
+        _forget_chat_upload_urls(user_id)
+        summary["uploads"] = sum(len(p) for p in uploads.values())
 
         for table in ACCOUNT_DELETE_TABLES:
             resp = await async_client.delete(
