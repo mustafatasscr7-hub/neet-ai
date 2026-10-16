@@ -5,6 +5,7 @@
 --   chat uploads (private chat-uploads bucket) .................................. while linked from one of the owner's chats;
 --                                                                                 unlinked files are deleted once 7 days old
 --   guest_usage_log (IP + daily tokens) ......................................... 30 days
+--   guest_device_usage_log (guest device ID + daily tokens) ..................... 30 days
 --   active_sessions (devices) ................................................... 90 days after last activity
 --   media_doubt_log (image/PDF doubt records) ................................... 90 days
 --   usage_log, max_usage_alerts (per-account usage) ............................. 12 months
@@ -47,6 +48,7 @@ alter table public.session_feedback alter column user_id drop not null;
 
 -- The cleanup filters by date; without these indexes every daily run would scan whole tables.
 create index if not exists guest_usage_log_usage_date_idx on public.guest_usage_log (usage_date);
+-- guest_device_usage_log and its index come from create_guest_device_usage_log.sql (run that first).
 create index if not exists usage_log_usage_date_idx on public.usage_log (usage_date);
 create index if not exists active_sessions_last_active_at_idx on public.active_sessions (last_active_at);
 create index if not exists media_doubt_log_created_at_idx on public.media_doubt_log (created_at);
@@ -151,6 +153,7 @@ declare
   v_rules text[][] := array[
     -- label,                         table,                       where,                                                                                    set
     array['guest_usage_log',          'public.guest_usage_log',    format('usage_date < %L', v_ist_today - 30),                                              null],
+    array['guest_device_usage_log',   'public.guest_device_usage_log', format('usage_date < %L', v_ist_today - 30),                                          null],
     array['active_sessions',          'public.active_sessions',    $w$last_active_at < now() - interval '90 days'$w$,                                       null],
     array['media_doubt_log',          'public.media_doubt_log',    $w$created_at < now() - interval '90 days'$w$,                                           null],
     array['usage_log',                'public.usage_log',          format('usage_date < %L', (v_ist_today - interval '12 months')::date),                   null],

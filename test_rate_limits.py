@@ -7,7 +7,9 @@ Run with: python test_rate_limits.py
 Plain pass/fail harness like test_client_ip.py. Fully offline: Supabase (auth + REST) is an
 httpx.MockTransport, the OTP send is stubbed, and the clock is a fake so windows can be crossed.
 """
+import asyncio
 import io
+import json
 import os
 import sys
 import time as real_time
@@ -66,10 +68,24 @@ class FakeClock:
         return getattr(real_time, name)
 
 
+USAGE_KEYS = {"guest_usage_log": "ip", "guest_device_usage_log": "device_id", "usage_log": "user_id"}
+USAGE_RPCS = {"increment_guest_usage": ("guest_usage_log", "p_ip"), "increment_guest_device_usage": ("guest_device_usage_log", "p_device_id"),
+              "increment_daily_usage": ("usage_log", "p_user_id")}
+
+
 class FakeSupabase:
+    """Auth (token -> user id) plus the three daily-usage tables and their increment RPCs."""
     def __init__(self):
         self.auth_calls = 0
         self.requests = []
+        self.rows = {}  # (table, key value, usage_date) -> row
+
+    def row(self, table, key, day):
+        return self.rows.setdefault((table, key, day), {USAGE_KEYS[table]: key, "usage_date": day, "tokens_used": 0, "limit_reached_at": None})
+
+    def tokens(self, table, key, day=None):
+        r = self.rows.get((table, key, day or server._ist_today()))
+        return r["tokens_used"] if r else 0
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -78,9 +94,26 @@ class FakeSupabase:
             token = request.headers.get("authorization", "")[7:]
             uid = TOKENS.get(token)
             return httpx.Response(200, json={"id": uid}) if uid else httpx.Response(401, json={"msg": "bad jwt"})
-        self.requests.append((request.method, path, dict(request.url.params)))
+        params = request.url.params
+        self.requests.append((request.method, path, dict(params)))
         if path.startswith("/rest/v1/rpc/"):
+            fn = path.rsplit("/", 1)[1]
+            if fn in USAGE_RPCS:
+                body = json.loads(request.content)
+                table, key_param = USAGE_RPCS[fn]
+                self.row(table, body[key_param], body["p_date"])["tokens_used"] += body["p_tokens"]
             return httpx.Response(200, json=None)
+        table = path.rsplit("/", 1)[1]
+        if table in USAGE_KEYS:
+            key = params[USAGE_KEYS[table]][3:]  # "eq.<value>"
+            dates = params["usage_date"]
+            days = dates[4:-1].split(",") if dates.startswith("in.(") else [dates[3:]]
+            matches = [r for (t, k, d), r in self.rows.items() if t == table and k == key and d in days]
+            if request.method == "PATCH":
+                for r in matches:
+                    r.update(json.loads(request.content))
+                return httpx.Response(204)
+            return httpx.Response(200, json=[dict(r) for r in matches])
         return httpx.Response(200, json=[])
 
 
@@ -131,6 +164,7 @@ def test_route_table():
         ("POST", "/admin/scan-pdf"): (10, 300, "ip"), ("POST", "/admin/scan-pdf/ocr-job"): (10, 300, "ip"),
         ("POST", "/admin/scan-pdf/estimate"): (20, 300, "ip"), ("POST", "/admin/mock-test-scan"): (5, 300, "ip"),
         ("POST", "/chat-alternate-method"): (20, 60, "device"),
+        ("GET", "/guest-usage-status"): (30, 60, "device"),
     }
     found = {}
     for route in server.app.routes:
@@ -347,6 +381,80 @@ def test_sweep_and_cap(client):
         reset()
 
 
+TOKENS_PER_ANSWER = 6000
+
+
+async def fake_stream_response(*args):
+    """Stands in for server.stream_response: bills one answer the way the real streaming helpers
+    do -- from a task spawned mid-stream -- so the guest's device must reach it via the context."""
+    user_id, ip = args[7], args[10]
+    task = asyncio.create_task(server.log_token_usage(user_id, TOKENS_PER_ANSWER, ip))
+    yield "ok"
+    await task
+
+
+def test_guest_budget(client, fake):
+    print("\n# guest daily budget: per device, plus 280,000 tokens per IP per IST day")
+    original_stream = server.stream_response
+    server.stream_response = fake_stream_response
+    today = server._ist_today()
+    ask = lambda *headers: client.post("/chat", json={"text": "what is osmosis"}, headers=at(*headers[1:], device=headers[0]) if headers[0] else at(*headers[1:]))
+    try:
+        reset()
+        dev_a, dev_b, dev_c = new_device(), new_device(), new_device()
+        got = [ask(dev_a, IP1).status_code for _ in range(4)]
+        check("device A: 3 answers (18,000 tokens > 14,000), the 4th is 402", got == [200, 200, 200, 402], str(got))
+        r = ask(dev_a, IP1)
+        check("...with the log-in message and a 24h retry", r.json()["detail"]["message"].startswith("Guest limit reached")
+              and 86000 < r.json()["detail"]["retry_after_seconds"] <= 86400, r.text)
+        check("tokens billed to device A's row from inside the stream", fake.tokens("guest_device_usage_log", dev_a) == 18000,
+              str(fake.tokens("guest_device_usage_log", dev_a)))
+        check("device B on the same IP still gets answers", ask(dev_b, IP1).status_code == 200)
+        check("the IP row adds up every guest on it (A + B)", fake.tokens("guest_usage_log", IP1) == 24000, str(fake.tokens("guest_usage_log", IP1)))
+
+        fake.row("guest_usage_log", IP1, today)["tokens_used"] = server.GUEST_IP_DAILY_CEILING
+        r = ask(dev_c, IP1)
+        secs = server._seconds_until_ist_midnight()
+        check("IP at 280,000 today: a brand-new device on it is 402 until IST midnight",
+              r.status_code == 402 and abs(r.json()["detail"]["retry_after_seconds"] - secs) <= 2, r.text)
+        check("a new device on another IP is unaffected", ask(new_device(), IP2).status_code == 200)
+        r = client.post("/chat", json={"text": "what is osmosis"}, headers=at(IP1, AUTH_A, device=dev_c))
+        check("a logged-in student on that IP is unaffected (own account budget)", r.status_code == 200, r.text)
+        check("...and billed to the account, not the guest rows", fake.tokens("usage_log", UID_A) == TOKENS_PER_ANSWER
+              and fake.tokens("guest_device_usage_log", dev_c) == 0)
+
+        ip3 = "192.0.2.33"
+        got = [ask(None, ip3).status_code for _ in range(4)]
+        check("no device id (old client): the IP's own 14,000 budget, as before", got == [200, 200, 200, 402], str(got))
+        check("...billed to the IP row only", fake.tokens("guest_usage_log", ip3) == 18000
+              and not [k for k in fake.rows if k[0] == "guest_device_usage_log" and k[1] == ip3])
+
+        print("\n# /guest-usage-status")
+        s = client.get("/guest-usage-status", headers=at(IP2, device=dev_a)).json()
+        check("device A: its own usage and cooldown (from any IP)", s["tokens_used"] == 18000 and s["retry_after_seconds"] > 86000, str(s))
+        s = client.get("/guest-usage-status", headers=at(IP1, device=new_device())).json()
+        check("fresh device on an IP past the ceiling: shown as used up until midnight",
+              s["tokens_used"] == server.DAILY_TOKEN_BUDGET_GUEST and abs(s["retry_after_seconds"] - secs) <= 2, str(s))
+        s = client.get("/guest-usage-status", headers=at(IP2, device=new_device())).json()
+        check("fresh device on a normal IP: nothing used", s == {"tokens_used": 0, "budget": 14000, "retry_after_seconds": None}, str(s))
+        s = client.get("/guest-usage-status", headers=at(ip3)).json()
+        check("no device id: the IP row", s["tokens_used"] == 18000 and s["retry_after_seconds"] > 86000, str(s))
+
+        print("\n# /merge-guest-usage")
+        before_b = fake.tokens("guest_device_usage_log", dev_b)
+        r = client.post("/merge-guest-usage", json={"user_id": "ignored"}, headers=at(IP1, AUTH_B, device=dev_a))
+        check("merges only this device's usage into the account", r.json() == {"merged": 18000}
+              and fake.tokens("usage_log", UID_B) == 18000, f"{r.text} {fake.tokens('usage_log', UID_B)}")
+        check("device row zeroed, other devices on the IP untouched, IP total kept",
+              fake.tokens("guest_device_usage_log", dev_a) == 0 and fake.tokens("guest_device_usage_log", dev_b) == before_b
+              and fake.tokens("guest_usage_log", IP1) == server.GUEST_IP_DAILY_CEILING)
+        r = client.post("/merge-guest-usage", json={"user_id": "x"}, headers=at(IP1, device=dev_b))
+        check("no login token -> 401", r.status_code == 401)
+    finally:
+        server.stream_response = original_stream
+        reset()
+
+
 def test_cors(client):
     print("\n# CORS preflight allows X-Device-Id from the website")
     r = client.options("/chat", headers={"Origin": "https://neet-ai-jet.vercel.app", "Access-Control-Request-Method": "POST",
@@ -371,6 +479,7 @@ if __name__ == "__main__":
     test_admin(tc)
     test_backstop(tc, fake)
     test_sweep_and_cap(tc)
+    test_guest_budget(tc, fake)
     test_cors(tc)
     print(f"\nTOTAL: {len(_passed)} passed, {len(_failed)} failed")
     sys.exit(1 if _failed else 0)

@@ -7,6 +7,7 @@ from typing import Optional, List, Dict, Union
 from collections import OrderedDict
 from contextlib import asynccontextmanager
 import asyncio
+import contextvars
 from concurrent.futures import ThreadPoolExecutor
 import anthropic
 import requests
@@ -1113,8 +1114,8 @@ ADMIN_MAX_ATTEMPTS = 3
 ADMIN_COOLDOWN_SECONDS = 300  # 5 minutes
 _admin_login_attempts = {}  # ip -> {"count": int, "blocked_until": float}
 
-# Client IP: the one source for the admin 3-strike lockout, every per-IP rate limit, the guest daily
-# token budget (guest_usage_log is keyed on it), media_doubt_log.ip and session location lookups.
+# Client IP: the one source for the admin 3-strike lockout, every per-IP rate limit and ceiling, the
+# per-IP guest token total (guest_usage_log), media_doubt_log.ip and session location lookups.
 #
 # TRUSTED_PROXY_COUNT = how many proxies sit in front of this app.
 #   0   -> no proxy (e.g. local dev): use the socket peer and ignore every forwarding header.
@@ -1935,6 +1936,16 @@ DAILY_TOKEN_BUDGET_GUEST = 14000  # ~2.5 doubts/day -- deliberately tight vs. th
                                   # allowance, so a guest could never get a single answer, ever.
                                   # This is 2.5 * the same measured ~5470 tokens/doubt, keeping the
                                   # same ratio to the free tier's budget as before.
+# Guests are budgeted per device (guest_device_usage_log, keyed on X-Device-Id) since carrier NAT
+# shares one IP between many students. guest_usage_log still adds up every guest token per IP, and
+# once an IP reaches this many in an IST day no guest on it gets a new answer until IST midnight --
+# the bound on what inventing device ids can get one IP (20 guests' worth, roughly $0.10-0.30 at
+# 2026-10 provider prices). Guests without a valid device id keep the old per-IP 14,000 budget.
+GUEST_IP_DAILY_CEILING = 20 * DAILY_TOKEN_BUDGET_GUEST
+# The guest's device id for this request, for the budget checks and usage logging below. Set by
+# each AI endpoint (_guest_device.set) rather than threaded through every streaming helper's
+# arguments next to `ip`; asyncio copies it into the tasks those helpers spawn.
+_guest_device = contextvars.ContextVar("guest_device", default="")
 
 # usage_log/guest_usage_log stay keyed by (id, usage_date) exactly as before -- tokens_used still
 # resets to 0 on a fresh calendar day. What changed is WHEN a block clears: previously that was
@@ -2100,15 +2111,31 @@ async def enforce_daily_budget(user_id: str, ip: str = ""):
         if remaining is not None:
             raise HTTPException(status_code=402, detail={"message": "Daily limit reached", "retry_after_seconds": remaining})
         return
-    # Guest (no account): tracked by IP instead, in a separate table -- an IP is a much weaker
-    # identity than a user_id (shared behind NAT/campus wifi, changes on mobile networks), so
-    # this is approximate, not airtight. Good enough to nudge toward logging in, which is the
-    # actual goal here, not perfect anti-abuse.
+    # Guest (no account): per device, plus the per-IP daily ceiling (see GUEST_IP_DAILY_CEILING).
+    # Approximate, not airtight -- the goal is to nudge toward logging in, not perfect anti-abuse.
     if not ip:
         return
-    remaining = await _check_rolling_cooldown("guest_usage_log", "ip", ip, DAILY_TOKEN_BUDGET_GUEST)
+    remaining = await _guest_cooldown_seconds(_guest_device.get(), _ip_key(ip))
     if remaining is not None:
         raise HTTPException(status_code=402, detail={"message": "Guest limit reached — log in to continue", "retry_after_seconds": remaining})
+
+async def _guest_ip_tokens_today(ip_key: str) -> int:
+    today, _, rows_by_date = await _fetch_usage_rows("guest_usage_log", "ip", ip_key)
+    return rows_by_date[today]["tokens_used"] if today in rows_by_date else 0
+
+async def _guest_cooldown_seconds(device: str, ip_key: str) -> "int | None":
+    """Seconds until this guest may ask again, or None. With a device id: the device's own rolling
+    24h budget, and the IP's daily total against GUEST_IP_DAILY_CEILING (clears at IST midnight).
+    Without one (old clients): the IP's rolling 24h budget, as before devices were tracked."""
+    if not device:
+        return await _check_rolling_cooldown("guest_usage_log", "ip", ip_key, DAILY_TOKEN_BUDGET_GUEST)
+    remaining, ip_tokens = await asyncio.gather(
+        _check_rolling_cooldown("guest_device_usage_log", "device_id", device, DAILY_TOKEN_BUDGET_GUEST),
+        _guest_ip_tokens_today(ip_key),
+    )
+    if remaining is None and ip_tokens >= GUEST_IP_DAILY_CEILING:
+        remaining = _seconds_until_ist_midnight()
+    return remaining
 
 async def log_token_usage(user_id: str, tokens: int, ip: str = ""):
     # check-then-log (enforce_daily_budget then this) is not atomic -- a handful of concurrent
@@ -2125,10 +2152,19 @@ async def log_token_usage(user_id: str, tokens: int, ip: str = ""):
                 json={"p_user_id": user_id, "p_date": _ist_today(), "p_tokens": tokens}
             )
         elif ip:
-            await async_client.post(
+            # The IP row is the per-IP total (GUEST_IP_DAILY_CEILING), so it counts every guest;
+            # the device row is that guest's own budget.
+            calls = [async_client.post(
                 f"{SUPABASE_URL}/rest/v1/rpc/increment_guest_usage", headers=ADMIN_HEADERS,
-                json={"p_ip": ip, "p_date": _ist_today(), "p_tokens": tokens}
-            )
+                json={"p_ip": _ip_key(ip), "p_date": _ist_today(), "p_tokens": tokens}
+            )]
+            device = _guest_device.get()
+            if device:
+                calls.append(async_client.post(
+                    f"{SUPABASE_URL}/rest/v1/rpc/increment_guest_device_usage", headers=ADMIN_HEADERS,
+                    json={"p_device_id": device, "p_date": _ist_today(), "p_tokens": tokens}
+                ))
+            await asyncio.gather(*calls)
     except Exception:
         pass  # never let logging failure break a response the student already received
 
@@ -5581,6 +5617,7 @@ async def stream_solve_response_with_diagram(req: SolveRequest, cached_solution,
 @app.post("/solve")
 async def solve_question(req: SolveRequest, request: Request, _: None = Depends(rate_limit(15, 60, by="account")), verified_user_id: str = Depends(_get_verified_user_id)):
     ip = _client_ip(request)
+    _guest_device.set(_device_id(request))
     # Overwritten in place (not a separate variable) so every downstream read of req.user_id --
     # including inside stream_solve_response_with_diagram, which takes the whole `req` object and
     # reads req.user_id itself -- picks up the verified identity with no further changes needed.
@@ -5630,6 +5667,7 @@ async def send_otp(req: PhoneOtpRequest, request: Request, _: None = Depends(_ra
 @app.post("/chat")
 async def chat(message: Message, request: Request, _: None = Depends(rate_limit(15, 60, by="account")), verified_user_id: str = Depends(_get_verified_user_id)):
     ip = _client_ip(request)
+    _guest_device.set(_device_id(request))
     # Same reasoning as /solve: overwritten in place so every downstream use (budget check, PDF
     # tier limits, stream_response and everything it threads this into) uses the verified
     # identity. "" correctly falls through to the existing guest path, unchanged.
@@ -5675,6 +5713,7 @@ def _clean_title(raw: str, fallback: str = "New Chat") -> str:
 @app.post("/title")
 async def generate_title(message: Message, request: Request, _: None = Depends(rate_limit(15, 60, by="account")), verified_user_id: str = Depends(_get_verified_user_id)):
     ip = _client_ip(request)
+    _guest_device.set(_device_id(request))
     message.user_id = verified_user_id
     await enforce_daily_budget(message.user_id, ip)
     client = deepseek_client
@@ -5727,6 +5766,7 @@ async def generate_title(message: Message, request: Request, _: None = Depends(r
 @app.post("/summarize-answer")
 async def summarize_answer(req: SummarizeAnswerRequest, request: Request, _: None = Depends(rate_limit(15, 60, by="account")), verified_user_id: str = Depends(_get_verified_user_id)):
     ip = _client_ip(request)
+    _guest_device.set(_device_id(request))
     req.user_id = verified_user_id
     await enforce_daily_budget(req.user_id, ip)
     client = deepseek_client
@@ -5749,22 +5789,36 @@ async def summarize_answer(req: SummarizeAnswerRequest, request: Request, _: Non
     await log_token_usage(req.user_id, response.usage.input_tokens + response.usage.output_tokens, ip)
     return {"summary": response.content[0].text}
 
+def _guest_usage_row_key(request: Request):
+    """(table, column, value) of the caller's own guest budget row: its device's when it sends a
+    valid X-Device-Id, else its IP's (old clients)."""
+    device = _device_id(request)
+    if device:
+        return "guest_device_usage_log", "device_id", device
+    return "guest_usage_log", "ip", _ip_key(_client_ip(request))
+
 # Guests have no Supabase session, so they can't use RLS to read their own usage row the way a
 # logged-in user does (auth.uid() is null for anonymous requests) -- this endpoint is the only
-# way a guest's remaining count can be shown, computed from the server's own view of their IP.
+# way a guest's remaining count can be shown, computed from the server's own view of their
+# device (or IP, for old clients). A device on an IP past GUEST_IP_DAILY_CEILING shows as used up.
 @app.get("/guest-usage-status")
-async def guest_usage_status(request: Request):
-    ip = _client_ip(request)
-    today, yesterday, rows_by_date = await _fetch_usage_rows("guest_usage_log", "ip", ip)
+async def guest_usage_status(request: Request, _: None = Depends(rate_limit(30, 60))):
+    table, column, value = _guest_usage_row_key(request)
+    today, yesterday, rows_by_date = await _fetch_usage_rows(table, column, value)
     used = rows_by_date[today]["tokens_used"] if today in rows_by_date else 0
     retry_after_seconds = _active_cooldown_seconds(today, yesterday, rows_by_date)
+    if column == "device_id" and retry_after_seconds is None:
+        if await _guest_ip_tokens_today(_ip_key(_client_ip(request))) >= GUEST_IP_DAILY_CEILING:
+            used, retry_after_seconds = DAILY_TOKEN_BUDGET_GUEST, _seconds_until_ist_midnight()
     return {"tokens_used": used, "budget": DAILY_TOKEN_BUDGET_GUEST, "retry_after_seconds": retry_after_seconds}
 
 # Called once a session exists (see chat.html on load): folds today's guest usage from this
-# browser's IP into the now-known user's usage_log, so logging in right after exhausting the
-# guest budget doesn't grant a second, separate allowance on top of the real free-tier one.
-# Zeroes the guest row after merging so a repeat call (page refresh, multiple tabs) doesn't
-# double-count -- safe to call on every page load, not just the first one after login.
+# browser's device (or IP, for old clients) into the now-known user's usage_log, so logging in
+# right after exhausting the guest budget doesn't grant a second, separate allowance on top of the
+# real free-tier one. Keyed on the device so a student never inherits other guests' usage from a
+# shared carrier IP. Zeroes the guest row after merging so a repeat call (page refresh, multiple
+# tabs) doesn't double-count -- safe to call on every page load, not just the first one after login.
+# The IP's total in guest_usage_log is left alone: it's only the per-IP ceiling.
 @app.post("/merge-guest-usage")
 async def merge_guest_usage(req: MergeGuestUsageRequest, request: Request, verified_user_id: str = Depends(_get_verified_user_id)):
     # Same IDOR class as /referral/status -- the one real call site only ever fires right after
@@ -5774,19 +5828,19 @@ async def merge_guest_usage(req: MergeGuestUsageRequest, request: Request, verif
     if not verified_user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
     req.user_id = verified_user_id
-    ip = _client_ip(request)
+    table, column, value = _guest_usage_row_key(request)
     today = _ist_today()
     try:
-        rows = http_requests.get(
-            f"{SUPABASE_URL}/rest/v1/guest_usage_log", headers=ADMIN_HEADERS,
-            params={"ip": f"eq.{ip}", "usage_date": f"eq.{today}", "select": "tokens_used", "limit": 1}
-        ).json()
+        rows = (await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/{table}", headers=ADMIN_HEADERS,
+            params={column: f"eq.{value}", "usage_date": f"eq.{today}", "select": "tokens_used", "limit": 1}
+        )).json()
         tokens = rows[0]["tokens_used"] if rows else 0
         if tokens > 0:
             await log_token_usage(req.user_id, tokens)
-            http_requests.patch(
-                f"{SUPABASE_URL}/rest/v1/guest_usage_log", headers=ADMIN_HEADERS,
-                params={"ip": f"eq.{ip}", "usage_date": f"eq.{today}"}, json={"tokens_used": 0}
+            await async_client.patch(
+                f"{SUPABASE_URL}/rest/v1/{table}", headers=ADMIN_HEADERS,
+                params={column: f"eq.{value}", "usage_date": f"eq.{today}"}, json={"tokens_used": 0}
             )
         return {"merged": tokens}
     except Exception as e:
@@ -7920,6 +7974,7 @@ async def solve_alternate_method_endpoint(req: SolveAlternateMethodRequest, requ
     # stops trusting the client's own user_id for token-usage attribution, same IDOR class the
     # /referral/status audit found elsewhere.
     req.user_id = verified_user_id
+    _guest_device.set(_device_id(request))
     if not req.pyq_id or not req.primary_solution:
         return {"alternate_method": ""}
 
