@@ -655,14 +655,7 @@ async function deleteAccount() {
 }
 
 // ---------- Active sessions (Account tab) ----------
-function getDeviceId() {
-  let id = localStorage.getItem('deviceId');
-  if (!id) {
-    id = (crypto.randomUUID ? crypto.randomUUID() : 'dev-' + Date.now() + '-' + Math.random().toString(36).slice(2));
-    localStorage.setItem('deviceId', id);
-  }
-  return id;
-}
+// getDeviceId() comes from api-device.js, loaded by every page that loads this file.
 
 function formatSessionTime(iso) {
   const d = new Date(iso);

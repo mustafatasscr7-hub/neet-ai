@@ -1555,6 +1555,7 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="./api-device.js"></script>
   <script src="./theme.js"></script>
   <script src="./i18n.js"></script>
   <script src="./confirm-modal.js"></script>
@@ -8019,18 +8020,8 @@ function plainTextFromMarkdown(text) {
     }
 
     // ---------- Device-session limit enforcement (Pro=1, Max=2 devices; Free unenforced) ----------
-    // Persisted per-browser, not per-tab/session -- the same physical device+browser keeps the
-    // same id across reloads and logins, so a routine page refresh never looks like a new device
-    // to the server. Deliberately just a random UUID (not real fingerprinting): proportionate for
-    // "stop 3 people sharing one paid account", not a security boundary.
-    function getDeviceId() {
-      let id = localStorage.getItem('deviceId');
-      if (!id) {
-        id = (crypto.randomUUID ? crypto.randomUUID() : 'dev-' + Date.now() + '-' + Math.random().toString(36).slice(2));
-        localStorage.setItem('deviceId', id);
-      }
-      return id;
-    }
+    // getDeviceId() comes from api-device.js: one id per browser, kept across reloads and logins,
+    // so a routine page refresh never looks like a new device to the server.
 
     // Light, best-effort UA parsing purely for the student to recognize their own devices in the
     // warning message -- not used for anything security-relevant, so it doesn't need to be exact.
