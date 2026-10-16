@@ -358,6 +358,10 @@
     }
     .sessions-logout-btn:hover { background: rgba(239, 68, 68, 0.1); }
     .sessions-logout-btn:disabled { opacity: 0.5; cursor: default; background: transparent; }
+    /* Locations come from DB-IP's free database, whose CC BY 4.0 licence asks for this link
+       wherever its results are shown (server.py _lookup_session_location). */
+    .sessions-attribution { margin-top: 8px; font-size: 11px; color: #666; }
+    .sessions-attribution a { color: inherit; text-decoration: underline; }
 
     /* Below ~620px there's no honest way to keep 5 columns readable, so the table becomes a
        stack of label/value cards instead -- same data, no cramped truncation. */
@@ -8282,6 +8286,7 @@ function plainTextFromMarkdown(text) {
               </div>
             `).join('')}
           </div>
+          <div class="sessions-attribution"><a href="https://db-ip.com" target="_blank" rel="noopener">IP Geolocation by DB-IP</a></div>
         `;
       } catch (e) {
         container.innerHTML = `<div style="font-size:13px;color:#555;padding:16px 0;">Couldn't load sessions.</div>`;

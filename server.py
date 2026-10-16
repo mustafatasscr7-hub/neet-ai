@@ -16,11 +16,15 @@ from google import genai
 from google.genai import types as genai_types
 import fitz  # PyMuPDF -- page-count check for PDF tier limits
 from PIL import Image, ImageSequence  # chat image upload -- verify + re-encode real pixel data
+import maxminddb  # DB-IP city database for the Active Sessions location label
 import base64
+import gzip
 import io
 import ipaddress
 import json
 import re
+import shutil
+import tempfile
 import uuid
 from dotenv import load_dotenv
 import os
@@ -68,7 +72,10 @@ async def lifespan(app: FastAPI):
     # real connection.
     await _warm_openai_embedding_connection("boot")
     keepalive_task = asyncio.create_task(_openai_keepalive_loop())
+    # In the background: the ~120 MB download must never delay startup (see _refresh_geoip_db).
+    geoip_task = asyncio.create_task(_geoip_refresh_loop())
     yield
+    geoip_task.cancel()
     keepalive_task.cancel()
     await async_client.aclose()
 
@@ -1482,29 +1489,108 @@ DEVICE_SESSION_GRACE_PERIOD_MINUTES = int(os.environ.get("DEVICE_SESSION_GRACE_P
 def _parse_ts(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
+# ---------- IP -> "City, Region" for the Active Sessions list ----------
+# Looked up on our own server in DB-IP's free "IP to City Lite" database (CC BY 4.0: commercial use
+# allowed with attribution, which is the "IP Geolocation by DB-IP" link under every Active Sessions
+# list and the credit in privacy.html). No IP address is sent anywhere for this -- it replaced
+# ip-api.com, which got every new session's IP over plain HTTP and is free for non-commercial use
+# only. The ~120 MB file is downloaded in the background at startup (Railway's disk doesn't survive
+# a deploy) and re-checked daily for DB-IP's next monthly release. Until it's loaded, or if the
+# download fails, lookups say "Unknown" -- what a failed ip-api call used to give.
+GEOIP_DB_DIR = os.getenv("GEOIP_DB_DIR") or os.path.join(tempfile.gettempdir(), "neet-ai-geoip")
+GEOIP_DB_URL = "https://download.db-ip.com/free/dbip-city-lite-{month}.mmdb.gz"
+GEOIP_REFRESH_SECONDS = 24 * 3600
+_geoip = {"reader": None, "month": None}
+
+def _geoip_months(today=None) -> list:
+    """This month's release first, then last month's (DB-IP publishes early in the month)."""
+    first = (today or datetime.now(timezone.utc).date()).replace(day=1)
+    previous = (first - timedelta(days=1)).replace(day=1)
+    return [first.strftime("%Y-%m"), previous.strftime("%Y-%m")]
+
+async def _download_geoip_db(month: str) -> Optional[str]:
+    """Local path of that month's database, downloading + unpacking it if needed; None if DB-IP
+    hasn't published it (yet). Written to .part files and renamed, so a crash never leaves a
+    half-written database behind."""
+    path = os.path.join(GEOIP_DB_DIR, f"dbip-city-lite-{month}.mmdb")
+    if os.path.exists(path):
+        return path
+    os.makedirs(GEOIP_DB_DIR, exist_ok=True)
+    gz_part = path + ".gz.part"
+    async with async_client.stream("GET", GEOIP_DB_URL.format(month=month), timeout=httpx.Timeout(30, read=120)) as resp:
+        if resp.status_code != 200:
+            return None
+        with open(gz_part, "wb") as f:
+            async for chunk in resp.aiter_bytes(1 << 20):
+                f.write(chunk)
+    def unpack():
+        with gzip.open(gz_part, "rb") as src, open(path + ".part", "wb") as dst:
+            shutil.copyfileobj(src, dst, 1 << 20)
+        os.replace(path + ".part", path)
+        os.remove(gz_part)
+    await asyncio.to_thread(unpack)
+    return path
+
+async def _refresh_geoip_db():
+    for month in _geoip_months():
+        if _geoip["month"] == month:
+            return
+        try:
+            path = await _download_geoip_db(month)
+        except Exception as e:
+            print(f"GEOIP DOWNLOAD FAILED ({month}): {e}", flush=True)
+            continue
+        if not path:
+            continue
+        try:
+            reader = await asyncio.to_thread(maxminddb.open_database, path)
+        except Exception as e:
+            print(f"GEOIP DATABASE UNREADABLE ({month}), deleting it: {e}", flush=True)
+            os.remove(path)
+            continue
+        old = _geoip["reader"]
+        _geoip.update(reader=reader, month=month)
+        if old:
+            old.close()
+        for name in os.listdir(GEOIP_DB_DIR):
+            if name.startswith("dbip-city-lite-") and month not in name:
+                try:
+                    os.remove(os.path.join(GEOIP_DB_DIR, name))
+                except OSError:
+                    pass
+        print(f"GEOIP: using DB-IP City Lite {month}", flush=True)
+        return
+
+async def _geoip_refresh_loop():
+    while True:
+        try:
+            await _refresh_geoip_db()
+        except Exception as e:
+            print(f"GEOIP REFRESH ERROR: {e}", flush=True)
+        await asyncio.sleep(GEOIP_REFRESH_SECONDS)
+
 async def _lookup_session_location(ip: str) -> str:
-    """Best-effort "City, Region" label for the Active Sessions list. Free, keyless lookup
-    (ip-api.com) with a short timeout -- called only once per session (new device, or a fresh
-    relogin on a previously-kicked one), never on routine heartbeats, since the result is cached
-    on the row. Any failure (timeout, private/local IP during dev, service error) degrades to
-    "Unknown" rather than ever blocking or failing the login/heartbeat itself."""
-    if not ip or ip in ("unknown", "127.0.0.1", "localhost", "::1") or ip.startswith(("10.", "192.168.", "172.")):
+    """Best-effort "City, Region" label for the Active Sessions list, from the local DB-IP database
+    above -- an in-memory lookup, no network call. Called only once per session (new device, or a
+    fresh relogin on a previously-kicked one), never on routine heartbeats, since the result is
+    cached on the row. Anything unusable (database not loaded yet, private/local IP during dev, an
+    IP DB-IP doesn't know) degrades to "Unknown" rather than ever failing the login/heartbeat."""
+    reader = _geoip["reader"]
+    if not reader or not ip:
         return "Unknown"
     try:
-        resp = await async_client.get(
-            f"http://ip-api.com/json/{ip}",
-            params={"fields": "status,city,regionName"},
-            timeout=3.0
-        )
-        data = resp.json()
-        if data.get("status") != "success":
+        if not ipaddress.ip_address(ip).is_global:
             return "Unknown"
-        city = data.get("city") or ""
-        region = data.get("regionName") or ""
-        label = ", ".join(p for p in (city, region) if p)
-        return label or "Unknown"
+        record = reader.get(ip) or {}
     except Exception:
         return "Unknown"
+    city = ((record.get("city") or {}).get("names") or {}).get("en") or ""
+    # DB-IP sometimes names a neighbourhood too, "Navi Mumbai (Ghansoli)" -- the city is enough.
+    city = re.sub(r"\s*\([^)]*\)\s*$", "", city)
+    subdivisions = record.get("subdivisions") or [{}]
+    region = ((subdivisions[0] or {}).get("names") or {}).get("en") or ""
+    label = ", ".join(p for p in (city, region) if p)
+    return label or "Unknown"
 
 async def _expire_due_grace_periods(rows: list) -> list:
     """Any row whose grace period has passed but isn't marked kicked yet gets kicked_at set now

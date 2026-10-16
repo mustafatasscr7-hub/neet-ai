@@ -683,9 +683,11 @@ async function renderActiveSessions() {
   const { data: { session } } = await client.auth.getSession();
   if (!session) return;
   try {
+    // Bearer required since /session/list stopped trusting the body's user_id (2026-10-07) --
+    // without it this list was always empty on every page but chat.html (which has its own copy).
     const res = await fetch(`${API_BASE}/session/list`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
       body: JSON.stringify({ user_id: session.user.id, device_id: getDeviceId() })
     });
     const data = await res.json();
@@ -717,6 +719,7 @@ async function renderActiveSessions() {
           </div>
         `).join('')}
       </div>
+      <div class="sessions-attribution"><a href="https://db-ip.com" target="_blank" rel="noopener">IP Geolocation by DB-IP</a></div>
     `;
   } catch (e) {
     container.innerHTML = `<div style="font-size:13px;color:#555;padding:16px 0;">Couldn't load sessions.</div>`;
@@ -730,7 +733,7 @@ async function logoutSession(targetDeviceId, btn) {
   try {
     const res = await fetch(`${API_BASE}/session/logout`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
       body: JSON.stringify({ user_id: session.user.id, target_device_id: targetDeviceId })
     });
     if (!res.ok) throw new Error('logout failed');
