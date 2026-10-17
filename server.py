@@ -2348,20 +2348,35 @@ NCERT_NON_CHAPTER_LABELS = {"Preliminary Pages", "Appendix", "Answer Key"}
 # content. This is the fix: compute the real number here, server-side, from data we already
 # trust, so the model's job in the "Chapter:" line becomes "copy this string" instead of
 # "recall this number" -- see _ncert_chapter_citation and its call site in stream_response().
+# Biology and Chemistry follow the rationalised NCERT books (2023-24 onwards, current for 2026-27)
+# -- the same editions as the PDFs in ncert-pdfs/ that ncert_content was built from. Chapters the
+# rationalisation dropped (Transport in Plants, The Solid State, ...) are left out, so their
+# numbers can't shift the real ones; test_syllabus_numbering.py pins a few known positions.
 NEET_SYLLABUS = {
     "Biology": {
-        11: ['The Living World', 'Biological Classification', 'Plant Kingdom', 'Animal Kingdom', 'Morphology of Flowering Plants', 'Anatomy of Flowering Plants', 'Structural Organisation in Animals', 'Cell: The Unit of Life', 'Biomolecules', 'Cell Cycle and Cell Division', 'Transport in Plants', 'Mineral Nutrition', 'Photosynthesis in Higher Plants', 'Respiration in Plants', 'Plant Growth and Development', 'Digestion and Absorption', 'Breathing and Exchange of Gases', 'Body Fluids and Circulation', 'Excretory Products and their Elimination', 'Locomotion and Movement', 'Neural Control and Coordination', 'Chemical Coordination and Integration'],
-        12: ['Reproduction in Organisms', 'Sexual Reproduction in Flowering Plants', 'Human Reproduction', 'Reproductive Health', 'Principles of Inheritance and Variation', 'Molecular Basis of Inheritance', 'Evolution', 'Human Health and Disease', 'Strategies for Enhancement in Food Production', 'Microbes in Human Welfare', 'Biotechnology: Principles and Processes', 'Biotechnology and its Applications', 'Organisms and Populations', 'Ecosystem', 'Biodiversity and Conservation', 'Environmental Issues']
+        11: ['The Living World', 'Biological Classification', 'Plant Kingdom', 'Animal Kingdom', 'Morphology of Flowering Plants', 'Anatomy of Flowering Plants', 'Structural Organisation in Animals', 'Cell: The Unit of Life', 'Biomolecules', 'Cell Cycle and Cell Division', 'Photosynthesis in Higher Plants', 'Respiration in Plants', 'Plant Growth and Development', 'Breathing and Exchange of Gases', 'Body Fluids and Circulation', 'Excretory Products and their Elimination', 'Locomotion and Movement', 'Neural Control and Coordination', 'Chemical Coordination and Integration'],
+        12: ['Sexual Reproduction in Flowering Plants', 'Human Reproduction', 'Reproductive Health', 'Principles of Inheritance and Variation', 'Molecular Basis of Inheritance', 'Evolution', 'Human Health and Disease', 'Microbes in Human Welfare', 'Biotechnology: Principles and Processes', 'Biotechnology and its Applications', 'Organisms and Populations', 'Ecosystem', 'Biodiversity and Conservation']
     },
     "Physics": {
         11: ['Units and Measurements', 'Motion in a Straight Line', 'Motion in a Plane', 'Laws of Motion', 'Work, Energy and Power', 'System of Particles and Rotational Motion', 'Gravitation', 'Mechanical Properties of Solids', 'Mechanical Properties of Fluids', 'Thermal Properties of Matter', 'Thermodynamics', 'Kinetic Theory', 'Oscillations', 'Waves', 'Mathematical Tools'],
         12: ['Electric Charges and Fields', 'Electrostatic Potential and Capacitance', 'Current Electricity', 'Moving Charges and Magnetism', 'Magnetism and Matter', 'Electromagnetic Induction', 'Alternating Current', 'Electromagnetic Waves', 'Ray Optics and Optical Instruments', 'Wave Optics', 'Dual Nature of Radiation and Matter', 'Atoms', 'Nuclei', 'Semiconductor Electronics: Materials, Devices and Simple Circuits']
     },
     "Chemistry": {
-        11: ['Some Basic Concepts of Chemistry', 'Structure of Atom', 'Classification of Elements and Periodicity in Properties of Elements', 'Chemical Bonding and Molecular Structure', 'States of Matter: Gases and Liquids', 'Thermodynamics', 'Equilibrium', 'Redox Reactions', 'Hydrogen', 'The s-Block Elements (Alkali and Alkaline Earth Metals)', 'The p-Block Elements', 'Organic Chemistry: Some Basic Principles and Techniques', 'Hydrocarbons', 'Environmental Chemistry'],
-        12: ['The Solid State', 'Solutions', 'Electrochemistry', 'Chemical Kinetics', 'Surface Chemistry', 'General Principles and Processes of Isolation of Elements', 'The p-Block Elements', 'The d and f Block Elements', 'Coordination Compounds', 'Haloalkanes and Haloarenes', 'Alcohols, Phenols and Ethers', 'Aldehydes, Ketones and Carboxylic Acids', 'Amines', 'Biomolecules', 'Polymers', 'Chemistry in Everyday Life']
+        11: ['Some Basic Concepts of Chemistry', 'Structure of Atom', 'Classification of Elements and Periodicity in Properties of Elements', 'Chemical Bonding and Molecular Structure', 'Thermodynamics', 'Equilibrium', 'Redox Reactions', 'Organic Chemistry: Some Basic Principles and Techniques', 'Hydrocarbons'],
+        12: ['Solutions', 'Electrochemistry', 'Chemical Kinetics', 'The d and f Block Elements', 'Coordination Compounds', 'Haloalkanes and Haloarenes', 'Alcohols, Phenols and Ethers', 'Aldehydes, Ketones and Carboxylic Acids', 'Amines', 'Biomolecules']
     }
 }
+
+# The chapters the rationalisation dropped. ncert_content still has one of them (Transport in
+# Plants, English + Hindi), and fuzzy_match_chapter would cite it under a neighbour's number
+# (Respiration in Plants, Ch 12) -- these get a numberless citation instead.
+NCERT_DROPPED_CHAPTERS = {c.lower() for c in [
+    'Transport in Plants', 'Mineral Nutrition', 'Digestion and Absorption', 'Reproduction in Organisms',
+    'Strategies for Enhancement in Food Production', 'Environmental Issues', 'States of Matter: Gases and Liquids',
+    'Hydrogen', 'The s-Block Elements (Alkali and Alkaline Earth Metals)', 'The p-Block Elements', 'Environmental Chemistry',
+    'The Solid State', 'Surface Chemistry', 'General Principles and Processes of Isolation of Elements', 'Polymers',
+    'Chemistry in Everyday Life',
+]}
 
 # ---------------- Diagram matching (chat.html doubt-solving) ----------------
 # The SYSTEM_PROMPT instructs the model to include a line like "📚 Chapter: NCERT Class X,
@@ -2777,6 +2792,8 @@ def _ncert_chapter_citation(subject: str, class_num, chapter_name: str, lookup_n
     if not chapters:
         return f"NCERT Class {class_key}, {subject} — {chapter_name}"
     norm = lookup_name.strip().lower()
+    if norm in NCERT_DROPPED_CHAPTERS:
+        return f"NCERT Class {class_key}, {subject} — {chapter_name}"
     match = next((c for c in chapters if c.strip().lower() == norm), None) or fuzzy_match_chapter(lookup_name, chapters)
     if match:
         return f"NCERT Class {class_key}, Chapter {chapters.index(match) + 1} — {chapter_name}"
