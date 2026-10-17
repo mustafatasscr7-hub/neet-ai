@@ -12,6 +12,8 @@ every model call is a fake, and the peak-hour clock is patched.
 4. Budget fairness: cached input never counts, on Qwen or DeepSeek.
 5. Hinglish on Qwen: call-time guard, and a bare "DOUBT_TYPE: conversational" retries on Qwen.
 6. Hindi answers get a 1,400-token cap; any cap hit is logged and kept out of the caches.
+7. (batch 2) Earlier AI answers in chat history are cut to ~600 characters.
+8. (batch 2) End-of-chapter exercise lists are kept out of NCERT context.
 """
 import asyncio
 import io
@@ -110,13 +112,13 @@ class Harness:
         self._saved = {n: getattr(server, n) for n in names}
 
         async def fake_qwen(system, messages, user_id, ip, endpoint, billing_context=None, max_tokens=1024):
-            h.calls.append(SimpleNamespace(model="qwen", system=system, max_tokens=max_tokens, endpoint=endpoint))
+            h.calls.append(SimpleNamespace(model="qwen", system=system, messages=messages, max_tokens=max_tokens, endpoint=endpoint))
             if billing_context is not None:
                 billing_context.update(h.qwen_flags)
             yield h.qwen_outputs.pop(0)
 
         async def fake_deepseek(system, messages, user_id, ip, is_peak, endpoint, billing_context=None, max_tokens=1024):
-            h.calls.append(SimpleNamespace(model="deepseek", system=system, max_tokens=max_tokens, endpoint=endpoint))
+            h.calls.append(SimpleNamespace(model="deepseek", system=system, messages=messages, max_tokens=max_tokens, endpoint=endpoint))
             if billing_context is not None:
                 billing_context.update(h.deepseek_flags)
             yield h.deepseek_outputs.pop(0)
@@ -656,6 +658,117 @@ def test_hindi_cap():
         check("English /solve -> 1024", h.calls[0].max_tokens == 1024)
 
 
+# ---------- 7. history: earlier AI answers capped at ~600 characters (batch 2) ----------
+
+LONG_ANSWER = ("NEET Importance: 4/5\n\n📚 Chapter: NCERT Class 11, Chapter 11 — Transport in Plants\n\nAnswer:\n"
+               + "\n".join(f"- Point {i}: osmosis moves water from higher to lower water potential across a membrane." for i in range(1, 15))
+               + "\n\nKey Points:\n- The last key point about turgor pressure.")
+
+
+def test_history_cap():
+    print("\n[7] earlier AI answers capped in history")
+    cap = server._cap_history_answer
+    check("short answer unchanged", cap("Osmosis is diffusion of water.") == "Osmosis is diffusion of water.")
+    capped = cap(LONG_ANSWER)
+    body = capped[:-len(server._HISTORY_ANSWER_CUT_NOTE)]
+    check("long answer cut to <= 600 chars + a note", capped.endswith(server._HISTORY_ANSWER_CUT_NOTE) and len(body) <= 600, len(body))
+    check("cut on a line boundary (no half bullet)", LONG_ANSWER.startswith(body) and LONG_ANSWER[len(body)] == "\n")
+    check("keeps the start of the answer", body.startswith("NEET Importance: 4/5"))
+    no_break = "word " * 200
+    check("no line break -> cut on a space", cap(no_break)[:-len(server._HISTORY_ANSWER_CUT_NOTE)].endswith("word"))
+    long_question = "Explain " + "osmosis " * 120
+    history = [{"role": "user", "text": long_question}, {"role": "ai", "text": LONG_ANSWER}]
+    with Harness(deepseek_outputs=[GOOD]) as h:
+        chat("explain point 2 again", history=history)
+        msgs = h.calls[0].messages
+        check("student's own earlier message is never cut", msgs[0]["content"] == long_question)
+        check("earlier AI answer is capped in what the model sees", msgs[1]["content"] == capped)
+        check("current question untouched", msgs[-1]["content"].endswith("Student Question: explain point 2 again"))
+
+
+# ---------- 8. end-of-chapter exercise lists kept out of NCERT context (batch 2) ----------
+
+EN_EXERCISE_LIST = ("EXERCISES 1.What do you think is the significance of reproductive health in a society? "
+                    "2.Suggest the aspects of reproductive health which need to be given special attention in the present scenario. "
+                    "3.Is sex education necessary in schools? Why? 4.Do you think that reproductive health in our country has improved "
+                    "in the past 50 years? If yes, mention some such areas of improvement. 5.What are the suggested reasons for population "
+                    "explosion? 6.Is the use of contraceptives justified? Give reasons.")
+EN_CONTINUATION = ("of male accessory ducts and glands? 12. What is oogenesis? Give a brief account of oogenesis. 13. Draw a labelled "
+                   "diagram of a section through ovary. 14. Draw a labelled diagram of a Graafian follicle? 15. Name the functions of the "
+                   "following: (a) Corpus luteum (b) Endometrium (c) Acrosome (d) Sperm tail 16. Identify True/False statements.")
+EN_CONTENT = ("Osmosis is the diffusion of water across a semi-permeable membrane. The net direction and rate of osmosis depends on "
+              "both the pressure gradient and concentration gradient. Water will move from its region of higher chemical potential "
+              "to its region of lower chemical potential until equilibrium is reached. At equilibrium the two chambers should have "
+              "the same water potential. Plant cells placed in a hypertonic solution lose water and the protoplast shrinks away "
+              "from the cell wall, which is called plasmolysis.")
+EN_MIXED = EN_CONTENT + " " + EN_EXERCISE_LIST
+EN_TOC = ("CHAPTER TWO MOTION IN A STRAIGHT LINE 2.1 Introduction 2.2 Instantaneous velocity and speed 2.3 Acceleration "
+          "2.4 Kinematic equations for uniformly accelerated motion Summary Points to ponder Exercises2.1 INTRODUCTION Motion is "
+          "common to everything in the universe. We walk, run and ride a bicycle.")
+EN_WORKED_EXAMPLE = ("Example 2.3 A ball is thrown vertically upwards with a velocity of 20 m s–1 from the top of a building. "
+                     "The height of the point from where the ball is thrown is 25.0 m from the ground. (a) How high will the ball rise? "
+                     "Answer (a) Let us take the y-axis in the vertically upward direction with zero at the ground. Now v = 0 at the "
+                     "maximum height, so using v2 = v02 – 2 a (y – y0) we get 0 = 400 - 20 (y - y0), which gives y – y0 = 20 m.")
+EN_INTEXT_BOX = ("Intext Questions 3.3 For a reaction, A + B -> Product; the rate law is given by r = k [A]1/2 [B]2. What is the "
+                 "order of the reaction? 3.4 The conversion of molecules X to Y follows second order kinetics. If concentration of X "
+                 "is increased to three times how will it affect the rate of formation of Y? " + EN_CONTENT)
+HI_EXERCISE_LIST = ("**अभ्यास** 1. वर्गीकरण की पद्धतियों में समय के साथ आए परिवर्तनों की व्याख्या कीजिए। 2. निम्नलिखित के बारे में आर्थिक "
+                    "दृष्टि से दो महत्वपूर्ण उपयोगों को लिखिए। 3. डाइऐटम की कोशिका भित्ति के क्या लक्षण हैं? 4. शैवाल पुष्पन तथा "
+                    "लाल तरंगें क्या दर्शाती हैं? 5. वाइरस से विरोज़्ड कैसे भिन्न होते हैं?")
+HI_CONTENT = ("परासरण वह प्रक्रिया है जिसमें जल के अणु अर्धपारगम्य झिल्ली के पार उच्च जल विभव वाले क्षेत्र से निम्न जल विभव वाले क्षेत्र "
+              "की ओर गति करते हैं। जब किसी पादप कोशिका को अतिपरासारी विलयन में रखा जाता है, तो जल कोशिका से बाहर निकल जाता है और "
+              "जीवद्रव्य कोशिका भित्ति से सिकुड़कर अलग हो जाता है। इस प्रक्रिया को जीवद्रव्यकुंचन कहते हैं। ")
+HI_WORKED_EXAMPLE = ("इस प्रकार, 1 हर्ट्ज़ = 1 दोलन प्रति सेकंड (13.2) ध्यान दीजिए, आवृत्ति का सदैव ही पूर्णांक होना आवश्यक नहीं है। "
+                     "**उदाहरण 13.1** कोई मानव हृदय एक मिनट में औसतन 75 बार धड़कता है। इसकी आवृत्ति तथा आवर्तकाल परिकलित कीजिए। "
+                     "**हल** हृदय की धड़कन की आवृत्ति = 75/(1 min) = 1.25 s⁻¹ = 1.25 Hz, आवर्तकाल T = 1/1.25 = 0.8 s.")
+
+
+def test_exercise_filter():
+    print("\n[8] exercise-list chunks")
+    t = server._exercise_trim
+    check("EN exercise list -> dropped", t(EN_EXERCISE_LIST, "en") is None)
+    check("EN mid-list continuation (no header) -> dropped", t(EN_CONTINUATION, "en") is None)
+    check("EN content -> unchanged", t(EN_CONTENT, "en") == EN_CONTENT)
+    check("EN content + EXERCISES -> only the exercises cut off", t(EN_MIXED, "en") == EN_CONTENT)
+    check("EN contents list ('Exercises2.1 INTRODUCTION') -> unchanged", t(EN_TOC, "en") == EN_TOC)
+    check("EN worked example with its answer -> unchanged", t(EN_WORKED_EXAMPLE, "en") == EN_WORKED_EXAMPLE)
+    check("EN in-text question box followed by the chapter -> unchanged", t(EN_INTEXT_BOX, "en") == EN_INTEXT_BOX)
+    check("HI exercise list -> dropped", t(HI_EXERCISE_LIST, "hi") is None)
+    check("HI content -> unchanged", t(HI_CONTENT, "hi") == HI_CONTENT)
+    check("HI content + अभ्यास -> only the exercises cut off", t(HI_CONTENT + " " + HI_EXERCISE_LIST, "hi") == HI_CONTENT.rstrip())
+    check("HI worked example ('उदाहरण 13.1', 'ध्यान दीजिए,') -> unchanged", t(HI_WORKED_EXAMPLE, "hi") == HI_WORKED_EXAMPLE)
+    check("too little content before the exercises -> dropped", t("Summary. " + EN_EXERCISE_LIST, "en") is None)
+
+    rows = [
+        {"subject": "Biology", "class": 12, "chapter_name": "Reproductive Health", "language": "en", "content": EN_EXERCISE_LIST, "similarity": 0.80},
+        {"subject": "Biology", "class": 11, "chapter_name": "Transport in Plants", "language": "en", "content": EN_MIXED, "similarity": 0.70},
+        {"subject": "Biology", "class": 11, "chapter_name": "Transport in Plants", "language": "en", "content": EN_CONTENT, "similarity": 0.60},
+        {"subject": "Physics", "class": 11, "chapter_name": "Motion in a Straight Line", "language": "en", "content": EN_WORKED_EXAMPLE, "similarity": 0.55},
+        {"subject": "Physics", "class": 11, "chapter_name": "Motion in a Straight Line", "language": "en", "content": EN_TOC, "similarity": 0.40},
+    ]
+
+    class RpcClient(FakeClient):
+        async def post(self, url, headers=None, json=None, params=None, **kw):
+            self.posts.append(SimpleNamespace(table=_table(url), headers=headers or {}, json=json, params=params or {}))
+            return FakeResp(200, [dict(r) for r in rows])
+
+    async def fake_embedding(text):
+        return [0.0] * 8
+
+    saved = (server.async_client, server.get_embedding, server.NCERT_EXCLUDE_EXERCISES)
+    try:
+        server.async_client, server.get_embedding = RpcClient(), fake_embedding
+        res = asyncio.run(server.search_ncert("what is osmosis in plants"))
+        check("search: exercise list dropped, next chunks fill the 3 slots", [r["similarity"] for r in res] == [0.70, 0.60, 0.55], str([r["similarity"] for r in res]))
+        check("search: mixed chunk's exercise tail cut off", res and res[0]["content"] == EN_CONTENT)
+        check("search: threshold still applies (0.40 TOC chunk not used)", all(r["similarity"] >= server.NCERT_MATCH_THRESHOLD_EN for r in res))
+        server.NCERT_EXCLUDE_EXERCISES = False
+        res = asyncio.run(server.search_ncert("what is osmosis in plants"))
+        check("switch off -> previous behaviour (exercise list first)", [r["similarity"] for r in res] == [0.80, 0.70, 0.60] and res[1]["content"] == EN_MIXED)
+    finally:
+        server.async_client, server.get_embedding, server.NCERT_EXCLUDE_EXERCISES = saved
+
+
 if __name__ == "__main__":
     test_cache_key_and_eligibility()
     test_cache_store_rules()
@@ -668,5 +781,7 @@ if __name__ == "__main__":
     test_new_endpoints_logged()
     test_hinglish()
     test_hindi_cap()
+    test_history_cap()
+    test_exercise_filter()
     print(f"\nTOTAL: {len(_passed)} passed, {len(_failed)} failed")
     sys.exit(1 if _failed else 0)

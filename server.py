@@ -2604,6 +2604,79 @@ async def _match_with_merge_fallback(query: str, embed_fn, search_fn, offtopic_g
             return v_results
     return results
 
+# ---------- End-of-chapter exercise lists in NCERT retrieval ----------
+# 26-28% of the NCERT text retrieval returned for real English doubts was end-of-chapter EXERCISE
+# lists (2026-10-17 audit): question lists with no answers, which ground nothing and cost tokens.
+# Filtered here at query time rather than tagged in ncert_content, because many chunks are mixed --
+# real content followed by the start of the exercises -- and only a query-time filter can keep the
+# content and cut the questions off. Measured on all 8,293 chunks: English drops 78 / trims 26,
+# Hindi drops 125 / trims 7; an independent Gemini check of a fresh sample found every dropped chunk
+# and every removed tail to be questions (59/60 dropped, 27/27 tails; the one exception was half
+# questions), and 26/27 kept heads to be content. Deliberately conservative: some exercise text
+# still gets through rather than ever cutting real content. Set NCERT_EXCLUDE_EXERCISES = False to
+# switch it off.
+NCERT_EXCLUDE_EXERCISES = True
+
+_EXERCISE_EN_ITEM = re.compile(r"(?:(?<=\s)|^)(\d{1,2}(?:\.\d{1,2})?)\s*\.?\s*(?=[A-Z][a-z]|\()")
+_EXERCISE_HI_ITEM = re.compile(r"(?:(?<=\s)|^)(?:\*\*)?([\d०-९]{1,2}(?:\.[\d०-९]{1,2})?)\.?(?:\*\*)?\s+(?=\S)")
+# Numbers that label an example, figure, table or equation are never question numbers.
+_EXERCISE_NOT_A_NUMBER = re.compile(r"(?:Example|Fig\.?|Figure|Table|Eq\.?|Section|Unit|Chapter|उदाहरण|चित्र|सारणी|तालिका|समीकरण|अनुभाग|एकक|अध्याय)\W{0,4}$", re.I)
+# Only the end-of-chapter header starts a cut -- an in-text question box is followed by more of the
+# chapter, so cutting there would throw that away.
+_EXERCISE_EN_HEADER = re.compile(r"(?:ADDITIONAL\s+EXERCISES|EXERCISES)\s{0,3}(?:\*\*)?\s{0,3}(?=\d{1,2}(?:\.\d{1,2})?\s*\.?\s*[A-Z][a-z])", re.I)
+_EXERCISE_HI_HEADER = re.compile(r"(?:\*\*)?\s*(?:अतिरिक्त अभ्यास|अभ्यास)\s*(?:\*\*)?\s{0,3}(?=(?:\*\*)?\s*[\d०-९]{1,2}(?:\.[\d०-९]{1,2})?\s*[.)]?\s)")
+# A numbered item is a question when it asks something ("?") or sets a task: English, a task verb
+# starting a sentence; Hindi, a task verb ending one ("... ज्ञात कीजिए।") -- so "ध्यान दीजिए," (note
+# that) inside an explanation doesn't count.
+_EXERCISE_EN_TASK = re.compile(r"(?:^|[.?:;)]\s+|\s)(?:Explain|Describe|Define|Discuss|Differentiate|Distinguish|Give|Name|Write|List|State|Draw|"
+                               r"Mention|Compare|Suggest|Show|Prove|Derive|Identify|Predict|Arrange|Complete|Fill|Classify|Account|"
+                               r"Illustrate|Calculate|Find|Determine|Estimate|Obtain|Comment|Enumerate|Elaborate|Outline|Justify|"
+                               r"Match|Choose|Select|Prepare|Construct|Indicate|Assign|Sketch|Plot)\b")
+_EXERCISE_HI_TASK = re.compile(r"(?:कीजिए|कीजिये|समझाइए|समझाइये|लिखिए|लिखिये|बताइए|बताइये|दीजिए|दीजिये|पहचानिए|करें|लिखें|बताएँ|बताएं|दें|दर्शाइए)\s*[।|?]")
+
+def _exercise_question_coverage(text: str, lang: str):
+    """(share of the text made of numbered questions, number of them). Each question counts for at
+    most 500 characters, and text before the first number counts when it reads as the tail of a
+    question (a chunk that starts mid-list)."""
+    item_re = _EXERCISE_HI_ITEM if lang == "hi" else _EXERCISE_EN_ITEM
+    task_re = _EXERCISE_HI_TASK if lang == "hi" else _EXERCISE_EN_TASK
+    starts = [m.start() for m in item_re.finditer(text) if not _EXERCISE_NOT_A_NUMBER.search(text[max(0, m.start() - 14):m.start()])]
+    if not starts:
+        return 0.0, 0
+    is_question = lambda seg: "?" in seg[:500] or bool(task_re.search(seg[:500]))
+    questions = [(a, b) for a, b in zip(starts, starts[1:] + [len(text)]) if is_question(text[a:b])]
+    covered = sum(min(b - a, 500) for a, b in questions)
+    lead = text[:starts[0]]
+    if questions and len(lead) < 700 and is_question(lead):
+        covered += len(lead)
+    return covered / max(1, len(text)), len(questions)
+
+def _exercise_trim(content: str, lang: str) -> Optional[str]:
+    """The chunk's text with any end-of-chapter exercise section cut off, unchanged for a normal
+    chunk, or None when the chunk is an exercise list (drop it)."""
+    text = content or ""
+    header = (_EXERCISE_HI_HEADER if lang == "hi" else _EXERCISE_EN_HEADER).search(text)
+    if header:
+        tail_coverage, tail_questions = _exercise_question_coverage(text[header.start():], lang)
+        if tail_questions >= 2 and tail_coverage >= 0.5:
+            kept = text[:header.start()].rstrip()
+            return kept if len(kept) >= 300 else None
+    coverage, questions = _exercise_question_coverage(text, lang)
+    if questions >= 3 and coverage >= 0.5:
+        return None
+    return text
+
+def _without_exercises(rows: list) -> list:
+    if not NCERT_EXCLUDE_EXERCISES:
+        return rows
+    kept = []
+    for r in rows:
+        trimmed = _exercise_trim(r.get("content", ""), "hi" if r.get("language") == "hi" else "en")
+        if trimmed is None:
+            continue
+        kept.append(r if trimmed == r.get("content") else {**r, "content": trimmed})
+    return kept
+
 async def search_ncert(query: str, limit: int = 3):
     # Service-role key: ncert_content's anon SELECT policy was removed (scraping audit,
     # 2026-09-19) since nothing in the frontend reads this table directly anymore -- only this
@@ -2646,7 +2719,10 @@ async def search_ncert(query: str, limit: int = 3):
                 return [], None
             candidates = _filter_results(response.json())
             raw_top_score = candidates[0]["similarity"] if candidates else None
-            real_results = [r for r in candidates if r.get("similarity", 0) >= NCERT_MATCH_THRESHOLD_HI_GEMINI][:limit]
+            # Exercise lists are dropped/trimmed BEFORE the top `limit` are taken, so the next
+            # relevant chunk takes a dropped one's place. raw_top_score stays on the unfiltered list:
+            # it measures whether the doubt is on-topic at all, not which chunks get used.
+            real_results = [r for r in _without_exercises(candidates) if r.get("similarity", 0) >= NCERT_MATCH_THRESHOLD_HI_GEMINI][:limit]
             return real_results, raw_top_score
         # Gate not independently validated against real Hindi query data the way English was --
         # see _OFFTOPIC_GATE_MARGIN -- applied on the same general principle regardless.
@@ -2665,7 +2741,8 @@ async def search_ncert(query: str, limit: int = 3):
                 return [], None
             candidates = _filter_results(response.json())
             raw_top_score = candidates[0]["similarity"] if candidates else None
-            real_results = [r for r in candidates if r.get("similarity", 0) >= NCERT_MATCH_THRESHOLD_EN][:limit]
+            # Same exercise filtering as the Hindi branch above.
+            real_results = [r for r in _without_exercises(candidates) if r.get("similarity", 0) >= NCERT_MATCH_THRESHOLD_EN][:limit]
             return real_results, raw_top_score
         # Gate threshold: NCERT_MATCH_THRESHOLD_EN - _OFFTOPIC_GATE_MARGIN = 0.45 -- see
         # _OFFTOPIC_GATE_MARGIN's own comment for the real 107-query validation behind this one.
@@ -4953,6 +5030,31 @@ async def _refetch_images_as_attachments(refs: list, user_id: str) -> list:
 # its own independent cap via that one and this one is scoped to the text path only.
 _TEXT_HISTORY_MAX_TURNS = 4
 
+# Each earlier AI answer in that window is also cut to ~600 characters (2026-10-17): the follow-up
+# only needs to know what was said, not the whole answer again. Stored answers had a median of
+# ~710 characters, a 90th percentile of ~2,170, and Hindi costs ~2.4x the tokens per character,
+# so a turn-3+ Hindi request carried ~1,500 tokens of history. The student's own messages are
+# never cut. Measured before shipping on real follow-ups (10 questions x 2, DeepSeek, blind
+# judge): answered in context 18/20 capped vs 19/20 full; the one partial was "explain the last
+# key point", whose content sits past the cut. History tokens per earlier answer: English
+# 401 -> 162, Hindi 791 -> 290.
+_HISTORY_ANSWER_MAX_CHARS = 600
+_HISTORY_ANSWER_CUT_NOTE = "\n[...rest of this earlier answer omitted]"
+
+def _cap_history_answer(text: str) -> str:
+    text = text or ""
+    if len(text) <= _HISTORY_ANSWER_MAX_CHARS:
+        return text
+    cut = text[:_HISTORY_ANSWER_MAX_CHARS]
+    # End on a line break if there's one in the last 40% of the window, else on a space, so a
+    # bullet or a word is never sliced in half.
+    line_end = cut.rfind("\n")
+    if line_end >= _HISTORY_ANSWER_MAX_CHARS * 0.6:
+        cut = cut[:line_end]
+    elif cut.rfind(" ") > 0:
+        cut = cut[:cut.rfind(" ")]
+    return cut.rstrip() + _HISTORY_ANSWER_CUT_NOTE
+
 # chat.html/chatStore.tsx are now expected to only ever send a real display name
 # (user_metadata.full_name) as student_name, never the phone/email fallback their own profile UI
 # shows when no display name is set -- but this still guards server-side, since a stale app
@@ -5136,7 +5238,7 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
     # untruncated value for (that one already has its own separate cap, unaffected by this).
     for msg in history[-_TEXT_HISTORY_MAX_TURNS:]:
         role = "user" if msg["role"] == "user" else "assistant"
-        messages.append({"role": role, "content": msg["text"]})
+        messages.append({"role": role, "content": msg["text"] if role == "user" else _cap_history_answer(msg["text"])})
 
     # Was previously indented one level deeper, inside the loop above -- describes THIS request's
     # own attachments, unrelated to iterating over prior history, so it printed once per history
