@@ -2838,9 +2838,10 @@ let selectedImages = [];
       // numeric-answer format ends the block at "Final Answer:", the /solve endpoint's PYQ
       // template (reused by the PYQ-modal solve box, also rendered through this function) has
       // no Final Answer line and ends it at "🔑 Key Concept:" instead -- falls back to end of
-      // string if neither shows up.
-      html = html.replace(/Solution:\n([\s\S]*?)(?=\n\nFinal Answer:|\n\n🔑 Key Concept:|$)/, function(_, stepsText) {
-        return 'Solution:\n' + renderSolutionStepsHtml(stepsText);
+      // string if neither shows up. Hindi answers use server.py's fixed Hindi labels for the
+      // same template (HINDI_LANG_CONTEXT): "हल:" ... "अंतिम उत्तर:".
+      html = html.replace(/(Solution|हल):\n([\s\S]*?)(?=\n\n(?:Final Answer|अंतिम उत्तर):|\n\n🔑 Key Concept:|$)/, function(_, label, stepsText) {
+        return label + ':\n' + renderSolutionStepsHtml(stepsText);
       });
       html = html.replace(/\$\$([^$]+)\$\$/g, function(_, math) {
         try {

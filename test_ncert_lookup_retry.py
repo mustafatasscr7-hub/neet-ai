@@ -1,4 +1,4 @@
-"""A failed NCERT/diagram lookup is retried once with the raw query, never fanned out.
+"""A failed NCERT/diagram/PYQ lookup is retried once with the raw query, never fanned out.
 
 Run with: python test_ncert_lookup_retry.py
 Plain pass/fail harness like test_cost_fixes.py. Fully offline: the Supabase RPC and the Gemini
@@ -8,6 +8,7 @@ embedding are fakes.
    a second failure returns [] with no merge variants tried.
 2. A genuine empty result (not a failure) still tries the merge variants, as before.
 3. search_ncert's Hindi path end to end: one HTTP 500 costs one embed + two RPC calls.
+4. search_pyq (its own inline fan-out): same rule; after two failures only the chapter lookup runs.
 """
 import asyncio
 import io
@@ -113,9 +114,61 @@ def test_search_ncert_hindi_500():
     check("retry's row returned", [r["id"] for r in rows] == ["a"], rows)
 
 
+PYQ_QUERY = "eu bacteria cell wall kaise banti hai"
+PYQ_ROW = {"id": "p1", "question": "Cell wall of eubacteria is made of", "chapter": "Biological Classification", "similarity": 0.5}
+
+
+def run_search_pyq(statuses, rpc_rows, chapter=""):
+    posts, gets, embeds = [], [], []
+    statuses = list(statuses)
+
+    class FakeClient:
+        async def post(self, url, headers=None, json=None):
+            posts.append(url)
+            status = statuses.pop(0) if statuses else 200
+            return FakeResp(status, rpc_rows if status == 200 else {"message": "timeout"})
+
+        async def get(self, url, headers=None, params=None):
+            gets.append(url)
+            return FakeResp(200, [{**PYQ_ROW, "id": "c1"}])
+
+    async def fake_embed(text):
+        embeds.append(text)
+        return [0.0] * 1536
+
+    saved = server.async_client, server.get_embedding
+    server.async_client, server.get_embedding = FakeClient(), fake_embed
+    try:
+        result = asyncio.run(server.search_pyq(PYQ_QUERY, chapter=chapter))
+    finally:
+        server.async_client, server.get_embedding = saved
+    return result, posts, gets, embeds
+
+
+def test_search_pyq_failed_lookup():
+    print("\n4. search_pyq: failed lookup -> one retry, no fan-out")
+    (rows, tier), posts, gets, embeds = run_search_pyq([500, 200], [PYQ_ROW])
+    check("retry's exact match returned", tier == "exact" and [r["id"] for r in rows] == ["p1"], (tier, rows))
+    check("one embed + two RPC calls", len(embeds) == 1 and len(posts) == 2, (len(embeds), len(posts)))
+
+    chapter = "Biological Classification"
+    (rows, tier), posts, gets, embeds = run_search_pyq([500, 500], [], chapter=chapter)
+    check("two failures: no merge variants", len(embeds) == 1 and len(posts) == 2, (len(embeds), len(posts)))
+    check("two failures: chapter lookup still runs", tier == "chapter" and [r["id"] for r in rows] == ["c1"], (tier, rows))
+
+    (rows, tier), posts, gets, embeds = run_search_pyq([500, 500], [])
+    check("two failures, no chapter: nothing found", (rows, tier) == ([], "none"), (rows, tier))
+
+    below = [{**PYQ_ROW, "similarity": 0.27}]  # under both thresholds, above the 0.25 gate
+    (rows, tier), posts, gets, embeds = run_search_pyq([200], below)
+    variants = server._generate_space_merge_variants(PYQ_QUERY)
+    check("genuine near-miss still tries every variant", len(embeds) == 1 + len(variants), len(embeds))
+
+
 if __name__ == "__main__":
     test_failed_lookup_retries_once()
     test_genuine_empty_still_fans_out()
     test_search_ncert_hindi_500()
+    test_search_pyq_failed_lookup()
     print(f"\n{len(_passed)} passed, {len(_failed)} failed")
     sys.exit(1 if _failed else 0)

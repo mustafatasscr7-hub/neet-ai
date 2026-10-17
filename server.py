@@ -2702,6 +2702,32 @@ def _without_exercises(rows: list) -> list:
         kept.append(r if trimmed == r.get("content") else {**r, "content": trimmed})
     return kept
 
+# ---------- Known textbook errors in ncert_content ----------
+# Corrected in the text handed to the model, not in the DB, so a re-ingest or rollback never loses
+# the fix and the source rows stay a faithful copy of the book. Each entry is an exact substring of
+# one chunk (checked live 2026-10-18: each wrong text occurs in exactly one row); a chunk boundary
+# moving on re-ingest just stops the entry matching -- scan_ncert_flip_pairs.py lists candidates.
+# (language, wrong text, corrected text)
+NCERT_ERRATA = [
+    # Hindi Class 11 Biology, Excretory Products: the descending limb is PERMEABLE to water and
+    # almost impermeable to electrolytes (English book); the Hindi sentence has both flipped.
+    ("hi", "हेन्ले-लूप की अवरोही भुजा जल के लिए अपारगम्य होती है, परंतु वैद्युत अपघट्य के सक्रियता से या धीरे-धीरे पारगम्य होती है।",
+           "हेन्ले-लूप की अवरोही भुजा जल के लिए पारगम्य होती है, परंतु वैद्युत अपघट्य के लिए लगभग अपारगम्य होती है।"),
+    # English Class 11 Biology, Photosynthesis summary: the light reaction reduces NADP+, not NAD.
+    ("en", "finally to NAD forming NADH.", "finally to NADP+ forming NADPH."),
+]
+
+def _with_ncert_errata(rows: list) -> list:
+    fixed = []
+    for r in rows:
+        content = r.get("content") or ""
+        lang = "hi" if r.get("language") == "hi" else "en"
+        for e_lang, wrong, right in NCERT_ERRATA:
+            if e_lang == lang and wrong in content:
+                content = content.replace(wrong, right)
+        fixed.append(r if content == (r.get("content") or "") else {**r, "content": content})
+    return fixed
+
 async def search_ncert(query: str, limit: int = 3):
     # Service-role key: ncert_content's anon SELECT policy was removed (scraping audit,
     # 2026-09-19) since nothing in the frontend reads this table directly anymore -- only this
@@ -2748,7 +2774,7 @@ async def search_ncert(query: str, limit: int = 3):
             # relevant chunk takes a dropped one's place. raw_top_score stays on the unfiltered list:
             # it measures whether the doubt is on-topic at all, not which chunks get used.
             real_results = [r for r in _without_exercises(candidates) if r.get("similarity", 0) >= NCERT_MATCH_THRESHOLD_HI_GEMINI][:limit]
-            return real_results, raw_top_score
+            return _with_ncert_errata(real_results), raw_top_score
         # Gate not independently validated against real Hindi query data the way English was --
         # see _OFFTOPIC_GATE_MARGIN -- applied on the same general principle regardless.
         return await _match_with_merge_fallback(query, _get_gemini_query_embedding, _search, NCERT_MATCH_THRESHOLD_HI_GEMINI - _OFFTOPIC_GATE_MARGIN)
@@ -2768,7 +2794,7 @@ async def search_ncert(query: str, limit: int = 3):
             raw_top_score = candidates[0]["similarity"] if candidates else None
             # Same exercise filtering as the Hindi branch above.
             real_results = [r for r in _without_exercises(candidates) if r.get("similarity", 0) >= NCERT_MATCH_THRESHOLD_EN][:limit]
-            return real_results, raw_top_score
+            return _with_ncert_errata(real_results), raw_top_score
         # Gate threshold: NCERT_MATCH_THRESHOLD_EN - _OFFTOPIC_GATE_MARGIN = 0.45 -- see
         # _OFFTOPIC_GATE_MARGIN's own comment for the real 107-query validation behind this one.
         return await _match_with_merge_fallback(query, get_embedding, _search, NCERT_MATCH_THRESHOLD_EN - _OFFTOPIC_GATE_MARGIN)
@@ -2978,7 +3004,7 @@ async def search_pyq(query: str, limit: int = 5, chapter: str = ""):
             json={"query_embedding": embedding, "match_threshold": 0, "match_count": fetch_count}
         )
         if response.status_code != 200:
-            return [], None
+            return None, None
         rows = response.json()
         raw_top_score = rows[0]["similarity"] if rows else None
         return rows, raw_top_score
@@ -2988,6 +3014,14 @@ async def search_pyq(query: str, limit: int = 5, chapter: str = ""):
 
     embedding = await _embed(query)
     rows, raw_top_score = await _raw_rows(embedding)
+    # Failed lookup (rows None, e.g. HTTP 500): retried once with the same embedding, never the
+    # merge-variant fan-out below -- same rule as _match_with_merge_fallback. If the retry fails
+    # too, the semantic tiers are skipped and only the chapter lookup at the end runs.
+    lookup_failed = False
+    if rows is None:
+        rows, raw_top_score = await _raw_rows(embedding)
+        lookup_failed = rows is None
+        rows = rows or []
 
     exact_results = _filter(rows, PYQ_MATCH_THRESHOLD, limit)
     if exact_results:
@@ -3017,14 +3051,14 @@ async def search_pyq(query: str, limit: int = 5, chapter: str = ""):
     # same reasoning _match_with_merge_fallback already applies for NCERT, evaluated once here
     # across both PYQ thresholds at once instead of duplicated per-tier.
     offtopic_gate = PYQ_FALLBACK_THRESHOLD - _OFFTOPIC_GATE_MARGIN
-    if raw_top_score is None or raw_top_score >= offtopic_gate:
+    if not lookup_failed and (raw_top_score is None or raw_top_score >= offtopic_gate):
         variants = _generate_space_merge_variants(student_portion)
         if variants:
             async def _try_variant(variant):
                 v_text = variant + chapter_suffix if chapter_suffix else variant
                 v_embedding = await _embed(v_text)
                 v_rows, _ = await _raw_rows(v_embedding)
-                return v_rows
+                return v_rows or []
             variant_rows_list = await asyncio.gather(*[_try_variant(v) for v in variants])
             for v_rows in variant_rows_list:
                 v_exact = _filter(v_rows, PYQ_MATCH_THRESHOLD, limit)
@@ -3995,7 +4029,9 @@ HINDI_LANG_CONTEXT = (
     "as-is -- do not translate or romanize them. For the section headers specifically, use "
     "these EXACT fixed Hindi labels rather than inventing your own translation each time: "
     "\"Answer:\" becomes \"उत्तर:\", \"Key Points:\" becomes \"मुख्य बिंदु:\", \"Quick "
-    "Recall:\" becomes \"त्वरित याद:\". \"NEET Importance:\" and \"Chapter:\" stay in "
+    "Recall:\" becomes \"त्वरित याद:\", and in numerical answers \"Given:\" becomes "
+    "\"दिया गया है:\", \"Formula:\" becomes \"सूत्र:\", \"Solution:\" becomes \"हल:\", "
+    "\"Final Answer:\" becomes \"अंतिम उत्तर:\". \"NEET Importance:\" and \"Chapter:\" stay in "
     "English exactly as given in the format above -- never translate those two labels."
 )
 
