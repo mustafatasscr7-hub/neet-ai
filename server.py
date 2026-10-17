@@ -2467,6 +2467,20 @@ def _detect_query_language(query: str) -> str:
     return "hi" if DEVANAGARI_RE.search(query or "") else "en"
 
 NCERT_MATCH_THRESHOLD_EN = 0.5
+# Short English questions ("what is diffusion", "function of ribosomes") embed less sharply than
+# full sentences: measured live 2026-10-18 on 20 short (<=5 word) academic queries, 11 missed 0.5
+# with raw top scores of 0.363-0.490, almost always with the right chapter on top, while 10 short
+# off-topic/small-talk queries topped out at 0.270 (0.36 the highest seen in earlier checks).
+# 0.42 is the lowest cutoff whose off-topic gate (cutoff - _OFFTOPIC_GATE_MARGIN = 0.37) still
+# sits above that 0.36 ceiling, so small talk still never reaches the merge-variant fan-out.
+# Word count only -- no extra model call. Fallback only: used when no chunk reached 0.5 (see
+# search_ncert). Hindi keeps its own Gemini threshold.
+NCERT_MATCH_THRESHOLD_EN_SHORT = 0.42
+NCERT_SHORT_QUERY_MAX_WORDS = 5
+
+def _ncert_threshold_en(query: str) -> float:
+    return NCERT_MATCH_THRESHOLD_EN_SHORT if len((query or "").split()) <= NCERT_SHORT_QUERY_MAX_WORDS else NCERT_MATCH_THRESHOLD_EN
+
 # Hindi embeddings score systematically lower than English for genuinely correct matches --
 # same underlying text-embedding-3-small model, but Hindi's much higher tokens/word density
 # (see hindi_retrieval_rechunking memory) dilutes the signal even in well-formed, sentence-
@@ -2795,8 +2809,11 @@ async def search_ncert(query: str, limit: int = 3, stats: dict = None):
         return await _match_with_merge_fallback(query, _get_gemini_query_embedding, _search, NCERT_MATCH_THRESHOLD_HI_GEMINI - _OFFTOPIC_GATE_MARGIN)
     else:
         # English path: same get_embedding() call (OpenAI text-embedding-3-small, embedding_cache-
-        # backed), same match_ncert RPC, same NCERT_MATCH_THRESHOLD_EN, same filter_language param
+        # backed), same match_ncert RPC, NCERT_MATCH_THRESHOLD_EN (or the short cutoff), same filter_language param
         # -- now wrapped in the merge-variant fallback above instead of a bare single attempt.
+        # Lower cutoff for short questions, decided on the student's own wording (merge variants
+        # of it use the same one) -- see NCERT_MATCH_THRESHOLD_EN_SHORT.
+        threshold = _ncert_threshold_en(query)
         async def _search(embedding):
             response = await async_client.post(
                 f"{SUPABASE_URL}/rest/v1/rpc/match_ncert",
@@ -2809,11 +2826,15 @@ async def search_ncert(query: str, limit: int = 3, stats: dict = None):
             raw_top_score = candidates[0]["similarity"] if candidates else None
             _record_raw_top(raw_top_score)
             # Same exercise filtering as the Hindi branch above.
-            real_results = [r for r in _without_exercises(candidates) if r.get("similarity", 0) >= NCERT_MATCH_THRESHOLD_EN][:limit]
+            # The short-question cutoff only fills in when nothing reached the normal one, so a short
+            # question that already matched keeps exactly the chunks it had (no weaker tail added).
+            usable = _without_exercises(candidates)
+            real_results = ([r for r in usable if r.get("similarity", 0) >= NCERT_MATCH_THRESHOLD_EN][:limit]
+                            or [r for r in usable if r.get("similarity", 0) >= threshold][:limit])
             return _with_ncert_errata(real_results), raw_top_score
-        # Gate threshold: NCERT_MATCH_THRESHOLD_EN - _OFFTOPIC_GATE_MARGIN = 0.45 -- see
+        # Gate threshold: threshold - _OFFTOPIC_GATE_MARGIN = 0.45 (0.37 for a short query) -- see
         # _OFFTOPIC_GATE_MARGIN's own comment for the real 107-query validation behind this one.
-        return await _match_with_merge_fallback(query, get_embedding, _search, NCERT_MATCH_THRESHOLD_EN - _OFFTOPIC_GATE_MARGIN)
+        return await _match_with_merge_fallback(query, get_embedding, _search, threshold - _OFFTOPIC_GATE_MARGIN)
 
 def _ncert_chapter_citation(subject: str, class_num, chapter_name: str, lookup_name: str = None) -> str:
     """Builds an authoritative citation string like 'NCERT Class 12, Chapter 3 -- Current

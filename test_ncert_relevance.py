@@ -9,6 +9,8 @@ and HTTP client are fakes.
 3. Normal case: the model prompt is byte-for-byte what it was before this change.
 4. Mixed chunks: off-subject ones dropped; citations highest-scoring chapter first, near-ties only.
 5. search_ncert fills stats; one ncert_retrieval_log row per answer, ids/scores only, no text.
+6. Short English questions (<=5 words) fall back to a 0.42 cutoff when nothing reaches 0.5;
+   longer ones, and short ones that already match, are unchanged; small talk still never retries.
 """
 import asyncio
 import io
@@ -218,11 +220,52 @@ def test_search_stats_and_log_privacy():
         check("no question or answer text in the log", "SI unit" not in text and "newton" not in text and out[:20] not in text)
 
 
+def _search_with(rows, query):
+    """Real search_ncert over fixed RPC rows; returns (result ids, number of embed calls)."""
+    embeds = []
+
+    async def fake_embed(text):
+        embeds.append(text)
+        return [0.0] * 1536
+
+    saved = server.async_client, server.get_embedding
+    server.async_client, server.get_embedding = FakeClient(rpc_rows=rows), fake_embed
+    try:
+        got = asyncio.run(server.search_ncert(query))
+    finally:
+        server.async_client, server.get_embedding = saved
+    return [r["id"] for r in got], len(embeds)
+
+
+def test_short_query_threshold():
+    print("\n6. short-question cutoff")
+    check("<=5 words -> 0.42", server._ncert_threshold_en("function of ribosomes") == 0.42)
+    check("5 words -> 0.42", server._ncert_threshold_en("who is the prime minister") == 0.42)
+    check("6+ words -> 0.5", server._ncert_threshold_en("explain the function of ribosomes please") == 0.5)
+
+    near = [row("r1", "Biology", 11, "Cell: The Unit of Life", 0.46), row("r2", "Biology", 12, "Molecular Basis of Inheritance", 0.44),
+            row("r3", "Biology", 11, "Biomolecules", 0.40)]
+    ids, _ = _search_with(near, "function of ribosomes")
+    check("short question at 0.46 now retrieves (>= 0.42 only)", ids == ["r1", "r2"], ids)
+    ids, _ = _search_with(near, "what is the function of ribosomes in a cell")
+    check("long question at 0.46 still retrieves nothing", ids == [], ids)
+
+    strong = [row("s1", "Physics", 11, "Gravitation", 0.55), row("s2", "Physics", 11, "Motion in a Plane", 0.46)]
+    ids, _ = _search_with(strong, "escape velocity")
+    check("short question already over 0.5 keeps only its 0.5 chunks", ids == ["s1"], ids)
+
+    small_talk = [row("t1", "Chemistry", 11, "Equilibrium", 0.36)]
+    ids, embeds = _search_with(small_talk, "how are you")
+    check("small talk at 0.36 retrieves nothing", ids == [], ids)
+    check("small talk skips the merge-variant retries (one embed)", embeds == 1, embeds)
+
+
 if __name__ == "__main__":
     test_question_subject()
     test_wrong_subject_no_citation()
     test_normal_case_unchanged()
     test_mixed_and_citation_order()
     test_search_stats_and_log_privacy()
+    test_short_query_threshold()
     print(f"\n{len(_passed)} passed, {len(_failed)} failed")
     sys.exit(1 if _failed else 0)
