@@ -57,7 +57,8 @@ class FakeClient:
         return FakeResp([])
 
     def posts_to(self, table):
-        return [p for p in self.posts if f"/rest/v1/{table}" in p[0]]
+        # Exact table: "/rest/v1/answer_cache" must not also match ".../answer_cache_log".
+        return [p for p in self.posts if p[0].split("?")[0].endswith(f"/rest/v1/{table}")]
 
 
 class Harness:
@@ -76,7 +77,7 @@ class Harness:
             "async_client", "_stream_with_peak_fallback", "check_max_usage_tier", "_spawn_background",
             "search_ncert", "_diagram_exists_for", "fetch_student_mistake_rows")}
 
-        async def fake_stream(system, messages, user_id, ip, endpoint, billing_context=None, force_qwen=False):
+        async def fake_stream(system, messages, user_id, ip, endpoint, billing_context=None, force_qwen=False, max_tokens=None):
             h.systems.append(system)
             yield h.model_outputs.pop(0)
 

@@ -12,7 +12,9 @@
 --   provider_usage_log (AI cost records) ........................................ user_id cleared at 12 months, rows deleted at 24 months
 --   question_reports, diagram_reports, response_feedback, session_feedback ...... user_id (and chat_id) cleared at 12 months, content kept
 --   auth.audit_log_entries (Supabase sign-in log, holds IP addresses) ........... 12 months
---   answer_cache, embedding_cache, pyq_solution_cache ........................... no limit (shared, not personal)
+--   answer_cache (shared answers, not personal) ................................. 30 days (server.py stops serving them at 30 days too)
+--   answer_cache_log (cache hit/miss counts, no user or text) ................... 90 days
+--   embedding_cache, pyq_solution_cache ......................................... no limit (shared, not personal)
 -- plus housekeeping: cron.job_run_details older than 30 days, retention_runs older than 90 days.
 --
 -- How it runs: two pg_cron jobs, 03:00 and 03:15 IST.
@@ -156,6 +158,8 @@ declare
     array['guest_device_usage_log',   'public.guest_device_usage_log', format('usage_date < %L', v_ist_today - 30),                                          null],
     array['active_sessions',          'public.active_sessions',    $w$last_active_at < now() - interval '90 days'$w$,                                       null],
     array['media_doubt_log',          'public.media_doubt_log',    $w$created_at < now() - interval '90 days'$w$,                                           null],
+    array['answer_cache',             'public.answer_cache',       $w$created_at < now() - interval '30 days'$w$,                                           null],
+    array['answer_cache_log',         'public.answer_cache_log',   $w$created_at < now() - interval '90 days'$w$,                                           null],
     array['usage_log',                'public.usage_log',          format('usage_date < %L', (v_ist_today - interval '12 months')::date),                   null],
     array['max_usage_alerts',         'public.max_usage_alerts',   $w$created_at < now() - interval '12 months'$w$,                                         null],
     array['provider_usage_log.user',  'public.provider_usage_log', $w$user_id is not null and created_at < now() - interval '12 months'$w$,                 'user_id = null'],

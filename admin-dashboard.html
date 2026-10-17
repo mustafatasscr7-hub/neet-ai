@@ -917,7 +917,7 @@
     };
     document.querySelectorAll('[data-fb-icon]').forEach(el => { el.innerHTML = FB_ICONS[el.dataset.fbIcon]; });
 
-    const MODEL_LABELS = { 'deepseek-v4-flash': 'DeepSeek V4 Flash', 'qwen-flash': 'Qwen Flash', 'gemini-3.5-flash-lite': 'Gemini 3.5 Flash Lite' };
+    const MODEL_LABELS = { 'deepseek-flash': 'DeepSeek Flash', 'deepseek-v4-flash': 'DeepSeek V4 Flash', 'qwen-flash': 'Qwen Flash', 'gemini-3.5-flash-lite': 'Gemini 3.5 Flash Lite' };
     const fbState = { rating: 'down', unreviewedOnly: true, from: '', to: '', page: 1, total: 0, pageSize: 25, items: [], selectedId: null, counts: null };
 
     // Same parseWithMath/renderSolutionStepsHtml as chat.html (copied, kept in step with it) so a

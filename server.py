@@ -224,11 +224,17 @@ async def _openai_keepalive_loop():
         await asyncio.sleep(_OPENAI_KEEPALIVE_INTERVAL_SECONDS)
         await _warm_openai_embedding_connection("periodic keep-alive")
 
-# Text doubt-answering (/chat, /solve) runs on DeepSeek V4 Flash via its Anthropic-compatible
+# Text doubt-answering (/chat, /solve) runs on DeepSeek Flash via its Anthropic-compatible
 # endpoint, not Claude -- the `anthropic` package is still used here as an SDK, just pointed at
 # a different base_url; there is no live Claude/anthropic.com client left in this file. DeepSeek's
 # vision support isn't reliable (confirmed via live testing -- it silently hallucinates on images
 # instead of erroring), so it's never used for image-attached questions.
+#
+# DeepSeek's pricing page (checked 2026-10-17) names the Flash model "deepseek-flash" and says the
+# legacy "deepseek-v4-flash" name is still accepted but that model is retired -- its requests are
+# served by DeepSeek-V4.1-Flash-1017 at the Flash price, so both names reach the same model. Also
+# the provider label written to provider_usage_log, which is why its CHECK constraint lists both.
+DEEPSEEK_MODEL = "deepseek-flash"
 deepseek_client = anthropic.Anthropic(api_key=DEEPSEEK_KEY, base_url="https://api.deepseek.com/anthropic")
 # Async twin used only by the streaming path (_stream_deepseek) -- the sync client above stays
 # for the non-streaming .messages.create() call sites (title generation, etc.), which are short
@@ -1404,6 +1410,10 @@ DAILY_TOKEN_BUDGET_FREE = 50000  # ~9 doubts/day -- re-recalibrated 2026-08-16. 
                                   # peak hours -- this number is 9 * ~5470, rounded up. If model
                                   # routing or either provider's caching behavior changes again,
                                   # re-measure before trusting this ceiling.
+                                  # 2026-10-17: Qwen now leaves cache-hit input out of the budget
+                                  # too (see _stream_qwen), so a doubt costs ~1,500-3,000 budget
+                                  # tokens at ANY hour -- this ceiling now allows ~20 doubts/day,
+                                  # not ~9. Not re-tuned yet; lower it if that's too generous.
 COOLDOWN_HOURS = 24  # how long a block lasts once the budget is actually crossed
 
 # Pro: a real, ENFORCED, user-visible daily ceiling -- unlike Free's rolling 24h-from-crossing
@@ -3298,15 +3308,14 @@ def _encode_running_summary_marker(new_summary: str) -> str:
 
 # Real per-provider pricing used only to compute provider_usage_log's `cost` column -- update
 # these constants directly if a provider changes pricing; nothing else needs to change.
-# DeepSeek's rates are its published peak/off-peak structure effective 2026-08-16 (fetched from
-# api-docs.deepseek.com/quick_start/pricing on 2026-08-14) -- the peak-hour Qwen fallback exists
-# specifically because of that change, so these are the rates that actually matter for cost
-# analysis here even for the handful of days before the change formally takes effect (using the
-# old flat rate instead would make the peak_window column meaningless in the cost figures).
+# DeepSeek's rates are the Flash column of api-docs.deepseek.com/quick_start/pricing, fetched
+# 2026-10-17 (off-peak is half of peak; peak = 01:00-04:00 and 06:00-10:00 UTC, Mon-Fri, see
+# _is_deepseek_peak_hour). The previous constants (0.007/0.22/0.66 off-peak) were the V4 Flash
+# prices from 2026-08-14 and overstated every logged DeepSeek cost by roughly 30%.
 # $ per 1M tokens throughout.
 DEEPSEEK_RATES = {
-    "peak": {"cache_hit": 0.014, "cache_miss": 0.44, "output": 1.32},
-    "off_peak": {"cache_hit": 0.007, "cache_miss": 0.22, "output": 0.66},
+    "peak": {"cache_hit": 0.006, "cache_miss": 0.30, "output": 1.20},
+    "off_peak": {"cache_hit": 0.003, "cache_miss": 0.15, "output": 0.60},
 }
 # Qwen-Flash's published rate for the 0-256K input tier (fetched from
 # alibabacloud.com/help/en/model-studio/model-pricing on 2026-08-14). cache_hit is Alibaba's
@@ -3567,6 +3576,7 @@ async def _stream_gemini_media(media_parts: list, doubt_type: str, media_files: 
         )
         full_answer = ""
         last_usage = None
+        capped = False
         try:
             async for chunk in gemini_stream:
                 if chunk.text:
@@ -3574,6 +3584,7 @@ async def _stream_gemini_media(media_parts: list, doubt_type: str, media_files: 
                     yield chunk.text
                 if chunk.usage_metadata:
                     last_usage = chunk.usage_metadata
+                capped = capped or _gemini_output_capped(chunk)
         finally:
             # Log on the way out (including on an early client disconnect) rather than only on a clean
             # finish. Gemini reports usage_metadata cumulatively on every streamed chunk, so the last
@@ -3595,7 +3606,9 @@ async def _stream_gemini_media(media_parts: list, doubt_type: str, media_files: 
                 cache_hit_tokens = last_usage.cached_content_token_count or 0
                 cache_miss_tokens = max(0, last_usage.prompt_token_count - cache_hit_tokens)
                 cost = _gemini_cost(cache_miss_tokens, cache_hit_tokens, last_usage.candidates_token_count)
-                asyncio.create_task(log_provider_usage("gemini-3.5-flash-lite", False, last_usage.prompt_token_count, last_usage.candidates_token_count, cost, "/chat", user_id))
+                if capped:
+                    _note_output_cap("gemini-3.5-flash-lite", "/chat", 1024, last_usage.candidates_token_count or 0)
+                asyncio.create_task(log_provider_usage("gemini-3.5-flash-lite", False, last_usage.prompt_token_count, last_usage.candidates_token_count, cost, "/chat", user_id, cache_hit_tokens=cache_hit_tokens, output_capped=capped))
                 asyncio.create_task(log_token_usage(user_id, last_usage.prompt_token_count + last_usage.candidates_token_count, ip))
             if full_answer:
                 asyncio.create_task(log_media_doubt(user_id, ip, doubt_type, media_files, full_answer))
@@ -3603,27 +3616,73 @@ async def _stream_gemini_media(media_parts: list, doubt_type: str, media_files: 
         await _alert_all_providers_down(f"/chat ({doubt_type})", e, user_id)
         raise
 
-async def log_provider_usage(provider: str, peak_window: bool, input_tokens: int, output_tokens: int, cost: float, endpoint: str, user_id: str = ""):
+async def log_provider_usage(provider: str, peak_window: bool, input_tokens: int, output_tokens: int, cost: float, endpoint: str, user_id: str = "", cache_hit_tokens: int = 0, output_capped: bool = False):
     """Additive to log_token_usage() (which drives per-user daily budget enforcement, keyed by
     total tokens only) -- this is purely for cost/provider analytics: one row per completed
     request in provider_usage_log (see create_provider_usage_log_table.sql; RLS locked to the
     service-role key only, no anon/authenticated policy at all, same as pyq_solution_cache --
     this is internal cost telemetry, not user-facing content). Keeps the existing print line
-    too, since it's cheap and useful for a quick Railway log check without a DB round trip."""
-    print(f"PROVIDER USAGE: provider={provider} peak_window={str(peak_window).lower()} input={input_tokens} output={output_tokens} cost=${cost:.6f} endpoint={endpoint}", flush=True)
+    too, since it's cheap and useful for a quick Railway log check without a DB round trip.
+
+    input_tokens is the TOTAL prompt (cache hits included); cache_hit_tokens is the part of it
+    the provider billed at its cache-hit rate. output_capped marks a reply cut off by its
+    max_tokens. Both columns come from alter_provider_usage_log_cache_hits_and_endpoints.sql --
+    until that has been run, the insert is retried without them so cost rows keep landing."""
+    print(f"PROVIDER USAGE: provider={provider} peak_window={str(peak_window).lower()} input={input_tokens} cache_hit={cache_hit_tokens} output={output_tokens} cost=${cost:.6f} endpoint={endpoint}" + (" OUTPUT_CAPPED" if output_capped else ""), flush=True)
+    row = {
+        "user_id": user_id or None,
+        "provider": provider,
+        "peak_window": peak_window,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cost": cost,
+        "endpoint": endpoint,
+        "cache_hit_tokens": cache_hit_tokens,
+        "output_capped": output_capped,
+    }
+    url = f"{SUPABASE_URL}/rest/v1/provider_usage_log"
+    headers = {**ADMIN_HEADERS, "Content-Type": "application/json"}
     try:
-        await async_client.post(
-            f"{SUPABASE_URL}/rest/v1/provider_usage_log", headers={**ADMIN_HEADERS, "Content-Type": "application/json"},
-            json={
-                "user_id": user_id or None,
-                "provider": provider,
-                "peak_window": peak_window,
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-                "cost": cost,
-                "endpoint": endpoint
-            }
-        )
+        resp = await async_client.post(url, headers=headers, json=row)
+        if resp.status_code >= 400 and "column" in resp.text:
+            legacy = {k: v for k, v in row.items() if k not in ("cache_hit_tokens", "output_capped")}
+            await async_client.post(url, headers=headers, json=legacy)
+    except Exception:
+        pass
+
+# Output-cap bookkeeping shared by every model helper below. Verification calls (/chat-verify)
+# run under their own deliberately small caps, so hitting one says nothing about the answer the
+# student sees -- only answer-producing calls flag the response as cut off (which keeps it out
+# of the shared caches).
+_NON_ANSWER_ENDPOINTS = {"/chat-verify"}
+
+def _note_output_cap(provider: str, endpoint: str, max_tokens, output_tokens: int, billing_context: dict = None):
+    print(f"OUTPUT CAP HIT: provider={provider} endpoint={endpoint} max_tokens={max_tokens} output={output_tokens} (reply was cut off)", flush=True)
+    if billing_context is not None and endpoint not in _NON_ANSWER_ENDPOINTS:
+        billing_context["output_capped"] = True
+
+def _gemini_output_capped(response) -> bool:
+    """True when Gemini stopped because of max_output_tokens (a streamed chunk or a full response)."""
+    for candidate in (getattr(response, "candidates", None) or []):
+        reason = getattr(candidate, "finish_reason", None)
+        if reason is not None and str(getattr(reason, "name", reason)).upper().endswith("MAX_TOKENS"):
+            return True
+    return False
+
+async def _log_deepseek_message_usage(response, endpoint: str, user_id: str, max_tokens: int):
+    """provider_usage_log row for a one-shot (non-streaming) DeepSeek .messages.create() call --
+    /title, /summarize-answer and both alternate-method endpoints, which used to bill the
+    student's budget but never reach the cost log. Best-effort, like every logger here."""
+    try:
+        usage = response.usage
+        is_peak = _is_deepseek_peak_hour()
+        cache_hit = usage.cache_read_input_tokens or 0
+        cache_miss = usage.input_tokens + (usage.cache_creation_input_tokens or 0)
+        capped = getattr(response, "stop_reason", None) == "max_tokens"
+        if capped:
+            _note_output_cap(DEEPSEEK_MODEL, endpoint, max_tokens, usage.output_tokens)
+        cost = _deepseek_cost(cache_miss, cache_hit, usage.output_tokens, is_peak)
+        await log_provider_usage(DEEPSEEK_MODEL, is_peak, cache_miss + cache_hit, usage.output_tokens, cost, endpoint, user_id, cache_hit_tokens=cache_hit, output_capped=capped)
     except Exception:
         pass
 
@@ -3695,10 +3754,17 @@ async def _stream_qwen(system: str, messages: list, user_id: str, ip: str, endpo
     user-facing quota deduction. None (the default, used by every caller that doesn't pass one,
     e.g. /solve) means "always bill", matching the pre-existing behavior.
 
-    max_tokens defaults to 1024 (the historical value for every real-answer caller) -- only
-    _verify_given_values overrides this, to a much smaller cap, since a runaway verification
-    response (observed live: some trials rambled to 600-1000+ output tokens re-litigating their
-    own answer) is pure wasted latency, not a longer/better answer."""
+    The same dict also carries back what happened to the reply: "output_capped" is set when an
+    answer-producing call stopped at max_tokens (see _note_output_cap), and the verification
+    wrappers set "corrected" when they replaced or annotated the model's answer. stream_response
+    reads both to keep such answers out of the shared answer cache.
+
+    max_tokens defaults to 1024 (the historical value for every real-answer caller). Hindi
+    answers get ANSWER_MAX_TOKENS_HI instead (Devanagari costs ~2.4x the tokens of the same
+    English content, so 1024 cut real answers off mid-word), and _verify_given_values uses a much
+    smaller cap, since a runaway verification response (observed live: some trials rambled to
+    600-1000+ output tokens re-litigating their own answer) is pure wasted latency, not a
+    longer/better answer."""
     qwen_stream = await qwen_async_client.chat.completions.create(
         model="qwen-flash",
         max_tokens=max_tokens,
@@ -3707,10 +3773,13 @@ async def _stream_qwen(system: str, messages: list, user_id: str, ip: str, endpo
         messages=[{"role": "system", "content": system}] + messages
     )
     input_tokens = output_tokens = cache_hit_tokens = 0
+    capped = False
     try:
         async for chunk in qwen_stream:
             if chunk.choices and chunk.choices[0].delta.content:
                 yield chunk.choices[0].delta.content
+            if chunk.choices and chunk.choices[0].finish_reason == "length":
+                capped = True
             if chunk.usage:
                 input_tokens = chunk.usage.prompt_tokens
                 output_tokens = chunk.usage.completion_tokens
@@ -3736,18 +3805,24 @@ async def _stream_qwen(system: str, messages: list, user_id: str, ip: str, endpo
         if input_tokens or output_tokens:
             cache_miss_tokens = max(0, input_tokens - cache_hit_tokens)
             cost = _qwen_cost(cache_miss_tokens, cache_hit_tokens, output_tokens)
-            asyncio.create_task(log_provider_usage("qwen-flash", True, input_tokens, output_tokens, cost, endpoint, user_id))
+            if capped:
+                _note_output_cap("qwen-flash", endpoint, max_tokens, output_tokens, billing_context)
+            asyncio.create_task(log_provider_usage("qwen-flash", True, input_tokens, output_tokens, cost, endpoint, user_id, cache_hit_tokens=cache_hit_tokens, output_capped=capped))
             if billing_context is None or billing_context.get("bill", True):
-                asyncio.create_task(log_token_usage_with_bonus(user_id, input_tokens + output_tokens, ip))
+                # Cache-hit input tokens are left out of the student's daily budget, exactly as
+                # _stream_deepseek already does (DeepSeek's usage.input_tokens excludes its cache
+                # reads). Counting them here used to make a peak-hour doubt use ~5x more of the
+                # budget than the same doubt off-peak.
+                asyncio.create_task(log_token_usage_with_bonus(user_id, cache_miss_tokens + output_tokens, ip))
 
-async def _stream_deepseek(system: str, messages: list, user_id: str, ip: str, is_peak: bool, endpoint: str, billing_context: dict = None):
+async def _stream_deepseek(system: str, messages: list, user_id: str, ip: str, is_peak: bool, endpoint: str, billing_context: dict = None, max_tokens: int = 1024):
     """The default off-peak provider, and also the peak-window fallback when Qwen is
     unavailable -- is_peak is only for the usage-log tag, so peak-window fallback traffic still
     shows up as such in the logs even though DeepSeek ended up serving it. See _stream_qwen's
-    docstring for what billing_context does."""
+    docstring for what billing_context and max_tokens do."""
     async with deepseek_async_client.messages.stream(
-        model="deepseek-v4-flash",
-        max_tokens=1024,
+        model=DEEPSEEK_MODEL,
+        max_tokens=max_tokens,
         thinking={"type": "disabled"},
         system=system,
         messages=messages
@@ -3778,9 +3853,13 @@ async def _stream_deepseek(system: str, messages: list, user_id: str, ip: str, i
                 # finally block before it completes. log_provider_usage/log_token_usage_with_bonus
                 # already swallow their own failures internally, so nothing here needs to await or
                 # catch anything.
-                asyncio.create_task(log_provider_usage("deepseek-v4-flash", is_peak, cache_miss_tokens + cache_hit_tokens, usage.output_tokens, cost, endpoint, user_id))
+                capped = getattr(final_message, "stop_reason", None) == "max_tokens"
+                if capped:
+                    _note_output_cap(DEEPSEEK_MODEL, endpoint, max_tokens, usage.output_tokens, billing_context)
+                asyncio.create_task(log_provider_usage(DEEPSEEK_MODEL, is_peak, cache_miss_tokens + cache_hit_tokens, usage.output_tokens, cost, endpoint, user_id, cache_hit_tokens=cache_hit_tokens, output_capped=capped))
                 if billing_context is None or billing_context.get("bill", True):
-                    asyncio.create_task(log_token_usage_with_bonus(user_id, usage.input_tokens + usage.output_tokens, ip))
+                    # Same rule as _stream_qwen: cache-miss input + output, cache hits never count.
+                    asyncio.create_task(log_token_usage_with_bonus(user_id, cache_miss_tokens + usage.output_tokens, ip))
             except Exception:
                 pass
 
@@ -3793,6 +3872,75 @@ HINDI_ONLY_CORE = (
     "Hinglish mixing. The ONLY exceptions are LaTeX/KaTeX math notation, chemical formulas/"
     "symbols (e.g. $H_2O$), and units (e.g. m/s, kg), which stay exactly as-is."
 )
+
+# Output caps for answer-producing text calls (/chat, /solve) on DeepSeek and Qwen. Measured
+# 2026-10-17: the same content in Devanagari takes ~2.4x DeepSeek's and ~3.7x Qwen's tokens of
+# English, and Hindi /chat answers averaged ~760 (DeepSeek) / ~910 (Qwen) output tokens against
+# ~470 for English -- a real SN1 answer ran to 1,087, so 1024 cut Hindi answers off mid-word.
+ANSWER_MAX_TOKENS = 1024
+ANSWER_MAX_TOKENS_HI = 1400
+
+def _answer_max_tokens(language: str) -> int:
+    return ANSWER_MAX_TOKENS_HI if language == "hi" else ANSWER_MAX_TOKENS
+
+# stream_response's per-request answer instructions, kept as constants so the shared answer
+# cache's prompt version (ANSWER_CACHE_PROMPT_VERSION) changes whenever one of them does.
+CONCISE_STYLE_CONTEXT = "\n\nIMPORTANT: The student has selected CONCISE mode. Give a very short answer — maximum 3 sentences only. No bullet points, no key points section, no memory tricks. Just the core answer."
+HINDI_LANG_CONTEXT = (
+    f"\n\nIMPORTANT: {HINDI_ONLY_CORE} Proper nouns like NEET or NCERT also stay exactly "
+    "as-is -- do not translate or romanize them. For the section headers specifically, use "
+    "these EXACT fixed Hindi labels rather than inventing your own translation each time: "
+    "\"Answer:\" becomes \"उत्तर:\", \"Key Points:\" becomes \"मुख्य बिंदु:\", \"Quick "
+    "Recall:\" becomes \"त्वरित याद:\". \"NEET Importance:\" and \"Chapter:\" stay in "
+    "English exactly as given in the format above -- never translate those two labels."
+)
+
+# ---------- Hinglish doubts on Qwen ----------
+# Measured 2026-10-17 with the real assembled prompt (4 trials each): Qwen read 6 of 8 Hinglish
+# academic doubts ("ohm ka niyam kya hai", "photosynthesis kaise hota hai", ...) as conversational
+# and then stopped after the bare "DOUBT_TYPE: conversational" line -- 25 of 32 replies -- and
+# did the same for Hinglish small talk ("tum kaun ho"). Each one then cost a full DeepSeek
+# regeneration at peak price. Appending this at call time (never edited into SYSTEM_PROMPT -- see
+# MCQ_AMBIGUOUS_GUARD for why inline edits backfired on Qwen before) took Qwen to 32/32 academic
+# answers and 19/20 complete conversational replies; DeepSeek with the same note: 26/26.
+HINGLISH_GUARD = (
+    "\n\nIMPORTANT: this message is written in Hinglish (Hindi typed in English letters), a normal way "
+    "students ask real doubts. Judge it exactly as you would the same message in English: if it asks about "
+    "a NEET Physics/Chemistry/Biology concept (e.g. \"osmosis kya hota hai\", \"newton ka teesra niyam samjhao\"), "
+    "it is an academic doubt -- answer it in the normal academic format starting with VISUAL_INTENT. Only if it "
+    "is genuinely conversational, write DOUBT_TYPE: conversational and then, on the next line, 1-3 sentences of "
+    "real reply -- never stop after the marker line alone."
+)
+
+# Common Hindi words in Latin script. Whole-word match only, so English text containing "hai" or
+# "kya" as part of a longer word never counts; one hit is enough since a real English doubt
+# essentially never contains any of these as a standalone word.
+_HINGLISH_WORD_RE = re.compile(
+    r"\b(kya|kyaa|hai|hain|hota|hoti|hote|kaise|kaisa|kaisi|kyun|kyon|kyu|samjhao|samjhaao|samjhaiye|"
+    r"samjha|batao|bataiye|bataye|mein|nahi|nahin|kaun|kaunsa|kaunsi|kitna|kitni|kitne|matlab|"
+    r"chahiye|karo|karte|kijiye|aur|tum|aap|mujhe|yeh|woh|kab|kahan|jata|jaata|hoga|wala|wali)\b",
+    re.IGNORECASE
+)
+
+def _looks_hinglish(text: str) -> bool:
+    return bool(text) and not DEVANAGARI_RE.search(text) and bool(_HINGLISH_WORD_RE.search(text))
+
+# Appended to the "empty conversational" override when that retry stays on Qwen (see
+# _stream_empty_conversational_retry). The old override text alone still stopped at the bare
+# marker for "yes" (3/4) and "ohm ka niyam kya hai" (4/4); with this added: 30/30 complete
+# replies, including "yes"/"haan batao" answering a question the AI had just asked.
+QWEN_EMPTY_CONVERSATIONAL_RETRY_NOTE = (
+    "\n\nJudge this message exactly as you would the same message written in plain English (Hinglish -- "
+    "Hindi typed in English letters -- is a normal way to ask a real doubt). If it asks about a NEET "
+    "Physics/Chemistry/Biology concept, answer it as an academic doubt starting with VISUAL_INTENT. Only if it is "
+    "genuinely conversational, write DOUBT_TYPE: conversational and then, on the next line, 1-3 sentences of real "
+    "reply -- never stop after the marker line alone."
+)
+
+_CONVERSATIONAL_MARKER = "DOUBT_TYPE: conversational"
+
+def _is_bare_conversational_marker(text: str) -> bool:
+    return (text or "").strip() == _CONVERSATIONAL_MARKER
 
 # ---------- Running-summary layer (sliding-2 + background summarization) ----------
 # Real cost/latency impact already measured via a standalone test before this was built: ~68
@@ -3856,7 +4004,7 @@ async def _update_running_summary(prev_summary: str, dropped_question: str, drop
         # than a generation that happened to stop there on its own -- a cut-off summary drops
         # facts the exact same way the original bug did, just mechanically instead of by choice.
         resp = await deepseek_async_client.messages.create(
-            model="deepseek-v4-flash", max_tokens=500, thinking={"type": "disabled"},
+            model=DEEPSEEK_MODEL, max_tokens=500, thinking={"type": "disabled"},
             system=summary_system, messages=[{"role": "user", "content": user_msg}],
         )
         new_summary = "".join(b.text for b in resp.content if hasattr(b, "text")).strip()
@@ -3877,14 +4025,14 @@ async def _update_running_summary(prev_summary: str, dropped_question: str, drop
         if truncated:
             print(f"TRUNCATED RUNNING SUMMARY: user_id={user_id or 'unknown'} output_tokens={usage.output_tokens} (hit max_tokens cap -- summary was cut off mid-generation, facts may be missing)", flush=True)
         try:
-            await log_provider_usage("deepseek-v4-flash", is_peak, cache_miss + cache_hit, usage.output_tokens, cost, "/chat-summary-truncated" if truncated else "/chat-summary", user_id)
+            await log_provider_usage(DEEPSEEK_MODEL, is_peak, cache_miss + cache_hit, usage.output_tokens, cost, "/chat-summary-truncated" if truncated else "/chat-summary", user_id, cache_hit_tokens=cache_hit, output_capped=truncated)
         except Exception:
             pass
         return new_summary
     except Exception:
         return None
 
-async def _stream_with_peak_fallback(system: str, messages: list, user_id: str, ip: str, endpoint: str, billing_context: dict = None, force_qwen: bool = False):
+async def _stream_with_peak_fallback(system: str, messages: list, user_id: str, ip: str, endpoint: str, billing_context: dict = None, force_qwen: bool = False, max_tokens: int = ANSWER_MAX_TOKENS):
     """Routes text-doubt generation (/chat, /solve -- never image/PDF doubts, those stay on
     Gemini regardless of time of day) to Qwen-Flash during DeepSeek's published peak-pricing
     windows (_is_deepseek_peak_hour), DeepSeek everywhere else. Confirmed via a live 45-question
@@ -3916,13 +4064,15 @@ async def _stream_with_peak_fallback(system: str, messages: list, user_id: str, 
     try after it, so any exception escaping this function means text generation is genuinely
     exhausted for this request (see _alert_all_providers_down). Re-raised unchanged so the
     existing per-endpoint catch-all in stream_response/stream_solve_response still does its
-    normal job -- this only adds the alert, nothing about the failure itself changes."""
+    normal job -- this only adds the alert, nothing about the failure itself changes.
+
+    max_tokens applies to whichever provider serves the request (see _answer_max_tokens)."""
     try:
         is_peak = _is_deepseek_peak_hour()
         if force_qwen or is_peak:
             sent_any = False
             try:
-                async for chunk in _stream_qwen(system, messages, user_id, ip, endpoint, billing_context):
+                async for chunk in _stream_qwen(system, messages, user_id, ip, endpoint, billing_context, max_tokens=max_tokens):
                     sent_any = True
                     yield chunk
                 return
@@ -3930,10 +4080,10 @@ async def _stream_with_peak_fallback(system: str, messages: list, user_id: str, 
                 if sent_any:
                     raise
                 print(f"QWEN UNAVAILABLE BEFORE FIRST TOKEN, FALLING BACK TO DEEPSEEK: {e}", flush=True)
-            async for chunk in _stream_deepseek(system, messages, user_id, ip, is_peak, endpoint, billing_context):
+            async for chunk in _stream_deepseek(system, messages, user_id, ip, is_peak, endpoint, billing_context, max_tokens=max_tokens):
                 yield chunk
             return
-        async for chunk in _stream_deepseek(system, messages, user_id, ip, False, endpoint, billing_context):
+        async for chunk in _stream_deepseek(system, messages, user_id, ip, False, endpoint, billing_context, max_tokens=max_tokens):
             yield chunk
     except Exception as e:
         await _alert_all_providers_down(endpoint, e, user_id)
@@ -4069,7 +4219,7 @@ Final Answer: Cannot be determined — {mq} is missing from the problem."""
 
 SIMULATED_STREAM_MARKER = "SIMULATED_STREAM: yes\n"
 
-async def _stream_qwen_verified(system: str, messages: list, problem_text: str, user_id: str, ip: str, endpoint: str, billing_context: dict = None):
+async def _stream_qwen_verified(system: str, messages: list, problem_text: str, user_id: str, ip: str, endpoint: str, billing_context: dict = None, max_tokens: int = ANSWER_MAX_TOKENS):
     """Used only when the caller has already decided (a) this request is being routed to Qwen and
     (b) the question matches _is_multi_object_numerical -- see the trigger condition in
     stream_response's text branch. Buffers Qwen's full first answer (no live token streaming is
@@ -4089,12 +4239,12 @@ async def _stream_qwen_verified(system: str, messages: list, problem_text: str, 
     is_peak = _is_deepseek_peak_hour()
     try:
         chunks = []
-        async for c in _stream_qwen(system, messages, user_id, ip, endpoint, billing_context):
+        async for c in _stream_qwen(system, messages, user_id, ip, endpoint, billing_context, max_tokens=max_tokens):
             chunks.append(c)
         first_answer = "".join(chunks)
     except Exception as e:
         print(f"QWEN UNAVAILABLE BEFORE VERIFICATION, FALLING BACK TO DEEPSEEK: {e}", flush=True)
-        async for chunk in _stream_deepseek(system, messages, user_id, ip, is_peak, endpoint, billing_context):
+        async for chunk in _stream_deepseek(system, messages, user_id, ip, is_peak, endpoint, billing_context, max_tokens=max_tokens):
             yield chunk
         return
 
@@ -4103,6 +4253,8 @@ async def _stream_qwen_verified(system: str, messages: list, problem_text: str, 
     if is_valid:
         yield first_answer
         return
+    if billing_context is not None:
+        billing_context["corrected"] = True  # replaced by the verifier -- never shared-cached
     missing_quantity = _extract_missing_quantity(verify_raw)
     yield _build_insufficient_data_answer(missing_quantity)
 
@@ -4291,6 +4443,126 @@ SELF_CORRECTION_RETRY_GUARD = (
 # options were broken (8edfce62). The warning line is itself flagged by _has_self_correction, so
 # such a retry is never cached -- it gets logged for PYQ data review instead.
 
+# ---------- Shared answer cache (answer_cache) ----------
+# A stored reply is served verbatim to every later student who sends the same message, so:
+#   - Only a chat's FIRST message, with no history and no running summary, is ever looked up or
+#     stored. Anything later can depend on the conversation ("yes", "explain in short" -- a real
+#     cached "yes" reply was one student's "here's the whole conversation formatted as Markdown").
+#     A short conversational opener ("yes", "thanks") is fine as a first message: its reply is
+#     generic. (Exact-match greetings never get this far -- _SMALLTALK_RESPONSES answers them.)
+#   - Text only: images/PDFs never, and a Retry (skip_cache) always generates fresh.
+#   - The key covers the prompt version, language and answer style, so Hindi and English, or
+#     Concise and Detailed, never share an entry.
+#   - Entries expire after ANSWER_CACHE_TTL_DAYS, and whenever ANSWER_CACHE_PROMPT_VERSION
+#     changes (any edit to the prompt text it hashes), so old-format answers stop being served.
+#   - Never stored: clarifying (AMBIGUOUS) replies, self-correcting or verifier-corrected answers,
+#     answers cut off at max_tokens, answers written with the student's weak-chapter context, and
+#     anything containing the student's name. A Hindi answer written while a name was in the
+#     prompt isn't stored either, since a Devanagari spelling of the name can't be checked.
+# Every lookup and every store decision is logged to answer_cache_log.
+ANSWER_CACHE_TTL_DAYS = 30
+# Bump when answer post-processing changes in a way the prompt text hashed below doesn't capture.
+ANSWER_CACHE_FORMAT_TAG = "2026-10-17"
+ANSWER_CACHE_PROMPT_VERSION = ANSWER_CACHE_FORMAT_TAG + "-" + hashlib.sha256("\x00".join([
+    SYSTEM_PROMPT, SYSTEM_PROMPT_NO_CLARIFY, CONCISE_STYLE_CONTEXT, HINDI_LANG_CONTEXT, HINGLISH_GUARD,
+    MNEMONIC_QUALITY_GUARD, INERT_PAIR_GUARD, MCQ_AMBIGUOUS_GUARD,
+]).encode()).hexdigest()[:10]
+_ANSWER_CACHE_HEADERS = {"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"}
+
+def _answer_cache_language(language: str) -> str:
+    return "hi" if language == "hi" else "en"
+
+def _answer_cache_style(answer_style: str) -> str:
+    return "concise" if answer_style == "concise" else "detailed"
+
+def _answer_cache_key(text: str, language: str, answer_style: str) -> str:
+    normalized = " ".join((text or "").split()).lower()
+    return hashlib.sha256(
+        f"{ANSWER_CACHE_PROMPT_VERSION}:{_answer_cache_language(language)}:{_answer_cache_style(answer_style)}:{normalized}".encode()
+    ).hexdigest()
+
+def _answer_cache_skip_reason(images, pdf, history, running_summary, skip_cache) -> Optional[str]:
+    """Why this request may not use the shared cache at all, or None if it may."""
+    if images or pdf:
+        return "media"
+    if skip_cache:
+        return "retry"
+    if history or running_summary:
+        return "history"
+    return None
+
+def _answer_cache_store_block(answer: str, language: str, student_name: str, used_student_context: bool, flags: dict = None) -> Optional[str]:
+    """Why this answer must not be stored, or None if it may. "self_correction" is checked last on
+    purpose: it is the only reason a background regeneration can fix (see stream_response)."""
+    flags = flags or {}
+    text = answer or ""
+    if not text.strip() or _is_bare_conversational_marker(text):
+        return "empty"
+    head = text.lstrip()[:300]
+    if head.startswith("Error:"):
+        return "error"
+    if head.startswith("AMBIGUOUS") or "AMBIGUOUS: yes" in head:
+        return "clarifying"
+    if flags.get("output_capped"):
+        return "capped"
+    if flags.get("corrected"):
+        return "corrected"
+    if used_student_context:
+        return "personalised"
+    name = _usable_student_name(student_name)
+    if name:
+        for part in {name, *name.split()}:
+            if len(part) >= 2 and re.search(rf"(?<!\w){re.escape(part)}(?!\w)", text, re.IGNORECASE):
+                return "name"
+        if _answer_cache_language(language) == "hi":
+            return "name_unverifiable"
+    if _has_self_correction(text):
+        return "self_correction"
+    return None
+
+async def _answer_cache_lookup(cache_key: str) -> Optional[dict]:
+    """The live (current version, not expired) row for this key, or None. Any failure -- including
+    the versioning migration not having been run yet -- is just a miss."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=ANSWER_CACHE_TTL_DAYS)).isoformat()
+    try:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/answer_cache", headers=_ANSWER_CACHE_HEADERS,
+            params={"question_hash": f"eq.{cache_key}", "prompt_version": f"eq.{ANSWER_CACHE_PROMPT_VERSION}",
+                    "created_at": f"gte.{cutoff}", "select": "answer,alternate_method", "limit": "1"}
+        )
+        rows = resp.json() if resp.status_code == 200 else []
+    except Exception:
+        return None
+    return rows[0] if isinstance(rows, list) and rows and rows[0].get("answer") else None
+
+async def _answer_cache_store(cache_key: str, answer: str, language: str, answer_style: str) -> bool:
+    """Upsert on question_hash, so a same-version row that expired is replaced (created_at reset,
+    and its alternate method cleared, since that was generated from the old answer)."""
+    try:
+        resp = await async_client.post(
+            f"{SUPABASE_URL}/rest/v1/answer_cache",
+            headers={**_ANSWER_CACHE_HEADERS, "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates"},
+            params={"on_conflict": "question_hash"},
+            json={"question_hash": cache_key, "answer": answer, "prompt_version": ANSWER_CACHE_PROMPT_VERSION,
+                  "language": _answer_cache_language(language), "answer_style": _answer_cache_style(answer_style),
+                  "created_at": datetime.now(timezone.utc).isoformat(), "alternate_method": None}
+        )
+        return resp.status_code < 400
+    except Exception:
+        return False
+
+async def _log_answer_cache_event(event: str, reason: Optional[str], cache_key: str, language: str, answer_style: str, is_guest: bool):
+    """event: hit / miss / skip (lookup) or stored / not_stored (after generation). Best-effort."""
+    print(f"ANSWER CACHE: event={event} reason={reason or '-'} lang={_answer_cache_language(language)} style={_answer_cache_style(answer_style)} guest={str(is_guest).lower()} key={cache_key[:12]}", flush=True)
+    try:
+        await async_client.post(
+            f"{SUPABASE_URL}/rest/v1/answer_cache_log", headers={**ADMIN_HEADERS, "Content-Type": "application/json"},
+            json={"event": event, "reason": reason, "question_hash": cache_key, "prompt_version": ANSWER_CACHE_PROMPT_VERSION,
+                  "language": _answer_cache_language(language), "answer_style": _answer_cache_style(answer_style), "is_guest": is_guest}
+        )
+    except Exception:
+        pass
+
 # Strong references for fire-and-forget regeneration tasks -- asyncio only keeps a weak reference
 # to a running Task, so an unreferenced multi-second model call could be garbage-collected mid-run.
 _BACKGROUND_TASKS = set()
@@ -4416,14 +4688,14 @@ def _append_hedge_verification_note(first_answer: str, option: str, reason: str,
         note += f" ({tie_break})"
     return first_answer + note
 
-async def _stream_mcq_hedge_verified(system: str, messages: list, question_text: str, user_id: str, ip: str, endpoint: str, billing_context: dict = None, force_qwen: bool = False):
+async def _stream_mcq_hedge_verified(system: str, messages: list, question_text: str, user_id: str, ip: str, endpoint: str, billing_context: dict = None, force_qwen: bool = False, max_tokens: int = ANSWER_MAX_TOKENS):
     """Used only when the question matches _is_mcq_shaped -- see the trigger condition in
     stream_response's text branch. Buffers the full first answer (from whichever model
     _stream_with_peak_fallback would have picked anyway -- this isn't Qwen-specific the way the
     insufficient-data verifier is, since the audit's own confirmed failure case was a DeepSeek
     answer), then only spends a second call if _has_hedging_language finds something in it."""
     chunks = []
-    async for c in _stream_with_peak_fallback(system, messages, user_id, ip, endpoint, billing_context, force_qwen):
+    async for c in _stream_with_peak_fallback(system, messages, user_id, ip, endpoint, billing_context, force_qwen, max_tokens=max_tokens):
         chunks.append(c)
     first_answer = "".join(chunks)
 
@@ -4432,6 +4704,8 @@ async def _stream_mcq_hedge_verified(system: str, messages: list, question_text:
         yield first_answer
         return
 
+    if billing_context is not None:
+        billing_context["corrected"] = True  # second-guessed itself -- never shared-cached
     yield SIMULATED_STREAM_MARKER
     option, reason, tie_break = await _verify_mcq_hedge(question_text, first_answer, user_id, ip, billing_context)
     if option:
@@ -4693,30 +4967,60 @@ def _usable_student_name(name: str) -> str:
         return ""
     return name
 
-async def _regenerate_and_cache_chat_answer(system: str, messages: list, answer_hash: str, has_retrieval: bool, force_qwen: bool, user_id: str, ip: str):
+async def _regenerate_and_cache_chat_answer(system: str, messages: list, cache_key: str, has_retrieval: bool, force_qwen: bool, user_id: str, ip: str, language: str = "en", answer_style: str = "detailed", student_name: str = "", max_tokens: int = ANSWER_MAX_TOKENS):
     """Background (never awaited by the request) replacement for a shared-cache /chat answer that
     _has_self_correction flagged. One retry with SELF_CORRECTION_RETRY_GUARD appended, same model
     routing, NOT billed to the student (they already paid for the answer they saw; provider cost
-    is still logged under /chat). Cached only if the retry is clean and is a real answer, not a
-    clarifying question -- this path skips stream_response's rule-11 guard, so an AMBIGUOUS reply
-    is never cached from here. Anything else leaves the cache empty for this question, so the
-    next student asking it gets a fresh generation through the normal checks."""
+    is still logged under /chat). Stored only if the retry passes the same checks a live answer
+    does (_answer_cache_store_block) -- this path skips stream_response's rule-11 guard, so an
+    AMBIGUOUS reply is caught there too. Anything else leaves the cache empty for this question,
+    so the next student asking it gets a fresh generation through the normal checks."""
     try:
-        stream = _stream_with_peak_fallback(system + SELF_CORRECTION_RETRY_GUARD, messages, user_id, ip, "/chat", {"bill": False}, force_qwen)
+        flags = {"bill": False}
+        stream = _stream_with_peak_fallback(system + SELF_CORRECTION_RETRY_GUARD, messages, user_id, ip, "/chat", flags, force_qwen, max_tokens=max_tokens)
         answer = ""
         async for chunk in _force_citation_when_no_retrieval(stream, has_retrieval):
             answer += chunk
-        if answer.strip() and not answer.lstrip().startswith("AMBIGUOUS") and not _has_self_correction(answer):
-            await async_client.post(
-                f"{SUPABASE_URL}/rest/v1/answer_cache",
-                headers={"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}", "Content-Type": "application/json"},
-                json={"question_hash": answer_hash, "answer": answer}
-            )
-            print(f"CHAT SELF-CORRECTION REGENERATED AND CACHED: question_hash={answer_hash[:12]}", flush=True)
+        block = _answer_cache_store_block(answer, language, student_name, False, flags)
+        stored = block is None and await _answer_cache_store(cache_key, answer, language, answer_style)
+        if stored:
+            print(f"CHAT SELF-CORRECTION REGENERATED AND CACHED: question_hash={cache_key[:12]}", flush=True)
         else:
-            print(f"CHAT SELF-CORRECTION UNRESOLVED, NOT CACHED: question_hash={answer_hash[:12]}", flush=True)
+            print(f"CHAT SELF-CORRECTION UNRESOLVED, NOT CACHED: question_hash={cache_key[:12]} reason={block or 'write_failed'}", flush=True)
+        await _log_answer_cache_event("stored" if stored else "not_stored", "regenerated" if stored else f"regenerated:{block or 'write_failed'}", cache_key, language, answer_style, not user_id)
     except Exception as e:
-        print(f"CHAT SELF-CORRECTION REGENERATION FAILED: question_hash={answer_hash[:12]}: {e}", flush=True)
+        print(f"CHAT SELF-CORRECTION REGENERATION FAILED: question_hash={cache_key[:12]}: {e}", flush=True)
+
+async def _stream_empty_conversational_retry(override_system: str, messages: list, user_id: str, ip: str, is_peak: bool, billing_context: dict, try_qwen: bool, max_tokens: int = ANSWER_MAX_TOKENS):
+    """Second attempt after a reply that was only the bare "DOUBT_TYPE: conversational" line.
+    Qwen is the model that does this (see HINGLISH_GUARD), so when the first attempt was on Qwen
+    the retry stays on Qwen, with QWEN_EMPTY_CONVERSATIONAL_RETRY_NOTE added -- far cheaper than
+    the full DeepSeek regeneration this always used to be, and measured 30/30 complete. Only the
+    reply's first line is held back, to see whether it is the bare marker again; if it is (or Qwen
+    fails before writing anything), DeepSeek answers as before."""
+    if try_qwen:
+        buffered = ""
+        released = False
+        try:
+            async for chunk in _stream_qwen(override_system + QWEN_EMPTY_CONVERSATIONAL_RETRY_NOTE, messages, user_id, ip, "/chat", billing_context, max_tokens=max_tokens):
+                if released:
+                    yield chunk
+                    continue
+                buffered += chunk
+                head = buffered.lstrip()
+                if not head or _CONVERSATIONAL_MARKER.startswith(head) or (head.startswith(_CONVERSATIONAL_MARKER) and not head[len(_CONVERSATIONAL_MARKER):].strip()):
+                    continue
+                released = True
+                yield buffered
+        except Exception as e:
+            if released:
+                raise
+            print(f"QWEN EMPTY-CONVERSATIONAL RETRY FAILED, FALLING BACK TO DEEPSEEK: {e}", flush=True)
+        if released:
+            return
+        print("QWEN EMPTY-CONVERSATIONAL RETRY STILL EMPTY, FALLING BACK TO DEEPSEEK", flush=True)
+    async for chunk in _stream_deepseek(override_system, messages, user_id, ip, is_peak, "/chat", billing_context, max_tokens=max_tokens):
+        yield chunk
 
 async def stream_response(text: str, history: list = [], images: list = [], pdf: str = None, answer_style: str = "detailed", student_name: str = "", language: str = "en", user_id: str = "", personalize: bool = True, skip_cache: bool = False, ip: str = "", running_summary: str = "", dropped_question: str = "", dropped_answer: str = ""):
     images = (images or [])[:3]
@@ -4768,28 +5072,23 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
             if deterministic_ambiguity is not None:
                 yield deterministic_ambiguity
                 return
-    import hashlib
-    # Personalized answers are specific to this student and must never be served from —
-    # or written to — the shared answer cache, which is keyed only on question text.
-    # skip_cache is for explicit retries: the student has already seen the cached
-    # answer and wants a genuinely different generation, so it must bypass cache too.
-    use_shared_cache = not (personalize and user_id) and not skip_cache
-    answer_hash = hashlib.sha256(f"{language}:{text.strip().lower()}".encode()).hexdigest()
-    # Service-role key: answer_cache has RLS with no anon INSERT policy, so writes via
-    # the anon key were silently rejected (401) — reads worked, writes never did.
-    headers = {
-        "apikey": SUPABASE_SERVICE_KEY,
-        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"
-    }
-    if not images and not pdf and use_shared_cache:
-        cache_resp = await async_client.get(
-            f"{SUPABASE_URL}/rest/v1/answer_cache?question_hash=eq.{answer_hash}&select=answer",
-            headers=headers
-        )
-        cached = cache_resp.json()
-        if cached:
-            yield cached[0]["answer"]
+    # Shared answer cache -- see the rules above _answer_cache_key. Looked up before any retrieval
+    # or model work so a hit costs nothing; every lookup is logged (hit / miss / skip + reason).
+    cache_skip_reason = _answer_cache_skip_reason(images, pdf, history, running_summary, skip_cache)
+    cache_key = _answer_cache_key(text, language, answer_style)
+
+    def _cache_log(event, reason=None):
+        asyncio.create_task(_log_answer_cache_event(event, reason, cache_key, language, answer_style, not user_id))
+
+    if cache_skip_reason is None:
+        cached_row = await _answer_cache_lookup(cache_key)
+        if cached_row:
+            _cache_log("hit")
+            yield cached_row["answer"]
             return
+        _cache_log("miss")
+    else:
+        _cache_log("skip", cache_skip_reason)
     # Student context, NCERT search, and the diagram-existence check are independent of each
     # other -- run them concurrently instead of stacking their latency sequentially. Skip the
     # search entirely for an image-only doubt (see IMAGE_ONLY_PLACEHOLDER_TEXT above) -- there's
@@ -4866,21 +5165,15 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
         import sys
         usable_student_name = _usable_student_name(student_name)
         name_context = f"\n\nThe student name is {usable_student_name}. Use their name naturally and occasionally in responses to make it personal." if usable_student_name else ""
-        style_context = "\n\nIMPORTANT: The student has selected CONCISE mode. Give a very short answer — maximum 3 sentences only. No bullet points, no key points section, no memory tricks. Just the core answer." if answer_style == "concise" else ""
+        style_context = CONCISE_STYLE_CONTEXT if answer_style == "concise" else ""
+        answer_max_tokens = _answer_max_tokens(language)
         # Deliberately NOT folded into full_system below -- appended last, after
         # student_context/graph_context/conciseness_context/mcq_context and (in the text branch)
         # after the running-summary note, in every branch, so it's always the most recent
         # instruction the model reads before answering rather than one buried mid-prompt with
         # English context (running summary, student_context) stacked after it. That ordering was
         # a likely contributor to mixed-language answers in longer Hindi conversations.
-        lang_context = (
-            f"\n\nIMPORTANT: {HINDI_ONLY_CORE} Proper nouns like NEET or NCERT also stay exactly "
-            "as-is -- do not translate or romanize them. For the section headers specifically, use "
-            "these EXACT fixed Hindi labels rather than inventing your own translation each time: "
-            "\"Answer:\" becomes \"उत्तर:\", \"Key Points:\" becomes \"मुख्य बिंदु:\", \"Quick "
-            "Recall:\" becomes \"त्वरित याद:\". \"NEET Importance:\" and \"Chapter:\" stay in "
-            "English exactly as given in the format above -- never translate those two labels."
-        ) if language == "hi" else ""
+        lang_context = HINDI_LANG_CONTEXT if language == "hi" else ""
         # Graph/curve-matching questions are Gemini's one consistently weak category (~73%
         # across 4 rounds of testing, vs 95-100% on everything else) -- this can't be gated on
         # chapter/question-type ahead of time since the chapter is an OUTPUT of the answer (the
@@ -4993,6 +5286,9 @@ the question, ignore this instruction entirely and use the plain "Answer:" heade
                 asyncio.create_task(_update_running_summary(running_summary, dropped_question, dropped_answer, user_id, ip, language))
                 if dropped_question and dropped_answer else None
             )
+            if _looks_hinglish(text):
+                # See HINGLISH_GUARD -- stops Qwen reading a Hinglish doubt as small talk.
+                full_system = full_system + HINGLISH_GUARD
             if running_summary:
                 # Prepended to the system prompt, ahead of the sliding-2 messages themselves --
                 # matches the tested design exactly: [running summary] + [last 2 raw exchanges]
@@ -5008,7 +5304,7 @@ the question, ignore this instruction entirely and use the plain "Answer:" heade
             # no cheaper substitute for Gemini on image/PDF doubts, so those are never touched.
             max_tier = await check_max_usage_tier(user_id)
             force_qwen = max_tier == "breakeven"
-            print(f"MODEL SELECTED: {'qwen-flash (Max breakeven downgrade)' if force_qwen else ('qwen-flash (DeepSeek peak-hour fallback)' if is_peak else 'deepseek-v4-flash')}", flush=True)
+            print(f"MODEL SELECTED: {'qwen-flash (Max breakeven downgrade)' if force_qwen else ('qwen-flash (DeepSeek peak-hour fallback)' if is_peak else DEEPSEEK_MODEL)}", flush=True)
             sys.stdout.flush()
             full_answer = ""
             # billing_context lets this loop waive the student's daily-budget charge the moment
@@ -5049,14 +5345,14 @@ the question, ignore this instruction entirely and use the plain "Answer:" heade
             # longer-established, Qwen-specific mechanism.
             mcq_shaped = (not multi_object_numerical) and _is_mcq_shaped(text)
             if multi_object_numerical:
-                stream_source = _stream_qwen_verified(full_system, messages, text, user_id, ip, "/chat", billing_context)
+                stream_source = _stream_qwen_verified(full_system, messages, text, user_id, ip, "/chat", billing_context, max_tokens=answer_max_tokens)
             elif mcq_shaped:
                 # See MCQ_AMBIGUOUS_GUARD's own comment for why this is appended here rather than
                 # baked into SYSTEM_PROMPT itself -- fixes the AMBIGUOUS-misfire on the FIRST
                 # attempt instead of relying on the existing whitelist-guard's costly regenerate.
-                stream_source = _stream_mcq_hedge_verified(full_system + MCQ_AMBIGUOUS_GUARD, messages, text, user_id, ip, "/chat", billing_context, force_qwen)
+                stream_source = _stream_mcq_hedge_verified(full_system + MCQ_AMBIGUOUS_GUARD, messages, text, user_id, ip, "/chat", billing_context, force_qwen, max_tokens=answer_max_tokens)
             else:
-                stream_source = _stream_with_peak_fallback(full_system, messages, user_id, ip, "/chat", billing_context, force_qwen)
+                stream_source = _stream_with_peak_fallback(full_system, messages, user_id, ip, "/chat", billing_context, force_qwen, max_tokens=answer_max_tokens)
 
             # Peel off a leading SIMULATED_STREAM_MARKER chunk (only ever yielded by
             # _stream_qwen_verified) BEFORE it reaches the rule-11 AMBIGUOUS/CLARIFY_TYPE
@@ -5210,12 +5506,12 @@ the question, ignore this instruction entirely and use the plain "Answer:" heade
                     )
                     full_answer = ""
                     billing_context = {"bill": True}
-                    # Forced straight to DeepSeek, not the normal peak-hour routing -- confirmed
-                    # live (4/4) that Qwen is the one that stops generating right after this
-                    # marker, so retrying through the same routing during a peak window would
-                    # likely just reproduce the identical empty response. DeepSeek reliably
-                    # continues past the marker with the required natural-language reply.
-                    override_stream = _stream_deepseek(override_system, messages, user_id, ip, is_peak, "/chat", billing_context)
+                    # Qwen is the one that stops right after this marker (confirmed live), and a
+                    # plain retry through it reproduced the empty reply -- so a request Qwen
+                    # served retries on Qwen with an extra note first (cheap, measured 30/30),
+                    # and only falls back to a full DeepSeek generation if that is empty again.
+                    # A request DeepSeek served retries on DeepSeek, as before.
+                    override_stream = _stream_empty_conversational_retry(override_system, messages, user_id, ip, is_peak, billing_context, use_qwen_for_this_request, answer_max_tokens)
                 else:
                     override_system = full_system + (
                         "\n\nOVERRIDE (server-enforced, not optional): this exact doubt has been "
@@ -5226,7 +5522,7 @@ the question, ignore this instruction entirely and use the plain "Answer:" heade
                     )
                     full_answer = ""
                     billing_context = {"bill": True}
-                    override_stream = _stream_with_peak_fallback(override_system, messages, user_id, ip, "/chat", billing_context, force_qwen)
+                    override_stream = _stream_with_peak_fallback(override_system, messages, user_id, ip, "/chat", billing_context, force_qwen, max_tokens=answer_max_tokens)
                 if override_reason == "invalid_clarify":
                     # Hard server-side re-validation of the retry itself (added 2026-09-21) --
                     # the override above still only relies on the model actually obeying "do not
@@ -5269,7 +5565,7 @@ the question, ignore this instruction entirely and use the plain "Answer:" heade
                         final_system = full_system.replace(SYSTEM_PROMPT, SYSTEM_PROMPT_NO_CLARIFY, 1)
                         full_answer = ""
                         billing_context = {"bill": True}
-                        final_stream = _stream_with_peak_fallback(final_system, messages, user_id, ip, "/chat", billing_context, force_qwen)
+                        final_stream = _stream_with_peak_fallback(final_system, messages, user_id, ip, "/chat", billing_context, force_qwen, max_tokens=answer_max_tokens)
                         async for text_chunk in _force_citation_when_no_retrieval(final_stream, bool(results)):
                             full_answer += text_chunk
                             yield text_chunk
@@ -5287,19 +5583,21 @@ the question, ignore this instruction entirely and use the plain "Answer:" heade
                     async for text_chunk in _force_citation_when_no_retrieval(override_stream, bool(results)):
                         full_answer += text_chunk
                         yield text_chunk
-            if not images and not pdf and use_shared_cache:
-                if _has_self_correction(full_answer):
-                    # Shared cache, served verbatim to every later student asking the same text --
-                    # never store visible self-correction there. This student has already seen
-                    # it; a clean background regeneration takes its place in the cache instead.
-                    print(f"CHAT SELF-CORRECTION DETECTED, NOT CACHED: question_hash={answer_hash[:12]}", flush=True)
-                    _spawn_background(_regenerate_and_cache_chat_answer(full_system, messages, answer_hash, bool(results), force_qwen, user_id, ip))
+            if cache_skip_reason is None:
+                # billing_context is the dict of whichever attempt produced full_answer (each
+                # override retry starts a fresh one), so its capped/corrected flags are this answer's.
+                cache_block = _answer_cache_store_block(full_answer, language, usable_student_name, bool(student_context), billing_context)
+                if cache_block is None:
+                    stored = await _answer_cache_store(cache_key, full_answer, language, answer_style)
+                    _cache_log("stored" if stored else "not_stored", None if stored else "write_failed")
                 else:
-                    await async_client.post(
-                        f"{SUPABASE_URL}/rest/v1/answer_cache",
-                        headers={**headers, "Content-Type": "application/json"},
-                        json={"question_hash": answer_hash, "answer": full_answer}
-                    )
+                    _cache_log("not_stored", cache_block)
+                    if cache_block == "self_correction":
+                        # Shared cache, served verbatim to every later student asking the same
+                        # text -- never store visible self-correction there. This student has
+                        # already seen it; a clean background regeneration takes its place instead.
+                        print(f"CHAT SELF-CORRECTION DETECTED, NOT CACHED: question_hash={cache_key[:12]}", flush=True)
+                        _spawn_background(_regenerate_and_cache_chat_answer(full_system, messages, cache_key, bool(results), force_qwen, user_id, ip, language, answer_style, usable_student_name, answer_max_tokens))
             # The background summarization task (if one was fired above) has had the ENTIRE
             # main-answer generation above to run concurrently -- typically several seconds,
             # comfortably longer than a summarization call's own ~1-1.5s real measured latency --
@@ -5433,26 +5731,32 @@ async def _store_cached_pyq_solution(pyq_id: str, language: str, solution: str, 
         json=row
     )
 
-async def _generate_solve_solution(req: SolveRequest, ip: str, extra_system: str = "", bill: bool = True) -> str:
+async def _generate_solve_solution(req: SolveRequest, ip: str, extra_system: str = "", bill: bool = True, meta: dict = None) -> str:
     """Non-streaming full generation through the same model/prompt each live /solve path uses
     (Gemini with the real diagram image(s) when there is one, otherwise the peak-hour DeepSeek/
     Qwen routing). Used by the background self-correction regeneration and by
     scan_solution_cache.py --apply, never by the live streaming request itself. Provider cost is
-    always logged under /solve; bill=False skips charging the student's daily budget."""
+    always logged under /solve; bill=False skips charging the student's daily budget. Pass a meta
+    dict to learn whether the solution was cut off at its output cap (meta["output_capped"])."""
+    meta = meta if meta is not None else {}
+    meta["bill"] = bill
     has_diagram = _solve_has_diagram(req)
     system = _solve_system_prompt(req.language, has_diagram) + extra_system
     if not has_diagram:
         solution = ""
-        async for chunk in _stream_with_peak_fallback(system, _solve_text_messages(req), req.user_id, ip, "/solve", {"bill": bill}):
+        async for chunk in _stream_with_peak_fallback(system, _solve_text_messages(req), req.user_id, ip, "/solve", meta, max_tokens=_answer_max_tokens(req.language)):
             solution += chunk
         return solution
     contents = await _solve_diagram_contents(req)
     config = genai_types.GenerateContentConfig(system_instruction=system, max_output_tokens=1024)
     resp = await gemini_client.aio.models.generate_content(model="gemini-3.5-flash-lite", contents=contents, config=config)
     usage = resp.usage_metadata
+    capped = _gemini_output_capped(resp)
     if usage:
+        if capped:
+            _note_output_cap("gemini-3.5-flash-lite", "/solve", 1024, usage.candidates_token_count or 0, meta)
         cost = _gemini_cost(usage.prompt_token_count, 0, usage.candidates_token_count)
-        asyncio.create_task(log_provider_usage("gemini-3.5-flash-lite", False, usage.prompt_token_count, usage.candidates_token_count, cost, "/solve", req.user_id))
+        asyncio.create_task(log_provider_usage("gemini-3.5-flash-lite", False, usage.prompt_token_count, usage.candidates_token_count, cost, "/solve", req.user_id, output_capped=capped))
         if bill:
             asyncio.create_task(log_token_usage(req.user_id, usage.prompt_token_count + usage.candidates_token_count, ip))
     return resp.text or ""
@@ -5465,8 +5769,9 @@ async def _regenerate_and_cache_solution(req: SolveRequest, ip: str):
     matching question, where no option is correct) -- logged for data review and left uncached,
     since caching anything there would serve a broken or invented solution to every student."""
     try:
-        solution = await _generate_solve_solution(req, ip, SELF_CORRECTION_RETRY_GUARD, bill=False)
-        if solution.strip() and not _has_self_correction(solution):
+        meta = {}
+        solution = await _generate_solve_solution(req, ip, SELF_CORRECTION_RETRY_GUARD, bill=False, meta=meta)
+        if solution.strip() and not _has_self_correction(solution) and not meta.get("output_capped"):
             await _store_cached_pyq_solution(req.pyq_id, req.language, solution)
             print(f"SOLVE SELF-CORRECTION REGENERATED AND CACHED: pyq_id={req.pyq_id} language={req.language}", flush=True)
         else:
@@ -5497,11 +5802,16 @@ async def stream_solve_response(req: SolveRequest, cached_solution, ip: str):
         # subject to the same Max-plan breakeven downgrade (text-only endpoint, no image
         # involved, same reasoning as stream_response's text branch).
         force_qwen = (await check_max_usage_tier(req.user_id)) == "breakeven"
-        async for text_chunk in _stream_with_peak_fallback(solve_system, solve_messages, req.user_id, ip, "/solve", force_qwen=force_qwen):
+        solve_meta = {"bill": True}
+        async for text_chunk in _stream_with_peak_fallback(solve_system, solve_messages, req.user_id, ip, "/solve", solve_meta, force_qwen=force_qwen, max_tokens=_answer_max_tokens(req.language)):
             full_solution += text_chunk
             yield text_chunk
         if req.pyq_id and full_solution:
-            await _cache_or_regenerate_solution(req, full_solution, ip)
+            if solve_meta.get("output_capped"):
+                # pyq_solution_cache serves this to every later student forever -- never a cut-off solution.
+                print(f"SOLVE ANSWER CUT OFF AT OUTPUT CAP, NOT CACHED: pyq_id={req.pyq_id} language={req.language}", flush=True)
+            else:
+                await _cache_or_regenerate_solution(req, full_solution, ip)
     except Exception as e:
         yield f"Error: {str(e)}"
 
@@ -5566,6 +5876,7 @@ async def stream_solve_response_with_diagram(req: SolveRequest, cached_solution,
         )
         full_solution = ""
         last_usage = None
+        capped = False
         try:
             async for chunk in gemini_stream:
                 if chunk.text:
@@ -5573,6 +5884,7 @@ async def stream_solve_response_with_diagram(req: SolveRequest, cached_solution,
                     yield chunk.text
                 if chunk.usage_metadata:
                     last_usage = chunk.usage_metadata
+                capped = capped or _gemini_output_capped(chunk)
         finally:
             # Log on the way out (including on an early client disconnect) rather than only on a
             # clean finish -- same asyncio.create_task fix _stream_gemini_media now also uses (see
@@ -5590,7 +5902,9 @@ async def stream_solve_response_with_diagram(req: SolveRequest, cached_solution,
             # flat cost, not the cache-split _stream_gemini_media computes.
             if last_usage:
                 cost = _gemini_cost(last_usage.prompt_token_count, 0, last_usage.candidates_token_count)
-                asyncio.create_task(log_provider_usage("gemini-3.5-flash-lite", False, last_usage.prompt_token_count, last_usage.candidates_token_count, cost, "/solve", req.user_id))
+                if capped:
+                    _note_output_cap("gemini-3.5-flash-lite", "/solve", 1024, last_usage.candidates_token_count or 0)
+                asyncio.create_task(log_provider_usage("gemini-3.5-flash-lite", False, last_usage.prompt_token_count, last_usage.candidates_token_count, cost, "/solve", req.user_id, output_capped=capped))
                 asyncio.create_task(log_token_usage(req.user_id, last_usage.prompt_token_count + last_usage.candidates_token_count, ip))
         # Deliberately NOT inside the finally above, unlike _stream_gemini_media's analogous
         # log_media_doubt call -- that's a pure audit-trail log, safe to record even a partial
@@ -5606,7 +5920,10 @@ async def stream_solve_response_with_diagram(req: SolveRequest, cached_solution,
         # this PYQ's solution gets it for free regardless of which path they'd otherwise hit. Same
         # self-correction gate as the text path too -- see _cache_or_regenerate_solution.
         if req.pyq_id and full_solution:
-            await _cache_or_regenerate_solution(req, full_solution, ip)
+            if capped:
+                print(f"SOLVE ANSWER CUT OFF AT OUTPUT CAP, NOT CACHED: pyq_id={req.pyq_id} language={req.language}", flush=True)
+            else:
+                await _cache_or_regenerate_solution(req, full_solution, ip)
     except Exception as e:
         # Gemini is the sole provider for a diagram-based /solve request (no DeepSeek/Qwen
         # fallback exists here either, same reasoning as _stream_gemini_media) -- this is that
@@ -5725,7 +6042,7 @@ async def generate_title(message: Message, request: Request, _: None = Depends(r
     fallback_title = "Casual Chat" if message.language != "hi" else "सामान्य चैट"
     title_lang = "entirely in Hindi (Devanagari script) — every word in Hindi, no English words mixed in" if message.language == "hi" else "in English"
     response = client.messages.create(
-        model="deepseek-v4-flash",
+        model=DEEPSEEK_MODEL,
         max_tokens=15,
         thinking={"type": "disabled"},
         system=(
@@ -5756,6 +6073,7 @@ async def generate_title(message: Message, request: Request, _: None = Depends(r
         messages=[{"role": "user", "content": message.text}]
     )
     await log_token_usage(message.user_id, response.usage.input_tokens + response.usage.output_tokens, ip)
+    await _log_deepseek_message_usage(response, "/title", message.user_id, 15)
     return {"title": _clean_title(response.content[0].text, fallback_title)}
 
 # Backs chat.html's "/summarize" command -- same lightweight, no-NCERT-search, low-max_tokens
@@ -5772,7 +6090,7 @@ async def summarize_answer(req: SummarizeAnswerRequest, request: Request, _: Non
     client = deepseek_client
     lang_instruction = HINDI_ONLY_CORE if req.language == "hi" else "Respond in English."
     response = client.messages.create(
-        model="deepseek-v4-flash",
+        model=DEEPSEEK_MODEL,
         max_tokens=220,
         thinking={"type": "disabled"},
         system=(
@@ -5787,6 +6105,7 @@ async def summarize_answer(req: SummarizeAnswerRequest, request: Request, _: Non
         messages=[{"role": "user", "content": req.text}]
     )
     await log_token_usage(req.user_id, response.usage.input_tokens + response.usage.output_tokens, ip)
+    await _log_deepseek_message_usage(response, "/summarize-answer", req.user_id, 220)
     return {"summary": response.content[0].text}
 
 def _guest_usage_row_key(request: Request):
@@ -5908,7 +6227,9 @@ async def usage_summary(verified_user_id: str = Depends(_get_verified_user_id)):
         window_start_iso = (datetime.now(timezone.utc) - timedelta(days=USAGE_PROVIDER_BREAKDOWN_DAYS)).isoformat()
         resp = await async_client.get(
             f"{SUPABASE_URL}/rest/v1/provider_usage_log", headers=ADMIN_HEADERS,
-            params={"user_id": f"eq.{user_id}", "created_at": f"gte.{window_start_iso}",
+            # Only /chat and /solve rows are doubts -- titles, summaries, alternate methods,
+            # verification passes etc. log their own rows to this table too.
+            params={"user_id": f"eq.{user_id}", "created_at": f"gte.{window_start_iso}", "endpoint": "in.(/chat,/solve)",
                     "select": "provider,created_at", "order": "created_at.asc"}
         )
         rows = resp.json() if resp.status_code == 200 else []
@@ -7480,7 +7801,7 @@ def classify_difficulty(question: str, option_a: str, option_b: str, option_c: s
         context_lines.append(f"Source: {source_tag}")
     try:
         response = deepseek_client.messages.create(
-            model="deepseek-v4-flash",
+            model=DEEPSEEK_MODEL,
             max_tokens=10,
             thinking={"type": "disabled"},
             system=(
@@ -7575,7 +7896,7 @@ async def classify_difficulty_endpoint(req: ClassifyDifficultyRequest, _: None =
                 if cache_miss or cache_hit or output_tokens:
                     cost = _deepseek_cost(cache_miss, cache_hit, output_tokens, is_peak)
                     try:
-                        await log_provider_usage("deepseek-v4-flash", is_peak, cache_miss + cache_hit, output_tokens, cost, "/classify-difficulty", req.user_id)
+                        await log_provider_usage(DEEPSEEK_MODEL, is_peak, cache_miss + cache_hit, output_tokens, cost, "/classify-difficulty", req.user_id, cache_hit_tokens=cache_hit)
                     except Exception:
                         pass
                 if label:
@@ -7644,7 +7965,7 @@ async def admin_backfill_difficulty(table: str = "pyq", limit: int = 200, _: Non
         if cache_miss or cache_hit or output_tokens:
             cost = _deepseek_cost(cache_miss, cache_hit, output_tokens, is_peak)
             try:
-                await log_provider_usage("deepseek-v4-flash", is_peak, cache_miss + cache_hit, output_tokens, cost, "/classify-difficulty", "")
+                await log_provider_usage(DEEPSEEK_MODEL, is_peak, cache_miss + cache_hit, output_tokens, cost, "/classify-difficulty", "", cache_hit_tokens=cache_hit)
             except Exception:
                 pass
         if label:
@@ -7694,7 +8015,7 @@ def solve_correct_answer(question: str, option_a: str, option_b: str, option_c: 
     _deepseek_cost. This function itself has no endpoint/user_id context to log with."""
     try:
         response = deepseek_client.messages.create(
-            model="deepseek-v4-flash",
+            model=DEEPSEEK_MODEL,
             max_tokens=10,
             thinking={"type": "disabled"},
             system=(
@@ -7761,7 +8082,7 @@ async def ensure_correct_answer_endpoint(req: EnsureCorrectAnswerRequest, _: Non
         is_peak = _is_deepseek_peak_hour()
         cost = _deepseek_cost(cache_miss, cache_hit, output_tokens, is_peak)
         try:
-            await log_provider_usage("deepseek-v4-flash", is_peak, cache_miss + cache_hit, output_tokens, cost, "/ensure-correct-answer", req.user_id)
+            await log_provider_usage(DEEPSEEK_MODEL, is_peak, cache_miss + cache_hit, output_tokens, cost, "/ensure-correct-answer", req.user_id, cache_hit_tokens=cache_hit)
         except Exception:
             pass
     if not label:
@@ -7828,7 +8149,7 @@ async def admin_pyq_backfill_correct_answer(limit: int = 200, _: None = Depends(
         if cache_miss or cache_hit or output_tokens:
             cost = _deepseek_cost(cache_miss, cache_hit, output_tokens, is_peak)
             try:
-                await log_provider_usage("deepseek-v4-flash", is_peak, cache_miss + cache_hit, output_tokens, cost, "/ensure-correct-answer", "")
+                await log_provider_usage(DEEPSEEK_MODEL, is_peak, cache_miss + cache_hit, output_tokens, cost, "/ensure-correct-answer", "", cache_hit_tokens=cache_hit)
             except Exception:
                 pass
         if label:
@@ -7860,7 +8181,9 @@ async def admin_pyq_backfill_correct_answer(limit: int = 200, _: None = Depends(
 
 # ---------- Multiple Solution Methods (alternate solving approach, on-demand + permanently cached) ----------
 
-def generate_alternate_method(question: str, primary_answer: str, options_context: str = "", language: str = "en"):
+ALTERNATE_METHOD_MAX_TOKENS = 800
+
+def generate_alternate_method(question: str, primary_answer: str, options_context: str = "", language: str = "en", usage_out: dict = None):
     """Single DeepSeek call that both decides whether a genuinely different, pedagogically valid
     method exists for this specific question AND generates it if so -- not every doubt has a real
     second method (most don't), so this must not fabricate one just to fill the feature.
@@ -7875,12 +8198,14 @@ def generate_alternate_method(question: str, primary_answer: str, options_contex
     Returns (text, tokens_used) where text is '' (not None) when the model determined no genuine
     alternate exists -- a real, cacheable verdict, not a retry state -- or (None, 0) on a hard
     failure the caller must NOT cache, so it's retried next time instead of permanently
-    remembering a failure as "no alternate exists"."""
+    remembering a failure as "no alternate exists". Runs in a worker thread (sync client), so it
+    can't log provider cost itself: pass usage_out and the raw response lands in
+    usage_out["response"] for the endpoint to log."""
     lang_instruction = f"\n\n{HINDI_ONLY_CORE}" if language == "hi" else ""
     try:
         response = deepseek_client.messages.create(
-            model="deepseek-v4-flash",
-            max_tokens=800,
+            model=DEEPSEEK_MODEL,
+            max_tokens=ALTERNATE_METHOD_MAX_TOKENS,
             thinking={"type": "disabled"},
             system=f"""You are a NEET exam expert reviewing a solved question. This feature only applies to numerical or derivation-style questions that involve a calculation or step-by-step derivation to reach the answer. If the question is a simple factual recall, identification, or definition question with no calculation/derivation involved (e.g. "which organelle is X", "what is the term for Y", "name the scientist who discovered Z"), always reply NO ALTERNATE -- restating supporting facts through a different angle is NOT a genuine alternate solving method, only a real second calculation or derivation path counts.
 
@@ -7894,6 +8219,8 @@ Then on the next line, if ALTERNATE EXISTS, write the full alternate method as b
 Do not default to "NO ALTERNATE" just because the final numeric answer is the same -- a different starting PRINCIPLE that reaches the same answer IS a genuine alternate and has real teaching value, for questions that involve a real calculation. Only say NO ALTERNATE if you truly cannot identify any different underlying principle, if the only "alternate" you can think of just re-derives the same formula a different way, or if the question is factual recall with no calculation at all.{lang_instruction}""",
             messages=[{"role": "user", "content": f"Question: {question}\n{options_context}\n\nPrimary method already given to the student:\n{primary_answer}\n\nFind a genuinely different valid alternate method."}]
         )
+        if usage_out is not None:
+            usage_out["response"] = response
         raw = response.content[0].text.strip()
         tokens = response.usage.input_tokens + response.usage.output_tokens
         first_line, _, rest = raw.partition("\n")
@@ -7913,6 +8240,11 @@ class ChatAlternateMethodRequest(BaseModel):
     primary_answer: str
     language: str = "en"
     user_id: str = ""
+    # The shared answer_cache row (and the alternate method stored on it) only ever belongs to a
+    # chat's first message -- see the rules above _answer_cache_key. Callers that don't send
+    # first_turn (the app, for now) still get a fresh alternate method, it just isn't shared.
+    answer_style: str = "detailed"
+    first_turn: bool = False
 
 @app.post("/chat-alternate-method")
 async def chat_alternate_method_endpoint(req: ChatAlternateMethodRequest, request: Request, _: None = Depends(rate_limit(20, 60, by="account")), verified_user_id: str = Depends(_get_verified_user_id)):
@@ -7926,48 +8258,41 @@ async def chat_alternate_method_endpoint(req: ChatAlternateMethodRequest, reques
     if not req.question or not req.primary_answer:
         return {"alternate_method": ""}
 
-    # Same hash the /chat shared cache already uses (language:text.strip().lower()) -- computed
-    # here rather than trusting a client-supplied hash, so this can never be pointed at the wrong
-    # cache row.
-    answer_hash = hashlib.sha256(f"{req.language}:{req.question.strip().lower()}".encode()).hexdigest()
-    cache_headers = {"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"}
-
-    resp = await async_client.get(
-        f"{SUPABASE_URL}/rest/v1/answer_cache",
-        headers=cache_headers,
-        params={"question_hash": f"eq.{answer_hash}", "select": "alternate_method"}
-    )
-    rows = resp.json()
-    if rows and rows[0].get("alternate_method") is not None:
-        return {"alternate_method": rows[0]["alternate_method"]}
+    # Same key the /chat shared cache uses (_answer_cache_key), computed here rather than trusting
+    # a client-supplied hash, so this can never be pointed at the wrong cache row -- and only for a
+    # chat's first message, the only kind of message the shared cache holds.
+    cache_key = _answer_cache_key(req.question, req.language, req.answer_style) if req.first_turn else None
+    row = await _answer_cache_lookup(cache_key) if cache_key else None
+    if row and row.get("alternate_method") is not None:
+        return {"alternate_method": row["alternate_method"]}
 
     # Only a fresh generation costs anything, so a cached method above stays free even past the cap.
     await enforce_daily_budget(req.user_id)
     loop = asyncio.get_event_loop()
-    text, tokens = await loop.run_in_executor(None, generate_alternate_method, req.question, req.primary_answer, "", req.language)
+    usage_out = {}
+    text, tokens = await loop.run_in_executor(None, generate_alternate_method, req.question, req.primary_answer, "", req.language, usage_out)
+    if usage_out.get("response") is not None:
+        await _log_deepseek_message_usage(usage_out["response"], "/chat-alternate-method", req.user_id, ALTERNATE_METHOD_MAX_TOKENS)
     if text is None:
         return {"alternate_method": ""}
 
     if tokens:
         await log_token_usage(req.user_id, tokens)
 
-    # PATCH, never upsert/insert: a row only exists here at all if the primary answer went
-    # through the SHARED cache (personalize=false or guest) -- writing a new row keyed on this
-    # hash would risk a personalized answer's alternate method leaking into the shared cache for
-    # a totally different user asking the same question text later. If there's no shared row,
-    # this just doesn't persist -- the feature still works for this one render, it just isn't
-    # free next time, exactly mirroring how the primary answer itself already isn't cached for
-    # personalized requests either.
-    if rows:
+    # PATCH, never upsert/insert: a live shared row exists only when this first message's answer
+    # went through the shared cache -- writing a new row keyed on this question would risk a
+    # personalised answer's alternate method being served to a different student later. With no
+    # shared row this just doesn't persist: the feature still works for this one render.
+    if row:
         try:
             await async_client.patch(
                 f"{SUPABASE_URL}/rest/v1/answer_cache",
-                headers={**cache_headers, "Content-Type": "application/json"},
-                params={"question_hash": f"eq.{answer_hash}"},
+                headers={**_ANSWER_CACHE_HEADERS, "Content-Type": "application/json"},
+                params={"question_hash": f"eq.{cache_key}"},
                 json={"alternate_method": text}
             )
         except Exception as e:
-            print(f"ALTERNATE METHOD SAVE ERROR (chat, hash={answer_hash}): {e}")
+            print(f"ALTERNATE METHOD SAVE ERROR (chat, hash={cache_key}): {e}")
 
     return {"alternate_method": text}
 
@@ -8009,9 +8334,12 @@ async def solve_alternate_method_endpoint(req: SolveAlternateMethodRequest, requ
     await enforce_daily_budget(req.user_id, ip)
     options_context = f"A) {req.option_a}\nB) {req.option_b}\nC) {req.option_c}\nD) {req.option_d}"
     loop = asyncio.get_event_loop()
+    usage_out = {}
     text, tokens = await loop.run_in_executor(
-        None, generate_alternate_method, req.question, req.primary_solution, options_context, req.language
+        None, generate_alternate_method, req.question, req.primary_solution, options_context, req.language, usage_out
     )
+    if usage_out.get("response") is not None:
+        await _log_deepseek_message_usage(usage_out["response"], "/solve-alternate-method", req.user_id, ALTERNATE_METHOD_MAX_TOKENS)
     if text is None:
         return {"alternate_method": ""}
 

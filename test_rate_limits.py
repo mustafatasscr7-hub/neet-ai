@@ -461,7 +461,7 @@ def test_chat_alternate_method(client, fake):
     generated = []
     original = server.generate_alternate_method
 
-    def fake_generate(question, primary_answer, options_context="", language="en"):
+    def fake_generate(question, primary_answer, options_context="", language="en", usage_out=None):
         generated.append(question)
         return "Use energy conservation instead.", 700
 
@@ -483,8 +483,8 @@ def test_chat_alternate_method(client, fake):
         generated.clear()
         r = client.post("/chat-alternate-method", json=body, headers=at(IP1, AUTH_A))
         check("over the daily budget -> 402, nothing generated", r.status_code == 402 and not generated, f"{r.status_code} {generated}")
-        fake.tables["answer_cache"] = [{"alternate_method": "cached method"}]
-        r = client.post("/chat-alternate-method", json=body, headers=at(IP1, AUTH_A))
+        fake.tables["answer_cache"] = [{"answer": "cached answer", "alternate_method": "cached method"}]
+        r = client.post("/chat-alternate-method", json={**body, "first_turn": True}, headers=at(IP1, AUTH_A))
         check("an already-cached method is still served past the cap (costs nothing)",
               r.status_code == 200 and r.json() == {"alternate_method": "cached method"} and not generated, r.text)
     finally:
@@ -499,7 +499,7 @@ def test_solve_alternate_method(client, fake):
     generated = []
     original = server.generate_alternate_method
 
-    def fake_generate(question, primary_answer, options_context="", language="en"):
+    def fake_generate(question, primary_answer, options_context="", language="en", usage_out=None):
         generated.append(question)
         return "Use the mole method instead.", 5000
 

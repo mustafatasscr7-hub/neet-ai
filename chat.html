@@ -7245,8 +7245,9 @@ function plainTextFromMarkdown(text) {
     // question costs zero extra DeepSeek calls. Returns '' both when there's genuinely no
     // alternate method and when the request fails -- either way, no button should appear.
     // Logged-in only: the server bills it to the verified account and checks its daily budget, so
-    // a guest (no session) never asks.
-    async function ensureAlternateMethod(questionText, primaryAnswer, language) {
+    // a guest (no session) never asks. firstTurn: the server only shares an alternate method
+    // through answer_cache for a chat's first message (the only kind that cache holds).
+    async function ensureAlternateMethod(questionText, primaryAnswer, language, firstTurn) {
       try {
         const { data: { session } } = await client.auth.getSession();
         if (!session) return '';
@@ -7256,7 +7257,9 @@ function plainTextFromMarkdown(text) {
           body: JSON.stringify({
             question: questionText,
             primary_answer: primaryAnswer,
-            language
+            language,
+            answer_style: localStorage.getItem('answerStyle') || 'detailed',
+            first_turn: !!firstTurn
           })
         });
         const data = await res.json();
@@ -7913,7 +7916,7 @@ function plainTextFromMarkdown(text) {
         // NEET Importance/Chapter line) was never a real doubt with an "alternate method" to
         // begin with, so this used to burn a real LLM call on every "hello".
         if (metaHtml && !(options.images && options.images.length) && !options.pdf) {
-          ensureAlternateMethod(questionText, fullText, getLang()).then(altText => {
+          ensureAlternateMethod(questionText, fullText, getLang(), historyLen === 0).then(altText => {
             if (altText) appendAlternateMethodToggle(bubble, altText);
           });
         }

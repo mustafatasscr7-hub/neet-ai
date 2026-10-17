@@ -43,7 +43,7 @@ only removed by the user's own actions or by `POST /account/delete`.
 | Guest device ID / IP + daily tokens | Guest `/chat`, `/solve`, `/title`, `/summarize-answer` | Guest limit (14,000 tokens per device per day; 280,000 per IP per day across all guests) | `guest_device_usage_log` (device ID, IST date, tokens) and `guest_usage_log` (IP, IST date, tokens; the per-IP total). Clients without a device ID: IP only | 30 days (not touched by account deletion; logging in moves that day's device usage to the account) | Supabase |
 | Rate-limit counters | Every limited API route, `/auth/send-otp` | Abuse / flood protection | Server memory only (never written anywhere): counts keyed by account, device ID (`X-Device-Id` header), phone number or IP address | Cleared within a day (longest window: OTP's 24h; every deploy restarts the process and clears them) | None |
 | Supabase sign-in log | Supabase Auth | Auth audit trail | `auth.audit_log_entries` (sign-in events, IP address) | 12 months | Supabase |
-| Shared answer cache / embedding cache | Non-personalised `/chat` | Cost/latency | `answer_cache` (question hash → answer), `embedding_cache` (question hash → embedding vector), `pyq_solution_cache` | No limit (not personal) | Supabase; not linked to a user |
+| Shared answer cache / embedding cache | Non-personalised `/chat` (a chat's first message only) | Cost/latency | `answer_cache` (question hash → answer), `answer_cache_log` (hit/miss counts with the question hash, no user or text), `embedding_cache` (question hash → embedding vector), `pyq_solution_cache` | `answer_cache` 30 days, `answer_cache_log` 90 days, the rest no limit (not personal) | Supabase; not linked to a user |
 | Server logs | Railway stdout | Debugging | Railway logs: user IDs + errors, no question text (checked `print(` calls) | Railway's log retention | Railway |
 | Server error events | `sentry_sdk` (send_default_pii=False) | Debugging | Sentry, **only if `SENTRY_DSN` is set on Railway** (empty in local `.env`; Railway unknown) | Sentry plan retention | Sentry (if on) |
 | "All AI providers down" alert | Server | Ops | Telegram message: endpoint, user_id, error text | Telegram | Telegram (only if bot token set on Railway; empty locally) |
@@ -77,7 +77,9 @@ through the Storage API via pg_net, with the service key in Vault. Every run wri
 | 12 months | `usage_log`, `max_usage_alerts`, `auth.audit_log_entries` (owner chose 12 months; see section 6 on its size) |
 | 24 months, `user_id` cleared at 12 months | `provider_usage_log`. It holds `user_id`, so it was not "no personal data" as it stood; clearing the id at 12 months makes the second year anonymous |
 | Anonymise at 12 months (`user_id`, and `chat_id` where present, cleared), keep content | `question_reports`, `diagram_reports`, `response_feedback`, `session_feedback` (their `user_id` was NOT NULL; `retention_cleanup.sql` relaxes that) |
-| No limit (not personal) | `answer_cache`, `embedding_cache`, `pyq_solution_cache` |
+| 30 days (not personal) | `answer_cache` (server.py also stops serving entries at 30 days) |
+| 90 days (not personal) | `answer_cache_log` |
+| No limit (not personal) | `embedding_cache`, `pyq_solution_cache` |
 | Housekeeping | `cron.job_run_details` 30 days; `retention_runs` 90 days (the file sweep logs deleted file names, `<user_id>/<hex>.<ext>`, so a wrong deletion could be traced) |
 
 Tables that didn't fit the owner's list, and what was decided:
