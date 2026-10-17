@@ -1343,7 +1343,11 @@ def insert_question(q, subject="Biology"):
         "source_tag": q.get("source_tag"),
         "subject": subject,
         "has_diagram": q.get("has_diagram", False),
-        "is_active": True
+        "is_active": True,
+        # The table's default is now pending (add_pyq_review_status.sql); this script is the
+        # admin's own import, so its rows go live as before.
+        "uploaded_by": "admin",
+        "review_status": "approved"
     }
     res = http_requests.post(
         f"{SUPABASE_URL}/rest/v1/pyq",

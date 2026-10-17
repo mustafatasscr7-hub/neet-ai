@@ -140,10 +140,12 @@ TEXT CHUNK:
 def upload_to_supabase(questions):
     success = 0
     for q in questions:
+        # The table's default is now pending (add_pyq_review_status.sql); this script is the
+        # admin's own import, so its rows go live as before.
         res = requests.post(
             f"{SUPABASE_URL}/rest/v1/pyq",
             headers=headers,
-            json=q
+            json={**q, "uploaded_by": "admin", "review_status": "approved"}
         )
         if res.status_code in [200, 201]:
             success += 1

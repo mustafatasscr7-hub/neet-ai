@@ -158,7 +158,8 @@ def seed(fake):
                 "correct_answer": answer, "difficulty": "Easy", "diagram_url": None, "option_a_diagram_url": None,
                 "option_b_diagram_url": None, "option_c_diagram_url": None, "option_d_diagram_url": None,
                 "is_active": True, "embedding": [0.1] * 4, "source_pdf_filename": "secret.pdf", "source_tag": "t",
-                "reviewed": True, "class": 11, "has_diagram": False, "question_type": "mcq"}
+                "reviewed": True, "class": 11, "has_diagram": False, "question_type": "mcq",
+                "review_status": "approved"}  # add_pyq_review_status.sql: only approved rows reach students
     for subject, n in (("Biology", 120), ("Physics", 60), ("Chemistry", 60)):
         for i in range(n):
             fake.tables["pyq"].append(q(subject, i, letters[i % len(letters)]))

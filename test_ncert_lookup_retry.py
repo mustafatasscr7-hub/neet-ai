@@ -130,6 +130,11 @@ def run_search_pyq(statuses, rpc_rows, chapter=""):
 
         async def get(self, url, headers=None, params=None):
             gets.append(url)
+            # The review gate's follow-up lookup by id (_backfill_pyq_chapters): every RPC row
+            # here counts as approved, so it comes back as visible.
+            if params and str(params.get("id", "")).startswith("in.("):
+                ids = params["id"][4:-1].split(",")
+                return FakeResp(200, [{"id": i, "chapter": PYQ_ROW["chapter"]} for i in ids])
             return FakeResp(200, [{**PYQ_ROW, "id": "c1"}])
 
     async def fake_embed(text):

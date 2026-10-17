@@ -313,6 +313,7 @@
   let adminKey = sessionStorage.getItem('admin_key') || '';
   let currentSubject = null;
   let currentPdfFilename = null; // filename of the last-scanned PDF, attached to saves so it shows up in Processed PDFs
+  let currentBatchId = null; // one upload batch per scanned PDF / parsed paste -- saved as pyq.batch_id for the review filters
   let currentProcessedPdfId = null;  // id of this scan's processed_pdfs row, for the completion/failure update
   let currentPdfQuestionsExtracted = 0; // running count of questions saved so far for the current scan
   let chapterList = [];       // [{name, count}] style not needed here - just names for the dropdown
@@ -414,6 +415,16 @@
     // (tiny epsilon guards against float rounding, e.g. 0.6 - 0.5 !== exactly 0.1 in JS).
     const tied = (bestScore - second) < 0.1 - 1e-9;
     return { chapter: best, score: bestScore, second, tied };
+  }
+
+  // e.g. 20261018-1432-Cell-the-Unit-of-Life-PYQ-k3f9 -- only [A-Za-z0-9-], which the server
+  // requires (anything else and it makes its own id instead).
+  function newBatchId(filename) {
+    const d = new Date();
+    const pad = n => String(n).padStart(2, '0');
+    const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`;
+    const slug = (filename || 'paste').replace(/\.pdf$/i, '').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'upload';
+    return `${stamp}-${slug}-${Math.random().toString(36).slice(2, 6)}`;
   }
 
   function authHeaders(extra) {
@@ -626,6 +637,7 @@
 
     currentSubject = draft.subject || null;
     currentPdfFilename = draft.pdfFilename || null;
+    currentBatchId = newBatchId(currentPdfFilename);
     currentProcessedPdfId = draft.processedPdfId || null;
     currentPdfQuestionsExtracted = draft.pdfQuestionsExtracted || 0;
     blockIdSeq = draft.blockIdSeq || 0;
@@ -1427,6 +1439,7 @@
     }));
     scanFilenameMatch = null; // no filename to match chapters against in paste mode
     currentPdfFilename = null;
+    currentBatchId = newBatchId(null);
     currentProcessedPdfId = null;
     document.getElementById('statPageCount').textContent = '—'; // "pages" doesn't apply to pasted text
     renderAllBlocks();
@@ -1640,6 +1653,7 @@
       }
     }
     currentPdfFilename = file.name;
+    currentBatchId = newBatchId(currentPdfFilename);
     currentProcessedPdfId = null;
     currentPdfQuestionsExtracted = 0;
     const statusEl = document.getElementById('scanStatus');
@@ -2619,7 +2633,7 @@
       const res = await fetch(`${API_BASE}/admin/pyq-bulk-create`, {
         method: 'POST',
         headers: authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ questions: [payload] })
+        body: JSON.stringify({ questions: [payload], batch_id: currentBatchId })
       });
       if (res.status === 401) return logout();
       if (!res.ok) {
@@ -2711,7 +2725,7 @@
         const res = await fetch(`${API_BASE}/admin/pyq-bulk-create`, {
           method: 'POST',
           headers: authHeaders({ 'Content-Type': 'application/json' }),
-          body: JSON.stringify({ questions: toSave.map(t => t.payload) })
+          body: JSON.stringify({ questions: toSave.map(t => t.payload), batch_id: currentBatchId })
         });
         if (res.status === 401) return logout();
         if (!res.ok) { alert('Bulk save failed: ' + await describeHttpError(res)); return; }

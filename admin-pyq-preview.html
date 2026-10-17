@@ -118,6 +118,28 @@
     .q-approve-btn { background: #4ade80; border: none; color: white; padding: 5px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
     .q-approve-btn:hover { background: #3ecf75; }
 
+    /* Contractor upload review -- status badges, rule-based warnings, the needs-fix note box,
+       and the "today" bar. Same badge formula as q-flag above. */
+    .review-bar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; background: #111; border: 1px solid #1e1e1e; border-radius: 10px; padding: 10px 12px; font-size: 12px; color: #888; }
+    .review-bar strong { color: #ececec; font-weight: 600; }
+    .review-bar .review-today { margin-right: auto; }
+    .review-filters { display: contents; }
+    .filter-bar input[type="date"] { background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 8px; padding: 7px 10px; color: #ececec; font-size: 13px; font-family: 'Inter', sans-serif; outline: none; color-scheme: dark; }
+    .q-status { font-size: 11px; padding: 3px 9px; border-radius: 20px; font-weight: 600; }
+    .q-status.pending { background: #f59e0b20; color: #f59e0b; }
+    .q-status.needs_fix { background: #f9731620; color: #fb923c; }
+    .q-upload-meta { color: #555; }
+    .q-warn { font-size: 11px; padding: 3px 9px; border-radius: 20px; font-weight: 600; background: #f59e0b1c; color: #f5b445; text-decoration: none; }
+    a.q-warn:hover { text-decoration: underline; }
+    .q-review-note { margin-top: 12px; padding: 10px 12px; border-radius: 8px; background: #f9731612; border: 1px solid #f9731640; color: #fdba74; font-size: 12px; line-height: 1.5; white-space: pre-wrap; }
+    .q-review-note b { color: #fb923c; }
+    .q-fix-btn { background: transparent; border: 1px solid #f9731660; color: #fb923c; padding: 5px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
+    .q-fix-btn:hover { background: #f9731614; }
+    .q-note-box { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+    .q-note-box textarea { width: 100%; min-height: 64px; background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 6px; color: #ececec; font-size: 13px; font-family: 'Inter', sans-serif; padding: 8px 10px; outline: none; resize: vertical; }
+    .q-note-box textarea:focus { border-color: #fb923c; }
+    .q-note-actions { display: flex; gap: 8px; }
+
     /* Edit form -- shown in place of the read-only card while a question is being edited */
     .q-edit-field { margin-bottom: 10px; }
     .q-edit-field label { display: block; font-size: 11px; color: #888; margin-bottom: 4px; }
@@ -247,6 +269,14 @@
       <button class="logout-btn" onclick="logout()">Log out</button>
     </div>
 
+    <div class="review-bar" id="reviewBar">
+      <span class="review-today" id="reviewToday">Today: …</span>
+      <span id="reviewQueueCounts"></span>
+      <button type="button" class="dup-toggle-btn" onclick="showReviewQueue('pending')">Pending</button>
+      <button type="button" class="dup-toggle-btn" onclick="showReviewQueue('needs_fix')">Needs fix</button>
+      <button type="button" class="q-approve-btn" id="approveCleanBtn" onclick="approveCleanOnPage()" style="display:none">✅ Approve clean rows on this page</button>
+    </div>
+
     <div class="filter-bar">
       <select id="filterSubject" onchange="onSubjectChange()">
         <option value="">All Subjects</option>
@@ -259,6 +289,23 @@
       </select>
       <input type="text" id="filterSearch" placeholder="Search question text..." oninput="onSearchInput()"/>
       <label class="check-label"><input type="checkbox" id="filterDiagram" onchange="onFilterChange()"/> Only with uploaded diagram</label>
+      <span class="review-filters" id="reviewFilters">
+        <select id="filterReviewStatus" onchange="onFilterChange()" title="Review status">
+          <option value="">Any status</option>
+          <option value="pending">Pending review</option>
+          <option value="needs_fix">Needs fix</option>
+          <option value="approved">Approved</option>
+        </select>
+        <select id="filterUploadedBy" onchange="onFilterChange()" title="Uploaded by">
+          <option value="">Uploaded by anyone</option>
+          <option value="contractor">Contractor</option>
+          <option value="admin">Admin</option>
+        </select>
+        <select id="filterBatch" onchange="onFilterChange()" title="Upload batch">
+          <option value="">All batches</option>
+        </select>
+        <input type="date" id="filterUploadedDate" onchange="onFilterChange()" title="Uploaded on (India time)"/>
+      </span>
       <button type="button" id="dupToggleBtn" class="dup-toggle-btn" onclick="toggleDuplicatesView()">🔁 Find Duplicates (50%+)</button>
       <button type="button" id="reviewToggleBtn" class="dup-toggle-btn" onclick="toggleReviewMode()">📋 Review Queue</button>
       <button type="button" id="reportsToggleBtn" class="dup-toggle-btn" onclick="toggleReportsView()">🚩 Reported</button>
@@ -291,6 +338,7 @@
       <label class="check-label"><input type="checkbox" id="selectAllCheckbox" onchange="toggleSelectAll(this.checked)"/> Select all on this page</label>
       <span class="bulk-count" id="bulkSelectedCount">0 selected</span>
       <button type="button" class="q-approve-btn" id="bulkApproveBtn" onclick="bulkApproveSelected()" style="display:none">✅ Approve Selected</button>
+      <button type="button" class="q-approve-btn" id="bulkReviewApproveBtn" onclick="bulkReviewApproveSelected()" style="display:none">✅ Approve for students</button>
       <button type="button" class="q-delete-btn" id="bulkDeleteBtn" onclick="bulkDeleteSelected()">🗑 Delete Selected</button>
       <button type="button" class="q-edit-btn" onclick="clearSelection()">Clear</button>
     </div>
@@ -332,6 +380,8 @@
     let editingIds = new Set();
     let editDrafts = {}; // id -> pending diagram_url / option_a-d_diagram_url while a card is being edited
     let chapterCacheBySubject = {}; // subject -> [chapter names], for the edit form's chapter datalist
+    let noteOpenIds = new Set(); // cards with the "Needs fix" note box open
+    let noteDrafts = {}; // id -> unsent note text, kept across re-renders
 
     // Full canonical NCERT chapter list per subject (Class 11 + 12 combined, same source list
     // pyqbank.html's picker uses) -- merged into the edit form's dropdown below because the
@@ -399,6 +449,7 @@
       document.getElementById('gateOverlay').style.display = 'none';
       document.getElementById('dashboard').style.display = 'block';
       const urlId = new URLSearchParams(window.location.search).get('id');
+      loadReviewSummary();
       if (urlId) {
         await loadSingleQuestionFromUrl(urlId);
       } else {
@@ -413,7 +464,7 @@
       const area = document.getElementById('resultsArea');
       area.innerHTML = '<div class="loading-text">Loading...</div>';
       try {
-        const res = await fetch(`${API_BASE}/admin/pyq-search?id=${encodeURIComponent(id)}&full=true`, { headers: authHeaders() });
+        const res = await fetch(`${API_BASE}/admin/pyq-search?id=${encodeURIComponent(id)}&full=true&warnings=true`, { headers: authHeaders() });
         if (res.status === 401) return logout();
         const data = await res.json();
         if (data.error || !data.rows || data.rows.length === 0) {
@@ -829,10 +880,19 @@
       if (search) params.set('search', search);
       if (onlyDiagram) params.set('with_uploaded_diagram', 'true');
       if (reviewMode) params.set('reviewed', 'false');
+      const reviewStatus = document.getElementById('filterReviewStatus').value;
+      const uploadedBy = document.getElementById('filterUploadedBy').value;
+      const batchId = document.getElementById('filterBatch').value;
+      const uploadedDate = document.getElementById('filterUploadedDate').value;
+      if (reviewStatus) params.set('review_status', reviewStatus);
+      if (uploadedBy) params.set('uploaded_by', uploadedBy);
+      if (batchId) params.set('batch_id', batchId);
+      if (uploadedDate) params.set('uploaded_date', uploadedDate);
       params.set('page', currentPage);
       params.set('sort_by', 'created_at');
       params.set('sort_dir', reviewMode ? document.getElementById('reviewSortOrder').value : 'desc');
       params.set('full', 'true');
+      params.set('warnings', 'true');
 
       try {
         const res = await fetch(`${API_BASE}/admin/pyq-search?${params.toString()}`, { headers: authHeaders() });
@@ -855,9 +915,221 @@
         renderResults();
         renderPagination();
         updateResultCountText();
+        updateApproveCleanBtn();
       } catch (e) {
         area.innerHTML = '<div class="empty-text">Could not reach server.</div>';
       }
+    }
+
+    // ---------------- Contractor upload review ----------------
+    // review_status gates students (server-side, PYQ_STUDENT_VISIBLE): pending / needs_fix rows
+    // never reach them. Approve here makes a row live; Needs fix sends it to the contractor's
+    // own list with the note, and their correction comes back here as pending.
+    function awaitingReview(q) {
+      return !!q.review_status && q.review_status !== 'approved';
+    }
+
+    async function loadReviewSummary() {
+      try {
+        const res = await fetch(`${API_BASE}/admin/pyq-review-summary`, { headers: authHeaders() });
+        if (res.status === 401) return logout();
+        const data = await res.json();
+        if (!res.ok || data.error) {
+          document.getElementById('reviewToday').textContent = 'Review numbers unavailable: ' + (data.error || res.status);
+          return;
+        }
+        const t = data.today;
+        document.getElementById('reviewToday').innerHTML =
+          `Today: <strong>${t.uploaded}</strong> uploaded (${t.uploaded_by_contractor} by contractor), <strong>${t.checked}</strong> checked`;
+        document.getElementById('reviewQueueCounts').innerHTML =
+          `<strong>${data.pending}</strong> pending · <strong>${data.needs_fix}</strong> needs fix`;
+        const sel = document.getElementById('filterBatch');
+        const keep = sel.value;
+        sel.innerHTML = '<option value="">All batches</option>' + (data.batches || []).map(b => {
+          const when = b.uploaded_at ? new Date(b.uploaded_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
+          const label = `${when} · ${b.uploaded_by || '?'} · ${b.count} Q (${b.pending} pending, ${b.needs_fix} fix)`;
+          return `<option value="${escapeHtml(b.batch_id)}">${escapeHtml(label)}</option>`;
+        }).join('');
+        if ([...sel.options].some(o => o.value === keep)) sel.value = keep;
+      } catch (e) {
+        document.getElementById('reviewToday').textContent = 'Review numbers unavailable (could not reach server).';
+      }
+    }
+
+    // Set the filter first: switching another view off reloads the list itself, and that reload
+    // must already see the new status.
+    function showReviewQueue(status) {
+      document.getElementById('filterReviewStatus').value = status;
+      currentPage = 1;
+      if (duplicatesMode) return toggleDuplicatesView();
+      if (reportsMode) return toggleReportsView();
+      if (diagramMode) return toggleDiagramMode();
+      if (reviewMode) return toggleReviewMode();
+      loadResults();
+    }
+
+    function updateApproveCleanBtn() {
+      const clean = currentRows.filter(q => awaitingReview(q) && !(q.warnings || []).length);
+      const btn = document.getElementById('approveCleanBtn');
+      btn.style.display = clean.length && !duplicatesMode && !reportsMode && !diagramMode ? 'inline-block' : 'none';
+      btn.textContent = `✅ Approve ${clean.length} clean row${clean.length === 1 ? '' : 's'} on this page`;
+    }
+
+    async function postReview(ids, status, note) {
+      try {
+        const res = await fetch(`${API_BASE}/admin/pyq-review`, {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ ids, status, note: note || null })
+        });
+        if (res.status === 401) return { error: 'unauthorized' };
+        if (!res.ok) return { error: await describeHttpError(res) };
+        const data = await res.json();
+        return data.error ? { error: data.error } : { updated: data.updated || [] };
+      } catch (e) {
+        return { error: 'Could not reach server.' };
+      }
+    }
+
+    // Applies a review result locally: rows that no longer match the status filter leave the list.
+    function applyReviewResult(updatedRows) {
+      const filter = document.getElementById('filterReviewStatus').value;
+      const byId = Object.fromEntries(updatedRows.map(u => [u.id, u]));
+      const removed = new Set();
+      currentRows.forEach(q => {
+        const u = byId[q.id];
+        if (!u) return;
+        Object.assign(q, u);
+        if (q.review_status === 'approved') q.reviewed = true;
+        if ((filter && q.review_status !== filter) || (reviewMode && q.reviewed)) removed.add(q.id);
+      });
+      currentRows = currentRows.filter(q => !removed.has(q.id));
+      totalRows = Math.max(0, totalRows - removed.size);
+      updatedRows.forEach(u => { selectedIds.delete(u.id); noteOpenIds.delete(u.id); delete noteDrafts[u.id]; });
+      renderResults();
+      renderPagination();
+      updateResultCountText();
+      updateBulkBar();
+      updateApproveCleanBtn();
+      loadReviewSummary();
+    }
+
+    async function reviewApprove(id, btnEl) {
+      btnEl.disabled = true;
+      btnEl.textContent = 'Approving...';
+      const result = await postReview([id], 'approved');
+      if (result.error === 'unauthorized') return logout();
+      if (result.error) {
+        alert('Approve failed: ' + result.error);
+        btnEl.disabled = false;
+        btnEl.textContent = '✅ Approve for students';
+        return;
+      }
+      applyReviewResult(result.updated);
+    }
+
+    function openNeedsFix(id) {
+      noteOpenIds.add(id);
+      renderResults();
+      const box = document.getElementById('fix-note-' + id);
+      if (box) box.focus();
+    }
+
+    function closeNeedsFix(id) {
+      noteOpenIds.delete(id);
+      delete noteDrafts[id];
+      renderResults();
+    }
+
+    // After an edit, the warnings shown are the ones from before it -- re-ask the server.
+    async function refreshRowWarnings(id) {
+      try {
+        const res = await fetch(`${API_BASE}/admin/pyq-search?id=${encodeURIComponent(id)}&full=true&warnings=true`, { headers: authHeaders() });
+        const data = await res.json();
+        const fresh = (data.rows || [])[0];
+        const row = currentRows.find(r => r.id === id);
+        if (!fresh || !row || editingIds.has(id)) return;
+        row.warnings = fresh.warnings || [];
+        renderResults();
+        updateApproveCleanBtn();
+      } catch (e) {}
+    }
+
+    async function sendNeedsFix(id, btnEl) {
+      const note = (document.getElementById('fix-note-' + id).value || '').trim();
+      if (!note) { alert('Write what needs fixing -- the contractor sees this note.'); return; }
+      btnEl.disabled = true;
+      btnEl.textContent = 'Sending...';
+      const result = await postReview([id], 'needs_fix', note);
+      if (result.error === 'unauthorized') return logout();
+      if (result.error) {
+        alert('Needs fix failed: ' + result.error);
+        btnEl.disabled = false;
+        btnEl.textContent = 'Send back';
+        return;
+      }
+      applyReviewResult(result.updated);
+    }
+
+    async function approveIdsForStudents(ids, btnEl, confirmText) {
+      if (ids.length === 0) return;
+      if (!(await showConfirmModal(confirmText, { confirmLabel: 'Approve' }))) return;
+      const originalLabel = btnEl.textContent;
+      btnEl.disabled = true;
+      btnEl.textContent = 'Approving...';
+      const result = await postReview(ids, 'approved');
+      btnEl.disabled = false;
+      btnEl.textContent = originalLabel;
+      if (result.error === 'unauthorized') return logout();
+      if (result.error) { alert('Approve failed: ' + result.error); return; }
+      applyReviewResult(result.updated);
+    }
+
+    function bulkReviewApproveSelected() {
+      const ids = currentRows.filter(q => selectedIds.has(q.id) && awaitingReview(q)).map(q => q.id);
+      approveIdsForStudents(ids, document.getElementById('bulkReviewApproveBtn'),
+        `Approve ${ids.length} question${ids.length === 1 ? '' : 's'}? They go live for students straight away.`);
+    }
+
+    function approveCleanOnPage() {
+      const ids = currentRows.filter(q => awaitingReview(q) && !(q.warnings || []).length).map(q => q.id);
+      approveIdsForStudents(ids, document.getElementById('approveCleanBtn'),
+        `Approve ${ids.length} question${ids.length === 1 ? '' : 's'} with no warnings? They go live for students straight away.`);
+    }
+
+    function reviewWarningsHtml(q) {
+      return (q.warnings || []).map(w => w.duplicate_of
+        ? `<a class="q-warn" href="?id=${encodeURIComponent(w.duplicate_of)}" target="_blank" rel="noopener">⚠ ${escapeHtml(w.text)}</a>`
+        : `<span class="q-warn">⚠ ${escapeHtml(w.text)}</span>`).join('');
+    }
+
+    function reviewMetaHtml(q) {
+      const parts = [];
+      if (q.review_status === 'pending') parts.push('<span class="q-status pending">Pending review</span>');
+      if (q.review_status === 'needs_fix') parts.push('<span class="q-status needs_fix">Needs fix</span>');
+      if (q.uploaded_by) {
+        const when = q.uploaded_at ? new Date(q.uploaded_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
+        parts.push(`<span class="q-upload-meta">${q.uploaded_by === 'contractor' ? 'Contractor' : 'Admin'}${when ? ' · ' + escapeHtml(when) : ''}</span>`);
+      }
+      return parts.join('');
+    }
+
+    function reviewNoteHtml(q) {
+      if (!q.review_note || q.review_status === 'approved') return '';
+      const label = q.review_status === 'pending' ? 'Fixed by contractor -- your note was:' : 'Sent back:';
+      return `<div class="q-review-note"><b>${label}</b> ${escapeHtml(q.review_note)}</div>`;
+    }
+
+    function needsFixBoxHtml(q) {
+      if (!noteOpenIds.has(q.id)) return '';
+      return `
+        <div class="q-note-box">
+          <textarea id="fix-note-${q.id}" placeholder="What needs fixing? The contractor sees exactly this.">${escapeHtml(noteDrafts[q.id] ?? q.review_note ?? '')}</textarea>
+          <div class="q-note-actions">
+            <button type="button" class="q-fix-btn" onclick="sendNeedsFix('${q.id}', this)">Send back</button>
+            <button type="button" class="q-edit-btn" style="margin-left:0" onclick="closeNeedsFix('${q.id}')">Cancel</button>
+          </div>
+        </div>`;
     }
 
     function updateResultCountText() {
@@ -912,12 +1184,22 @@
       bar.style.display = count > 0 ? 'flex' : 'none';
       document.getElementById('bulkSelectedCount').textContent = `${count} selected`;
       document.getElementById('bulkApproveBtn').style.display = reviewMode ? 'inline-block' : 'none';
+      const anyAwaiting = currentRows.some(q => selectedIds.has(q.id) && awaitingReview(q));
+      document.getElementById('bulkReviewApproveBtn').style.display = anyAwaiting && !duplicatesMode && !reportsMode ? 'inline-block' : 'none';
       const selectAllCb = document.getElementById('selectAllCheckbox');
       const idsOnScreen = currentModeRowIds();
       selectAllCb.checked = idsOnScreen.length > 0 && idsOnScreen.every(id => selectedIds.has(id));
     }
 
     async function approveOneQuietly(id) {
+      // A row still waiting on upload review is approved for students at the same time (the
+      // review endpoint also sets reviewed=true), so one click clears both queues.
+      const row = currentRows.find(r => r.id === id);
+      if (row && awaitingReview(row)) {
+        const result = await postReview([id], 'approved');
+        if (!result.error) loadReviewSummary();
+        return result.error ? { error: result.error } : { success: true };
+      }
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 20000);
       try {
@@ -1339,6 +1621,7 @@
         editingIds.delete(id);
         delete editDrafts[id];
         rerenderCurrentView();
+        if (idx !== -1 && currentRows[idx].warnings) refreshRowWarnings(id);
       } catch (e) {
         alert(e.name === 'AbortError' ? 'Timed out waiting for the server -- check your connection and try again.' : 'Could not reach server.');
         btnEl.disabled = false;
@@ -1374,7 +1657,12 @@
         const optImg = q['option_' + opt + '_diagram_url'] ? `<img class="q-diagram-img" src="${escapeHtml(q['option_' + opt + '_diagram_url'])}">` : '';
         return `<div class="q-option${isCorrect ? ' correct' : ''}"><strong>${opt.toUpperCase()})</strong> <span>${parseWithMath(q['option_' + opt])}${optImg}</span></div>`;
       }).join('');
-      const flags = computeFlags(q);
+      // The server's rule-based warnings (pyq-search warnings=true) cover everything computeFlags
+      // checks and more; computeFlags stays as the fallback for views that don't fetch them.
+      const flags = q.warnings ? [] : computeFlags(q);
+      // Review actions only in the plain list -- Duplicates/Reported keep their own row maps.
+      const reviewActions = !duplicatesMode && !reportsMode;
+      const waiting = reviewActions && awaitingReview(q);
       return `
         <div class="question-card">
           <label class="q-select-corner"><input type="checkbox" class="q-select-checkbox" ${selectedIds.has(q.id) ? 'checked' : ''} onchange="toggleQuestionSelect('${q.id}', this.checked)"/></label>
@@ -1384,22 +1672,29 @@
             ${q.chapter ? `<span>${escapeHtml(q.chapter)}</span>` : ''}
             ${q.source_tag ? `<span>${escapeHtml(q.source_tag)}</span>` : ''}
             ${!q.is_active ? '<span class="q-inactive-flag">Inactive</span>' : ''}
+            ${reviewMetaHtml(q)}
           </div>
           <div class="q-text">${parseWithMath(q.question)}</div>
           ${q.diagram_url ? `<img class="q-diagram-img" src="${escapeHtml(q.diagram_url)}">` : ''}
           <div class="q-options">${opts}</div>
+          ${reviewNoteHtml(q)}
           <div class="q-admin-bar">
             <span class="q-admin-id">${escapeHtml(q.id)}</span>
             ${flags.map(f => `<span class="q-flag">${escapeHtml(f)}</span>`).join('')}
+            ${reviewWarningsHtml(q)}
             <button class="q-edit-btn" onclick="startEdit('${q.id}')">✏️ Edit</button>
-            ${reviewMode ? `<button class="q-approve-btn" onclick="approveQuestion('${q.id}', this)">✅ Approve</button>` : ''}
+            ${waiting ? `<button class="q-approve-btn" onclick="reviewApprove('${q.id}', this)">✅ Approve for students</button>` : ''}
+            ${reviewMode && !waiting ? `<button class="q-approve-btn" onclick="approveQuestion('${q.id}', this)">✅ Approve</button>` : ''}
+            ${reviewActions && q.review_status && !noteOpenIds.has(q.id) ? `<button class="q-fix-btn" onclick="openNeedsFix('${q.id}')">🔧 Needs fix</button>` : ''}
             <button class="q-delete-btn" onclick="deleteQuestion('${q.id}', this)">🗑 Delete</button>
           </div>
+          ${reviewActions ? needsFixBoxHtml(q) : ''}
         </div>`;
     }
 
     function renderResults() {
       const area = document.getElementById('resultsArea');
+      area.querySelectorAll('textarea[id^="fix-note-"]').forEach(t => { noteDrafts[t.id.slice('fix-note-'.length)] = t.value; });
       if (currentRows.length === 0) {
         area.innerHTML = '<div class="empty-text">No rows match these filters.</div>';
         return;
@@ -1432,6 +1727,8 @@
       document.getElementById('diagramFilterChapter').style.display = 'none';
       document.getElementById('diagramFilterSubtopic').style.display = 'none';
       document.getElementById('diagramFilterStatus').style.display = 'none';
+      document.getElementById('reviewFilters').style.display = '';
+      document.getElementById('approveCleanBtn').style.display = 'none';
     }
 
     async function toggleDuplicatesView() {
@@ -1440,6 +1737,7 @@
       reportsMode = false;
       resetModeToggleUi();
       document.getElementById('dupToggleBtn').classList.toggle('active', duplicatesMode);
+      document.getElementById('reviewFilters').style.display = duplicatesMode ? 'none' : '';
       document.getElementById('filterChapter').disabled = duplicatesMode;
       document.getElementById('filterSearch').disabled = duplicatesMode;
       document.getElementById('filterDiagram').disabled = duplicatesMode;
@@ -1474,6 +1772,7 @@
       reviewMode = false;
       resetModeToggleUi();
       document.getElementById('reportsToggleBtn').classList.toggle('active', reportsMode);
+      document.getElementById('reviewFilters').style.display = reportsMode ? 'none' : '';
       document.getElementById('filterChapter').disabled = reportsMode;
       document.getElementById('filterSearch').disabled = reportsMode;
       document.getElementById('filterDiagram').disabled = reportsMode;
@@ -1495,6 +1794,7 @@
       reportsMode = false;
       resetModeToggleUi();
       document.getElementById('diagramToggleBtn').classList.toggle('active', diagramMode);
+      document.getElementById('reviewFilters').style.display = diagramMode ? 'none' : '';
       if (diagramMode) {
         document.getElementById('filterSubject').style.display = 'none';
         document.getElementById('filterChapter').style.display = 'none';
@@ -2238,7 +2538,9 @@
             has_diagram: r.has_diagram, diagram_url: r.diagram_url,
             option_a_diagram_url: r.option_a_diagram_url, option_b_diagram_url: r.option_b_diagram_url,
             option_c_diagram_url: r.option_c_diagram_url, option_d_diagram_url: r.option_d_diagram_url,
-            reviewed: r.reviewed, difficulty: r.difficulty
+            reviewed: r.reviewed, difficulty: r.difficulty,
+            review_status: r.review_status, review_note: r.review_note, uploaded_by: r.uploaded_by,
+            uploaded_at: r.uploaded_at, batch_id: r.batch_id
           }))
         };
         const res = await fetch(`${API_BASE}/admin/pyq-bulk-create`, {

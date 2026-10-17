@@ -1043,9 +1043,19 @@ class PyqQuestionCreate(BaseModel):
     # instead of coming back reset to "needs review" every time.
     reviewed: Optional[bool] = None
     difficulty: Optional[str] = None
+    # Undo-restore-only too, and honoured only for the admin key: a restored row keeps who
+    # uploaded it and where it stood in review. A contractor's request never sets these.
+    review_status: Optional[str] = None
+    review_note: Optional[str] = None
+    uploaded_by: Optional[str] = None
+    uploaded_at: Optional[str] = None
+    batch_id: Optional[str] = None
 
 class PyqBulkCreate(BaseModel):
     questions: List[PyqQuestionCreate]
+    # One id per upload session (a PDF's review), made by the uploading page so several saves
+    # from the same PDF land in the same batch. Missing or malformed -> the server makes one.
+    batch_id: Optional[str] = None
 
 class PageRange(BaseModel):
     start: int
@@ -1223,7 +1233,12 @@ def verify_admin_or_contractor_pdf(request: Request, x_admin_key: str = Header(N
     CONTRACTOR_PDF_KEY. Every other admin route in the app (dozens of them -- user-plan overrides,
     mock-test publishing, question-report resolution, etc.) still requires verify_admin directly
     and never even compares against CONTRACTOR_PDF_KEY, so that key is cryptographically inert
-    everywhere outside this specific set, by construction rather than convention."""
+    everywhere outside this specific set, by construction rather than convention.
+
+    Returns who is calling, "admin" or "contractor" -- pyq-bulk-create stamps it on every row as
+    uploaded_by and starts contractor rows as pending. Checked contractor-first so a
+    misconfigured CONTRACTOR_PDF_KEY == ADMIN_PASSWORD can only ever hide uploads, never
+    auto-approve them."""
     ip = _client_ip(request)
     now = time.time()
     record = _admin_login_attempts.get(ip, {"count": 0, "blocked_until": 0})
@@ -1239,6 +1254,7 @@ def verify_admin_or_contractor_pdf(request: Request, x_admin_key: str = Header(N
         _admin_login_attempts[ip] = record
         raise HTTPException(status_code=401, detail="Unauthorized")
     _admin_login_attempts.pop(ip, None)
+    return "contractor" if CONTRACTOR_PDF_KEY and x_admin_key == CONTRACTOR_PDF_KEY else "admin"
 
 @app.post("/contractor-pdf-review/verify")
 async def contractor_pdf_review_verify(_: None = Depends(verify_contractor_pdf_review)):
@@ -3107,28 +3123,34 @@ PYQ_CHAPTER_FALLBACK_LIMIT = 6
 # each row's embedding vector along for nothing).
 PYQ_CARD_COLUMNS = "id,subject,chapter,year,question,option_a,option_b,option_c,option_d,correct_answer,difficulty,diagram_url,option_a_diagram_url,option_b_diagram_url,option_c_diagram_url,option_d_diagram_url"
 
+# The one filter every student-facing pyq read adds (add_pyq_review_status.sql). is_active is the
+# report/deactivate switch; review_status keeps contractor uploads hidden until an admin approves
+# them (pending / needs_fix never reach a student). test_pyq_review_gate.py fails if a student
+# path reads pyq without it.
+PYQ_STUDENT_VISIBLE = {"is_active": "eq.true", "review_status": "eq.approved"}
+
 async def _backfill_pyq_chapters(results: list, headers: dict) -> list:
-    """match_pyq (the RPC search_pyq below calls into) doesn't select/return a chapter column at
-    all -- confirmed live against the real RPC response shape. Every question a student sees via
-    chat.html's PYQ modal flows through this RPC, so its own "Save" button was always writing
-    chapter=null to saved_questions, and Saved Questions had nothing to show for those rows (the
-    card's own display logic was already correct -- there was just never any data to render).
-    Rather than needing a migration to redefine the RPC's own SQL (no DDL access here), this
-    backfills chapter with one follow-up lookup against the real pyq table by id -- cheap (one
-    extra request, only when at least one result is actually missing it) and self-healing for
-    every future search, not just a one-time data fix."""
-    missing_ids = [r["id"] for r in results if r.get("id") and not r.get("chapter")]
-    if not missing_ids:
-        return results
+    """match_pyq (the RPC search_pyq below calls into) doesn't return a chapter column, so this
+    follow-up lookup by id fills it in -- and is also the review gate for the semantic results:
+    the RPC can't be relied on to filter review_status (its live definition isn't visible from
+    here), so any id this lookup doesn't return as student-visible is dropped. A failed lookup
+    drops everything rather than showing rows nobody could check."""
+    ids = [r["id"] for r in results if r.get("id")]
+    if not ids:
+        return []
     resp = await async_client.get(
         f"{SUPABASE_URL}/rest/v1/pyq", headers=headers,
-        params={"id": f"in.({','.join(missing_ids)})", "select": "id,chapter"}
+        params={"id": f"in.({','.join(ids)})", **PYQ_STUDENT_VISIBLE, "select": "id,chapter"}
     )
-    chapter_by_id = {row["id"]: row.get("chapter") for row in resp.json()} if resp.status_code == 200 else {}
-    for r in results:
+    if resp.status_code != 200:
+        print(f"PYQ VISIBILITY LOOKUP FAILED ({resp.status_code}), dropping {len(ids)} results", flush=True)
+        return []
+    chapter_by_id = {row["id"]: row.get("chapter") for row in resp.json()}
+    visible = [r for r in results if r.get("id") in chapter_by_id]
+    for r in visible:
         if not r.get("chapter"):
-            r["chapter"] = chapter_by_id.get(r.get("id"))
-    return results
+            r["chapter"] = chapter_by_id[r["id"]]
+    return visible
 
 async def search_pyq(query: str, limit: int = 5, chapter: str = ""):
     if _is_off_topic_pyq_query(query):
@@ -3184,8 +3206,10 @@ async def search_pyq(query: str, limit: int = 5, chapter: str = ""):
         raw_top_score = rows[0]["similarity"] if rows else None
         return rows, raw_top_score
 
-    def _filter(rows, threshold, count):
-        return [r for r in rows if r.get("similarity", 0) >= threshold][:count]
+    # Gate before the limit, so hidden rows that rank highly never use up result slots.
+    async def _visible(rows, threshold, count):
+        above = [r for r in rows if r.get("similarity", 0) >= threshold]
+        return (await _backfill_pyq_chapters(above, headers))[:count]
 
     embedding = await _embed(query)
     rows, raw_top_score = await _raw_rows(embedding)
@@ -3198,9 +3222,11 @@ async def search_pyq(query: str, limit: int = 5, chapter: str = ""):
         lookup_failed = rows is None
         rows = rows or []
 
-    exact_results = _filter(rows, PYQ_MATCH_THRESHOLD, limit)
+    # Every tier below returns only what _backfill_pyq_chapters lets through (the review gate,
+    # via _visible); a tier whose rows are all hidden falls through to the next one.
+    exact_results = await _visible(rows, PYQ_MATCH_THRESHOLD, limit)
     if exact_results:
-        return await _backfill_pyq_chapters(exact_results, headers), "exact"
+        return exact_results, "exact"
 
     # Real calibration data (see PYQ_FALLBACK_THRESHOLD's own comment above): a raw score already
     # at/above the fallback threshold but below the exact one (0.30-0.4) is a genuine, capped
@@ -3213,9 +3239,9 @@ async def search_pyq(query: str, limit: int = 5, chapter: str = ""):
     # longer gets that chance in this band. Measured live: this specific query dropped from 6
     # embeds + 6 RPCs (2.1s) to 1 embed + 1 RPC.
     if raw_top_score is not None and raw_top_score >= PYQ_FALLBACK_THRESHOLD:
-        fallback_results = _filter(rows, PYQ_FALLBACK_THRESHOLD, PYQ_FALLBACK_LIMIT)
+        fallback_results = await _visible(rows, PYQ_FALLBACK_THRESHOLD, PYQ_FALLBACK_LIMIT)
         if fallback_results:
-            return await _backfill_pyq_chapters(fallback_results, headers), "related"
+            return fallback_results, "related"
 
     # Below the fallback threshold: gate on the same off-topic margin the fallback tier's own
     # merge-variant retry always used (_OFFTOPIC_GATE_MARGIN below PYQ_FALLBACK_THRESHOLD) -- a
@@ -3236,13 +3262,13 @@ async def search_pyq(query: str, limit: int = 5, chapter: str = ""):
                 return v_rows or []
             variant_rows_list = await asyncio.gather(*[_try_variant(v) for v in variants])
             for v_rows in variant_rows_list:
-                v_exact = _filter(v_rows, PYQ_MATCH_THRESHOLD, limit)
+                v_exact = await _visible(v_rows, PYQ_MATCH_THRESHOLD, limit)
                 if v_exact:
-                    return await _backfill_pyq_chapters(v_exact, headers), "exact"
+                    return v_exact, "exact"
             for v_rows in variant_rows_list:
-                v_related = _filter(v_rows, PYQ_FALLBACK_THRESHOLD, PYQ_FALLBACK_LIMIT)
+                v_related = await _visible(v_rows, PYQ_FALLBACK_THRESHOLD, PYQ_FALLBACK_LIMIT)
                 if v_related:
-                    return await _backfill_pyq_chapters(v_related, headers), "related"
+                    return v_related, "related"
 
     # Both semantic tiers came up empty (either no embedded rows are close at all, or this
     # specific query embeds poorly -- e.g. a very short/generic doubt). Rather than a dead-end
@@ -3256,7 +3282,7 @@ async def search_pyq(query: str, limit: int = 5, chapter: str = ""):
             headers=headers,
             params={
                 "chapter": f"ilike.{chapter}",
-                "is_active": "eq.true",
+                **PYQ_STUDENT_VISIBLE,
                 "select": PYQ_CARD_COLUMNS,
                 "limit": PYQ_CHAPTER_FALLBACK_LIMIT,
                 "order": "year.desc",
@@ -6948,9 +6974,9 @@ async def _sample_random_mock_questions() -> list:
     # Also ran sequentially before (3 blocking sync `requests.get()` calls back-to-back,
     # each stalling the event loop) -- now fired concurrently via the shared async client.
     bio_resp, phy_resp, che_resp = await asyncio.gather(
-        async_client.get(f"{SUPABASE_URL}/rest/v1/pyq", headers=headers, params={"subject": "eq.Biology", "is_active": "eq.true", "select": MOCK_QUESTION_COLUMNS, "limit": 200}),
-        async_client.get(f"{SUPABASE_URL}/rest/v1/pyq", headers=headers, params={"subject": "eq.Physics", "is_active": "eq.true", "select": MOCK_QUESTION_COLUMNS, "limit": 200}),
-        async_client.get(f"{SUPABASE_URL}/rest/v1/pyq", headers=headers, params={"subject": "eq.Chemistry", "is_active": "eq.true", "select": MOCK_QUESTION_COLUMNS, "limit": 200}),
+        async_client.get(f"{SUPABASE_URL}/rest/v1/pyq", headers=headers, params={"subject": "eq.Biology", **PYQ_STUDENT_VISIBLE, "select": MOCK_QUESTION_COLUMNS, "limit": 200}),
+        async_client.get(f"{SUPABASE_URL}/rest/v1/pyq", headers=headers, params={"subject": "eq.Physics", **PYQ_STUDENT_VISIBLE, "select": MOCK_QUESTION_COLUMNS, "limit": 200}),
+        async_client.get(f"{SUPABASE_URL}/rest/v1/pyq", headers=headers, params={"subject": "eq.Chemistry", **PYQ_STUDENT_VISIBLE, "select": MOCK_QUESTION_COLUMNS, "limit": 200}),
     )
     bio, phy, che = bio_resp.json(), phy_resp.json(), che_resp.json()
     bio_q = random.sample(bio, min(90, len(bio)))
@@ -7083,7 +7109,7 @@ async def get_pyq_chapters(subject: str, _: None = Depends(rate_limit(30, 60))):
         total_resp = await async_client.get(
             f"{SUPABASE_URL}/rest/v1/pyq",
             headers={**headers, "Prefer": "count=exact"},
-            params={"subject": f"eq.{subject}", "is_active": "eq.true", "select": "id", "limit": 1}
+            params={"subject": f"eq.{subject}", **PYQ_STUDENT_VISIBLE, "select": "id", "limit": 1}
         )
         content_range = total_resp.headers.get("content-range", "")
         tail = content_range.split("/")[-1] if "/" in content_range else ""
@@ -7104,7 +7130,7 @@ async def get_pyq_chapters(subject: str, _: None = Depends(rate_limit(30, 60))):
                 headers={**headers, "Range": f"{offset}-{offset + page_size - 1}"},
                 params={
                     "subject": f"eq.{subject}",
-                    "is_active": "eq.true",
+                    **PYQ_STUDENT_VISIBLE,
                     "chapter": "not.is.null",
                     "select": "chapter"
                 }
@@ -7150,7 +7176,7 @@ async def pyq_browse(subject: str, chapter: str, year: int = None, _: None = Dep
         params = {
             "subject": f"eq.{subject}",
             "chapter": f"eq.{chapter}",
-            "is_active": "eq.true",
+            **PYQ_STUDENT_VISIBLE,
             "select": PYQ_CARD_COLUMNS,
         }
         if year is not None:
@@ -7189,7 +7215,7 @@ async def _sample_personalised_questions(selections: list, requested_count) -> t
         seen_subjects.add(sel.subject)
         params = {
             "subject": f"eq.{sel.subject}",
-            "is_active": "eq.true",
+            **PYQ_STUDENT_VISIBLE,
             "select": MOCK_QUESTION_COLUMNS,
             "limit": 1000
         }
@@ -7292,7 +7318,7 @@ async def _catalog_test_questions(subject: str, test_number: int, select: str):
         headers=headers,
         params={
             "id": f"in.({id_list})",
-            "is_active": "eq.true",
+            **PYQ_STUDENT_VISIBLE,
             "select": select
         }
     )
@@ -7635,7 +7661,7 @@ def health():
 
 # ---------- Admin: PYQ data management (admin-dashboard.html only, not linked from any student page) ----------
 
-ADMIN_SORT_COLUMNS = {"id", "subject", "chapter", "question", "correct_answer", "is_active", "year", "created_at"}
+ADMIN_SORT_COLUMNS = {"id", "subject", "chapter", "question", "correct_answer", "is_active", "year", "created_at", "uploaded_at"}
 
 def _admin_count(params):
     resp = http_requests.get(
@@ -7913,6 +7939,11 @@ async def admin_pyq_search(
     is_active: str = None,
     with_uploaded_diagram: str = None,
     reviewed: str = None,
+    review_status: str = None,
+    uploaded_by: str = None,
+    batch_id: str = None,
+    uploaded_date: str = None,
+    warnings: bool = False,
     page: int = 1,
     sort_by: str = "id",
     sort_dir: str = "asc",
@@ -7932,7 +7963,9 @@ async def admin_pyq_search(
         select_fields = (
             "id,subject,chapter,question,option_a,option_b,option_c,option_d,correct_answer,"
             "is_active,year,source_tag,class,has_diagram,diagram_url,option_a_diagram_url,"
-            "option_b_diagram_url,option_c_diagram_url,option_d_diagram_url,reviewed,created_at"
+            "option_b_diagram_url,option_c_diagram_url,option_d_diagram_url,reviewed,created_at,"
+            "question_type,difficulty,"
+            "review_status,review_note,uploaded_by,uploaded_at,batch_id,reviewed_at,reviewed_by"
             if full else
             "id,subject,chapter,question,correct_answer,is_active,year"
         )
@@ -7955,6 +7988,21 @@ async def admin_pyq_search(
             params["is_active"] = f"eq.{is_active}"
         if reviewed in ("true", "false"):
             params["reviewed"] = f"eq.{reviewed}"
+        if review_status in PYQ_REVIEW_STATUSES:
+            params["review_status"] = f"eq.{review_status}"
+        if uploaded_by in PYQ_UPLOADERS:
+            params["uploaded_by"] = f"eq.{uploaded_by}"
+        if batch_id and _BATCH_ID_RE.match(batch_id):
+            params["batch_id"] = f"eq.{batch_id}"
+        # One India-time calendar day of uploads, as a plain and-group so it combines with the
+        # or-groups below instead of overwriting them.
+        and_parts = []
+        if uploaded_date:
+            try:
+                day_start, day_end = _ist_day_bounds_utc(uploaded_date)
+                and_parts += [f"uploaded_at.gte.{day_start}", f"uploaded_at.lt.{day_end}"]
+            except ValueError:
+                return {"error": "uploaded_date must be YYYY-MM-DD"}
         # Both filters below are OR-groups across the same 4-5 columns, and both need to be
         # applyable at once (e.g. searching while also filtering to uploaded-diagram rows) --
         # collected as separate or(...) groups and combined via and=() at the end instead of
@@ -7986,21 +8034,351 @@ async def admin_pyq_search(
                 f'option_c.ilike."*{safe_search}*",'
                 f'option_d.ilike."*{safe_search}*")'
             )
-        if len(or_groups) == 1:
+        if len(or_groups) == 1 and not and_parts:
             params["or"] = "(" + or_groups[0][3:]  # strip the "or(" wrapper, top-level or= wants bare (...)
-        elif len(or_groups) > 1:
-            params["and"] = "(" + ",".join(or_groups) + ")"
+        elif or_groups or and_parts:
+            params["and"] = "(" + ",".join(or_groups + and_parts) + ")"
 
-        response = http_requests.get(
+        response = await async_client.get(
             f"{SUPABASE_URL}/rest/v1/pyq",
             headers={**ADMIN_HEADERS, "Prefer": "count=exact"},
             params=params
         )
+        if response.status_code >= 400:
+            return {"error": response.text}
         rows = response.json()
         content_range = response.headers.get("content-range", "")
         tail = content_range.split("/")[-1] if "/" in content_range else ""
         total = int(tail) if tail.isdigit() else len(rows)
+        if full and warnings:
+            await _attach_pyq_review_warnings(rows)
         return {"rows": rows, "total": total, "page": page, "page_size": page_size}
+    except Exception as e:
+        return {"error": str(e)}
+
+# ---------- Contractor upload review (add_pyq_review_status.sql) ----------
+# Contractor uploads land as review_status='pending' and stay out of every student path
+# (PYQ_STUDENT_VISIBLE) until an admin approves them in admin-pyq-preview.html. "Needs fix" sends a
+# row back to the contractor with a note (the Needs fix tab in contractor-pdf-review.html); the
+# contractor's correction puts it back to pending. Admin uploads, and every row from before this
+# existed, are approved.
+
+_UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+def _ist_day_bounds_utc(day: str) -> tuple:
+    """UTC [start, end) of one India-time calendar day 'YYYY-MM-DD', as PostgREST-safe ISO
+    strings (Z suffix, no '+' to survive query-string encoding)."""
+    start = datetime.combine(date.fromisoformat(day), datetime.min.time(), tzinfo=IST).astimezone(timezone.utc)
+    fmt = "%Y-%m-%dT%H:%M:%SZ"
+    return start.strftime(fmt), (start + timedelta(days=1)).strftime(fmt)
+
+# Rule-based only, no model calls -- these are hints for the reviewer, never a gate.
+_PYQ_DIAGRAM_MENTION_RE = re.compile(
+    r"\b(?:figures?|diagrams?|graphs?|circuits?|labell?ed|shown (?:in|below|above|here)|as shown|"
+    r"the (?:image|picture|plot))\b|\bfig\.", re.I)
+_PYQ_IMAGE_FIELDS = ("diagram_url", "option_a_diagram_url", "option_b_diagram_url", "option_c_diagram_url", "option_d_diagram_url")
+PYQ_REVIEW_DUP_THRESHOLD = 0.8
+PYQ_DUP_CORPUS_TTL = 120
+_pyq_dup_corpus_cache = {}
+
+def _norm_chapter(name) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", (name or "").lower()).strip()
+
+# normalised chapter name -> [(subject, class)] -- a list because some names (Thermodynamics)
+# are chapters in two subjects.
+_SYLLABUS_CHAPTER_INDEX = {}
+for _subject, _classes in NEET_SYLLABUS.items():
+    for _cls, _names in _classes.items():
+        for _name in _names:
+            _SYLLABUS_CHAPTER_INDEX.setdefault(_norm_chapter(_name), []).append((_subject, _cls))
+_DROPPED_CHAPTERS_NORM = {_norm_chapter(c) for c in NCERT_DROPPED_CHAPTERS}
+
+def _pyq_basic_warnings(row: dict) -> list:
+    warnings = []
+    def warn(code, text):
+        warnings.append({"code": code, "text": text})
+
+    answer = str(row.get("correct_answer") or "").strip()
+    if not answer or answer.upper() == "EMPTY":
+        warn("answer_key", "No answer key")
+    elif _answer_letter(answer) is None:
+        warn("answer_key", f'Answer key "{answer[:20]}" is not A-D')
+
+    missing, by_text = [], {}
+    for letter in "abcd":
+        text = (row.get(f"option_{letter}") or "").strip()
+        has_image = bool((row.get(f"option_{letter}_diagram_url") or "").strip())
+        if not text and not has_image:
+            missing.append(letter.upper())
+        elif text and not has_image:
+            by_text.setdefault(re.sub(r"\s+", " ", text.lower()).rstrip(" ."), []).append(letter.upper())
+    if missing:
+        warn("options", f"Option{'s' if len(missing) > 1 else ''} {', '.join(missing)} empty")
+    for same in by_text.values():
+        if len(same) > 1:
+            warn("options", f"Options {' and '.join(same)} are identical")
+
+    if not any((row.get(f) or "").strip() for f in _PYQ_IMAGE_FIELDS):
+        if row.get("has_diagram"):
+            warn("diagram", "Marked as having a diagram, but none is attached")
+        elif _PYQ_DIAGRAM_MENTION_RE.search(row.get("question") or ""):
+            warn("diagram", "Mentions a figure/diagram/graph, but none is attached")
+
+    chapter = (row.get("chapter") or "").strip()
+    subject = row.get("subject")
+    norm = _norm_chapter(chapter)
+    entries = _SYLLABUS_CHAPTER_INDEX.get(norm, [])
+    if not chapter:
+        warn("chapter", "No chapter")
+    elif not entries:
+        if norm not in _DROPPED_CHAPTERS_NORM:
+            warn("chapter", f'Chapter "{chapter}" is not in the syllabus list')
+    elif not any(s == subject for s, _ in entries):
+        warn("chapter", f'"{chapter}" is a {entries[0][0]} chapter, but the subject is {subject}')
+    else:
+        classes = sorted(c for s, c in entries if s == subject)
+        try:
+            row_class = int(row.get("class")) if row.get("class") is not None else None
+        except (TypeError, ValueError):
+            row_class = None
+        if row_class is not None and row_class not in classes:
+            warn("chapter", f'"{chapter}" is Class {classes[0]}, but the row says Class {row_class}')
+    return warnings
+
+def _pyq_dup_tokens(row: dict) -> set:
+    # Same tokens /admin/pyq-duplicates compares (question + all four options).
+    return _tokenize_for_dup_check(" ".join(filter(None, [
+        row.get("question"), row.get("option_a"), row.get("option_b"), row.get("option_c"), row.get("option_d")
+    ])))
+
+async def _pyq_dup_corpus(subject: str):
+    """[(id, tokens)] for every pyq row in the subject, any status -- cached briefly since the
+    review page asks for it on every page turn. None if the read fails (the duplicate check is
+    then skipped, never guessed)."""
+    hit = _pyq_dup_corpus_cache.get(subject)
+    if hit and time.time() - hit[0] < PYQ_DUP_CORPUS_TTL:
+        return hit[1]
+    rows, offset, page_size = [], 0, 1000
+    while True:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
+            params={"subject": f"eq.{subject}", "select": "id,question,option_a,option_b,option_c,option_d",
+                    "order": "id.asc", "limit": page_size, "offset": offset}
+        )
+        page = resp.json() if resp.status_code < 400 else None
+        if not isinstance(page, list):
+            print(f"PYQ DUP CORPUS READ FAILED (subject={subject}): {resp.status_code}", flush=True)
+            return None
+        rows.extend(page)
+        if len(page) < page_size:
+            break
+        offset += page_size
+    corpus = [(r["id"], _pyq_dup_tokens(r)) for r in rows]
+    _pyq_dup_corpus_cache[subject] = (time.time(), corpus)
+    return corpus
+
+def _best_duplicate(row_id, tokens: set, corpus: list) -> tuple:
+    best_id, best = None, 0.0
+    for other_id, other_tokens in corpus:
+        if other_id == row_id or not other_tokens:
+            continue
+        shared = len(tokens & other_tokens)
+        if shared:
+            overlap = shared / len(tokens | other_tokens)
+            if overlap > best:
+                best_id, best = other_id, overlap
+    return best_id, best
+
+async def _attach_pyq_review_warnings(rows: list):
+    """Adds row["warnings"] = [{code, text}] to each row. The duplicate check (a subject-wide
+    sweep) only runs for rows still waiting on review."""
+    for row in rows:
+        row["warnings"] = _pyq_basic_warnings(row)
+    to_check = [r for r in rows if r.get("review_status") != "approved" and r.get("subject") and r.get("id")]
+    subjects = sorted({r["subject"] for r in to_check})
+    corpora = dict(zip(subjects, await asyncio.gather(*[_pyq_dup_corpus(s) for s in subjects])))
+
+    def scan():
+        for subject in subjects:
+            corpus = corpora.get(subject)
+            if corpus is None:
+                continue
+            # This page's own rows too, in case they were saved after the cached corpus was read.
+            known = {i for i, _ in corpus}
+            combined = corpus + [(o["id"], _pyq_dup_tokens(o)) for o in rows if o.get("subject") == subject and o.get("id") not in known]
+            for row in (r for r in to_check if r["subject"] == subject):
+                tokens = _pyq_dup_tokens(row)
+                if not tokens:
+                    continue
+                other_id, overlap = _best_duplicate(row["id"], tokens, combined)
+                if overlap >= PYQ_REVIEW_DUP_THRESHOLD:
+                    row["warnings"].append({"code": "duplicate", "duplicate_of": other_id,
+                                            "text": f"{round(overlap * 100)}% the same as question {str(other_id)[:8]}"})
+    await asyncio.to_thread(scan)
+
+async def _pyq_count(params: dict) -> int:
+    resp = await async_client.get(
+        f"{SUPABASE_URL}/rest/v1/pyq", headers={**ADMIN_HEADERS, "Prefer": "count=exact"},
+        params={**params, "select": "id", "limit": 1}
+    )
+    tail = resp.headers.get("content-range", "").split("/")[-1]
+    return int(tail) if tail.isdigit() else 0
+
+@app.get("/admin/pyq-review-summary")
+async def admin_pyq_review_summary(_: None = Depends(verify_admin)):
+    """Today's numbers (India time) for the review bar, plus the recent batches for its filter."""
+    try:
+        today_start, _today_end = _ist_day_bounds_utc(_ist_today())
+        uploaded, uploaded_contractor, checked, pending, needs_fix = await asyncio.gather(
+            _pyq_count({"uploaded_at": f"gte.{today_start}"}),
+            _pyq_count({"uploaded_at": f"gte.{today_start}", "uploaded_by": "eq.contractor"}),
+            _pyq_count({"reviewed_at": f"gte.{today_start}"}),
+            _pyq_count({"review_status": "eq.pending"}),
+            _pyq_count({"review_status": "eq.needs_fix"}),
+        )
+        batch_resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
+            params={"batch_id": "not.is.null", "select": "batch_id,uploaded_by,uploaded_at,review_status",
+                    "order": "uploaded_at.desc", "limit": 1000}
+        )
+        if batch_resp.status_code >= 400:
+            return {"error": batch_resp.text}
+        batches = {}
+        for r in batch_resp.json():
+            b = batches.setdefault(r["batch_id"], {"batch_id": r["batch_id"], "uploaded_by": r.get("uploaded_by"),
+                                                   "uploaded_at": r.get("uploaded_at"), "count": 0,
+                                                   "pending": 0, "needs_fix": 0, "approved": 0})
+            b["count"] += 1
+            if r.get("review_status") in PYQ_REVIEW_STATUSES:
+                b[r["review_status"]] += 1
+        return {
+            "today": {"uploaded": uploaded, "uploaded_by_contractor": uploaded_contractor, "checked": checked},
+            "pending": pending, "needs_fix": needs_fix,
+            "batches": list(batches.values())[:100],
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+class PyqReviewRequest(BaseModel):
+    ids: List[str]
+    status: str  # "approved" or "needs_fix"
+    note: Optional[str] = None
+
+@app.post("/admin/pyq-review")
+async def admin_pyq_review(body: PyqReviewRequest, _: None = Depends(verify_admin)):
+    if body.status not in ("approved", "needs_fix"):
+        return {"error": "status must be approved or needs_fix"}
+    ids = [i for i in body.ids if i]
+    if not ids or len(ids) > 200 or not all(_UUID_RE.match(i) for i in ids):
+        return {"error": "1-200 valid question ids required"}
+    note = (body.note or "").strip()[:1000]
+    if body.status == "needs_fix" and not note:
+        return {"error": "Write a note saying what needs fixing"}
+    fields = {
+        "review_status": body.status,
+        "review_note": note if body.status == "needs_fix" else None,
+        "reviewed_at": datetime.now(timezone.utc).isoformat(),
+        "reviewed_by": "admin",
+    }
+    # Approving is also the admin's own content check, so it clears the older Review Queue
+    # (reviewed=false) at the same time.
+    if body.status == "approved":
+        fields["reviewed"] = True
+    try:
+        resp = await async_client.patch(
+            f"{SUPABASE_URL}/rest/v1/pyq",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
+            params={"id": f"in.({','.join(ids)})", "select": "id,review_status,review_note,reviewed_at,reviewed"},
+            json=fields
+        )
+        if resp.status_code >= 400:
+            return {"error": resp.text}
+        return {"updated": resp.json()}
+    except Exception as e:
+        return {"error": str(e)}
+
+# The contractor's side: only their own needs_fix rows, only through the contractor key (never
+# ADMIN_PASSWORD, same isolation as /contractor-pdf-review/verify).
+CONTRACTOR_FIX_COLUMNS = (
+    "id,subject,chapter,class,year,question,option_a,option_b,option_c,option_d,correct_answer,"
+    "has_diagram,diagram_url,option_a_diagram_url,option_b_diagram_url,option_c_diagram_url,"
+    "option_d_diagram_url,source_pdf_filename,review_status,review_note,reviewed_at,uploaded_at,batch_id"
+)
+CONTRACTOR_FIXABLE_FIELDS = ("subject", "chapter", "class", "year", "question", "option_a", "option_b", "option_c",
+                             "option_d", "correct_answer", "has_diagram", "diagram_url", "option_a_diagram_url",
+                             "option_b_diagram_url", "option_c_diagram_url", "option_d_diagram_url")
+
+@app.get("/contractor/pyq-needs-fix")
+async def contractor_pyq_needs_fix(_: None = Depends(verify_contractor_pdf_review)):
+    try:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
+            params={"uploaded_by": "eq.contractor", "review_status": "eq.needs_fix",
+                    "select": CONTRACTOR_FIX_COLUMNS, "order": "reviewed_at.desc", "limit": 500}
+        )
+        if resp.status_code >= 400:
+            return {"error": resp.text}
+        pending = await _pyq_count({"uploaded_by": "eq.contractor", "review_status": "eq.pending"})
+        return {"rows": resp.json(), "pending_count": pending}
+    except Exception as e:
+        return {"error": str(e)}
+
+class ContractorPyqFix(BaseModel):
+    subject: Optional[str] = None
+    chapter: Optional[str] = None
+    class_: Optional[int] = Field(None, alias="class")
+    year: Optional[int] = None
+    question: Optional[str] = None
+    option_a: Optional[str] = None
+    option_b: Optional[str] = None
+    option_c: Optional[str] = None
+    option_d: Optional[str] = None
+    correct_answer: Optional[str] = None
+    has_diagram: Optional[bool] = None
+    diagram_url: Optional[str] = None
+    option_a_diagram_url: Optional[str] = None
+    option_b_diagram_url: Optional[str] = None
+    option_c_diagram_url: Optional[str] = None
+    option_d_diagram_url: Optional[str] = None
+
+@app.patch("/contractor/pyq-fix/{pyq_id}")
+async def contractor_pyq_fix(pyq_id: str, body: ContractorPyqFix, _: None = Depends(verify_contractor_pdf_review)):
+    if not _UUID_RE.match(pyq_id):
+        return {"error": "Invalid question id"}
+    sent = body.model_fields_set
+    fields = {}
+    for name in CONTRACTOR_FIXABLE_FIELDS:
+        attr = "class_" if name == "class" else name
+        if attr in sent:
+            fields[name] = getattr(body, attr)
+    if "subject" in fields and fields["subject"] not in ("Biology", "Physics", "Chemistry"):
+        return {"error": "Invalid subject"}
+    if "question" in fields and not (fields["question"] or "").strip():
+        return {"error": "Question can't be empty"}
+    # Back in the admin's queue. review_note stays so the admin sees what was asked for.
+    fields["review_status"] = "pending"
+    try:
+        # The filters make this a no-op unless the row is the contractor's own and still marked
+        # needs_fix -- an approved or admin-uploaded row can't be touched from here.
+        resp = await async_client.patch(
+            f"{SUPABASE_URL}/rest/v1/pyq",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
+            params={"id": f"eq.{pyq_id}", "uploaded_by": "eq.contractor", "review_status": "eq.needs_fix",
+                    "select": "id,question,chapter,option_a,option_b,option_c,option_d,review_status"},
+            json=fields
+        )
+        if resp.status_code >= 400:
+            return {"error": resp.text}
+        updated = resp.json()
+        if not updated:
+            return {"error": "This question is no longer waiting for a fix"}
+        row = updated[0]
+        if sent & {"question", "chapter", "option_a", "option_b", "option_c", "option_d"}:
+            asyncio.create_task(_embed_pyq_row_background(
+                row["id"], row.get("question"), row.get("chapter"),
+                row.get("option_a"), row.get("option_b"), row.get("option_c"), row.get("option_d")
+            ))
+        return {"updated": row}
     except Exception as e:
         return {"error": str(e)}
 
@@ -8403,7 +8781,7 @@ async def ensure_correct_answer_endpoint(req: EnsureCorrectAnswerRequest, _: Non
         resp = await async_client.get(
             f"{SUPABASE_URL}/rest/v1/pyq",
             headers=ADMIN_HEADERS,
-            params={"id": f"eq.{req.pyq_id}",
+            params={"id": f"eq.{req.pyq_id}", **PYQ_STUDENT_VISIBLE,
                     "select": "id,correct_answer,question,option_a,option_b,option_c,option_d"}
         )
         if resp.status_code >= 400:
@@ -9623,12 +10001,19 @@ async def _embed_pyq_row_background(row_id, question, chapter, option_a, option_
     except Exception as e:
         print(f"PYQ EMBEDDING FAILED (generation) id={row_id}: {e}", flush=True)
 
+PYQ_REVIEW_STATUSES = ("pending", "approved", "needs_fix")
+PYQ_UPLOADERS = ("admin", "contractor")
+_BATCH_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
+
 @app.post("/admin/pyq-bulk-create")
-async def admin_pyq_bulk_create(body: PyqBulkCreate, _: None = Depends(verify_admin_or_contractor_pdf)):
+async def admin_pyq_bulk_create(body: PyqBulkCreate, role: str = Depends(verify_admin_or_contractor_pdf)):
     if not body.questions:
         return {"error": "No questions provided"}
     if any(q.subject not in ("Biology", "Physics", "Chemistry") for q in body.questions):
         return {"error": "Invalid subject"}
+    # Who uploaded comes from the key that authenticated this request, never from the body.
+    # Contractor rows start pending and stay out of every student path until an admin approves.
+    batch_id = body.batch_id if body.batch_id and _BATCH_ID_RE.match(body.batch_id) else f"{role}-{uuid.uuid4().hex[:12]}"
     payload = []
     for q in body.questions:
         item = {
@@ -9667,9 +10052,23 @@ async def admin_pyq_bulk_create(body: PyqBulkCreate, _: None = Depends(verify_ad
             item["reviewed"] = q.reviewed
         if q.difficulty is not None:
             item["difficulty"] = q.difficulty
+        item["uploaded_by"] = role
+        item["batch_id"] = batch_id
+        item["review_status"] = "pending" if role == "contractor" else "approved"
+        if role == "admin":
+            if q.review_status in PYQ_REVIEW_STATUSES:
+                item["review_status"] = q.review_status
+            if q.review_note:
+                item["review_note"] = q.review_note
+            if q.uploaded_by in PYQ_UPLOADERS:
+                item["uploaded_by"] = q.uploaded_by
+            if q.uploaded_at:
+                item["uploaded_at"] = q.uploaded_at
+            if q.batch_id and _BATCH_ID_RE.match(q.batch_id):
+                item["batch_id"] = q.batch_id
         payload.append(item)
     try:
-        response = http_requests.post(
+        response = await async_client.post(
             f"{SUPABASE_URL}/rest/v1/pyq",
             headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
             json=payload
@@ -9682,7 +10081,7 @@ async def admin_pyq_bulk_create(body: PyqBulkCreate, _: None = Depends(verify_ad
                 row["id"], row.get("question"), row.get("chapter"),
                 row.get("option_a"), row.get("option_b"), row.get("option_c"), row.get("option_d")
             ))
-        return {"created": created}
+        return {"created": created, "batch_id": batch_id}
     except Exception as e:
         return {"error": str(e)}
 

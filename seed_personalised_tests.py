@@ -28,6 +28,7 @@ for subject, count in QUESTIONS_PER_TEST.items():
         params={
             "subject": f"eq.{subject}",
             "is_active": "eq.true",
+            "review_status": "eq.approved",
             "select": "id",
             "limit": 5000
         }

@@ -50,3 +50,16 @@ through the new domain, so a contractor's browser DevTools only ever sees reques
 
 Change or unset `CONTRACTOR_PDF_KEY` on Railway at any time — takes effect immediately, no
 redeploy of the frontend needed, and never affects your own admin login.
+
+## Upload review (added 2026-10-18)
+
+Everything saved through this tool now lands as **pending** and stays hidden from students until
+you approve it in `admin-pyq-preview.html` (Pending / Needs fix buttons at the top). "Needs fix"
+sends a question back with your note; the contractor sees it under **Needs fix** in this tool,
+corrects it, and it returns to your pending list. Run `add_pyq_review_status.sql` before the
+backend change goes live.
+
+That **Needs fix** list only exists in the new `contractor-pdf-review.html`, so the separate
+Vercel project needs the file again: repeat step 3 with the updated `contractor-pdf-review.html`
+(renamed to `index.html`). Until then the contractor's old copy keeps working, and their uploads
+are still saved as pending; they just can't see their fix list yet.
