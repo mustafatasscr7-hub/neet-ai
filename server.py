@@ -8313,7 +8313,7 @@ async def contractor_pyq_needs_fix(_: None = Depends(verify_contractor_pdf_revie
     try:
         resp = await async_client.get(
             f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
-            params={"uploaded_by": "eq.contractor", "review_status": "eq.needs_fix",
+            params={"review_status": "eq.needs_fix",
                     "select": CONTRACTOR_FIX_COLUMNS, "order": "reviewed_at.desc", "limit": 500}
         )
         if resp.status_code >= 400:

@@ -1671,7 +1671,7 @@
 
   // ---------------- Needs fix ----------------
   // Questions the reviewer sent back, each with a note. Saving a fix sends it back for review.
-  // Only this tool's own uploads ever appear here (the server filters on uploader + status).
+  // Shows every needs_fix question regardless of uploader (the server filters on status only).
   let fixRows = [];
   let fixImages = {}; // id -> {diagram_url, option_a_diagram_url, ...} as edited here
   const FIX_IMAGE_FIELDS = [['diagram_url', 'Question image'], ['option_a_diagram_url', 'Option A image'],
