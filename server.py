@@ -2502,6 +2502,25 @@ NCERT_MATCH_THRESHOLD_HI = 0.40
 # calibration gap of 0.0129). 0.62 sits in the middle of that gap.
 NCERT_MATCH_THRESHOLD_HI_GEMINI = 0.62
 
+# Hindi chunks are short (~680 chars on average vs ~2,800 for English), so the same top 3 gave the
+# model ~1,800 chars of textbook text against ~8,500 for English. Hindi takes up to this many
+# instead, best score first, stopping before the chunk that would pass the char cap. Neighbouring
+# chunks were tried first: ncert_content has no chunk-order column, and the Hindi rows were
+# inserted 20 at a time with one created_at per batch (in scrambled order), so there is no "next chunk".
+NCERT_HI_CHUNK_LIMIT = 6
+NCERT_HI_CONTEXT_CHARS = 5000
+
+def _cap_ncert_chars(rows: list, max_chars: int) -> list:
+    """Leading rows whose content fits in max_chars; the first row is always kept."""
+    kept, total = [], 0
+    for r in rows:
+        size = len(r.get("content") or "")
+        if kept and total + size > max_chars:
+            break
+        kept.append(r)
+        total += size
+    return kept
+
 # Dedicated to the Hindi NCERT retrieval path (match_ncert_hi_gemini) -- deliberately NOT routed
 # through get_embedding()'s embedding_cache table like every other embedding call in this file.
 # That cache is a single hash-keyed table sized for the 1536-dim OpenAI vectors used everywhere
@@ -2788,11 +2807,12 @@ async def search_ncert(query: str, limit: int = 3, stats: dict = None):
         # text-embedding-3-small) is deliberately left completely intact, unused, as an instant
         # rollback: revert this branch to call match_ncert with filter_language="hi" and
         # NCERT_MATCH_THRESHOLD_HI again, no data migration needed either way.
+        hi_limit = max(limit, NCERT_HI_CHUNK_LIMIT)
         async def _search(embedding):
             response = await async_client.post(
                 f"{SUPABASE_URL}/rest/v1/rpc/match_ncert_hi_gemini",
                 headers=headers,
-                json={"query_embedding": embedding, "match_threshold": 0, "match_count": max(limit, 10)}
+                json={"query_embedding": embedding, "match_threshold": 0, "match_count": max(hi_limit, 10)}
             )
             if response.status_code != 200:
                 return None, None
@@ -2802,8 +2822,9 @@ async def search_ncert(query: str, limit: int = 3, stats: dict = None):
             # Exercise lists are dropped/trimmed BEFORE the top `limit` are taken, so the next
             # relevant chunk takes a dropped one's place. raw_top_score stays on the unfiltered list:
             # it measures whether the doubt is on-topic at all, not which chunks get used.
-            real_results = [r for r in _without_exercises(candidates) if r.get("similarity", 0) >= NCERT_MATCH_THRESHOLD_HI_GEMINI][:limit]
-            return _with_ncert_errata(real_results), raw_top_score
+            # More, shorter chunks than English -- see NCERT_HI_CHUNK_LIMIT.
+            real_results = [r for r in _without_exercises(candidates) if r.get("similarity", 0) >= NCERT_MATCH_THRESHOLD_HI_GEMINI][:hi_limit]
+            return _with_ncert_errata(_cap_ncert_chars(real_results, NCERT_HI_CONTEXT_CHARS)), raw_top_score
         # Gate not independently validated against real Hindi query data the way English was --
         # see _OFFTOPIC_GATE_MARGIN -- applied on the same general principle regardless.
         return await _match_with_merge_fallback(query, _get_gemini_query_embedding, _search, NCERT_MATCH_THRESHOLD_HI_GEMINI - _OFFTOPIC_GATE_MARGIN)
@@ -2935,15 +2956,34 @@ def _relevant_ncert_chunks(question: str, rows: list) -> list:
         return rows
     return [r for r in rows if r.get("subject") == subject]
 
-def _ncert_citations(rows: list) -> list:
-    """Distinct citation strings, highest-scoring chapter first, near-ties only (see the margin)."""
+# English chapter name -> Hindi NCERT title: "subject|class|chapter_name_en" -> chapter_name, taken
+# from ncert_content's Hindi rows (non-chapter labels left out). Regenerate if the Hindi books are re-ingested.
+with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "utils", "ncert_hindi_titles.json"), encoding="utf-8") as _f:
+    NCERT_HINDI_TITLES = json.load(_f)
+
+def _hindi_chapter_title(subject: str, class_num, english_name: str) -> Optional[str]:
+    """Hindi title of an English-book chapter, or None. The two books' English names differ a
+    little ("Units and Measurement" / "Units and Measurements"), hence the fuzzy fallback."""
+    prefix = f"{subject}|{class_num}|"
+    title = NCERT_HINDI_TITLES.get(prefix + (english_name or ""))
+    if title:
+        return title
+    match = fuzzy_match_chapter(english_name, [k[len(prefix):] for k in NCERT_HINDI_TITLES if k.startswith(prefix)])
+    return NCERT_HINDI_TITLES[prefix + match] if match else None
+
+def _ncert_citations(rows: list, hindi_titles: bool = False) -> list:
+    """Distinct citation strings, highest-scoring chapter first, near-ties only (see the margin).
+    hindi_titles: show the Hindi chapter title for English-book rows (a Hinglish doubt answered in
+    Hindi retrieves English chunks, but the student should see the Hindi book's chapter name)."""
     ranked = sorted(rows, key=lambda r: r.get("similarity") or 0, reverse=True)
     best = (ranked[0].get("similarity") or 0) if ranked else 0
     citations = []
     for r in ranked:
         if (r.get("similarity") or 0) < best - NCERT_CITATION_SCORE_MARGIN:
             break
-        citation = _ncert_chapter_citation(r.get('subject', ''), r.get('class'), r.get('chapter_name', ''), lookup_name=r.get('chapter_name_en'))
+        english_name = r.get('chapter_name_en') or r.get('chapter_name', '')
+        shown_name = (hindi_titles and _hindi_chapter_title(r.get('subject', ''), r.get('class'), english_name)) or r.get('chapter_name', '')
+        citation = _ncert_chapter_citation(r.get('subject', ''), r.get('class'), shown_name, lookup_name=english_name)
         if citation and citation not in citations:
             citations.append(citation)
     return citations
@@ -4167,7 +4207,9 @@ HINDI_LANG_CONTEXT = (
     "Recall:\" becomes \"त्वरित याद:\", and in numerical answers \"Given:\" becomes "
     "\"दिया गया है:\", \"Formula:\" becomes \"सूत्र:\", \"Solution:\" becomes \"हल:\", "
     "\"Final Answer:\" becomes \"अंतिम उत्तर:\". \"NEET Importance:\" and \"Chapter:\" stay in "
-    "English exactly as given in the format above -- never translate those two labels."
+    "English exactly as given in the format above -- never translate those two labels. Any memory "
+    "trick or mnemonic must itself be in Devanagari -- never an acronym or phrase made of English/Latin "
+    "letters (e.g. not \"OIL RIG\" or \"VIBGYOR\"); if no good Devanagari one exists, leave the memory trick out."
 )
 
 # ---------- Hinglish doubts on Qwen ----------
@@ -5423,7 +5465,7 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
         # copy one of these verbatim into the "Chapter:" line instead of recalling/guessing it,
         # which a live 45-question test found produced a ~30% wrong-chapter-number rate.
         # Highest-scoring chapter first; see _ncert_citations.
-        real_citations = _ncert_citations(results)
+        real_citations = _ncert_citations(results, hindi_titles=language == "hi" and _looks_hinglish(text))
         retrieved_from = "\n".join(f"- {c}" for c in real_citations)
         prefer_first = " Listed closest match first -- use the first unless another one is plainly the chapter this question is about." if len(real_citations) > 1 else ""
         user_message = f"NCERT Content:\n{context}\n\nRetrieved from (copy EXACTLY ONE of these verbatim into your Chapter: line -- never a different name or number):{prefer_first}\n{retrieved_from}\n\nStudent Question: {text}"
