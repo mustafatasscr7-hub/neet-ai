@@ -2549,10 +2549,16 @@ _OFFTOPIC_GATE_MARGIN = 0.05
 async def _match_with_merge_fallback(query: str, embed_fn, search_fn, offtopic_gate_threshold: float = None, variant_source: str = None, variant_transform=None):
     """embed_fn(text) -> embedding, sync or async (both handled via iscoroutine on the call
     result). search_fn(embedding) -> awaitable returning (results, raw_top_score): results is the
-    already-threshold-and-label-filtered list exactly as before; raw_top_score is the best
-    similarity score seen BEFORE the real threshold filter (None if literally no rows came back at
-    all), used only for the off-topic pre-check gate below. Tries the raw query first; only on an
-    empty result does it retry every single-adjacent-word-merge variant.
+    already-threshold-and-label-filtered list exactly as before, or None when the lookup itself
+    failed (e.g. HTTP 500); raw_top_score is the best similarity score seen BEFORE the real
+    threshold filter (None if literally no rows came back at all), used only for the off-topic
+    pre-check gate below. Tries the raw query first; only on an empty result does it retry every
+    single-adjacent-word-merge variant.
+
+    Failed lookup: retried once with the same embedding, and if that fails too, returns empty --
+    never the variant fan-out. A merge variant can't fix a database error, and a failed lookup has
+    no raw_top_score, so the off-topic gate couldn't stop it either: a cold-cache Hindi scan timing
+    out as HTTP 500 then fanned out into up to 8 more embeds + scans (measured 14.4s for one doubt).
 
     variant_source: text to generate merge variants FROM, if different from the query actually
     embedded/searched -- defaults to `query` itself (every existing caller: NCERT English/Hindi).
@@ -2598,6 +2604,10 @@ async def _match_with_merge_fallback(query: str, embed_fn, search_fn, offtopic_g
 
     embedding = await _embed(query)
     results, raw_top_score = await search_fn(embedding)
+    if results is None:
+        results, raw_top_score = await search_fn(embedding)
+        if results is None:
+            return []
     if results:
         return results
 
@@ -2731,7 +2741,7 @@ async def search_ncert(query: str, limit: int = 3):
                 json={"query_embedding": embedding, "match_threshold": 0, "match_count": max(limit, 10)}
             )
             if response.status_code != 200:
-                return [], None
+                return None, None
             candidates = _filter_results(response.json())
             raw_top_score = candidates[0]["similarity"] if candidates else None
             # Exercise lists are dropped/trimmed BEFORE the top `limit` are taken, so the next
@@ -2753,7 +2763,7 @@ async def search_ncert(query: str, limit: int = 3):
                 json={"query_embedding": embedding, "match_threshold": 0, "match_count": max(limit, 10), "filter_language": language}
             )
             if response.status_code != 200:
-                return [], None
+                return None, None
             candidates = _filter_results(response.json())
             raw_top_score = candidates[0]["similarity"] if candidates else None
             # Same exercise filtering as the Hindi branch above.
@@ -6632,7 +6642,8 @@ async def diagram_match(req: DiagramMatchRequest, _: None = Depends(rate_limit(1
             # Out of scope for the off-topic gate (no gate threshold passed below -- this RPC is
             # still called at the real threshold directly, so there's no raw/unfiltered score to
             # report). _match_with_merge_fallback's contract just needs SOME second tuple element.
-            return (response.json() if response.status_code == 200 else []), None
+            # None (not []) on a failed lookup, so it's retried once rather than fanned out.
+            return (response.json() if response.status_code == 200 else None), None
         # Merge-variant fallback matters most here: diagram reference embeddings are built from
         # very short text (often just a bare name), which measured as the most typo/spacing-
         # fragile of the three matching systems this covers -- see _match_with_merge_fallback.
