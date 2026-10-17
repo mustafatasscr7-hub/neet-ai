@@ -190,6 +190,7 @@
     /* Classes added to JS-rendered inline-styled elements so light-mode can target them */
     .class-section-heading { font-size: 12px; font-weight: 700; color: var(--color, #4f8ef7); text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 18px; padding-bottom: 10px; border-bottom: 1px solid #1e1e1e; display: flex; align-items: center; gap: 8px; }
     .chapter-index-num { font-size: 10px; color: var(--color, #4f8ef7); font-weight: 700; }
+    .chapter-old-label { margin-left: 6px; padding: 1px 6px; border: 1px solid #2a2a2a; border-radius: 4px; color: #888; font-weight: 500; }
     .year-filter-select { background: #0d0d12; border: 1px solid #2a2a35; border-radius: 8px; padding: 6px 12px; color: #ececec; font-size: 13px; font-family: 'Inter', sans-serif; cursor: pointer; }
     .q-diagram-img { max-width: 100%; height: auto; display: block; border-radius: 8px; margin: 12px 0; border: 1px solid #2a2a2a; }
     /* An <img> occasionally shows up embedded directly inside question/option text itself
@@ -242,6 +243,7 @@
     body.light-mode .chapter-item { background: linear-gradient(180deg, #ffffff, #fafafc) !important; border-color: #e3e3ea !important; box-shadow: 0 1px 3px rgba(0,0,0,0.04) !important; }
     body.light-mode .chapter-item:hover { border-color: var(--color, #4f8ef7) !important; background: #f7f7fa !important; }
     body.light-mode .chapter-item.empty:hover { background: linear-gradient(180deg, #ffffff, #fafafc) !important; }
+    body.light-mode .chapter-old-label { border-color: #e3e3ea; color: #777; }
     body.light-mode .chapter-name { color: #0d0d0d !important; }
     body.light-mode .chapter-count { color: #7a7a85 !important; }
     body.light-mode .chapter-arrow { color: #b0b0ba !important; }
@@ -465,18 +467,23 @@
 
     const neetSyllabus = {
       Biology: {
-        11: ['The Living World', 'Biological Classification', 'Plant Kingdom', 'Animal Kingdom', 'Morphology of Flowering Plants', 'Anatomy of Flowering Plants', 'Structural Organisation in Animals', 'Cell: The Unit of Life', 'Biomolecules', 'Cell Cycle and Cell Division', 'Transport in Plants', 'Mineral Nutrition', 'Photosynthesis in Higher Plants', 'Respiration in Plants', 'Plant Growth and Development', 'Digestion and Absorption', 'Breathing and Exchange of Gases', 'Body Fluids and Circulation', 'Excretory Products and their Elimination', 'Locomotion and Movement', 'Neural Control and Coordination', 'Chemical Coordination and Integration'],
-        12: ['Reproduction in Organisms', 'Sexual Reproduction in Flowering Plants', 'Human Reproduction', 'Reproductive Health', 'Principles of Inheritance and Variation', 'Molecular Basis of Inheritance', 'Evolution', 'Human Health and Disease', 'Strategies for Enhancement in Food Production', 'Microbes in Human Welfare', 'Biotechnology: Principles and Processes', 'Biotechnology and its Applications', 'Organisms and Populations', 'Ecosystem', 'Biodiversity and Conservation', 'Environmental Issues']
+        11: ['The Living World', 'Biological Classification', 'Plant Kingdom', 'Animal Kingdom', 'Morphology of Flowering Plants', 'Anatomy of Flowering Plants', 'Structural Organisation in Animals', 'Cell: The Unit of Life', 'Biomolecules', 'Cell Cycle and Cell Division', 'Photosynthesis in Higher Plants', 'Respiration in Plants', 'Plant Growth and Development', 'Breathing and Exchange of Gases', 'Body Fluids and Circulation', 'Excretory Products and their Elimination', 'Locomotion and Movement', 'Neural Control and Coordination', 'Chemical Coordination and Integration', 'Transport in Plants', 'Mineral Nutrition', 'Digestion and Absorption'],
+        12: ['Sexual Reproduction in Flowering Plants', 'Human Reproduction', 'Reproductive Health', 'Principles of Inheritance and Variation', 'Molecular Basis of Inheritance', 'Evolution', 'Human Health and Disease', 'Microbes in Human Welfare', 'Biotechnology: Principles and Processes', 'Biotechnology and its Applications', 'Organisms and Populations', 'Ecosystem', 'Biodiversity and Conservation', 'Reproduction in Organisms', 'Strategies for Enhancement in Food Production', 'Environmental Issues']
       },
       Physics: {
         11: ['Units and Measurements', 'Motion in a Straight Line', 'Motion in a Plane', 'Laws of Motion', 'Work, Energy and Power', 'System of Particles and Rotational Motion', 'Gravitation', 'Mechanical Properties of Solids', 'Mechanical Properties of Fluids', 'Thermal Properties of Matter', 'Thermodynamics', 'Kinetic Theory', 'Oscillations', 'Waves', 'Mathematical Tools'],
         12: ['Electric Charges and Fields', 'Electrostatic Potential and Capacitance', 'Current Electricity', 'Moving Charges and Magnetism', 'Magnetism and Matter', 'Electromagnetic Induction', 'Alternating Current', 'Electromagnetic Waves', 'Ray Optics and Optical Instruments', 'Wave Optics', 'Dual Nature of Radiation and Matter', 'Atoms', 'Nuclei', 'Semiconductor Electronics: Materials, Devices and Simple Circuits']
       },
       Chemistry: {
-        11: ['Some Basic Concepts of Chemistry', 'Structure of Atom', 'Classification of Elements and Periodicity in Properties of Elements', 'Chemical Bonding and Molecular Structure', 'States of Matter: Gases and Liquids', 'Thermodynamics', 'Equilibrium', 'Redox Reactions', 'Hydrogen', 'The s-Block Elements (Alkali and Alkaline Earth Metals)', 'The p-Block Elements', 'Organic Chemistry: Some Basic Principles and Techniques', 'Hydrocarbons', 'Environmental Chemistry'],
-        12: ['The Solid State', 'Solutions', 'Electrochemistry', 'Chemical Kinetics', 'Surface Chemistry', 'General Principles and Processes of Isolation of Elements', 'The p-Block Elements', 'The d and f Block Elements', 'Coordination Compounds', 'Haloalkanes and Haloarenes', 'Alcohols, Phenols and Ethers', 'Aldehydes, Ketones and Carboxylic Acids', 'Amines', 'Biomolecules', 'Polymers', 'Chemistry in Everyday Life']
+        11: ['Some Basic Concepts of Chemistry', 'Structure of Atom', 'Classification of Elements and Periodicity in Properties of Elements', 'Chemical Bonding and Molecular Structure', 'Thermodynamics', 'Equilibrium', 'Redox Reactions', 'Organic Chemistry: Some Basic Principles and Techniques', 'Hydrocarbons', 'States of Matter: Gases and Liquids', 'Hydrogen', 'The s-Block Elements (Alkali and Alkaline Earth Metals)', 'The p-Block Elements', 'Environmental Chemistry'],
+        12: ['Solutions', 'Electrochemistry', 'Chemical Kinetics', 'The d and f Block Elements', 'Coordination Compounds', 'Haloalkanes and Haloarenes', 'Alcohols, Phenols and Ethers', 'Aldehydes, Ketones and Carboxylic Acids', 'Amines', 'Biomolecules', 'The Solid State', 'Surface Chemistry', 'General Principles and Processes of Isolation of Elements', 'The p-Block Elements', 'Polymers', 'Chemistry in Everyday Life']
       }
     };
+
+    // Chapters the rationalised NCERT books (2023-24 onwards) dropped. They sit after the current
+    // chapters above, so the current ones keep the book's numbers; still listed because ~1,100
+    // PYQs are tagged with them. Same list as server.py's NCERT_DROPPED_CHAPTERS.
+    const oldSyllabusChapters = new Set(['Transport in Plants', 'Mineral Nutrition', 'Digestion and Absorption', 'Reproduction in Organisms', 'Strategies for Enhancement in Food Production', 'Environmental Issues', 'States of Matter: Gases and Liquids', 'Hydrogen', 'The s-Block Elements (Alkali and Alkaline Earth Metals)', 'The p-Block Elements', 'Environmental Chemistry', 'The Solid State', 'Surface Chemistry', 'General Principles and Processes of Isolation of Elements', 'Polymers', 'Chemistry in Everyday Life']);
 
     // ---------------- Match List-I / List-II formatting ----------------
     // Detects "Match List-I with List-II" style questions and lays the two lists out as
@@ -1230,7 +1237,7 @@ function handleBack() {
             const clickAttr = count ? `onclick="showQuestions('${subject}', ${classNum}, '${name.replace(/'/g, "\\'")}')"` : '';
             return `
             <div class="chapter-item ${count ? '' : 'empty'}" ${clickAttr}>
-              <div class="chapter-index-num">${localizeNum(i + 1)}</div>
+              <div class="chapter-index-num">${localizeNum(i + 1)}${oldSyllabusChapters.has(name) ? `<span class="chapter-old-label">${t('pyqbank','oldSyllabus')}</span>` : ''}</div>
               <div class="chapter-name">${chapterName(name)}</div>
               <div class="chapter-count">${count ? localizeNum(count) + ' ' + t('pyqbank','qsSuffix') : t('pyqbank','comingSoon')}</div>
               ${count ? '<div class="subject-arrow" style="top:12px;bottom:auto;right:14px;font-size:13px;">→</div>' : ''}
