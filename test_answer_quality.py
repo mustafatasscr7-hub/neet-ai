@@ -87,7 +87,7 @@ class Harness:
         def fake_spawn(coro):
             h.spawned.append(coro)
 
-        async def fake_search(text, limit=3):
+        async def fake_search(text, limit=3, **kw):
             return h.ncert_results
 
         async def fake_diagram(text):

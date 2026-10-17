@@ -2733,7 +2733,9 @@ def _with_ncert_errata(rows: list) -> list:
         fixed.append(r if content == (r.get("content") or "") else {**r, "content": content})
     return fixed
 
-async def search_ncert(query: str, limit: int = 3):
+async def search_ncert(query: str, limit: int = 3, stats: dict = None):
+    # stats, if given, is filled with "language" and "top_raw_score" (the raw query's best
+    # similarity before any threshold or filter) for the retrieval log -- see _log_ncert_retrieval.
     # Service-role key: ncert_content's anon SELECT policy was removed (scraping audit,
     # 2026-09-19) since nothing in the frontend reads this table directly anymore -- only this
     # function does, server-side. Both RPCs below run as their own SECURITY DEFINER regardless of
@@ -2745,6 +2747,13 @@ async def search_ncert(query: str, limit: int = 3):
         "Content-Type": "application/json"
     }
     language = _detect_query_language(query)
+    if stats is not None:
+        stats["language"] = language
+
+    def _record_raw_top(raw_top_score):
+        # First real score wins: that's the raw query's own attempt (merge variants only run after it).
+        if stats is not None and raw_top_score is not None and stats.get("top_raw_score") is None:
+            stats["top_raw_score"] = raw_top_score
 
     def _filter_results(rows):
         # chapter_name_en is what actually carries "Appendix"/etc for Hindi rows (chapter_name
@@ -2775,6 +2784,7 @@ async def search_ncert(query: str, limit: int = 3):
                 return None, None
             candidates = _filter_results(response.json())
             raw_top_score = candidates[0]["similarity"] if candidates else None
+            _record_raw_top(raw_top_score)
             # Exercise lists are dropped/trimmed BEFORE the top `limit` are taken, so the next
             # relevant chunk takes a dropped one's place. raw_top_score stays on the unfiltered list:
             # it measures whether the doubt is on-topic at all, not which chunks get used.
@@ -2797,6 +2807,7 @@ async def search_ncert(query: str, limit: int = 3):
                 return None, None
             candidates = _filter_results(response.json())
             raw_top_score = candidates[0]["similarity"] if candidates else None
+            _record_raw_top(raw_top_score)
             # Same exercise filtering as the Hindi branch above.
             real_results = [r for r in _without_exercises(candidates) if r.get("similarity", 0) >= NCERT_MATCH_THRESHOLD_EN][:limit]
             return _with_ncert_errata(real_results), raw_top_score
@@ -2839,6 +2850,104 @@ def _ncert_chapter_citation(subject: str, class_num, chapter_name: str, lookup_n
     if match:
         return f"NCERT Class {class_key}, Chapter {chapters.index(match) + 1} — {chapter_name}"
     return f"NCERT Class {class_key}, {subject} — {chapter_name}"
+
+# ---------- Relevance check on retrieved NCERT chunks ----------
+# A chunk can clear the similarity threshold and still come from the wrong subject: "SI unit of
+# force" retrieved Chemistry Ch 1's units table and the answer cited it. So when the QUESTION is
+# clearly one subject, chunks from another subject are set aside; if none are left, the model is
+# told to answer without a citation (rather than cite a wrong chapter or refuse).
+# "Clearly" = the question hits terms of exactly one subject below. Every term is one the other two
+# NCERT books don't teach -- overlap topics (DNA/enzymes/vitamins in Chemistry Biomolecules,
+# osmosis, Bohr model, photoelectric effect, velocity, current, cell, pH, ...) are left out on
+# purpose, and a question hitting two subjects ("intermolecular forces") gets no subject at all.
+# English-script terms only, so Devanagari questions are never gated. A miss here just means the
+# old behaviour (no gate), so the lists stay small rather than complete.
+_NCERT_SUBJECT_TERMS = {
+    "Physics": [
+        r"forces?", r"friction(?:al)?", r"torque", r"projectiles?", r"kinematics?", r"centripetal", r"centrifugal",
+        r"pendulums?", r"simple harmonic", r"young'?s modulus", r"moment of inertia", r"acceleration",
+        r"gravitation(?:al)?", r"escape velocity", r"newton'?s (?:first |second |third )?laws?", r"resistors?",
+        r"capacitors?", r"capacitance", r"inductors?", r"inductance", r"ohm'?s law", r"magnetic (?:field|flux)",
+        r"electric (?:field|potential|dipole)", r"coulomb'?s law", r"gauss'?s? law", r"wheatstone", r"potentiometer",
+        r"galvanometer", r"ammeter", r"voltmeter", r"refraction", r"refractive index", r"diffraction", r"doppler",
+        r"semiconductors?", r"transistors?", r"diodes?", r"lenz'?s law", r"work[- ]energy theorem",
+    ],
+    "Chemistry": [
+        r"molarity", r"molality", r"mole fraction", r"mole concept", r"limiting reagent", r"empirical formula",
+        r"stoichiometr(?:y|ic)", r"hybridi[sz]ation", r"vsepr", r"electronegativity", r"enthalpy", r"gibbs",
+        r"alkanes?", r"alkenes?", r"alkynes?", r"benzene", r"aldehydes?", r"ketones?", r"carboxylic", r"phenols?",
+        r"sn1", r"sn2", r"nucleophil(?:e|es|ic)", r"electrophil(?:e|es|ic)", r"markovnikov'?s?", r"iupac",
+        r"haloalkanes?", r"haloarenes?", r"amines?", r"isomers?", r"isomerism", r"redox", r"oxidation (?:number|state)s?",
+        r"electrochemical", r"galvanic", r"nernst", r"kohlrausch", r"molar conductivity", r"rate constant",
+        r"order of (?:a )?reaction", r"coordination compounds?", r"ligands?", r"lanthanoids?", r"actinoids?",
+        r"[dfps]-block", r"periodic table", r"aufbau", r"hund'?s rule", r"le chatelier'?s?", r"equilibrium constant",
+        r"aromatic(?:ity)?", r"aldol", r"cannizzaro", r"grignard", r"wurtz", r"bond order", r"molecular orbitals?",
+        r"atomic orbitals?", r"intermolecular", r"van der waals", r"ionic", r"covalent", r"chemical bond(?:s|ing)?",
+    ],
+    "Biology": [
+        r"photosynthe(?:sis|tic)", r"photorespiration", r"mitosis", r"mitotic", r"meiosis", r"meiotic", r"chromosomes?",
+        r"chromosomal", r"alleles?", r"mendel(?:'?s|ian)?", r"genotypes?", r"phenotypes?", r"nephrons?", r"kidneys?",
+        r"neurons?", r"pollination", r"pollen", r"fertili[sz]ation", r"embryos?", r"ecosystems?", r"bacteria(?:l)?",
+        r"virus(?:es)?", r"fungi", r"algae", r"xylem", r"phloem", r"digesti(?:on|ve)", r"lungs?", r"menstrua(?:l|tion)",
+        r"sperms?", r"ovar(?:y|ies)", r"placenta", r"pathogens?", r"immun(?:e|ity)", r"vaccin(?:e|es|ation)",
+        r"antibod(?:y|ies)", r"biotechnology", r"plasmids?", r"biodiversity", r"taxonomy", r"phylum", r"genus",
+        r"respiration", r"stomata", r"transpiration", r"glycolysis", r"krebs", r"tissues?", r"muscles?", r"heart",
+        r"proton motive",
+    ],
+}
+_NCERT_SUBJECT_RES = {s: re.compile(r"\b(?:" + "|".join(terms) + r")\b", re.IGNORECASE) for s, terms in _NCERT_SUBJECT_TERMS.items()}
+
+# Citations offered to the model: the best-scoring chapter first, plus any other chapter whose best
+# chunk is within this margin of it (a near-tie the model may judge better). Further below the top,
+# the top chapter wins outright. Not calibrated yet -- ncert_retrieval_log now records the scores to do it.
+NCERT_CITATION_SCORE_MARGIN = 0.05
+
+def _question_subject(text: str) -> Optional[str]:
+    """The one subject a question is clearly about, or None when unclear (no hits, or 2+ subjects)."""
+    hits = [s for s, rx in _NCERT_SUBJECT_RES.items() if rx.search(text or "")]
+    return hits[0] if len(hits) == 1 else None
+
+def _relevant_ncert_chunks(question: str, rows: list) -> list:
+    """rows minus the chunks clearly unrelated to the question (another subject, see above)."""
+    subject = _question_subject(question)
+    if not subject:
+        return rows
+    return [r for r in rows if r.get("subject") == subject]
+
+def _ncert_citations(rows: list) -> list:
+    """Distinct citation strings, highest-scoring chapter first, near-ties only (see the margin)."""
+    ranked = sorted(rows, key=lambda r: r.get("similarity") or 0, reverse=True)
+    best = (ranked[0].get("similarity") or 0) if ranked else 0
+    citations = []
+    for r in ranked:
+        if (r.get("similarity") or 0) < best - NCERT_CITATION_SCORE_MARGIN:
+            break
+        citation = _ncert_chapter_citation(r.get('subject', ''), r.get('class'), r.get('chapter_name', ''), lookup_name=r.get('chapter_name_en'))
+        if citation and citation not in citations:
+            citations.append(citation)
+    return citations
+
+async def _log_ncert_retrieval(language: str, question_subject: Optional[str], top_raw_score, retrieved: list, used: list):
+    """One ncert_retrieval_log row per /chat answer that ran NCERT search. Ids, scores and chapters
+    only -- never the question or answer text. Best-effort, like the other telemetry writes."""
+    used_ids = {r.get("id") for r in used}
+    chunks = [{
+        "id": r.get("id"),
+        "score": round(r.get("similarity") or 0, 4),
+        "subject": r.get("subject"),
+        "class": r.get("class"),
+        "chapter": r.get("chapter_name_en") or r.get("chapter_name"),
+        "used": r.get("id") in used_ids,
+    } for r in retrieved]
+    outcome = "grounded" if used else ("set_aside" if retrieved else "none")
+    try:
+        await async_client.post(
+            f"{SUPABASE_URL}/rest/v1/ncert_retrieval_log", headers={**ADMIN_HEADERS, "Content-Type": "application/json"},
+            json={"language": language, "question_subject": question_subject, "outcome": outcome, "chunks": chunks,
+                  "top_raw_score": round(top_raw_score, 4) if top_raw_score is not None else None}
+        )
+    except Exception:
+        pass
 
 # Re-measured 2026-08-24 after backfilling embeddings for the ~80% of pyq rows that had none
 # (984/5,084 -> 5,084/5,084) -- worth re-checking since 4x more embedded content changes what a
@@ -4607,7 +4716,7 @@ SELF_CORRECTION_RETRY_GUARD = (
 # Every lookup and every store decision is logged to answer_cache_log.
 ANSWER_CACHE_TTL_DAYS = 30
 # Bump when answer post-processing changes in a way the prompt text hashed below doesn't capture.
-ANSWER_CACHE_FORMAT_TAG = "2026-10-17"
+ANSWER_CACHE_FORMAT_TAG = "2026-10-18"
 ANSWER_CACHE_PROMPT_VERSION = ANSWER_CACHE_FORMAT_TAG + "-" + hashlib.sha256("\x00".join([
     SYSTEM_PROMPT, SYSTEM_PROMPT_NO_CLARIFY, CONCISE_STYLE_CONTEXT, HINDI_LANG_CONTEXT, HINGLISH_GUARD,
     MNEMONIC_QUALITY_GUARD, INERT_PAIR_GUARD, MCQ_AMBIGUOUS_GUARD,
@@ -5270,12 +5379,17 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
     if skip_ncert_search:
         # No retrieval means no known subject, and build_student_context only ever uses weak
         # chapters from the retrieved subject -- so there's nothing to fetch here at all.
-        results = []
+        results = retrieved = []
         mistake_rows = []
         diagram_exists = False
     else:
         mistake_rows_coro = fetch_student_mistake_rows(user_id) if (personalize and user_id) else _empty_list()
-        results, mistake_rows, diagram_exists = await asyncio.gather(search_ncert(text), mistake_rows_coro, diagram_exists_coro)
+        search_stats = {}
+        retrieved, mistake_rows, diagram_exists = await asyncio.gather(search_ncert(text, stats=search_stats), mistake_rows_coro, diagram_exists_coro)
+        # Chunks from a clearly different subject are dropped here, so every later "was anything
+        # retrieved" check (citation stripping included) treats an all-unrelated set as no retrieval.
+        results = _relevant_ncert_chunks(text, retrieved)
+        asyncio.create_task(_log_ncert_retrieval(search_stats.get("language") or _detect_query_language(text), _question_subject(text), search_stats.get("top_raw_score"), retrieved, results))
     student_context = build_student_context(mistake_rows, {r.get('subject') for r in results})
 
     if results:
@@ -5287,13 +5401,15 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
         # retrieved (see _ncert_chapter_citation) -- SYSTEM_PROMPT rule 1 instructs the model to
         # copy one of these verbatim into the "Chapter:" line instead of recalling/guessing it,
         # which a live 45-question test found produced a ~30% wrong-chapter-number rate.
-        real_citations = []
-        for r in results:
-            citation = _ncert_chapter_citation(r.get('subject', ''), r.get('class'), r.get('chapter_name', ''), lookup_name=r.get('chapter_name_en'))
-            if citation and citation not in real_citations:
-                real_citations.append(citation)
+        # Highest-scoring chapter first; see _ncert_citations.
+        real_citations = _ncert_citations(results)
         retrieved_from = "\n".join(f"- {c}" for c in real_citations)
-        user_message = f"NCERT Content:\n{context}\n\nRetrieved from (copy EXACTLY ONE of these verbatim into your Chapter: line -- never a different name or number):\n{retrieved_from}\n\nStudent Question: {text}"
+        prefer_first = " Listed closest match first -- use the first unless another one is plainly the chapter this question is about." if len(real_citations) > 1 else ""
+        user_message = f"NCERT Content:\n{context}\n\nRetrieved from (copy EXACTLY ONE of these verbatim into your Chapter: line -- never a different name or number):{prefer_first}\n{retrieved_from}\n\nStudent Question: {text}"
+    elif retrieved:
+        # Everything retrieved was from another subject. No "Retrieved from:" text here on purpose:
+        # rule 1 keys the Chapter line on that literal string.
+        user_message = f"[NCERT search only found passages from a different subject than this question, so they were set aside. Answer the question fully from your own NEET-level knowledge -- do not refuse -- and omit the 📚 Chapter: line.]\n\nStudent Question: {text}"
     else:
         user_message = f"Student Question: {text}"
     if diagram_exists:

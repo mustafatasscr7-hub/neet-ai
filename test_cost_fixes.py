@@ -126,7 +126,7 @@ class Harness:
         async def fake_none(*a, **k):
             return None
 
-        async def fake_search(text, limit=3):
+        async def fake_search(text, limit=3, **kw):
             return h.ncert
 
         async def fake_false(text):
