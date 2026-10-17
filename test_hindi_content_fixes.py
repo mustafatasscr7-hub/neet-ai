@@ -4,7 +4,7 @@ Run with: python test_hindi_content_fixes.py
 Plain pass/fail harness like test_cost_fixes.py. Fully offline: the Supabase RPC and the embedding
 are fakes.
 
-1. NCERT_ERRATA corrects retrieved chunk text (Hindi loop of Henle, English NAD/NADH), only in the
+1. NCERT_ERRATA corrects retrieved chunk text (Hindi Henle/Krebs/pH, English NAD/NADH), only in the
    chunk's own language, without touching the row it was given.
 2. search_ncert hands the corrected text on.
 3. Hindi answers get fixed Hindi labels for Given / Formula / Solution / Final Answer.
@@ -51,6 +51,13 @@ def test_errata():
     check("English: NADP+ forming NADPH", "finally to NADP+ forming NADPH." in fixed[1]["content"] and "NAD forming" not in fixed[1]["content"], fixed[1]["content"])
     check("unrelated chunk is the same object", fixed[2] is other)
     check("input rows not mutated", hi["content"] == HENLE_WRONG and en["content"] == NAD_WRONG)
+    krebs = {"language": "hi", "content": r"क्रेब्स चक्र में $\mathrm{NADPH} + \mathrm{H}^{+}$तथा $\mathrm{NADH}_{2}$ बनते हैं।"}
+    ph = {"language": "hi", "content": r"इस प्रकार, अम्लीय विलयन की $\text{pH} < 7$ क्षारीय विलयन की $\text{pH} < 7$ उदासीन विलयन की $\text{pH} = 7$"}
+    krebs_fixed, ph_fixed = (r["content"] for r in server._with_ncert_errata([krebs, ph]))
+    check("Krebs cycle: NADH + H+ and FADH2",
+          r"$\mathrm{NADH} + \mathrm{H}^{+}$ तथा $\mathrm{FADH}_{2}$" in krebs_fixed and "NADPH" not in krebs_fixed, krebs_fixed)
+    check("basic solution pH > 7, acidic stays < 7",
+          r"क्षारीय विलयन की $\text{pH} > 7$" in ph_fixed and r"अम्लीय विलयन की $\text{pH} < 7$" in ph_fixed, ph_fixed)
     check("entry only applies in its own language",
           server._with_ncert_errata([{"language": "hi", "content": NAD_WRONG}])[0]["content"] == NAD_WRONG)
 

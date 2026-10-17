@@ -2715,6 +2715,11 @@ NCERT_ERRATA = [
            "हेन्ले-लूप की अवरोही भुजा जल के लिए पारगम्य होती है, परंतु वैद्युत अपघट्य के लिए लगभग अपारगम्य होती है।"),
     # English Class 11 Biology, Photosynthesis summary: the light reaction reduces NADP+, not NAD.
     ("en", "finally to NAD forming NADH.", "finally to NADP+ forming NADPH."),
+    # Hindi Class 11 Biology, Respiration in Plants: the Krebs cycle forms NADH + H+ and FADH2.
+    ("hi", r"क्रेब्स चक्र में $\mathrm{NADPH} + \mathrm{H}^{+}$तथा $\mathrm{NADH}_{2}$ बनते हैं।",
+           r"क्रेब्स चक्र में $\mathrm{NADH} + \mathrm{H}^{+}$ तथा $\mathrm{FADH}_{2}$ बनते हैं।"),
+    # Hindi Class 11 Chemistry, Equilibrium: a basic solution has pH > 7.
+    ("hi", r"क्षारीय विलयन की $\text{pH} < 7$", r"क्षारीय विलयन की $\text{pH} > 7$"),
 ]
 
 def _with_ncert_errata(rows: list) -> list:
