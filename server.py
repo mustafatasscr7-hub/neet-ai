@@ -7985,10 +7985,12 @@ class SolveAlternateMethodRequest(BaseModel):
 @app.post("/solve-alternate-method")
 async def solve_alternate_method_endpoint(req: SolveAlternateMethodRequest, request: Request, _: None = Depends(rate_limit(20, 60, by="account")), verified_user_id: str = Depends(_get_verified_user_id)):
     # Mirrors /solve, not /referral/status -- guests can view alternate methods same as the
-    # primary solution (no login wall here, ever), so this never 401s on a missing token. Only
-    # stops trusting the client's own user_id for token-usage attribution, same IDOR class the
-    # /referral/status audit found elsewhere.
+    # primary solution (no login wall here, ever), so this never 401s on a missing token. Usage is
+    # billed to the verified account (a body user_id is ignored -- same IDOR class the
+    # /referral/status audit found elsewhere), or to the guest's device and IP, and the same daily
+    # budget as /solve is checked before a fresh generation (see enforce_daily_budget below).
     req.user_id = verified_user_id
+    ip = _client_ip(request)
     _guest_device.set(_device_id(request))
     if not req.pyq_id or not req.primary_solution:
         return {"alternate_method": ""}
@@ -8002,6 +8004,9 @@ async def solve_alternate_method_endpoint(req: SolveAlternateMethodRequest, requ
     if rows and rows[0].get("alternate_method") is not None:
         return {"alternate_method": rows[0]["alternate_method"]}
 
+    # Only a fresh generation costs anything, so a cached method above stays free even past the
+    # cap. Same 402s as /solve: per plan when logged in, per device + per-IP ceiling for guests.
+    await enforce_daily_budget(req.user_id, ip)
     options_context = f"A) {req.option_a}\nB) {req.option_b}\nC) {req.option_c}\nD) {req.option_d}"
     loop = asyncio.get_event_loop()
     text, tokens = await loop.run_in_executor(
@@ -8011,7 +8016,7 @@ async def solve_alternate_method_endpoint(req: SolveAlternateMethodRequest, requ
         return {"alternate_method": ""}
 
     if tokens:
-        await log_token_usage(req.user_id, tokens, _client_ip(request))
+        await log_token_usage(req.user_id, tokens, ip)
 
     # A pyq_solution_cache row always exists by the time this is called (the primary solution is
     # unconditionally cached the first time /solve runs for this pyq_id+language, no

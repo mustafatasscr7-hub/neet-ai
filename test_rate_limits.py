@@ -494,6 +494,80 @@ def test_chat_alternate_method(client, fake):
         reset()
 
 
+def test_solve_alternate_method(client, fake):
+    print("\n# /solve-alternate-method: open to guests, same daily budgets and 402s as /solve")
+    generated = []
+    original = server.generate_alternate_method
+
+    def fake_generate(question, primary_answer, options_context="", language="en"):
+        generated.append(question)
+        return "Use the mole method instead.", 5000
+
+    server.generate_alternate_method = fake_generate
+    body = {"pyq_id": "11111111-aaaa-4aaa-8aaa-111111111111", "question": "moles of O2", "primary_solution": "equivalents",
+            "language": "en", "user_id": UID_B}
+    solve_body = {"pyq_id": body["pyq_id"], "question": "moles of O2"}
+    alt = lambda *headers, device=None: client.post("/solve-alternate-method", json=body, headers=at(*headers, device=device))
+    solve = lambda *headers, device=None: client.post("/solve", json=solve_body, headers=at(*headers, device=device))
+    today = server._ist_today()
+    ip4, ip5 = "192.0.2.44", "192.0.2.55"
+    try:
+        reset()
+        fake.rows.clear()  # earlier tests leave usage on accounts A and B
+        print("  -- guests")
+        dev_a, dev_b = new_device(), new_device()
+        got = [alt(ip4, device=dev_a).status_code for _ in range(4)]
+        check("guest: generated without a login (3 x 5,000 tokens), the 4th is 402", got == [200, 200, 200, 402], str(got))
+        check("...billed to the guest's device and IP, not the body's user_id",
+              fake.tokens("guest_device_usage_log", dev_a) == 15000 and fake.tokens("guest_usage_log", ip4) == 15000
+              and fake.tokens("usage_log", UID_B) == 0)
+        r, s = alt(ip4, device=dev_a), solve(ip4, device=dev_a)
+        check("guest 402 is the same as /solve's", r.status_code == s.status_code == 402
+              and r.json()["detail"]["message"] == s.json()["detail"]["message"] == "Guest limit reached — log in to continue"
+              and set(r.json()["detail"]) == set(s.json()["detail"]), f"{r.text} | {s.text}")
+        check("another device on the same IP still gets one", alt(ip4, device=dev_b).status_code == 200)
+        fake.row("guest_usage_log", ip4, today)["tokens_used"] = server.GUEST_IP_DAILY_CEILING
+        dev_c = new_device()
+        r, s = alt(ip4, device=dev_c), solve(ip4, device=dev_c)
+        check("IP past 280,000: a new device is 402, same as /solve (until IST midnight)",
+              r.status_code == s.status_code == 402 and r.json()["detail"] == s.json()["detail"], f"{r.text} | {s.text}")
+
+        print("  -- logged in")
+        a_before = fake.tokens("usage_log", UID_A)
+        r = alt(ip5, AUTH_A, device=dev_c)
+        check("logged in: generated, billed to the verified account (A), not the body's (B) or the guest rows",
+              r.status_code == 200 and fake.tokens("usage_log", UID_A) - a_before == 5000 and fake.tokens("usage_log", UID_B) == 0
+              and fake.tokens("guest_device_usage_log", dev_c) == 0, r.text)
+        row = fake.row("usage_log", UID_A, today)
+        row["tokens_used"], row["limit_reached_at"] = server.DAILY_TOKEN_BUDGET_FREE, server.datetime.now(server.timezone.utc).isoformat()
+        generated.clear()
+        r, s = alt(ip5, AUTH_A), solve(ip5, AUTH_A)
+        check("free plan over budget: 402 'Daily limit reached', same as /solve, nothing generated",
+              r.status_code == s.status_code == 402 and r.json()["detail"]["message"] == s.json()["detail"]["message"] == "Daily limit reached"
+              and set(r.json()["detail"]) == set(s.json()["detail"]) and not generated, f"{r.text} | {s.text}")
+        fake.tables["user_plan"] = [{"plan": "pro"}]
+        row["tokens_used"] = server.DAILY_TOKEN_LIMIT_PRO
+        r, s = alt(ip5, AUTH_A), solve(ip5, AUTH_A)
+        check("pro plan over its cap: 402 with the midnight reset, same as /solve",
+              r.status_code == s.status_code == 402 and r.json()["detail"].get("reset_at_midnight_ist") is True
+              and r.json()["detail"]["message"] == s.json()["detail"]["message"] and set(r.json()["detail"]) == set(s.json()["detail"]),
+              f"{r.text} | {s.text}")
+
+        print("  -- cache")
+        fake.tables["pyq_solution_cache"] = [{"alternate_method": "cached method"}]
+        r = alt(ip5, AUTH_A)
+        check("cached method still served past the cap (costs nothing)", r.status_code == 200 and r.json() == {"alternate_method": "cached method"}
+              and not generated, r.text)
+        r = alt(ip4, device=dev_a)
+        check("...and to a guest past theirs", r.status_code == 200 and r.json() == {"alternate_method": "cached method"}, r.text)
+    finally:
+        server.generate_alternate_method = original
+        for table in ("user_plan", "pyq_solution_cache"):
+            fake.tables.pop(table, None)
+        fake.rows.clear()
+        reset()
+
+
 def test_cors(client):
     print("\n# CORS preflight allows X-Device-Id from the website")
     r = client.options("/chat", headers={"Origin": "https://neet-ai-jet.vercel.app", "Access-Control-Request-Method": "POST",
@@ -520,6 +594,7 @@ if __name__ == "__main__":
     test_sweep_and_cap(tc)
     test_guest_budget(tc, fake)
     test_chat_alternate_method(tc, fake)
+    test_solve_alternate_method(tc, fake)
     test_cors(tc)
     print(f"\nTOTAL: {len(_passed)} passed, {len(_failed)} failed")
     sys.exit(1 if _failed else 0)
