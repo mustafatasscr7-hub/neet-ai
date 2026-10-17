@@ -21,8 +21,13 @@ select extversion from pg_extension where extname = 'vector';
 --         CONCURRENTLY: the SQL editor runs in a transaction, and nothing writes this table at
 --         runtime. If the editor times out, the build keeps running server-side -- check with
 --         `select * from pg_stat_progress_create_index;` and wait for STEP 3 to show the index.
+--         No parallel workers: a parallel HNSW build puts maintenance_work_mem in a shared memory
+--         segment, and at 128MB Supabase Free failed with "53200: could not resize shared memory
+--         segment ... Cannot allocate memory". If the graph outgrows 64MB, pgvector logs a NOTICE
+--         and keeps building, only slower.
 set statement_timeout = '15min';
-set maintenance_work_mem = '128MB';
+set max_parallel_maintenance_workers = 0;
+set maintenance_work_mem = '64MB';
 create index if not exists ncert_content_embedding_gemini_hi_hnsw
   on public.ncert_content
   using hnsw ((embedding_gemini::halfvec(3072)) halfvec_cosine_ops)
