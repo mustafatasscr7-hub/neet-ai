@@ -301,10 +301,10 @@
           <option value="contractor">Contractor</option>
           <option value="admin">Admin</option>
         </select>
-        <select id="filterBatch" onchange="onFilterChange()" title="Upload batch">
+        <select id="filterBatch" onchange="onFilterChange()" title="Upload batch" hidden>
           <option value="">All batches</option>
         </select>
-        <input type="date" id="filterUploadedDate" onchange="onFilterChange()" title="Uploaded on (India time)"/>
+        <input type="date" id="filterUploadedDate" onchange="onFilterChange()" title="Uploaded on (India time)" hidden/>
       </span>
       <button type="button" id="dupToggleBtn" class="dup-toggle-btn" onclick="toggleDuplicatesView()">🔁 Find Duplicates (50%+)</button>
       <button type="button" id="reviewToggleBtn" class="dup-toggle-btn" onclick="toggleReviewMode()">📋 Review Queue</button>
