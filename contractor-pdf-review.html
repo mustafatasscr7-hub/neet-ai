@@ -132,7 +132,7 @@
   .fix-note b { color: #fb923c; }
   .fix-images { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; margin-top: 4px; }
   .fix-image-slot { border: 1px dashed #2a2a2a; border-radius: 8px; padding: 8px; font-size: 11px; color: #888; }
-  .fix-image-slot img { max-width: 100%; max-height: 110px; border-radius: 6px; display: block; margin: 6px 0; }
+  .fix-image-slot img { max-width: 100%; max-height: 110px; border-radius: 6px; display: block; margin: 6px 0; cursor: zoom-in; }
   .fix-image-slot input[type="file"] { width: 100%; font-size: 10px; color: #666; margin-top: 4px; }
   .fix-image-slot button { background: transparent; border: none; color: #ef4444; font-size: 11px; cursor: pointer; padding: 0; font-family: 'Inter', sans-serif; }
   #fixListBtn.has-fixes { border-color: #f9731680; color: #fb923c; }
@@ -150,6 +150,19 @@
      -- it was rendering visible-but-unclickable (buried under the overlay's own click layer)
      until this was raised above it. */
   :root { --keyboard-zindex: 960; }
+
+  /* Fix-image lightbox -- one shared instance, opened by clicking any thumbnail inside the
+     needs-fix cards' image slots. Above the fix list overlay (900) and the formula modal (950). */
+  #fixImageLightboxOverlay {
+    display: none; position: fixed; inset: 0; background: #000000d9; z-index: 965;
+    align-items: center; justify-content: center; padding: 40px;
+  }
+  #fixImageLightboxImg { max-width: 90vw; max-height: 90vh; object-fit: contain; border-radius: 4px; }
+  #fixImageLightboxClose {
+    position: fixed; top: 16px; right: 20px; background: none; border: none; color: #fff;
+    font-size: 26px; line-height: 1; cursor: pointer; padding: 6px 10px; opacity: 0.8;
+  }
+  #fixImageLightboxClose:hover { opacity: 1; }
 </style>
 </head>
 <body>
@@ -205,6 +218,11 @@
         <button type="button" class="action-btn primary" onclick="confirmFormulaInsert()">Insert</button>
       </div>
     </div>
+  </div>
+
+  <div id="fixImageLightboxOverlay" onclick="handleFixImageLightboxBackdropClick(event)">
+    <img id="fixImageLightboxImg" src="" alt=""/>
+    <button type="button" id="fixImageLightboxClose" onclick="closeFixImageLightbox()">✕</button>
   </div>
 
   <div id="pdfHistoryOverlay" style="display:none;position:fixed;inset:0;background:#000000a0;z-index:900;align-items:center;justify-content:center;">
@@ -1798,6 +1816,34 @@
   function removeFixImage(id, field) {
     fixImages[id][field] = null;
     rerenderFixCard(id);
+  }
+
+  // Click-to-enlarge for the needs-fix image thumbnails -- delegated so re-rendering a card
+  // (rerenderFixCard) never leaves a stale listener attached to a replaced <img>.
+  document.addEventListener('click', (e) => {
+    const thumb = e.target.closest('.fix-image-slot img');
+    if (thumb) openFixImageLightbox(thumb.src);
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    if (document.getElementById('fixImageLightboxOverlay').style.display !== 'none') closeFixImageLightbox();
+  });
+
+  function openFixImageLightbox(url) {
+    document.getElementById('fixImageLightboxImg').src = url;
+    document.getElementById('fixImageLightboxOverlay').style.display = 'flex';
+  }
+
+  function closeFixImageLightbox() {
+    document.getElementById('fixImageLightboxOverlay').style.display = 'none';
+    document.getElementById('fixImageLightboxImg').src = '';
+  }
+
+  // Only closes when the backdrop itself is the click target -- the <img> and the close button
+  // are also inside this element.
+  function handleFixImageLightboxBackdropClick(event) {
+    if (event.target.id === 'fixImageLightboxOverlay') closeFixImageLightbox();
   }
 
   function readFixFields(id) {
