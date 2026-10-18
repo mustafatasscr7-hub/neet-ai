@@ -8358,12 +8358,12 @@ async def contractor_pyq_fix(pyq_id: str, body: ContractorPyqFix, _: None = Depe
     # Back in the admin's queue. review_note stays so the admin sees what was asked for.
     fields["review_status"] = "pending"
     try:
-        # The filters make this a no-op unless the row is the contractor's own and still marked
-        # needs_fix -- an approved or admin-uploaded row can't be touched from here.
+        # The filter makes this a no-op unless the row is still marked needs_fix -- an approved
+        # row can't be touched from here. Any uploader (contractor or admin) can be sent back.
         resp = await async_client.patch(
             f"{SUPABASE_URL}/rest/v1/pyq",
             headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
-            params={"id": f"eq.{pyq_id}", "uploaded_by": "eq.contractor", "review_status": "eq.needs_fix",
+            params={"id": f"eq.{pyq_id}", "review_status": "eq.needs_fix",
                     "select": "id,question,chapter,option_a,option_b,option_c,option_d,review_status"},
             json=fields
         )
