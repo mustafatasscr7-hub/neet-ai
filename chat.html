@@ -4015,6 +4015,20 @@ let selectedImages = [];
                   const pro = !guest && userPlan === 'pro';
                   const max = !guest && userPlan === 'max';
                   const link = guest ? './login.html' : './pricing.html';
+                  // Weekly limit shares this same 402 path (see server.py's enforce_daily_budget)
+                  // -- distinguished from a daily block only by this detail flag, since
+                  // WEEKLY_LIMIT_ENFORCED being off means this branch never actually fires yet.
+                  // Its own message already carries the upgrade link as markdown, so no extra
+                  // ctaHtml is appended for it.
+                  let limitDetail = {};
+                  try { limitDetail = (await res.json()).detail || {}; } catch (e) {}
+                  if (limitDetail.reset_at_monday_ist) {
+                    solDiv.innerHTML = `<div style="color:#ef4444;">${parseWithMath(t('chat', 'weeklyLimitReachedMessage'))}</div>`;
+                    solBtn.textContent = 'Show Solution';
+                    solBtn.disabled = false;
+                    refreshUsageBanner();
+                    return;
+                  }
                   const msgKey = guest ? 'guestLimitReachedMessage' : (pro ? 'proLimitReachedMessage' : (max ? 'maxLimitReachedMessage' : 'limitReachedMessage'));
                   const ctaKey = guest ? 'login' : (pro ? 'upgradeToMax' : 'upgradeToPro');
                   const ctaHtml = max ? '' : ` <a href="${link}">${t('chat', ctaKey)}</a>`;
@@ -7527,7 +7541,13 @@ function plainTextFromMarkdown(text) {
           // where this failed attempt's answer would have landed.
           if (response.status === 402) {
             await refreshUsageBanner(); // updates userPlan too, so the check below reflects the real plan
-            const msgKey = !session ? 'guestLimitReachedMessage' : (userPlan === 'pro' ? 'proLimitReachedMessage' : (userPlan === 'max' ? 'maxLimitReachedMessage' : 'limitReachedMessage'));
+            // Weekly limit shares this same 402 path (see server.py's enforce_daily_budget) --
+            // distinguished from a daily block only by this detail flag, since WEEKLY_LIMIT_ENFORCED
+            // being off means this branch never actually fires yet.
+            let limitDetail = {};
+            try { limitDetail = (await response.json()).detail || {}; } catch (e) {}
+            const msgKey = limitDetail.reset_at_monday_ist ? 'weeklyLimitReachedMessage' :
+              (!session ? 'guestLimitReachedMessage' : (userPlan === 'pro' ? 'proLimitReachedMessage' : (userPlan === 'max' ? 'maxLimitReachedMessage' : 'limitReachedMessage')));
             addMessageRow('ai', t('chat', msgKey), undefined, aiIndex);
           } else if (response.status === 413) {
             let detail = {};

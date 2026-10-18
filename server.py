@@ -1442,14 +1442,15 @@ COOLDOWN_HOURS = 24  # how long a block lasts once the budget is actually crosse
 # margin.
 DAILY_TOKEN_LIMIT_PRO = 950_000
 MAX_DAILY_TOKEN_CAP = 2_100_000
-# Weekly figures shown on the Usage tab's "This week" bar -- display only, nothing blocks on
-# these yet (WEEKLY_LIMIT_ENFORCED stays False; flip it the day a real weekly cap is wanted).
-# Free gets a flat number rather than DAILY_TOKEN_BUDGET_FREE*7 because the daily budget is
-# already a tight, deliberately-recalibrated number (see its own comment) -- multiplying it
-# straight across a week would overstate how much Free is really meant to allow. Paid plans
-# don't have that same tension (their daily caps are themselves the real ceiling, not a tight
-# budget), so they use a plain daily*4 placeholder until a real weekly product decision exists.
-WEEKLY_TOKEN_LIMIT_FREE = 200_000
+# Weekly figures shown on the Usage tab's "This week" bar. Each is 5x that plan's real daily
+# ceiling (DAILY_TOKEN_BUDGET_FREE/DAILY_TOKEN_LIMIT_PRO/MAX_DAILY_TOKEN_CAP above) -- a flat
+# multiple rather than daily*7 so a student who uses their full daily allowance every day still
+# has slack left before the weekly figure bites. Nothing blocks on these yet: WEEKLY_LIMIT_ENFORCED
+# stays False, so today they only feed the Usage tab's display. Flip the flag to make
+# enforce_daily_budget below actually block once a plan's weekly figure is reached.
+WEEKLY_TOKEN_LIMIT_FREE = 250_000
+WEEKLY_TOKEN_LIMIT_PRO = 4_750_000
+WEEKLY_TOKEN_LIMIT_MAX = 10_500_000
 WEEKLY_LIMIT_ENFORCED = False
 # Backstop only, past the now-visible MAX_DAILY_TOKEN_CAP above -- silent, never surfaced to the
 # student in any form (see check_max_usage_tier). A single very large call (e.g. a big PDF/image
@@ -1468,6 +1469,17 @@ def _seconds_until_ist_midnight() -> int:
     now_ist = datetime.now(timezone.utc).astimezone(IST)
     next_midnight_ist = datetime.combine(now_ist.date() + timedelta(days=1), datetime.min.time(), tzinfo=IST)
     return int((next_midnight_ist - now_ist).total_seconds())
+
+def _ist_week_start_date() -> date:
+    """Calendar week anchored to Monday 12:00am IST -- same anchor usage_summary's own weekly
+    section uses (date.weekday() is 0 for Monday)."""
+    today_ist = datetime.now(timezone.utc).astimezone(IST).date()
+    return today_ist - timedelta(days=today_ist.weekday())
+
+def _seconds_until_ist_monday() -> int:
+    now_ist = datetime.now(timezone.utc).astimezone(IST)
+    next_monday_ist = datetime.combine(_ist_week_start_date() + timedelta(days=7), datetime.min.time(), tzinfo=IST)
+    return max(0, int((next_monday_ist - now_ist).total_seconds()))
 
 CST = timezone(timedelta(hours=8))  # China Standard Time, fixed offset (no DST) -- DeepSeek's
 
@@ -2079,6 +2091,32 @@ async def _check_plan_daily_limit(user_id: str, budget: int):
             "reset_at_midnight_ist": True
         })
 
+async def _weekly_tokens_used(user_id: str) -> int:
+    """Same usage_log table/column the daily checks use, summed over the current IST week
+    (Monday-anchored, see _ist_week_start_date) -- only called when WEEKLY_LIMIT_ENFORCED is True."""
+    week_start_date = _ist_week_start_date()
+    today_date = date.fromisoformat(_ist_today())
+    week_day_labels = [(week_start_date + timedelta(days=i)).isoformat() for i in range((today_date - week_start_date).days + 1)]
+    try:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/usage_log", headers=ADMIN_HEADERS,
+            params={"user_id": f"eq.{user_id}", "usage_date": f"in.({','.join(week_day_labels)})", "select": "tokens_used"}
+        )
+        return sum(r["tokens_used"] for r in resp.json()) if resp.status_code == 200 else 0
+    except Exception as e:
+        # Fails open, same principle as _check_plan_daily_limit above.
+        print(f"WEEKLY TOKENS FETCH FAILED (user_id={user_id}): {e}", flush=True)
+        return 0
+
+async def _check_weekly_limit(user_id: str, budget: int):
+    tokens_used = await _weekly_tokens_used(user_id)
+    if tokens_used >= budget:
+        raise HTTPException(status_code=402, detail={
+            "message": "Weekly limit reached",
+            "retry_after_seconds": _seconds_until_ist_monday(),
+            "reset_at_monday_ist": True
+        })
+
 async def _log_max_usage_alert(user_id: str, tokens_used: int, tier: str, action_taken: str):
     """Admin-visible audit trail for Max's silent breakeven handling -- never surfaced to the
     student. Idempotent per (user_id, usage_date, tier) via a unique index + ignore-duplicates, so
@@ -2135,16 +2173,22 @@ async def enforce_daily_budget(user_id: str, ip: str = ""):
         plan = await get_user_plan(user_id)
         if plan == "pro":
             await _check_plan_daily_limit(user_id, DAILY_TOKEN_LIMIT_PRO)
-            return
-        if plan == "max":
+        elif plan == "max":
             # As of 2026-09-03, a real visible cap too -- see MAX_DAILY_TOKEN_CAP's own comment.
             # check_max_usage_tier's breakeven backstop still applies independently of this, for
             # the single-large-call overshoot case its own docstring explains.
             await _check_plan_daily_limit(user_id, MAX_DAILY_TOKEN_CAP)
-            return
-        remaining = await _check_rolling_cooldown("usage_log", "user_id", user_id, DAILY_TOKEN_BUDGET_FREE)
-        if remaining is not None:
-            raise HTTPException(status_code=402, detail={"message": "Daily limit reached", "retry_after_seconds": remaining})
+        else:
+            remaining = await _check_rolling_cooldown("usage_log", "user_id", user_id, DAILY_TOKEN_BUDGET_FREE)
+            if remaining is not None:
+                raise HTTPException(status_code=402, detail={"message": "Daily limit reached", "retry_after_seconds": remaining})
+        # Weekly cap: same blocking path as the daily checks above (a 402), checked only after
+        # today's own daily check already let the request through, and only when
+        # WEEKLY_LIMIT_ENFORCED is True -- see that flag's own comment. Guarded before the query
+        # so flipping it off costs nothing extra on every request.
+        if WEEKLY_LIMIT_ENFORCED:
+            weekly_budget = WEEKLY_TOKEN_LIMIT_PRO if plan == "pro" else (WEEKLY_TOKEN_LIMIT_MAX if plan == "max" else WEEKLY_TOKEN_LIMIT_FREE)
+            await _check_weekly_limit(user_id, weekly_budget)
         return
     # Guest (no account): per device, plus the per-IP daily ceiling (see GUEST_IP_DAILY_CEILING).
     # Approximate, not airtight -- the goal is to nudge toward logging in, not perfect anti-abuse.
@@ -6638,10 +6682,10 @@ async def usage_summary(verified_user_id: str = Depends(_get_verified_user_id)):
                     "select": "tokens_used"}
         )
         weekly_tokens_used = sum(r["tokens_used"] for r in week_resp.json()) if week_resp.status_code == 200 else 0
-        # Free: flat WEEKLY_TOKEN_LIMIT_FREE (see its own comment). Paid: daily cap * 4 placeholder
-        # until a real weekly figure exists for them. WEEKLY_LIMIT_ENFORCED is display-only for now
-        # -- nothing here blocks a request on it.
-        weekly_budget = WEEKLY_TOKEN_LIMIT_FREE if plan == "free" else budget_for_plan * 4
+        # Real per-plan weekly figures (see their own comment, by DAILY_TOKEN_LIMIT_PRO etc.).
+        # WEEKLY_LIMIT_ENFORCED is display-only here -- enforce_daily_budget is what actually
+        # blocks a request on it, gated on that same flag.
+        weekly_budget = WEEKLY_TOKEN_LIMIT_PRO if plan == "pro" else (WEEKLY_TOKEN_LIMIT_MAX if plan == "max" else WEEKLY_TOKEN_LIMIT_FREE)
         weekly_percent_used = round(min(100, weekly_tokens_used / weekly_budget * 100), 1)
         next_monday_ist = datetime.combine(week_start_date + timedelta(days=7), datetime.min.time(), tzinfo=IST)
         weekly_reset_in_seconds = max(0, int((next_monday_ist - now_ist).total_seconds()))
