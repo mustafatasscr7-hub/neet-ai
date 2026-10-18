@@ -787,11 +787,14 @@ async function renderReferralSection() {
 
 // ---------- Usage (Usage tab) ----------
 function formatUsageDuration(totalSeconds) {
-  const h = Math.floor(totalSeconds / 3600);
+  const d = Math.floor(totalSeconds / 86400);
+  const h = Math.floor((totalSeconds % 86400) / 3600);
   const m = Math.floor((totalSeconds % 3600) / 60);
-  if (h <= 0 && m <= 0) return t('chat', 'usageLessThanMinute');
+  if (d <= 0 && h <= 0 && m <= 0) return t('chat', 'usageLessThanMinute');
+  const dUnit = t('chat', 'usageDayUnit');
   const hUnit = t('chat', 'usageHrUnit');
   const mUnit = t('chat', 'usageMinUnit');
+  if (d > 0) return `${localizeNum(d)} ${dUnit} ${localizeNum(h)} ${hUnit}`;
   if (h <= 0) return `${localizeNum(m)} ${mUnit}`;
   if (m <= 0) return `${localizeNum(h)} ${hUnit}`;
   return `${localizeNum(h)} ${hUnit} ${localizeNum(m)} ${mUnit}`;
@@ -884,7 +887,7 @@ async function renderUsageSection(isManualRefresh) {
         <div class="usage-bar-track">
           <div class="usage-bar-fill" style="width:${w.unlimited ? 100 : weekPercent}%;background:${weekGradient};"></div>
         </div>
-        <div class="usage-section-sub">${t('chat', 'usageDoubtsInWeek').replace('{n}', localizeNum(w.total_doubts))}</div>
+        <div class="usage-section-sub">${t('chat', 'usageDoubtsInWeek').replace('{n}', localizeNum(w.total_doubts))} &middot; ${t('chat', 'usageResetsIn').replace('{duration}', formatUsageDuration(w.reset_in_seconds))}</div>
       </div>
     `;
 

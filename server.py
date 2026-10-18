@@ -1442,6 +1442,15 @@ COOLDOWN_HOURS = 24  # how long a block lasts once the budget is actually crosse
 # margin.
 DAILY_TOKEN_LIMIT_PRO = 950_000
 MAX_DAILY_TOKEN_CAP = 2_100_000
+# Weekly figures shown on the Usage tab's "This week" bar -- display only, nothing blocks on
+# these yet (WEEKLY_LIMIT_ENFORCED stays False; flip it the day a real weekly cap is wanted).
+# Free gets a flat number rather than DAILY_TOKEN_BUDGET_FREE*7 because the daily budget is
+# already a tight, deliberately-recalibrated number (see its own comment) -- multiplying it
+# straight across a week would overstate how much Free is really meant to allow. Paid plans
+# don't have that same tension (their daily caps are themselves the real ceiling, not a tight
+# budget), so they use a plain daily*4 placeholder until a real weekly product decision exists.
+WEEKLY_TOKEN_LIMIT_FREE = 200_000
+WEEKLY_LIMIT_ENFORCED = False
 # Backstop only, past the now-visible MAX_DAILY_TOKEN_CAP above -- silent, never surfaced to the
 # student in any form (see check_max_usage_tier). A single very large call (e.g. a big PDF/image
 # doubt) can still push a student from just under the visible cap to past this number within ONE
@@ -6584,6 +6593,7 @@ async def usage_summary(verified_user_id: str = Depends(_get_verified_user_id)):
         # midnight-IST reset, and checking this for Pro/Max risks picking up a stale
         # limit_reached_at from before a same-day plan upgrade. Skipped entirely for anything but
         # free.
+        now_ist = datetime.now(timezone.utc).astimezone(IST)
         cooldown_remaining = _active_cooldown_seconds(today, yesterday, rows_by_date) if plan == "free" else None
         if cooldown_remaining is not None:
             reset_in_seconds = cooldown_remaining
@@ -6591,7 +6601,6 @@ async def usage_summary(verified_user_id: str = Depends(_get_verified_user_id)):
             # No active block: "reset" just means the next IST midnight, when a fresh usage_date
             # row starts and today's count naturally reads back to 0. Also the ONLY reset model
             # Pro ever uses (see above).
-            now_ist = datetime.now(timezone.utc).astimezone(IST)
             next_ist_midnight = datetime.combine(now_ist.date() + timedelta(days=1), datetime.min.time(), tzinfo=IST)
             reset_in_seconds = int((next_ist_midnight - now_ist).total_seconds())
 
@@ -6612,24 +6621,30 @@ async def usage_summary(verified_user_id: str = Depends(_get_verified_user_id)):
         today_start_utc = _ist_today_start_utc_iso()
         doubts_today = sum(1 for r in rows if r["created_at"] >= today_start_utc)
 
-        # Last 7 IST calendar days including today -- real doubt count, purely informational
-        # (product decision: no weekly cap enforced yet). The no-longer-used per-day breakdown
-        # (that used to back a bar-chart UI) was dropped; only the 7-day total is needed now.
-        week_day_labels = [(date.fromisoformat(today) - timedelta(days=i)).isoformat() for i in range(7)]
+        # Calendar week anchored to Monday 12:00am IST (not a rolling 7-day lookback), matching
+        # the "This week" bar's own reset: Python's date.weekday() is 0 for Monday, so subtracting
+        # it from today always lands on this week's Monday regardless of what day it is today.
+        week_start_date = date.fromisoformat(today) - timedelta(days=date.fromisoformat(today).weekday())
+        week_day_labels = [(week_start_date + timedelta(days=i)).isoformat() for i in range((date.fromisoformat(today) - week_start_date).days + 1)]
         weekly_doubts = sum(1 for r in rows if
             datetime.fromisoformat(r["created_at"].replace("Z", "+00:00")).astimezone(IST).date().isoformat() in week_day_labels)
 
         # Weekly token total, same table/column the daily figure above uses -- lets the Weekly
-        # section show a bar on the same real footing as Today's (tokens against the real budget,
-        # here projected across 7 days) rather than a different, doubt-count-only metric.
+        # section show a bar on the same real footing as Today's (tokens against a real budget)
+        # rather than a different, doubt-count-only metric.
         week_resp = await async_client.get(
             f"{SUPABASE_URL}/rest/v1/usage_log", headers=ADMIN_HEADERS,
             params={"user_id": f"eq.{user_id}", "usage_date": f"in.({','.join(week_day_labels)})",
                     "select": "tokens_used"}
         )
         weekly_tokens_used = sum(r["tokens_used"] for r in week_resp.json()) if week_resp.status_code == 200 else 0
-        weekly_budget = budget_for_plan * 7
+        # Free: flat WEEKLY_TOKEN_LIMIT_FREE (see its own comment). Paid: daily cap * 4 placeholder
+        # until a real weekly figure exists for them. WEEKLY_LIMIT_ENFORCED is display-only for now
+        # -- nothing here blocks a request on it.
+        weekly_budget = WEEKLY_TOKEN_LIMIT_FREE if plan == "free" else budget_for_plan * 4
         weekly_percent_used = round(min(100, weekly_tokens_used / weekly_budget * 100), 1)
+        next_monday_ist = datetime.combine(week_start_date + timedelta(days=7), datetime.min.time(), tzinfo=IST)
+        weekly_reset_in_seconds = max(0, int((next_monday_ist - now_ist).total_seconds()))
 
         return {
             "plan": plan,
@@ -6640,7 +6655,7 @@ async def usage_summary(verified_user_id: str = Depends(_get_verified_user_id)):
             },
             "weekly": {
                 "tokens_used": weekly_tokens_used, "budget": weekly_budget, "percent_used": weekly_percent_used,
-                "total_doubts": weekly_doubts, "unlimited": False
+                "total_doubts": weekly_doubts, "reset_in_seconds": weekly_reset_in_seconds, "unlimited": False
             }
         }
     except Exception as e:
