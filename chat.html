@@ -150,8 +150,8 @@
 
     body.light-mode .welcome h2 { color: #0d0d0d !important; }
     body.light-mode .welcome-search { background: #ffffff !important; border-color: #d5d5dd !important; }
-    body.light-mode .welcome-search input { color: #0d0d0d !important; }
-    body.light-mode .welcome-search input::placeholder { color: #9a9aa5 !important; }
+    body.light-mode .welcome-search input, body.light-mode .welcome-search textarea { color: #0d0d0d !important; }
+    body.light-mode .welcome-search input::placeholder, body.light-mode .welcome-search textarea::placeholder { color: #9a9aa5 !important; }
 
     body.light-mode textarea { color: #0d0d0d !important; }
     body.light-mode textarea::placeholder { color: #9a9aa5 !important; }
@@ -864,10 +864,22 @@
     .welcome-greeting-row { display: flex; align-items: center; gap: 12px; }
     .welcome-logo { width: 32px; height: 32px; flex-shrink: 0; }
 
-    .welcome-search { max-width: 580px; width: 100%; background: #111; border: 1px solid #2a2a2a; border-radius: 12px; display: flex; align-items: center; gap: 8px; padding: 12px 16px; transition: border-color 0.2s; }
+    .welcome-search { max-width: 580px; width: 100%; background: #111; border: 1px solid #2a2a2a; border-radius: 12px; display: flex; align-items: flex-end; gap: 8px; padding: 12px 16px; transition: border-color 0.2s; }
     .welcome-search:focus-within { border-color: #4f8ef740; }
-    .welcome-search input { flex: 1; background: transparent; border: none; color: #ececec; font-size: var(--chat-font-size, 14px); font-family: 'Inter', sans-serif; outline: none; }
-    .welcome-search input::placeholder { color: #444; }
+    .welcome-search input, .welcome-search textarea { flex: 1; background: transparent; border: none; color: #ececec; font-size: var(--chat-font-size, 14px); font-family: 'Inter', sans-serif; outline: none; }
+    .welcome-search input::placeholder, .welcome-search textarea::placeholder { color: #444; }
+    /* Same auto-grow cap as the main composer's #userInput (.input-wrapper textarea) -- this is
+       the box shown before the first message, with identical +/mic/send buttons, so it gets the
+       identical multi-line behavior instead of staying a single-line <input>. */
+    .welcome-search textarea { resize: none; max-height: 134px; min-height: 24px; line-height: 1.6; }
+    .welcome-search textarea::-webkit-scrollbar { width: 6px; }
+    .welcome-search textarea::-webkit-scrollbar-track { background: transparent; }
+    .welcome-search textarea::-webkit-scrollbar-thumb { background: transparent; border-radius: 4px; }
+    .welcome-search textarea:hover::-webkit-scrollbar-thumb, .welcome-search textarea:focus::-webkit-scrollbar-thumb { background: #3a3a3a; }
+    body.light-mode .welcome-search textarea:hover::-webkit-scrollbar-thumb, body.light-mode .welcome-search textarea:focus::-webkit-scrollbar-thumb { background: #d5d5dd !important; }
+    @media (max-width: 620px) {
+      .welcome-search textarea { max-height: 90px; }
+    }
     /* Applied only by focusMessageInput()'s programmatic auto-focus (see JS), never by a real
        click -- a click focusing an input is already a deliberate "I'm about to type" signal, so
        it shows the normal caret immediately same as any other input on the web. Auto-focus on
@@ -1474,7 +1486,7 @@
           <button id="welcomePlusBtn" onclick="togglePlusMenu(this)" style="background:transparent;border:none;color:#666;cursor:pointer;padding:6px;display:flex;align-items:center;flex-shrink:0;border-radius:8px;" title="Add attachment" data-i18n-title="chat.addAttachment">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
           </button>
-          <input type="text" id="welcomeInput" placeholder="Ask your NEET doubt..." data-i18n-placeholder="chat.askPlaceholder" />
+          <textarea id="welcomeInput" rows="1" placeholder="Ask your NEET doubt..." data-i18n-placeholder="chat.askPlaceholder"></textarea>
           <button id="welcomeVoiceBtn" class="voice-btn" onclick="toggleVoice()" style="background:transparent;border:none;color:#666;cursor:pointer;padding:6px;display:flex;align-items:center;flex-shrink:0;border-radius:8px;" title="Voice input" data-i18n-title="chat.voiceInput">
             <svg class="voice-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
           </button>
@@ -2534,11 +2546,9 @@ let selectedImages = [];
         }
         if (finalTranscript) voiceBaseTranscript += finalTranscript;
         activeInput.value = voiceBaseTranscript + interimTranscript;
-        if (activeInput === input) {
-          input.style.height = 'auto';
-          const cap = parseFloat(getComputedStyle(input).maxHeight) || 134;
-          input.style.height = Math.min(input.scrollHeight, cap) + 'px';
-        }
+        activeInput.style.height = 'auto';
+        const cap = parseFloat(getComputedStyle(activeInput).maxHeight) || 134;
+        activeInput.style.height = Math.min(activeInput.scrollHeight, cap) + 'px';
       };
 
       recognition.onend = function() {
@@ -6830,14 +6840,19 @@ function plainTextFromMarkdown(text) {
       const welcome = document.createElement('div');
       welcome.className = 'welcome';
       welcome.id = 'welcome';
-      welcome.innerHTML = `<div class="welcome-greeting-row"><img src="assets/logo.svg" alt="NEET-AI" class="welcome-logo" /><h2 id="welcomeGreeting">${t('chat','welcomeHeading')}</h2></div><div id="welcome-attachment-preview-inner" style="display:none;width:100%;max-width:580px;"></div><div class="welcome-search"><button id="welcomePlusBtn" onclick="togglePlusMenu(this)" style="background:transparent;border:none;color:#666;cursor:pointer;padding:6px;display:flex;align-items:center;flex-shrink:0;border-radius:8px;" title="Add attachment"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button><input type="text" id="welcomeInput" placeholder="${t('chat','askPlaceholder')}" /><button id="welcomeVoiceBtn" class="voice-btn" onclick="toggleVoice()" style="background:transparent;border:none;color:#666;cursor:pointer;padding:6px;display:flex;align-items:center;flex-shrink:0;border-radius:8px;" title="Voice input"><svg class="voice-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg></button><button class="welcome-send" id="welcomeSend"><svg viewBox="0 0 24 24"><path d="M4 12l1.41 1.41L11 7.83V20h2V7.83l5.59 5.58L20 12l-8-8-8 8z"/></svg></button></div><div class="input-hint">${t('chat','disclaimerMistakes')}</div>`;
+      welcome.innerHTML = `<div class="welcome-greeting-row"><img src="assets/logo.svg" alt="NEET-AI" class="welcome-logo" /><h2 id="welcomeGreeting">${t('chat','welcomeHeading')}</h2></div><div id="welcome-attachment-preview-inner" style="display:none;width:100%;max-width:580px;"></div><div class="welcome-search"><button id="welcomePlusBtn" onclick="togglePlusMenu(this)" style="background:transparent;border:none;color:#666;cursor:pointer;padding:6px;display:flex;align-items:center;flex-shrink:0;border-radius:8px;" title="Add attachment"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button><textarea id="welcomeInput" rows="1" placeholder="${t('chat','askPlaceholder')}"></textarea><button id="welcomeVoiceBtn" class="voice-btn" onclick="toggleVoice()" style="background:transparent;border:none;color:#666;cursor:pointer;padding:6px;display:flex;align-items:center;flex-shrink:0;border-radius:8px;" title="Voice input"><svg class="voice-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg></button><button class="welcome-send" id="welcomeSend"><svg viewBox="0 0 24 24"><path d="M4 12l1.41 1.41L11 7.83V20h2V7.83l5.59 5.58L20 12l-8-8-8 8z"/></svg></button></div><div class="input-hint">${t('chat','disclaimerMistakes')}</div>`;
       chatWindow.appendChild(welcome);
       renderWelcomeGreeting();
       document.getElementById('welcomeInput').addEventListener('keydown', function(e) {
         if (handleSlashMenuKeydown(e, this)) return;
-        if (e.key === 'Enter') { input.value = this.value; sendMessage(); }
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); input.value = this.value; sendMessage(); }
       });
-      document.getElementById('welcomeInput').addEventListener('input', function() { updateSlashMenuForInput(this); });
+      document.getElementById('welcomeInput').addEventListener('input', function() {
+        this.style.height = 'auto';
+        const cap = parseFloat(getComputedStyle(this).maxHeight) || 134;
+        this.style.height = Math.min(this.scrollHeight, cap) + 'px';
+        updateSlashMenuForInput(this);
+      });
       document.getElementById('welcomeInput').addEventListener('paste', handleWelcomePaste);
       document.getElementById('welcomeSend').addEventListener('click', function() {
         input.value = document.getElementById('welcomeInput').value;
@@ -8577,9 +8592,14 @@ function plainTextFromMarkdown(text) {
 
     document.getElementById('welcomeInput').addEventListener('keydown', function(e) {
       if (handleSlashMenuKeydown(e, this)) return;
-      if (e.key === 'Enter') { input.value = this.value; sendMessage(); }
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); input.value = this.value; sendMessage(); }
     });
-    document.getElementById('welcomeInput').addEventListener('input', function() { updateSlashMenuForInput(this); });
+    document.getElementById('welcomeInput').addEventListener('input', function() {
+      this.style.height = 'auto';
+      const cap = parseFloat(getComputedStyle(this).maxHeight) || 134;
+      this.style.height = Math.min(this.scrollHeight, cap) + 'px';
+      updateSlashMenuForInput(this);
+    });
     document.getElementById('welcomeInput').addEventListener('paste', handleWelcomePaste);
 
     document.getElementById('welcomeSend').addEventListener('click', function() {
