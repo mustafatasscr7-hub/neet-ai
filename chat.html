@@ -1072,8 +1072,19 @@
     body.light-mode .clarify-option-btn { border: 1px solid rgba(0,0,0,0.12) !important; background: rgba(0,0,0,0.02) !important; color: inherit !important; }
     body.light-mode .clarify-option-btn:hover { background: rgba(0,0,0,0.05) !important; border-color: rgba(0,0,0,0.2) !important; }
     .input-wrapper:focus-within { border-color: #4f8ef750; }
-    .input-wrapper textarea { flex: 1; background: transparent; border: none; color: #ececec; font-size: var(--chat-font-size, 14px); font-family: 'Inter', sans-serif; outline: none; resize: none; max-height: 160px; min-height: 24px; line-height: 1.6; }
+    .input-wrapper textarea { flex: 1; background: transparent; border: none; color: #ececec; font-size: var(--chat-font-size, 14px); font-family: 'Inter', sans-serif; outline: none; resize: none; max-height: 134px; min-height: 24px; line-height: 1.6; }
     .input-wrapper textarea::placeholder { color: #444; }
+    /* 134px/90px caps are ~6 and ~4 lines at this 14px/1.6 line-height. The JS auto-grow
+       listener reads max-height back off this element via getComputedStyle instead of
+       hardcoding it a second time, so the two breakpoints can't drift out of sync. */
+    .input-wrapper textarea::-webkit-scrollbar { width: 6px; }
+    .input-wrapper textarea::-webkit-scrollbar-track { background: transparent; }
+    .input-wrapper textarea::-webkit-scrollbar-thumb { background: transparent; border-radius: 4px; }
+    .input-wrapper textarea:hover::-webkit-scrollbar-thumb, .input-wrapper textarea:focus::-webkit-scrollbar-thumb { background: #3a3a3a; }
+    body.light-mode .input-wrapper textarea:hover::-webkit-scrollbar-thumb, body.light-mode .input-wrapper textarea:focus::-webkit-scrollbar-thumb { background: #d5d5dd !important; }
+    @media (max-width: 620px) {
+      .input-wrapper textarea { max-height: 90px; }
+    }
     .send-btn { width: 34px; height: 34px; background: #4f8ef7; border: none; border-radius: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s; flex-shrink: 0; }
     .send-btn:hover { background: #3b7de8; }
     #stopIcon rect { fill: white; }
@@ -2525,7 +2536,8 @@ let selectedImages = [];
         activeInput.value = voiceBaseTranscript + interimTranscript;
         if (activeInput === input) {
           input.style.height = 'auto';
-          input.style.height = Math.min(input.scrollHeight, 160) + 'px';
+          const cap = parseFloat(getComputedStyle(input).maxHeight) || 134;
+          input.style.height = Math.min(input.scrollHeight, cap) + 'px';
         }
       };
 
@@ -8557,7 +8569,8 @@ function plainTextFromMarkdown(text) {
 
     input.addEventListener('input', function() {
       this.style.height = 'auto';
-      this.style.height = Math.min(this.scrollHeight, 160) + 'px';
+      const cap = parseFloat(getComputedStyle(this).maxHeight) || 134;
+      this.style.height = Math.min(this.scrollHeight, cap) + 'px';
       updateSlashMenuForInput(this);
       updateCharCounter(this);
     });
