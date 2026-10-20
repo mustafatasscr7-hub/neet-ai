@@ -9793,7 +9793,7 @@ class AccountDeleteRequest(BaseModel):
 ACCOUNT_DELETE_TABLES = [
     "chats", "saved_questions", "mock_results", "user_streaks", "response_feedback",
     "active_sessions", "media_doubt_log", "usage_log", "max_usage_alerts", "bonus_tokens",
-    "user_plan", "user_referral_codes",
+    "user_plan", "user_referral_codes", "todo_tasks",
 ]
 # Kept with the student's id nulled out: content reports (quality signal for questions/diagrams),
 # cost telemetry, and both sides of a referral -- so the OTHER student's referral history and the
@@ -9918,6 +9918,138 @@ async def account_delete(body: AccountDeleteRequest, _: None = Depends(rate_limi
         raise HTTPException(status_code=500, detail="Could not delete your account. Please try again.")
     print(f"ACCOUNT DELETED: user_id={user_id} {summary}", flush=True)
     return {"deleted": True}
+
+# ---------- Study To-do list (Pro/Max only) ----------
+# Plain per-student checklist. No AI call and no token/usage accounting anywhere in this block --
+# this is pure CRUD. Identity comes only from the verified Bearer token (same pattern as the
+# referral endpoints above): every query below filters on user_id=verified_user_id, including the
+# patch and delete, so one student can never read, edit or touch another's rows just by guessing
+# a task id. Plan is re-checked server-side on every call (not just trusted from the client) --
+# a Free account gets a typed 403 before any row is read, created, changed or deleted. Needs
+# todo_tasks.sql applied first; see that file for why nothing here runs it automatically.
+TODO_PLAN_REQUIRED_DETAIL = {"code": "plan_required", "message": "Study To-do is a Pro/Max feature."}
+TODO_MAX_TASKS = 200
+TODO_MAX_TITLE_LEN = 200
+
+async def _require_todo_plan(verified_user_id: str):
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    plan = await get_user_plan(verified_user_id)
+    if plan not in ("pro", "max"):
+        raise HTTPException(status_code=403, detail=TODO_PLAN_REQUIRED_DETAIL)
+
+class TodoCreateRequest(BaseModel):
+    title: str
+    due_date: Optional[str] = None
+
+class TodoUpdateRequest(BaseModel):
+    title: Optional[str] = None
+    due_date: Optional[str] = None
+    done: Optional[bool] = None
+
+def _validate_todo_title(title: str) -> str:
+    title = (title or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Title is required")
+    if len(title) > TODO_MAX_TITLE_LEN:
+        raise HTTPException(status_code=400, detail=f"Title must be {TODO_MAX_TITLE_LEN} characters or fewer")
+    return title
+
+@app.get("/todos")
+async def todos_list(_: None = Depends(rate_limit(30, 60, by="account")), verified_user_id: str = Depends(_get_verified_user_id)):
+    await _require_todo_plan(verified_user_id)
+    try:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/todo_tasks", headers=ADMIN_HEADERS,
+            params={"user_id": f"eq.{verified_user_id}", "select": "id,title,due_date,done,created_at,done_at",
+                    "order": "created_at.desc", "limit": TODO_MAX_TASKS}
+        )
+        if resp.status_code >= 400:
+            raise RuntimeError(resp.text)
+        return {"tasks": resp.json()}
+    except Exception as e:
+        print(f"TODOS LIST ERROR (user_id={verified_user_id}): {e}", flush=True)
+        raise HTTPException(status_code=502, detail="Could not load your tasks")
+
+@app.post("/todos")
+async def todos_create(body: TodoCreateRequest, _: None = Depends(rate_limit(20, 60, by="account")), verified_user_id: str = Depends(_get_verified_user_id)):
+    await _require_todo_plan(verified_user_id)
+    title = _validate_todo_title(body.title)
+    due_date = body.due_date.strip() if body.due_date else None
+    try:
+        count_resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/todo_tasks", headers={**ADMIN_HEADERS, "Prefer": "count=exact"},
+            params={"user_id": f"eq.{verified_user_id}", "select": "id", "limit": 1}
+        )
+        if _account_rows_affected(count_resp) >= TODO_MAX_TASKS:
+            raise HTTPException(status_code=400, detail=f"You can have up to {TODO_MAX_TASKS} tasks — delete or finish some first.")
+        resp = await async_client.post(
+            f"{SUPABASE_URL}/rest/v1/todo_tasks",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
+            json={"user_id": verified_user_id, "title": title, "due_date": due_date}
+        )
+        if resp.status_code >= 400:
+            raise RuntimeError(resp.text)
+        created = resp.json()
+        return {"task": created[0] if created else None}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"TODOS CREATE ERROR (user_id={verified_user_id}): {e}", flush=True)
+        raise HTTPException(status_code=502, detail="Could not create task")
+
+@app.patch("/todos/{task_id}")
+async def todos_update(task_id: str, body: TodoUpdateRequest, _: None = Depends(rate_limit(30, 60, by="account")), verified_user_id: str = Depends(_get_verified_user_id)):
+    await _require_todo_plan(verified_user_id)
+    update_fields = {}
+    # model_fields_set (not `is not None`) so a due_date explicitly sent as null clears it, the
+    # same distinction /admin/pyq-update makes for its diagram_url fields above.
+    if "title" in body.model_fields_set:
+        update_fields["title"] = _validate_todo_title(body.title)
+    if "due_date" in body.model_fields_set:
+        update_fields["due_date"] = body.due_date.strip() if body.due_date else None
+    if "done" in body.model_fields_set:
+        update_fields["done"] = bool(body.done)
+        update_fields["done_at"] = datetime.now(timezone.utc).isoformat() if body.done else None
+    if not update_fields:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    try:
+        resp = await async_client.patch(
+            f"{SUPABASE_URL}/rest/v1/todo_tasks",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
+            params={"id": f"eq.{task_id}", "user_id": f"eq.{verified_user_id}"},
+            json=update_fields
+        )
+        if resp.status_code >= 400:
+            raise RuntimeError(resp.text)
+        updated = resp.json()
+        if not updated:
+            raise HTTPException(status_code=404, detail="Task not found")
+        return {"task": updated[0]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"TODOS UPDATE ERROR (user_id={verified_user_id}, task_id={task_id}): {e}", flush=True)
+        raise HTTPException(status_code=502, detail="Could not update task")
+
+@app.delete("/todos/{task_id}")
+async def todos_delete(task_id: str, _: None = Depends(rate_limit(30, 60, by="account")), verified_user_id: str = Depends(_get_verified_user_id)):
+    await _require_todo_plan(verified_user_id)
+    try:
+        resp = await async_client.delete(
+            f"{SUPABASE_URL}/rest/v1/todo_tasks", headers={**ADMIN_HEADERS, "Prefer": "return=representation"},
+            params={"id": f"eq.{task_id}", "user_id": f"eq.{verified_user_id}"}
+        )
+        if resp.status_code >= 400:
+            raise RuntimeError(resp.text)
+        if not resp.json():
+            raise HTTPException(status_code=404, detail="Task not found")
+        return {"deleted": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"TODOS DELETE ERROR (user_id={verified_user_id}, task_id={task_id}): {e}", flush=True)
+        raise HTTPException(status_code=502, detail="Could not delete task")
 
 @app.post("/admin/diagrams-create")
 async def admin_diagrams_create(body: DiagramCreate, _: None = Depends(verify_admin)):

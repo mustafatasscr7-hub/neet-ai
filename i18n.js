@@ -690,7 +690,22 @@ const TRANSLATIONS = {
       sfbSend: 'Send',
       sfbSkip: 'Skip',
       sfbThanks: 'Thanks for your feedback',
-      sfbSendFailed: 'Couldn’t send feedback. Please try again later.'
+      sfbSendFailed: 'Couldn’t send feedback. Please try again later.',
+      todo: 'To-do',
+      todoTitle: 'Study To-do',
+      todoAddPlaceholder: 'Add a task...',
+      todoAdd: 'Add',
+      todoTabToday: 'Today',
+      todoTabUpcoming: 'Upcoming',
+      todoTabDone: 'Done',
+      todoEmptyToday: 'Nothing due today',
+      todoEmptyUpcoming: 'No upcoming tasks',
+      todoEmptyDone: 'No completed tasks yet',
+      todoLoading: 'Loading your tasks...',
+      todoError: 'Something went wrong. Please try again.',
+      todoDelete: 'Delete task',
+      todoMarkDone: 'Mark as done',
+      todoMarkNotDone: 'Mark as not done'
     },
     hi: {
       newChat: 'नई चैट',
@@ -878,7 +893,22 @@ const TRANSLATIONS = {
       sfbSend: 'भेजें',
       sfbSkip: 'छोड़ें',
       sfbThanks: 'आपकी प्रतिक्रिया के लिए धन्यवाद',
-      sfbSendFailed: 'प्रतिक्रिया नहीं भेजी जा सकी। कृपया बाद में पुनः प्रयास करें।'
+      sfbSendFailed: 'प्रतिक्रिया नहीं भेजी जा सकी। कृपया बाद में पुनः प्रयास करें।',
+      todo: 'टू-डू',
+      todoTitle: 'स्टडी टू-डू',
+      todoAddPlaceholder: 'एक कार्य जोड़ें...',
+      todoAdd: 'जोड़ें',
+      todoTabToday: 'आज',
+      todoTabUpcoming: 'आगामी',
+      todoTabDone: 'पूर्ण',
+      todoEmptyToday: 'आज कुछ भी देय नहीं है',
+      todoEmptyUpcoming: 'कोई आगामी कार्य नहीं',
+      todoEmptyDone: 'अभी तक कोई कार्य पूरा नहीं हुआ',
+      todoLoading: 'आपके कार्य लोड हो रहे हैं...',
+      todoError: 'कुछ गलत हो गया। कृपया पुनः प्रयास करें।',
+      todoDelete: 'कार्य हटाएं',
+      todoMarkDone: 'पूर्ण के रूप में चिह्नित करें',
+      todoMarkNotDone: 'अपूर्ण के रूप में चिह्नित करें'
     }
   },
 
