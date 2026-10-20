@@ -414,41 +414,27 @@
       #displayNameInput { flex: 1; min-width: 0; width: auto; }
     }
 
-    /* Study To-do top-bar button: deliberately mirrors .upgrade-btn (same 30px height/pill shape,
-       same hover/active/focus treatment, same custom-property + light-mode-swap pattern) since it
-       sits right next to it. At phone width the label collapses to icon-only (30x30 circle) --
-       the lock badge (shown for Free/guest) sits as a small absolute-positioned dot instead of
-       inline so it still reads at that size. */
+    /* Study To-do top-bar button: icon-only, same 30px height and blue-tinted pill language as
+       the countdown pill it sits beside (#countdownWrapper > div: same bg/border/color tint) --
+       at 30x30 with a 15px radius it reads as a small circle next to that pill's elongated one.
+       The lock badge (Free/guest) sits as a small absolute-positioned dot on the circle's corner. */
     .todo-btn {
-      --todo-bg: rgba(255,255,255,0.06); --todo-bg-hover: rgba(255,255,255,0.10);
-      --todo-border: rgba(255,255,255,0.12); --todo-border-hover: rgba(255,255,255,0.20);
-      --todo-label: rgba(245,245,247,0.9); --todo-label-hover: #ffffff; --todo-ring: rgba(255,255,255,0.6);
-      position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-      box-sizing: border-box; height: 30px; padding: 0 14px; white-space: nowrap;
-      background: var(--todo-bg); color: var(--todo-label);
+      --todo-bg: #4f8ef710; --todo-bg-hover: #4f8ef71f; --todo-border: #4f8ef730; --todo-border-hover: #4f8ef750;
+      position: relative; display: inline-flex; align-items: center; justify-content: center;
+      box-sizing: border-box; width: 30px; height: 30px; padding: 0;
+      background: var(--todo-bg); color: #4f8ef7;
       border: 1px solid var(--todo-border); border-radius: 15px;
-      font-family: 'Inter', sans-serif; font-size: 12.5px; font-weight: 600;
       cursor: pointer; -webkit-tap-highlight-color: transparent;
-      transition: background-color 180ms ease, border-color 180ms ease, color 180ms ease, transform 180ms ease;
+      transition: background-color 180ms ease, border-color 180ms ease, transform 180ms ease;
     }
     .todo-btn::before { content: ''; position: absolute; left: 0; right: 0; top: 50%; height: 44px; transform: translateY(-50%); }
-    .todo-btn:hover { background: var(--todo-bg-hover); border-color: var(--todo-border-hover); color: var(--todo-label-hover); }
-    .todo-btn:active { transform: scale(0.97); transition-duration: 90ms; }
+    .todo-btn:hover { background: var(--todo-bg-hover); border-color: var(--todo-border-hover); }
+    .todo-btn:active { transform: scale(0.93); transition-duration: 90ms; }
     .todo-btn:focus { outline: none; }
-    .todo-btn:focus-visible { outline: 2px solid var(--todo-ring); outline-offset: 2px; }
+    .todo-btn:focus-visible { outline: 2px solid rgba(79,142,247,0.6); outline-offset: 2px; }
     .todo-btn-icon { flex-shrink: 0; }
-    .todo-btn-lock { flex-shrink: 0; color: #999; }
-    body.light-mode .todo-btn {
-      --todo-bg: rgba(0,0,0,0.04); --todo-bg-hover: rgba(0,0,0,0.07);
-      --todo-border: rgba(0,0,0,0.10); --todo-border-hover: rgba(0,0,0,0.18);
-      --todo-label: rgba(29,29,31,0.9); --todo-label-hover: #000000; --todo-ring: rgba(0,0,0,0.5);
-    }
-    @media (max-width: 620px) {
-      .todo-btn { padding: 0; width: 30px; gap: 0; }
-      .todo-btn-label { display: none; }
-      .todo-btn-lock { position: absolute; bottom: -2px; right: -2px; background: #1a1a1a; border-radius: 50%; padding: 1.5px; }
-      body.light-mode .todo-btn-lock { background: #ffffff; }
-    }
+    .todo-btn-lock { flex-shrink: 0; color: #999; position: absolute; bottom: -2px; right: -2px; background: #0d0d0d; border-radius: 50%; padding: 1.5px; }
+    body.light-mode .todo-btn-lock { background: #ffffff; }
     @media (prefers-reduced-motion: reduce) { .todo-btn, .todo-btn:active { transform: none; } }
 
     /* Study To-do modal: same dark-panel language as .settings-modal-panel/.diagram-modal-box
@@ -465,63 +451,98 @@
     .todo-modal-close { background: transparent; border: none; color: #888; font-size: 18px; cursor: pointer; padding: 4px 8px; border-radius: 6px; }
     .todo-modal-close:hover { color: #ececec; background: rgba(255,255,255,0.06); }
     .todo-modal-close:focus-visible { outline: 2px solid #4f8ef7; outline-offset: 1px; }
-    .todo-add-row { display: flex; gap: 8px; padding: 0 20px 14px; flex-shrink: 0; }
+    .todo-add-row { display: flex; gap: 8px; padding: 0 20px 10px; flex-shrink: 0; }
     .todo-add-input {
       flex: 1; min-width: 0; background: #111; border: 1px solid #2a2a2a; border-radius: 8px;
       color: #ececec; font-family: 'Inter', sans-serif; font-size: 13px; padding: 9px 12px;
     }
     .todo-add-input:focus { outline: none; border-color: #4f8ef7; }
-    .todo-add-date {
-      flex-shrink: 0; width: 128px; background: #111; border: 1px solid #2a2a2a; border-radius: 8px;
-      color: #ececec; font-family: 'Inter', sans-serif; font-size: 12.5px; padding: 9px 8px; color-scheme: dark;
-    }
-    .todo-add-date:focus { outline: none; border-color: #4f8ef7; }
     .todo-add-btn {
       flex-shrink: 0; background: #4f8ef7; border: none; color: #fff; font-family: 'Inter', sans-serif;
       font-size: 13px; font-weight: 600; padding: 0 16px; border-radius: 8px; cursor: pointer;
+      transition: background-color 150ms ease;
     }
     .todo-add-btn:hover { background: #3d7ce0; }
     .todo-add-btn:disabled { opacity: 0.5; cursor: not-allowed; }
     .todo-add-btn:focus-visible { outline: 2px solid #4f8ef7; outline-offset: 2px; }
+    /* Quick-add date chips replace a visible mm/dd/yyyy box: Today/Tomorrow set the date directly,
+       "Pick date" only opens the native picker on click (never shown as its own input row), and the
+       hidden date input it drives is visually invisible but still focusable/functional. Single-select
+       like the Saved Questions difficulty chips elsewhere in the site -- clicking the active chip
+       again clears it back to "no due date". */
+    .todo-date-chips { display: flex; align-items: center; gap: 6px; padding: 0 20px 14px; flex-shrink: 0; flex-wrap: wrap; }
+    .todo-date-chip {
+      background: transparent; border: 1px solid #2a2a2a; color: #999; font-family: 'Inter', sans-serif;
+      font-size: 12px; font-weight: 600; padding: 5px 11px; border-radius: 999px; cursor: pointer;
+      transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease;
+    }
+    .todo-date-chip:hover { color: #ccc; border-color: #3a3a3a; }
+    .todo-date-chip.active { background: rgba(79,142,247,0.14); border-color: #4f8ef7; color: #4f8ef7; }
+    .todo-date-chip:focus-visible { outline: 2px solid #4f8ef7; outline-offset: 1px; }
+    .todo-date-hidden-input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+    .todo-date-tag {
+      display: inline-flex; align-items: center; gap: 5px; background: rgba(79,142,247,0.12); color: #4f8ef7;
+      font-size: 11.5px; font-weight: 600; padding: 4px 6px 4px 10px; border-radius: 999px;
+    }
+    .todo-date-tag-clear {
+      background: transparent; border: none; color: inherit; cursor: pointer; display: flex;
+      align-items: center; justify-content: center; padding: 2px; border-radius: 50%; opacity: 0.75;
+    }
+    .todo-date-tag-clear:hover { opacity: 1; background: rgba(79,142,247,0.18); }
     .todo-inline-error { margin: 0 20px 10px; font-size: 12px; color: #f87171; flex-shrink: 0; }
     .todo-tabs { display: flex; gap: 4px; padding: 0 20px 12px; border-bottom: 1px solid #222; flex-shrink: 0; }
     .todo-tab {
-      background: transparent; border: none; color: #888; font-family: 'Inter', sans-serif;
-      font-size: 13px; font-weight: 600; padding: 7px 12px; border-radius: 8px; cursor: pointer;
+      display: inline-flex; align-items: center; gap: 6px; background: transparent; border: none; color: #888;
+      font-family: 'Inter', sans-serif; font-size: 13px; font-weight: 600; padding: 7px 12px; border-radius: 8px;
+      cursor: pointer; transition: background-color 150ms ease, color 150ms ease;
     }
     .todo-tab:hover { color: #ccc; background: rgba(255,255,255,0.05); }
     .todo-tab.active { color: #4f8ef7; background: rgba(79,142,247,0.12); }
     .todo-tab:focus-visible { outline: 2px solid #4f8ef7; outline-offset: -2px; }
-    .todo-list-area { flex: 1; overflow-y: auto; padding: 8px 12px 16px; min-height: 160px; }
+    .todo-tab-count {
+      font-size: 10.5px; font-weight: 700; color: #777; background: rgba(255,255,255,0.08);
+      border-radius: 999px; padding: 1px 6px; line-height: 1.5; transition: background-color 150ms ease, color 150ms ease;
+    }
+    .todo-tab.active .todo-tab-count { color: #4f8ef7; background: rgba(79,142,247,0.18); }
+    .todo-list-area { flex: 1; overflow-y: auto; padding: 8px 12px 16px; min-height: 200px; }
     .todo-state-msg { text-align: center; color: #666; font-size: 13px; padding: 36px 16px; }
     .todo-state-error { color: #f87171; }
-    .todo-item { display: flex; align-items: flex-start; gap: 10px; padding: 10px 8px; border-radius: 8px; }
+    .todo-empty { display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; color: #555; font-size: 13px; padding: 40px 16px; }
+    .todo-empty-icon { color: #3a3a3a; }
+    /* Roomier rows than a typical dense list -- 14px vertical padding and a true circular tick
+       (up from the earlier rounded-square checkbox) so ticking reads as completing a step, not
+       filling in a form field. */
+    .todo-item { display: flex; align-items: flex-start; gap: 12px; padding: 14px 10px; border-radius: 10px; transition: background-color 150ms ease, opacity 150ms ease; }
     .todo-item:hover { background: rgba(255,255,255,0.03); }
     .todo-item:hover .todo-delete-btn { opacity: 1; }
+    .todo-item-done { opacity: 0.55; }
     .todo-check {
-      flex-shrink: 0; width: 19px; height: 19px; margin-top: 1px; border-radius: 5px;
+      flex-shrink: 0; width: 22px; height: 22px; margin-top: 1px; border-radius: 50%;
       border: 1.5px solid #444; background: transparent; color: #fff; font-size: 12px; line-height: 1;
       cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0;
+      transition: background-color 150ms ease, border-color 150ms ease, transform 100ms ease;
     }
     .todo-check:hover { border-color: #4f8ef7; }
     .todo-check.checked { background: #4f8ef7; border-color: #4f8ef7; }
+    .todo-check:active { transform: scale(0.88); }
     .todo-check:focus-visible { outline: 2px solid #4f8ef7; outline-offset: 2px; }
-    .todo-item-body { flex: 1; min-width: 0; }
-    .todo-item-title { font-size: 13.5px; color: #ececec; line-height: 1.4; word-break: break-word; }
+    .todo-item-body { flex: 1; min-width: 0; padding-top: 2px; }
+    .todo-item-title { font-size: 13.5px; color: #ececec; line-height: 1.4; word-break: break-word; transition: color 150ms ease; }
     .todo-item-done .todo-item-title { color: #666; text-decoration: line-through; }
-    .todo-item-date { font-size: 11.5px; color: #666; margin-top: 2px; }
-    .todo-item-date.overdue { color: #f87171; }
+    .todo-item-date {
+      display: inline-block; margin-top: 6px; font-size: 11px; font-weight: 600; color: #999;
+      background: rgba(255,255,255,0.06); border-radius: 999px; padding: 2px 9px;
+    }
+    .todo-item-date.overdue { color: #f87171; background: rgba(248,113,113,0.12); }
     .todo-delete-btn {
-      flex-shrink: 0; background: transparent; border: none; color: #666; cursor: pointer;
-      padding: 4px; border-radius: 6px; opacity: 0; transition: opacity 120ms ease;
+      flex-shrink: 0; margin-top: 1px; background: transparent; border: none; color: #666; cursor: pointer;
+      padding: 5px; border-radius: 6px; opacity: 0; transition: opacity 120ms ease, color 120ms ease, background-color 120ms ease;
     }
     .todo-delete-btn:hover { color: #f87171; background: rgba(248,113,113,0.1); }
     .todo-delete-btn:focus-visible { outline: 2px solid #4f8ef7; outline-offset: 1px; opacity: 1; }
     @media (max-width: 620px) {
       .todo-modal-panel { width: 100vw; height: 100vh; max-width: 100vw; max-height: 100vh; border-radius: 0; }
       .todo-delete-btn { opacity: 1; }
-      .todo-add-row { flex-wrap: wrap; }
-      .todo-add-date { width: 100%; }
     }
 
     /* Usage tab (Settings > Usage) -- flat rows matching Claude's own usage page rather than
@@ -1568,9 +1589,8 @@
         </button>
       </div>
     <div style="display:flex;align-items:center;gap:10px;">
-<button id="todoBtn" class="todo-btn" onclick="openTodoModal()" title="Study To-do" data-i18n-title="chat.todoTitle">
+<button id="todoBtn" class="todo-btn" onclick="openTodoModal()" title="To-do" data-i18n-title="chat.todo" aria-label="To-do" data-i18n-aria-label="chat.todo">
           <svg class="todo-btn-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 3h6"/><path d="M9 12l2 2 4-4"/></svg>
-          <span class="todo-btn-label" data-i18n="chat.todo">To-do</span>
           <svg id="todoLockIcon" class="todo-btn-lock" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:none;"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
         </button>
 <div style="position:relative;" id="countdownWrapper">
@@ -8415,14 +8435,25 @@ function plainTextFromMarkdown(text) {
           </div>
           <div class="todo-add-row">
             <input type="text" id="todoAddInput" class="todo-add-input" maxlength="200" data-i18n-placeholder="chat.todoAddPlaceholder" placeholder="${t('chat', 'todoAddPlaceholder')}" />
-            <input type="date" id="todoAddDate" class="todo-add-date" aria-label="${t('chat', 'todoAddPlaceholder')}" />
             <button id="todoAddBtn" class="todo-add-btn" data-i18n="chat.todoAdd">Add</button>
+          </div>
+          <div class="todo-date-chips">
+            <button type="button" class="todo-date-chip" data-chip="today" data-i18n="chat.todoDateToday">Today</button>
+            <button type="button" class="todo-date-chip" data-chip="tomorrow" data-i18n="chat.todoDateTomorrow">Tomorrow</button>
+            <button type="button" class="todo-date-chip" data-chip="pick" data-i18n="chat.todoPickDate">Pick date</button>
+            <input type="date" id="todoAddDateHidden" class="todo-date-hidden-input" tabindex="-1" aria-hidden="true" />
+            <span id="todoDateTag" class="todo-date-tag" style="display:none;">
+              <span id="todoDateTagText"></span>
+              <button type="button" id="todoDateTagClear" class="todo-date-tag-clear" data-i18n-aria-label="chat.todoClearDate" aria-label="${t('chat', 'todoClearDate')}">
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M18 6L6 18"/><path d="M6 6l12 12"/></svg>
+              </button>
+            </span>
           </div>
           <div id="todoInlineError" class="todo-inline-error" style="display:none;"></div>
           <div class="todo-tabs" role="tablist">
-            <button class="todo-tab active" data-tab="today" role="tab" aria-selected="true" data-i18n="chat.todoTabToday">Today</button>
-            <button class="todo-tab" data-tab="upcoming" role="tab" aria-selected="false" data-i18n="chat.todoTabUpcoming">Upcoming</button>
-            <button class="todo-tab" data-tab="done" role="tab" aria-selected="false" data-i18n="chat.todoTabDone">Done</button>
+            <button class="todo-tab active" data-tab="today" role="tab" aria-selected="true"><span data-i18n="chat.todoTabToday">Today</span><span class="todo-tab-count" id="todoCountToday">0</span></button>
+            <button class="todo-tab" data-tab="upcoming" role="tab" aria-selected="false"><span data-i18n="chat.todoTabUpcoming">Upcoming</span><span class="todo-tab-count" id="todoCountUpcoming">0</span></button>
+            <button class="todo-tab" data-tab="done" role="tab" aria-selected="false"><span data-i18n="chat.todoTabDone">Done</span><span class="todo-tab-count" id="todoCountDone">0</span></button>
           </div>
           <div class="todo-list-area" id="todoListArea"></div>
         </div>
@@ -8438,6 +8469,82 @@ function plainTextFromMarkdown(text) {
       addInput.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); submitNewTodo(); } };
       addInput.focus();
       todoState.tab = 'today';
+      todoAddDateChip = null;
+      todoAddDateValue = null;
+      initTodoDateChips();
+    }
+
+    // ---------- Quick-add date chips (Today / Tomorrow / Pick date) ----------
+    // Single-select like the Saved Questions difficulty chips: clicking the already-active chip
+    // clears it back to "no due date" instead of just re-selecting it. "Pick date" never shows its
+    // own input row -- it drives a visually hidden native <input type="date"> and only opens the
+    // browser's picker on click, same native control as before, just not rendered as a visible box.
+    let todoAddDateChip = null;   // 'today' | 'tomorrow' | 'pick' | null
+    let todoAddDateValue = null;  // 'YYYY-MM-DD' | null
+
+    function _todoTomorrowStr() {
+      const d = new Date();
+      d.setDate(d.getDate() + 1);
+      return d.toISOString().slice(0, 10);
+    }
+
+    function initTodoDateChips() {
+      const hiddenInput = document.getElementById('todoAddDateHidden');
+      document.querySelectorAll('#todoModal .todo-date-chip').forEach(chip => {
+        chip.onclick = () => {
+          const kind = chip.dataset.chip;
+          if (kind === 'pick') {
+            if (todoAddDateChip === 'pick') {
+              if (hiddenInput.showPicker) hiddenInput.showPicker(); else hiddenInput.click();
+            } else if (hiddenInput.showPicker) {
+              hiddenInput.showPicker();
+            } else {
+              hiddenInput.click();
+            }
+            return;
+          }
+          const value = kind === 'today' ? new Date().toISOString().slice(0, 10) : _todoTomorrowStr();
+          if (todoAddDateChip === kind) {
+            todoAddDateChip = null; todoAddDateValue = null;
+          } else {
+            todoAddDateChip = kind; todoAddDateValue = value;
+          }
+          renderTodoDateChips();
+        };
+      });
+      hiddenInput.onchange = () => {
+        if (!hiddenInput.value) return;
+        todoAddDateChip = 'pick';
+        todoAddDateValue = hiddenInput.value;
+        renderTodoDateChips();
+      };
+      document.getElementById('todoDateTagClear').onclick = () => {
+        todoAddDateChip = null; todoAddDateValue = null; hiddenInput.value = '';
+        renderTodoDateChips();
+      };
+      renderTodoDateChips();
+    }
+
+    function resetTodoDateChips() {
+      todoAddDateChip = null;
+      todoAddDateValue = null;
+      const hiddenInput = document.getElementById('todoAddDateHidden');
+      if (hiddenInput) hiddenInput.value = '';
+      renderTodoDateChips();
+    }
+
+    function renderTodoDateChips() {
+      document.querySelectorAll('#todoModal .todo-date-chip').forEach(chip => {
+        chip.classList.toggle('active', chip.dataset.chip === todoAddDateChip);
+      });
+      const tag = document.getElementById('todoDateTag');
+      const tagText = document.getElementById('todoDateTagText');
+      if (!tag || !tagText) return;
+      if (!todoAddDateValue) { tag.style.display = 'none'; return; }
+      tagText.textContent = todoAddDateChip === 'today' ? t('chat', 'todoDateToday')
+        : todoAddDateChip === 'tomorrow' ? t('chat', 'todoDateTomorrow')
+        : formatTodoDueDate(todoAddDateValue);
+      tag.style.display = '';
     }
 
     function switchTodoTab(tabName) {
@@ -8486,11 +8593,10 @@ function plainTextFromMarkdown(text) {
 
     async function submitNewTodo() {
       const input = document.getElementById('todoAddInput');
-      const dateInput = document.getElementById('todoAddDate');
       if (!input) return;
       const title = input.value.trim();
       if (!title) return;
-      const due_date = dateInput.value || null;
+      const due_date = todoAddDateValue || null;
       const addBtn = document.getElementById('todoAddBtn');
       addBtn.disabled = true;
       try {
@@ -8508,7 +8614,7 @@ function plainTextFromMarkdown(text) {
         }
         todoState.tasks.unshift(data.task);
         input.value = '';
-        dateInput.value = '';
+        resetTodoDateChips();
         renderTodoList();
         input.focus();
       } catch (e) {
@@ -8581,10 +8687,19 @@ function plainTextFromMarkdown(text) {
       return localizeNum(d.toLocaleDateString(locale, { month: 'short', day: 'numeric' }));
     }
 
+    // Today/Tomorrow read better on a task row than "20 Oct"/"21 Oct" would -- falls back to the
+    // short date for anything further out, same formatTodoDueDate used by the add-row's date tag.
+    function _todoDueDateLabel(dateStr) {
+      const todayStr = new Date().toISOString().slice(0, 10);
+      if (dateStr === todayStr) return t('chat', 'todoDateToday');
+      if (dateStr === _todoTomorrowStr()) return t('chat', 'todoDateTomorrow');
+      return formatTodoDueDate(dateStr);
+    }
+
     function renderTodoItem(task) {
       const todayStr = new Date().toISOString().slice(0, 10);
       const overdue = !task.done && task.due_date && _todoDateOnly(task.due_date) < todayStr;
-      const dateLabel = task.due_date ? formatTodoDueDate(task.due_date) : '';
+      const dateLabel = task.due_date ? _todoDueDateLabel(_todoDateOnly(task.due_date)) : '';
       return `
         <div class="todo-item${task.done ? ' todo-item-done' : ''}" id="todoItem-${task.id}">
           <button class="todo-check${task.done ? ' checked' : ''}" onclick="toggleTodoDone('${task.id}', ${!task.done})" aria-label="${task.done ? t('chat', 'todoMarkNotDone') : t('chat', 'todoMarkDone')}">${task.done ? '&#10003;' : ''}</button>
@@ -8598,9 +8713,23 @@ function plainTextFromMarkdown(text) {
         </div>`;
     }
 
+    const TODO_EMPTY_ICON = '<svg class="todo-empty-icon" width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 3h6"/><path d="M9 12l2 2 4-4"/></svg>';
+
+    function updateTodoTabCounts() {
+      const counts = { today: 0, upcoming: 0, done: 0 };
+      todoState.tasks.forEach(task => { counts[_todoCategory(task)]++; });
+      const todayEl = document.getElementById('todoCountToday');
+      const upcomingEl = document.getElementById('todoCountUpcoming');
+      const doneEl = document.getElementById('todoCountDone');
+      if (todayEl) todayEl.textContent = localizeNum(counts.today);
+      if (upcomingEl) upcomingEl.textContent = localizeNum(counts.upcoming);
+      if (doneEl) doneEl.textContent = localizeNum(counts.done);
+    }
+
     function renderTodoList() {
       const area = document.getElementById('todoListArea');
       if (!area) return;
+      updateTodoTabCounts();
       if (todoState.loading) {
         area.innerHTML = `<div class="todo-state-msg">${escapeHtml(t('chat', 'todoLoading'))}</div>`;
         return;
@@ -8612,7 +8741,7 @@ function plainTextFromMarkdown(text) {
       const items = todoState.tasks.filter(task => _todoCategory(task) === todoState.tab);
       if (!items.length) {
         const emptyKey = todoState.tab === 'today' ? 'todoEmptyToday' : todoState.tab === 'upcoming' ? 'todoEmptyUpcoming' : 'todoEmptyDone';
-        area.innerHTML = `<div class="todo-state-msg">${escapeHtml(t('chat', emptyKey))}</div>`;
+        area.innerHTML = `<div class="todo-empty">${TODO_EMPTY_ICON}<div>${escapeHtml(t('chat', emptyKey))}</div></div>`;
         return;
       }
       const sorted = [...items].sort((a, b) => {

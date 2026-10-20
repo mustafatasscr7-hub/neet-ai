@@ -60,6 +60,10 @@ function applyTranslations() {
     const [ns, key] = el.getAttribute('data-i18n-title').split('.');
     el.title = t(ns, key);
   });
+  document.querySelectorAll('[data-i18n-aria-label]').forEach(el => {
+    const [ns, key] = el.getAttribute('data-i18n-aria-label').split('.');
+    el.setAttribute('aria-label', t(ns, key));
+  });
   document.querySelectorAll('[data-i18n-html]').forEach(el => {
     const [ns, key] = el.getAttribute('data-i18n-html').split('.');
     el.innerHTML = t(ns, key);
@@ -705,7 +709,11 @@ const TRANSLATIONS = {
       todoError: 'Something went wrong. Please try again.',
       todoDelete: 'Delete task',
       todoMarkDone: 'Mark as done',
-      todoMarkNotDone: 'Mark as not done'
+      todoMarkNotDone: 'Mark as not done',
+      todoDateToday: 'Today',
+      todoDateTomorrow: 'Tomorrow',
+      todoPickDate: 'Pick date',
+      todoClearDate: 'Clear date'
     },
     hi: {
       newChat: 'नई चैट',
@@ -908,7 +916,11 @@ const TRANSLATIONS = {
       todoError: 'कुछ गलत हो गया। कृपया पुनः प्रयास करें।',
       todoDelete: 'कार्य हटाएं',
       todoMarkDone: 'पूर्ण के रूप में चिह्नित करें',
-      todoMarkNotDone: 'अपूर्ण के रूप में चिह्नित करें'
+      todoMarkNotDone: 'अपूर्ण के रूप में चिह्नित करें',
+      todoDateToday: 'आज',
+      todoDateTomorrow: 'कल',
+      todoPickDate: 'तारीख चुनें',
+      todoClearDate: 'तारीख हटाएं'
     }
   },
 
