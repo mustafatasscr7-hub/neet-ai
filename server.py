@@ -1601,6 +1601,15 @@ def validate_doubt_length(text: str):
             "max_chars": MAX_DOUBT_LENGTH, "length": length
         })
 
+def _decode_pdf_and_count_pages(pdf_b64: str):
+    """CPU-heavy base64 decode + fitz page-count, run off the event loop via asyncio.to_thread."""
+    pdf_bytes = base64.b64decode(pdf_b64)
+    try:
+        page_count = fitz.open(stream=pdf_bytes, filetype="pdf").page_count
+    except Exception:
+        page_count = None  # unreadable/corrupt -- let Gemini's own error surface instead of guessing here
+    return pdf_bytes, page_count
+
 async def validate_pdf_limits(pdf_b64: "str | None", user_id: str):
     """Raises HTTPException(413) before any Gemini call if the PDF exceeds the user's tier
     limit -- called from the /chat route handler (not inside stream_response's generator),
@@ -1611,12 +1620,8 @@ async def validate_pdf_limits(pdf_b64: "str | None", user_id: str):
     plan = await get_user_plan(user_id)
     tier = _pdf_tier_for_plan(plan)
     limits = PDF_LIMITS[tier]
-    pdf_bytes = base64.b64decode(pdf_b64)
+    pdf_bytes, page_count = await asyncio.to_thread(_decode_pdf_and_count_pages, pdf_b64)
     size_mb = len(pdf_bytes) / (1024 * 1024)
-    try:
-        page_count = fitz.open(stream=pdf_bytes, filetype="pdf").page_count
-    except Exception:
-        page_count = None  # unreadable/corrupt -- let Gemini's own error surface instead of guessing here
     exceeds = size_mb > limits["max_mb"] or (page_count is not None and page_count > limits["max_pages"])
     if exceeds:
         next_tier = PDF_NEXT_TIER[tier]
@@ -9628,6 +9633,34 @@ MAX_CHAT_IMAGE_BYTES = 8 * 1024 * 1024
 # conservative than /chat's 15/60 -- a real doubt rarely attaches more than a couple images at
 # once, unlike a text message which is always exactly one -- while still comfortably covering a
 # student attaching several images across a session.
+def _process_chat_image_sync(file_bytes: bytes):
+    """CPU-heavy PIL decode/validate/re-encode, run off the event loop via asyncio.to_thread.
+    Returns (file_bytes, ext, media_type, None) on success, or (None, None, None, error_message)."""
+    try:
+        img = Image.open(io.BytesIO(file_bytes))
+        img.load()
+    except Exception:
+        return None, None, None, "Only image attachments can be uploaded"
+    fmt = (img.format or "").upper()
+    FORMAT_EXT = {"JPEG": "jpg", "PNG": "png", "WEBP": "webp", "GIF": "gif"}
+    if fmt not in FORMAT_EXT:
+        return None, None, None, "Unsupported image format"
+    ext = FORMAT_EXT[fmt]
+    media_type = "image/jpeg" if fmt == "JPEG" else f"image/{fmt.lower()}"
+    out = io.BytesIO()
+    try:
+        if fmt == "JPEG":
+            img.convert("RGB").save(out, format="JPEG", quality=90)
+        elif fmt == "GIF" and getattr(img, "is_animated", False):
+            frames = [frame.convert("RGBA").copy() for frame in ImageSequence.Iterator(img)]
+            frames[0].save(out, format="GIF", save_all=True, append_images=frames[1:],
+                            loop=img.info.get("loop", 0), duration=img.info.get("duration", 100))
+        else:
+            img.save(out, format=fmt)
+    except Exception:
+        return None, None, None, "Only image attachments can be uploaded"
+    return out.getvalue(), ext, media_type, None
+
 @app.post("/chat-image-upload")
 async def chat_image_upload(body: ChatImageUploadRequest, _: None = Depends(rate_limit(10, 60, by="account")), verified_user_id: str = Depends(_get_verified_user_id)):
     # Same IDOR class as /referral/status -- every real call site already requires a session
@@ -9651,30 +9684,9 @@ async def chat_image_upload(body: ChatImageUploadRequest, _: None = Depends(rate
     # than storing the raw uploaded bytes -- means what lands in storage is only ever pixel data
     # Pillow itself decoded and re-encoded, discarding anything a crafted file smuggled in beyond
     # that (EXIF payloads, polyglot trailers appended after valid image data, etc).
-    try:
-        img = Image.open(io.BytesIO(file_bytes))
-        img.load()
-    except Exception:
-        return {"error": "Only image attachments can be uploaded"}
-    fmt = (img.format or "").upper()
-    FORMAT_EXT = {"JPEG": "jpg", "PNG": "png", "WEBP": "webp", "GIF": "gif"}
-    if fmt not in FORMAT_EXT:
-        return {"error": "Unsupported image format"}
-    ext = FORMAT_EXT[fmt]
-    media_type = "image/jpeg" if fmt == "JPEG" else f"image/{fmt.lower()}"
-    out = io.BytesIO()
-    try:
-        if fmt == "JPEG":
-            img.convert("RGB").save(out, format="JPEG", quality=90)
-        elif fmt == "GIF" and getattr(img, "is_animated", False):
-            frames = [frame.convert("RGBA").copy() for frame in ImageSequence.Iterator(img)]
-            frames[0].save(out, format="GIF", save_all=True, append_images=frames[1:],
-                            loop=img.info.get("loop", 0), duration=img.info.get("duration", 100))
-        else:
-            img.save(out, format=fmt)
-    except Exception:
-        return {"error": "Only image attachments can be uploaded"}
-    file_bytes = out.getvalue()
+    file_bytes, ext, media_type, error = await asyncio.to_thread(_process_chat_image_sync, file_bytes)
+    if error:
+        return {"error": error}
     # Per-user folder so /account/delete can find every upload by listing <user_id>/. Async write:
     # the old blocking requests.post here stalled every other request (including streaming
     # answers) for as long as an upload to Storage took.
