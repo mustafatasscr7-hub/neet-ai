@@ -715,7 +715,15 @@ const TRANSLATIONS = {
       todoPickDate: 'Pick date',
       todoClearDate: 'Clear date',
       todoCalPrevMonth: 'Previous month',
-      todoCalNextMonth: 'Next month'
+      todoCalNextMonth: 'Next month',
+      plannerCardTitlePlaceholder: 'Task title',
+      plannerCardCancel: 'Cancel',
+      plannerCardAdd: 'Add',
+      plannerCardTitleRequired: 'Title is required',
+      plannerCardError: 'Could not add task. Please try again.',
+      plannerCardAdded: 'Added to Planner',
+      plannerCardCancelled: 'Not added',
+      plannerUpgradeBtn: 'Upgrade'
     },
     hi: {
       newChat: 'नई चैट',
@@ -924,7 +932,15 @@ const TRANSLATIONS = {
       todoPickDate: 'तारीख चुनें',
       todoClearDate: 'तारीख हटाएं',
       todoCalPrevMonth: 'पिछला महीना',
-      todoCalNextMonth: 'अगला महीना'
+      todoCalNextMonth: 'अगला महीना',
+      plannerCardTitlePlaceholder: 'कार्य का शीर्षक',
+      plannerCardCancel: 'रद्द करें',
+      plannerCardAdd: 'जोड़ें',
+      plannerCardTitleRequired: 'शीर्षक आवश्यक है',
+      plannerCardError: 'कार्य जोड़ा नहीं जा सका। कृपया पुनः प्रयास करें।',
+      plannerCardAdded: 'प्लानर में जोड़ा गया',
+      plannerCardCancelled: 'नहीं जोड़ा गया',
+      plannerUpgradeBtn: 'अपग्रेड करें'
     }
   },
 

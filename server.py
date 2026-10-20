@@ -5553,6 +5553,144 @@ async def _stream_empty_conversational_retry(override_system: str, messages: lis
     async for chunk in _stream_deepseek(override_system, messages, user_id, ip, is_peak, "/chat", billing_context, max_tokens=max_tokens):
         yield chunk
 
+# ---------- Planner quick-add from chat ----------
+# Lets a student add a Planner task by just typing it in chat (e.g. "add 3Qs for biology
+# tomorrow") instead of opening the Planner modal. Two-stage so a normal message never pays for
+# this: a cheap keyword regex below (no model call) decides whether the message is even worth
+# checking, and only then does one Qwen-Flash extraction call (temperature 0, ~60 output tokens,
+# 3s timeout -- same cost-logged shape as _ncert_spelling_rewrite above) decide whether it's
+# really a task request. This never writes to todo_tasks itself -- POST /todos (the real plan
+# check, 200-task cap and rate limit) only runs when the student taps Add on the confirm card
+# chat.html renders from the PLANNER_TASK/PLANNER_UPGRADE marker yielded below.
+_PLANNER_TRIGGER_RE = re.compile(
+    r'\b(add|schedule|remind(?:er)?s?|planner|to-?do|tasks?|plan\s+for)\b'
+    r'|add\s*kar|yaad\s*dila|planner\s*(mein|me)|plan\s*kar'
+    r'|जोड़ो|जोड़ें|जोड़ना|प्लानर|याद\s*दिला|टास्क|कार्य\s*जोड़',
+    re.IGNORECASE
+)
+
+def _has_planner_trigger(text: str) -> bool:
+    return bool(_PLANNER_TRIGGER_RE.search(text or ""))
+
+_PLANNER_WEEKDAYS = {
+    "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
+    "friday": 4, "saturday": 5, "sunday": 6,
+}
+_PLANNER_DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
+
+def _resolve_planner_due_date(due_raw, now_ist) -> Optional[str]:
+    """Resolves the model's own 'today'/'tomorrow'/weekday-name/'YYYY-MM-DD' answer into a real
+    YYYY-MM-DD string, anchored to India time (now_ist, always built from IST -- see the global
+    IST constant) so this is correct regardless of the server's own clock and never shifts near
+    UTC midnight. Returns None for anything unrecognized -- a missing/invalid due date just means
+    the task has none, same as the Planner modal's own optional due_date."""
+    if not due_raw or not isinstance(due_raw, str):
+        return None
+    due_raw = due_raw.strip()
+    low = due_raw.lower()
+    if low == "today":
+        return now_ist.strftime("%Y-%m-%d")
+    if low == "tomorrow":
+        return (now_ist + timedelta(days=1)).strftime("%Y-%m-%d")
+    if low in _PLANNER_WEEKDAYS:
+        delta = (_PLANNER_WEEKDAYS[low] - now_ist.weekday()) % 7
+        return (now_ist + timedelta(days=delta)).strftime("%Y-%m-%d")
+    if _PLANNER_DATE_RE.match(due_raw):
+        try:
+            datetime.strptime(due_raw, "%Y-%m-%d")
+            return due_raw
+        except ValueError:
+            return None
+    return None
+
+async def _extract_planner_task(text: str, user_id: str = "") -> Optional[dict]:
+    """One cheap Qwen-Flash call (same cost-logged pattern as _ncert_spelling_rewrite) deciding
+    whether `text` is really a request to add a study task, as opposed to e.g. a subject question
+    that merely contains a trigger word ("add 3 and 5"). Returns None on is_task: false, an
+    empty/missing title, a malformed/non-JSON reply, or any failure/timeout -- meaning "fall back
+    to the normal chat flow", same fail-safe spirit as _ncert_spelling_rewrite. Never raises."""
+    now_ist = datetime.now(timezone.utc).astimezone(IST)
+    try:
+        response = await asyncio.wait_for(
+            qwen_async_client.chat.completions.create(
+                model="qwen-flash",
+                max_tokens=60,
+                temperature=0,
+                messages=[
+                    {"role": "system", "content": (
+                        f"Today is {now_ist.strftime('%A')}, {now_ist.strftime('%Y-%m-%d')} (India time). "
+                        "A student sent a chat message to a NEET exam-prep app. Decide whether they are "
+                        "asking to add or schedule a study task to their Planner -- e.g. 'add 3Qs for "
+                        "biology tomorrow', 'physics ke 5 questions Sunday ko planner mein daalo'. This is "
+                        "NOT a task request if it's actually a subject question that merely contains a "
+                        "word like 'add' or 'task' (e.g. 'add 3 and 5', 'what is Ohm's law').\n\n"
+                        "Return ONLY a JSON object, nothing else, in exactly this shape:\n"
+                        '{"is_task": true or false, "title": "...", "due": "...", "multiple": true or false}\n\n'
+                        "If is_task is false, title can be empty and due null. Otherwise:\n"
+                        "- title: a short, clear description of the task (under 100 characters), in the "
+                        "SAME language/script the student used.\n"
+                        "- due: exactly one of 'today', 'tomorrow', a weekday name ('Monday'..'Sunday'), an "
+                        "explicit 'YYYY-MM-DD' date if one was given, or null if no date was mentioned.\n"
+                        "- multiple: true only if the student asked for more than one distinct task in this "
+                        "message (then title/due describe only the FIRST one).\n"
+                        "Never answer the request, never explain -- output ONLY the JSON object."
+                    )},
+                    {"role": "user", "content": text},
+                ],
+            ),
+            timeout=3,
+        )
+    except Exception:
+        return None
+    usage = getattr(response, "usage", None)
+    if usage:
+        input_tokens = usage.prompt_tokens or 0
+        output_tokens = usage.completion_tokens or 0
+        details = getattr(usage, "prompt_tokens_details", None)
+        cache_hit_tokens = (details.cached_tokens or 0) if details else 0
+        if input_tokens or output_tokens:
+            # Cost-logged like any other provider call, but deliberately NOT log_token_usage --
+            # this extraction call must never count against the student's own daily/weekly budget.
+            cache_miss_tokens = max(0, input_tokens - cache_hit_tokens)
+            cost = _qwen_cost(cache_miss_tokens, cache_hit_tokens, output_tokens)
+            asyncio.create_task(log_provider_usage(
+                "qwen-flash", _is_deepseek_peak_hour(), input_tokens, output_tokens, cost,
+                "/chat-planner-extract", user_id, cache_hit_tokens=cache_hit_tokens
+            ))
+    try:
+        raw = (response.choices[0].message.content or "").strip()
+        raw = re.sub(r'^```(?:json)?\s*|\s*```$', '', raw).strip()
+        parsed = json.loads(raw)
+    except Exception:
+        return None
+    if not isinstance(parsed, dict) or not parsed.get("is_task"):
+        return None
+    title = str(parsed.get("title") or "").strip().replace("\n", " ").replace("\r", " ")[:100]
+    if not title:
+        return None
+    return {
+        "title": title,
+        "due_date": _resolve_planner_due_date(parsed.get("due"), now_ist),
+        "multiple": bool(parsed.get("multiple")),
+    }
+
+_PLANNER_CONFIRM_REPLY_EN = "I can add that to your Planner. Please confirm:"
+_PLANNER_CONFIRM_REPLY_ONLY_FIRST_EN = "I can add that to your Planner — only the first task is shown below. Please confirm:"
+_PLANNER_CONFIRM_REPLY_HI = "मैं इसे आपके प्लानर में जोड़ सकता हूं। कृपया पुष्टि करें:"
+_PLANNER_CONFIRM_REPLY_ONLY_FIRST_HI = "मैं इसे आपके प्लानर में जोड़ सकता हूं — नीचे केवल पहला कार्य दिखाया गया है। कृपया पुष्टि करें:"
+_PLANNER_UPGRADE_REPLY_EN = "The Planner is available on Pro and Max. Upgrade to add study tasks from chat."
+_PLANNER_UPGRADE_REPLY_HI = "प्लानर Pro और Max पर उपलब्ध है। चैट से स्टडी टास्क जोड़ने के लिए अपग्रेड करें।"
+
+def _planner_task_card_response(extracted: dict, language: str) -> str:
+    reply = (_PLANNER_CONFIRM_REPLY_ONLY_FIRST_HI if extracted["multiple"] else _PLANNER_CONFIRM_REPLY_HI) \
+        if language == "hi" else \
+        (_PLANNER_CONFIRM_REPLY_ONLY_FIRST_EN if extracted["multiple"] else _PLANNER_CONFIRM_REPLY_EN)
+    return f"PLANNER_TASK: yes\nTITLE: {extracted['title']}\nDUE: {extracted['due_date'] or ''}\n\n{reply}"
+
+def _planner_upgrade_response(language: str) -> str:
+    reply = _PLANNER_UPGRADE_REPLY_HI if language == "hi" else _PLANNER_UPGRADE_REPLY_EN
+    return f"PLANNER_UPGRADE: yes\n\n{reply}"
+
 async def stream_response(text: str, history: list = [], images: list = [], pdf: str = None, answer_style: str = "detailed", student_name: str = "", language: str = "en", user_id: str = "", personalize: bool = True, skip_cache: bool = False, ip: str = "", running_summary: str = "", dropped_question: str = "", dropped_answer: str = ""):
     images = (images or [])[:3]
 
@@ -5602,6 +5740,19 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
             deterministic_ambiguity = _deterministic_topic_ambiguity_response(text)
             if deterministic_ambiguity is not None:
                 yield deterministic_ambiguity
+                return
+        # Planner quick-add (see _has_planner_trigger/_extract_planner_task above): the keyword
+        # check costs nothing and only runs the one cheap Qwen-Flash extraction call when it
+        # fires. A non-task false-positive ("add 3 and 5") or any extraction failure/timeout
+        # falls through silently to the normal pipeline below, unchanged.
+        if _has_planner_trigger(text):
+            extracted = await _extract_planner_task(text, user_id)
+            if extracted is not None:
+                plan = await get_user_plan(user_id)
+                if plan in ("pro", "max"):
+                    yield _planner_task_card_response(extracted, language)
+                else:
+                    yield _planner_upgrade_response(language)
                 return
     # Shared answer cache -- see the rules above _answer_cache_key. Looked up before any retrieval
     # or model work so a hit costs nothing; every lookup is logged (hit / miss / skip + reason).

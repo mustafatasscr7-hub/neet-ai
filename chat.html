@@ -572,6 +572,47 @@
       .todo-delete-btn { opacity: 1; }
     }
 
+    /* Planner quick-add card (chat.html's PLANNER_TASK/PLANNER_UPGRADE markers) -- same dark-inset
+       language as the Planner modal itself (#1a1a1a/#2a2a2a, blue accent only), just scoped to sit
+       inside a chat bubble instead of a modal panel. Reuses .todo-date-chip/.todo-calendar-popover/
+       .todo-cal-* as-is for the date picker (see _plannerCardHtml) -- only the card shell, title
+       input and Add/Cancel/done states below are new. */
+    .planner-card { margin-top: 10px; background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 12px; padding: 12px; max-width: 360px; }
+    .planner-card-title-input {
+      width: 100%; box-sizing: border-box; background: #111; border: 1px solid #2a2a2a; border-radius: 8px;
+      color: #ececec; font-family: 'Inter', sans-serif; font-size: 13px; padding: 9px 12px; margin-bottom: 10px;
+    }
+    .planner-card-title-input:focus { outline: none; border-color: #4f8ef7; }
+    .planner-card-date-chips { padding: 0 0 2px; }
+    .planner-card-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+    .planner-card-cancel-btn {
+      background: transparent; border: 1px solid #2a2a2a; color: #999; font-family: 'Inter', sans-serif;
+      font-size: 12.5px; font-weight: 600; padding: 7px 14px; border-radius: 8px; cursor: pointer;
+      transition: background-color 150ms ease, color 150ms ease;
+    }
+    .planner-card-cancel-btn:hover:not(:disabled) { color: #ccc; background: rgba(255,255,255,0.05); }
+    .planner-card-cancel-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .planner-card-add-btn {
+      background: #4f8ef7; border: none; color: #fff; font-family: 'Inter', sans-serif; font-size: 12.5px;
+      font-weight: 600; padding: 7px 16px; border-radius: 8px; cursor: pointer; transition: background-color 150ms ease;
+    }
+    .planner-card-add-btn:hover:not(:disabled) { background: #3d7ce0; }
+    .planner-card-add-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .planner-card-error { margin-top: 8px; font-size: 12px; color: #f87171; }
+    .planner-card-done {
+      display: flex; align-items: center; gap: 8px; color: #4f8ef7; font-size: 13px; font-weight: 600;
+    }
+    .planner-card-done.planner-card-cancelled { color: #777; font-weight: 500; }
+    .planner-upgrade-row { margin-top: 10px; }
+    .planner-upgrade-btn {
+      background: #4f8ef7; border: none; color: #fff; font-family: 'Inter', sans-serif; font-size: 12.5px;
+      font-weight: 600; padding: 8px 18px; border-radius: 8px; cursor: pointer; transition: background-color 150ms ease;
+    }
+    .planner-upgrade-btn:hover { background: #3d7ce0; }
+    @media (max-width: 420px) {
+      .planner-card { max-width: 100%; }
+    }
+
     /* Usage tab (Settings > Usage) -- flat rows matching Claude's own usage page rather than
        boxed cards: each section is a label+stat row, a thin bar, then a muted sub-line, separated
        only by a hairline border-bottom (the same divider treatment every other Settings row in
@@ -4912,6 +4953,16 @@ let selectedImages = [];
           insertAutoEmbedDiagram(bubble, bubble.firstChild, diagram);
         }
 
+        // Same idea as the diagram restore above, for a Planner quick-add card/upgrade prompt
+        // (see streamAIResponse's isPlannerTask/isPlannerUpgrade branch, which is what first sets
+        // msgObj.plannerCard/plannerUpgrade) -- rebuilds the exact same card on reload, already
+        // showing its final added/cancelled state if the student already answered it live.
+        if (msgObj && msgObj.plannerCard) {
+          renderPlannerTaskCard(bubble, bubble.firstChild, msgIndex, msgObj.plannerCard.title, msgObj.plannerCard.due, msgObj.plannerCard.status);
+        } else if (msgObj && msgObj.plannerUpgrade) {
+          renderPlannerUpgradeCard(bubble, bubble.firstChild);
+        }
+
         // metaHtml (NEET Importance/Chapter) is only ever present on a real academic answer --
         // server.py's SYSTEM_PROMPT now skips both entirely for a conversational reply (see
         // DOUBT_TYPE) -- reusing that same signal here means a greeting/small-talk reply never
@@ -7901,6 +7952,12 @@ function plainTextFromMarkdown(text) {
         // rule 11) -- when present, the rest of the stream is CLARIFY_TYPE/QUESTION/OPTION lines,
         // not answer text, so it must never be handed to renderStreamingText at all.
         let isClarification = false;
+        // PLANNER_TASK: yes / PLANNER_UPGRADE: yes are two more mutually-exclusive first-line
+        // markers (see server.py's _planner_task_card_response/_planner_upgrade_response) --
+        // the chat-quick-add-to-Planner short-circuit never streams a real model answer, so
+        // like AMBIGUOUS this is never handed to renderStreamingText either.
+        let isPlannerTask = false;
+        let isPlannerUpgrade = false;
 
         // Set inline, the moment VISUAL_INTENT: yes resolves below -- read after the loop to
         // decide the "Show Diagram" button (skipped if already auto-embedded). Declared here,
@@ -7941,6 +7998,10 @@ function plainTextFromMarkdown(text) {
                 // else branch below, which flushes the buffered text (marker line included)
                 // straight into fullText -- exactly the leaked "DOUBT_TYPE: conversational" text.
                 const conv = firstLine.match(/^\s*DOUBT_TYPE:\s*conversational\s*$/i);
+                // Two more mutually-exclusive first-line markers -- see the isPlannerTask/
+                // isPlannerUpgrade declarations above for what follows each.
+                const plannerTask = firstLine.match(/^\s*PLANNER_TASK:\s*(yes|no)\s*$/i);
+                const plannerUpgrade = firstLine.match(/^\s*PLANNER_UPGRADE:\s*(yes|no)\s*$/i);
                 visualIntentResolved = true;
                 if (amb && amb[1].toLowerCase() === 'yes') {
                   isClarification = true;
@@ -7949,6 +8010,12 @@ function plainTextFromMarkdown(text) {
                   visualIntent = m[1].toLowerCase();
                   appendToFullText(rest);
                 } else if (conv) {
+                  appendToFullText(rest);
+                } else if (plannerTask && plannerTask[1].toLowerCase() === 'yes') {
+                  isPlannerTask = true;
+                  appendToFullText(rest); // TITLE:/DUE: lines + the one-line reply -- parsed after the loop
+                } else if (plannerUpgrade && plannerUpgrade[1].toLowerCase() === 'yes') {
+                  isPlannerUpgrade = true;
                   appendToFullText(rest);
                 } else {
                   appendToFullText(visualIntentBuffer); // not our line -- flush unchanged, keep default 'no'
@@ -7984,7 +8051,7 @@ function plainTextFromMarkdown(text) {
               appendToFullText(chunk[i]);
             }
             const now = Date.now();
-            if (!isClarification && now - lastRenderTime >= RENDER_THROTTLE_MS) {
+            if (!isClarification && !isPlannerTask && !isPlannerUpgrade && now - lastRenderTime >= RENDER_THROTTLE_MS) {
               renderStreamingText(textArea, fullText);
               lastRenderTime = now;
               // Deliberately no scrollBottom() here -- the one scrollBottom() call made when the
@@ -8021,12 +8088,18 @@ function plainTextFromMarkdown(text) {
           const m = trimmed.match(/^VISUAL_INTENT:\s*(yes|no)$/i);
           const amb = trimmed.match(/^AMBIGUOUS:\s*(yes|no)$/i);
           const conv = trimmed.match(/^DOUBT_TYPE:\s*conversational$/i);
+          const plannerTask = trimmed.match(/^PLANNER_TASK:\s*(yes|no)$/i);
+          const plannerUpgrade = trimmed.match(/^PLANNER_UPGRADE:\s*(yes|no)$/i);
           if (amb && amb[1].toLowerCase() === 'yes') {
             isClarification = true; // nothing follows it -- parseClarification below fails safe on an empty body
           } else if (m) {
             visualIntent = m[1].toLowerCase();
           } else if (conv) {
             // whole buffer WAS just the marker -- nothing left to add
+          } else if (plannerTask && plannerTask[1].toLowerCase() === 'yes') {
+            isPlannerTask = true; // nothing follows it -- the title-parse fallback below fails safe
+          } else if (plannerUpgrade && plannerUpgrade[1].toLowerCase() === 'yes') {
+            isPlannerUpgrade = true;
           } else {
             appendToFullText(visualIntentBuffer);
           }
@@ -8059,6 +8132,56 @@ function plainTextFromMarkdown(text) {
           } else {
             currentConversation.push({ role: 'ai', text: fullText, time: new Date().toISOString(), runningSummary: newRunningSummary || undefined });
           }
+
+          if (pendingSidebarSave) {
+            await pendingSidebarSave;
+            pendingSidebarSave = null;
+          }
+
+          const conv = conversations.find(c => c.id === currentId || c.supabaseId === currentId);
+          if (conv) conv.messages = currentConversation;
+
+          const { data: { session: sessionAfter } } = await client.auth.getSession();
+          if (sessionAfter && conv && conv.supabaseId) {
+            await client.from('chats').update({ messages: currentConversation }).eq('id', conv.supabaseId).eq('user_id', sessionAfter.user.id);
+          }
+          refreshUsageBanner();
+        } else if (isPlannerTask || isPlannerUpgrade) {
+          // Chat quick-add to Planner (see server.py's _has_planner_trigger/_extract_planner_task):
+          // like a clarifying question, this is a dead-end turn on its own -- no diagram/PYQ
+          // buttons, no alternate-method toggle, no versions/retry-stacking. Mirrors the
+          // isClarification branch's own persistence shape above, just with a confirm card (or an
+          // upgrade button for Free) instead of clarify options. See renderPlannerTaskCard/
+          // renderPlannerUpgradeCard and addMessageRow's own msgObj.plannerCard/plannerUpgrade
+          // check for how the exact same card is rebuilt on reload from the persisted fields.
+          let title = '', due = null, reply = fullText.trim();
+          if (isPlannerTask) {
+            const titleMatch = fullText.match(/^\s*TITLE:\s*(.*)$/im);
+            const dueMatch = fullText.match(/^\s*DUE:\s*(.*)$/im);
+            title = titleMatch ? titleMatch[1].trim() : '';
+            const dueRaw = dueMatch ? dueMatch[1].trim() : '';
+            due = dueRaw || null;
+            const blankIdx = fullText.search(/\n\s*\n/);
+            reply = (blankIdx !== -1 ? fullText.slice(blankIdx) : '').trim();
+          }
+          if (!reply) reply = t('chat', 'emptyReplyFallback');
+          textArea.innerHTML = parseWithMath(reply);
+
+          const hasCard = isPlannerTask && !!title; // fails safe to a plain reply if TITLE was somehow empty/missing
+          const msgIndex = retryTarget ? aiIndex : currentConversation.length;
+          const aiMsg = { role: 'ai', text: reply, time: new Date().toISOString(), runningSummary: newRunningSummary || undefined };
+          if (hasCard) aiMsg.plannerCard = { title, due, status: 'pending' };
+          if (isPlannerUpgrade) aiMsg.plannerUpgrade = true;
+          if (retryTarget) {
+            currentConversation[aiIndex] = aiMsg;
+            const oldActions = aiRow.querySelector('.message-actions');
+            if (oldActions) oldActions.remove();
+          } else {
+            currentConversation.push(aiMsg);
+          }
+
+          if (hasCard) renderPlannerTaskCard(bubble, textArea, msgIndex, title, due, 'pending');
+          else if (isPlannerUpgrade) renderPlannerUpgradeCard(bubble, textArea);
 
           if (pendingSidebarSave) {
             await pendingSidebarSave;
@@ -8973,6 +9096,307 @@ function plainTextFromMarkdown(text) {
         return a.due_date.localeCompare(b.due_date);
       });
       area.innerHTML = sorted.map(renderTodoItem).join('');
+    }
+
+    // ---------- Planner quick-add from chat ----------
+    // Renders the PLANNER_TASK/PLANNER_UPGRADE marker server.py's chat quick-add short-circuit
+    // sends (see streamAIResponse's own isPlannerTask/isPlannerUpgrade branch) as a confirm card
+    // inline in the chat bubble, both live and on reload (addMessageRow's own msgObj.plannerCard/
+    // plannerUpgrade check). Reuses the Planner modal's own date-chip/calendar CSS classes
+    // (.todo-date-chip, .todo-calendar-popover, .todo-cal-*) for a visually identical date picker,
+    // but with its own small per-card JS state -- the modal's calendar is a global singleton (only
+    // ever one instance open at a time), which is wrong for chat history, where many cards can
+    // exist on screen/in one conversation at once, each needing independent state.
+    const _plannerCardState = {}; // cardId -> { msgIndex, dateChip, dateValue, calViewYear, calViewMonth, _outsideHandler, _keyHandler }
+    // A monotonic counter, not `'m' + msgIndex` -- a retry or a future render path that doesn't
+    // fully clear its textArea before re-rendering could otherwise leave a stale card from an
+    // earlier render still in the DOM under the same msgIndex, and two elements sharing one id is
+    // exactly the kind of bug a plain counter can't have (confirmed live: an earlier version of
+    // this using msgIndex-derived ids broke document.getElementById lookups once that happened).
+    let _plannerCardSeq = 0;
+
+    function _plannerCardHtml(cardId, title, due, status) {
+      if (status === 'added') {
+        return `<div class="planner-card planner-card-done" id="plannerCard-${cardId}">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 12l2.5 2.5L16 9"/></svg>
+          <span>${escapeHtml(t('chat', 'plannerCardAdded'))}</span>
+        </div>`;
+      }
+      if (status === 'cancelled') {
+        return `<div class="planner-card planner-card-done planner-card-cancelled" id="plannerCard-${cardId}">
+          <span>${escapeHtml(t('chat', 'plannerCardCancelled'))}</span>
+        </div>`;
+      }
+      return `<div class="planner-card" id="plannerCard-${cardId}">
+        <input type="text" class="planner-card-title-input" id="plannerCardTitle-${cardId}" maxlength="200" value="${escapeHtml(title)}" data-i18n-placeholder="chat.plannerCardTitlePlaceholder" placeholder="${escapeHtml(t('chat', 'plannerCardTitlePlaceholder'))}" />
+        <div class="todo-date-chips planner-card-date-chips" id="plannerCardDateChips-${cardId}">
+          <button type="button" class="todo-date-chip" data-chip="today">${escapeHtml(t('chat', 'todoDateToday'))}</button>
+          <button type="button" class="todo-date-chip" data-chip="tomorrow">${escapeHtml(t('chat', 'todoDateTomorrow'))}</button>
+          <button type="button" id="plannerCardPickChip-${cardId}" class="todo-date-chip" data-chip="pick">${escapeHtml(t('chat', 'todoPickDate'))}</button>
+          <span class="todo-date-tag" id="plannerCardDateTag-${cardId}" style="display:none;">
+            <span id="plannerCardDateTagText-${cardId}"></span>
+            <button type="button" class="todo-date-tag-clear" id="plannerCardDateTagClear-${cardId}" aria-label="${escapeHtml(t('chat', 'todoClearDate'))}">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M18 6L6 18"/><path d="M6 6l12 12"/></svg>
+            </button>
+          </span>
+          <div class="todo-calendar-popover" id="plannerCardCalendar-${cardId}" style="display:none;" role="dialog" aria-label="${escapeHtml(t('chat', 'todoPickDate'))}">
+            <div class="todo-cal-header">
+              <button type="button" class="todo-cal-nav" id="plannerCardCalPrev-${cardId}" aria-label="${escapeHtml(t('chat', 'todoCalPrevMonth'))}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></button>
+              <span class="todo-cal-month-year" id="plannerCardCalMonthYear-${cardId}"></span>
+              <button type="button" class="todo-cal-nav" id="plannerCardCalNext-${cardId}" aria-label="${escapeHtml(t('chat', 'todoCalNextMonth'))}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></button>
+            </div>
+            <div class="todo-cal-weekdays" id="plannerCardCalWeekdays-${cardId}"></div>
+            <div class="todo-cal-grid" id="plannerCardCalGrid-${cardId}"></div>
+          </div>
+        </div>
+        <div class="planner-card-actions">
+          <button type="button" class="planner-card-cancel-btn" id="plannerCardCancel-${cardId}">${escapeHtml(t('chat', 'plannerCardCancel'))}</button>
+          <button type="button" class="planner-card-add-btn" id="plannerCardAdd-${cardId}">${escapeHtml(t('chat', 'plannerCardAdd'))}</button>
+        </div>
+        <div class="planner-card-error" id="plannerCardError-${cardId}" style="display:none;"></div>
+      </div>`;
+    }
+
+    function renderPlannerTaskCard(bubble, textArea, msgIndex, title, due, status) {
+      const cardId = 'c' + (++_plannerCardSeq);
+      textArea.insertAdjacentHTML('beforeend', _plannerCardHtml(cardId, title, due, status));
+      if (status === 'pending') _initPlannerCard(cardId, msgIndex, title, due);
+    }
+
+    function renderPlannerUpgradeCard(bubble, textArea) {
+      textArea.insertAdjacentHTML('beforeend', `<div class="planner-upgrade-row"><button type="button" class="planner-upgrade-btn" onclick="window.location.href='./pricing.html'">${escapeHtml(t('chat', 'plannerUpgradeBtn'))}</button></div>`);
+    }
+
+    function _initPlannerCard(cardId, msgIndex, initialTitle, initialDue) {
+      const state = _plannerCardState[cardId] = {
+        msgIndex,
+        dateChip: initialDue === _todoTodayStr() ? 'today' : initialDue === _todoTomorrowStr() ? 'tomorrow' : initialDue ? 'pick' : null,
+        dateValue: initialDue || null,
+        calViewYear: null, calViewMonth: null,
+      };
+      const root = document.getElementById('plannerCard-' + cardId);
+      if (!root) return;
+      root.querySelectorAll('.todo-date-chip').forEach(chip => {
+        chip.onclick = () => {
+          const kind = chip.dataset.chip;
+          if (kind === 'pick') {
+            if (_isPlannerCalOpen(cardId)) _closePlannerCardCalendar(cardId); else _openPlannerCardCalendar(cardId);
+            return;
+          }
+          _closePlannerCardCalendar(cardId);
+          const value = kind === 'today' ? _todoTodayStr() : _todoTomorrowStr();
+          if (state.dateChip === kind) { state.dateChip = null; state.dateValue = null; }
+          else { state.dateChip = kind; state.dateValue = value; }
+          _renderPlannerCardDateChips(cardId);
+        };
+      });
+      document.getElementById('plannerCardCalPrev-' + cardId).onclick = () => _plannerCardCalGotoMonth(cardId, -1);
+      document.getElementById('plannerCardCalNext-' + cardId).onclick = () => _plannerCardCalGotoMonth(cardId, 1);
+      document.getElementById('plannerCardDateTagClear-' + cardId).onclick = () => {
+        state.dateChip = null; state.dateValue = null;
+        _closePlannerCardCalendar(cardId);
+        _renderPlannerCardDateChips(cardId);
+      };
+      document.getElementById('plannerCardAdd-' + cardId).onclick = () => _submitPlannerCard(cardId);
+      document.getElementById('plannerCardCancel-' + cardId).onclick = () => _cancelPlannerCard(cardId);
+      _renderPlannerCardDateChips(cardId);
+    }
+
+    function _renderPlannerCardDateChips(cardId) {
+      const state = _plannerCardState[cardId];
+      const root = document.getElementById('plannerCard-' + cardId);
+      if (!state || !root) return;
+      root.querySelectorAll('.todo-date-chip').forEach(chip => {
+        chip.classList.toggle('active', chip.dataset.chip === state.dateChip);
+      });
+      const tag = document.getElementById('plannerCardDateTag-' + cardId);
+      const tagText = document.getElementById('plannerCardDateTagText-' + cardId);
+      if (!tag || !tagText) return;
+      if (state.dateChip !== 'pick' || !state.dateValue) { tag.style.display = 'none'; return; }
+      tagText.textContent = formatTodoDueDate(state.dateValue);
+      tag.style.display = '';
+    }
+
+    function _isPlannerCalOpen(cardId) {
+      const el = document.getElementById('plannerCardCalendar-' + cardId);
+      return !!el && el.style.display !== 'none';
+    }
+
+    function _openPlannerCardCalendar(cardId) {
+      const state = _plannerCardState[cardId];
+      const popover = document.getElementById('plannerCardCalendar-' + cardId);
+      const pickChip = document.getElementById('plannerCardPickChip-' + cardId);
+      if (!state || !popover || !pickChip) return;
+      const hasSel = state.dateChip === 'pick' && state.dateValue;
+      const base = hasSel ? _todoParseDateStr(state.dateValue) : new Date();
+      state.calViewYear = base.getFullYear();
+      state.calViewMonth = base.getMonth();
+      _renderPlannerCardCalendar(cardId);
+      popover.style.display = '';
+      _positionPlannerCardCalendar(cardId);
+      state._outsideHandler = (e) => {
+        if (!popover.contains(e.target) && !pickChip.contains(e.target)) _closePlannerCardCalendar(cardId);
+      };
+      state._keyHandler = (e) => {
+        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); _closePlannerCardCalendar(cardId); pickChip.focus(); }
+      };
+      document.addEventListener('mousedown', state._outsideHandler, true);
+      document.addEventListener('keydown', state._keyHandler, true);
+    }
+
+    function _closePlannerCardCalendar(cardId) {
+      const state = _plannerCardState[cardId];
+      const popover = document.getElementById('plannerCardCalendar-' + cardId);
+      if (popover) popover.style.display = 'none';
+      if (state) {
+        if (state._outsideHandler) { document.removeEventListener('mousedown', state._outsideHandler, true); state._outsideHandler = null; }
+        if (state._keyHandler) { document.removeEventListener('keydown', state._keyHandler, true); state._keyHandler = null; }
+      }
+    }
+
+    // Anchored relative to this card's own .todo-date-chips (position:relative, same CSS rule the
+    // Planner modal's calendar relies on) using viewport coordinates for the up/down flip -- unlike
+    // the modal, a chat bubble has no overflow:hidden ancestor clipping it, so the real screen edge
+    // is the only boundary that matters here.
+    function _positionPlannerCardCalendar(cardId) {
+      const popover = document.getElementById('plannerCardCalendar-' + cardId);
+      const chip = document.getElementById('plannerCardPickChip-' + cardId);
+      const container = chip ? chip.closest('.todo-date-chips') : null;
+      if (!popover || !chip || !container) return;
+      const popoverWidth = popover.offsetWidth || 224;
+      const popoverHeight = popover.offsetHeight || 250;
+      let left = chip.offsetLeft;
+      const maxLeft = container.clientWidth - popoverWidth - 4;
+      left = Math.max(4, Math.min(left, maxLeft));
+      popover.style.left = left + 'px';
+      const chipRect = chip.getBoundingClientRect();
+      const spaceBelow = window.innerHeight - chipRect.bottom;
+      if (spaceBelow < popoverHeight + 12 && chipRect.top > popoverHeight + 12) {
+        popover.style.bottom = (container.clientHeight - chip.offsetTop) + 6 + 'px';
+        popover.style.top = 'auto';
+      } else {
+        popover.style.top = (chip.offsetTop + chip.offsetHeight + 6) + 'px';
+        popover.style.bottom = 'auto';
+      }
+    }
+
+    function _plannerCardCalGotoMonth(cardId, delta) {
+      const state = _plannerCardState[cardId];
+      if (!state) return;
+      state.calViewMonth += delta;
+      if (state.calViewMonth < 0) { state.calViewMonth = 11; state.calViewYear--; }
+      else if (state.calViewMonth > 11) { state.calViewMonth = 0; state.calViewYear++; }
+      _renderPlannerCardCalendar(cardId);
+    }
+
+    function _renderPlannerCardCalendar(cardId) {
+      const state = _plannerCardState[cardId];
+      const monthYearEl = document.getElementById('plannerCardCalMonthYear-' + cardId);
+      const weekdaysEl = document.getElementById('plannerCardCalWeekdays-' + cardId);
+      const gridEl = document.getElementById('plannerCardCalGrid-' + cardId);
+      if (!state || !monthYearEl || !weekdaysEl || !gridEl) return;
+      const locale = _todoCalLocale();
+      const monthLabel = new Intl.DateTimeFormat(locale, { month: 'long', year: 'numeric' }).format(new Date(state.calViewYear, state.calViewMonth, 1));
+      monthYearEl.textContent = localizeNum(monthLabel);
+      weekdaysEl.innerHTML = _todoCalWeekdayLabels().map(l => `<span>${escapeHtml(l)}</span>`).join('');
+
+      const todayStr = _todoTodayStr();
+      const selectedStr = state.dateChip === 'pick' ? state.dateValue : null;
+      const firstOfMonth = new Date(state.calViewYear, state.calViewMonth, 1);
+      const firstWeekday = (firstOfMonth.getDay() + 6) % 7;
+      const daysInMonth = new Date(state.calViewYear, state.calViewMonth + 1, 0).getDate();
+      const daysInPrevMonth = new Date(state.calViewYear, state.calViewMonth, 0).getDate();
+
+      const cells = [];
+      for (let i = 0; i < firstWeekday; i++) {
+        const dayNum = daysInPrevMonth - firstWeekday + 1 + i;
+        cells.push({ dateStr: _todoLocalDateStr(new Date(state.calViewYear, state.calViewMonth - 1, dayNum)), dayNum, otherMonth: true });
+      }
+      for (let day = 1; day <= daysInMonth; day++) {
+        cells.push({ dateStr: _todoLocalDateStr(new Date(state.calViewYear, state.calViewMonth, day)), dayNum: day, otherMonth: false });
+      }
+      let nextDay = 1;
+      while (cells.length % 7 !== 0) {
+        cells.push({ dateStr: _todoLocalDateStr(new Date(state.calViewYear, state.calViewMonth + 1, nextDay)), dayNum: nextDay, otherMonth: true });
+        nextDay++;
+      }
+
+      gridEl.innerHTML = cells.map(c => {
+        const classes = ['todo-cal-day'];
+        if (c.otherMonth) classes.push('other-month');
+        if (c.dateStr === todayStr) classes.push('is-today');
+        if (c.dateStr === selectedStr) classes.push('selected');
+        return `<button type="button" class="${classes.join(' ')}" data-date="${c.dateStr}">${localizeNum(c.dayNum)}</button>`;
+      }).join('');
+      gridEl.querySelectorAll('.todo-cal-day').forEach(btn => {
+        btn.onclick = () => {
+          state.dateChip = 'pick';
+          state.dateValue = btn.dataset.date;
+          _closePlannerCardCalendar(cardId);
+          _renderPlannerCardDateChips(cardId);
+        };
+      });
+    }
+
+    async function _submitPlannerCard(cardId) {
+      const state = _plannerCardState[cardId];
+      const root = document.getElementById('plannerCard-' + cardId);
+      if (!state || !root) return;
+      const addBtn = document.getElementById('plannerCardAdd-' + cardId);
+      const cancelBtn = document.getElementById('plannerCardCancel-' + cardId);
+      if (addBtn.disabled) return; // guards a double-tap from posting the same task twice
+      const titleInput = document.getElementById('plannerCardTitle-' + cardId);
+      const title = (titleInput.value || '').trim();
+      const errEl = document.getElementById('plannerCardError-' + cardId);
+      if (!title) {
+        errEl.textContent = t('chat', 'plannerCardTitleRequired');
+        errEl.style.display = '';
+        return;
+      }
+      addBtn.disabled = true;
+      cancelBtn.disabled = true;
+      errEl.style.display = 'none';
+      try {
+        const { data: { session } } = await client.auth.getSession();
+        if (!session) { window.location.href = './login.html'; return; }
+        const due_date = (state.dateChip && state.dateValue) ? state.dateValue : null;
+        const res = await fetch(`${API_BASE}/todos`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
+          body: JSON.stringify({ title, due_date })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (_isTodoPlanRequired(res.status, data)) { window.location.href = './pricing.html'; return; }
+        if (!res.ok) {
+          errEl.textContent = typeof data.detail === 'string' ? data.detail : t('chat', 'plannerCardError');
+          errEl.style.display = '';
+          addBtn.disabled = false;
+          cancelBtn.disabled = false;
+          return;
+        }
+        _finalizePlannerCard(cardId, 'added');
+      } catch (e) {
+        errEl.textContent = t('chat', 'plannerCardError');
+        errEl.style.display = '';
+        addBtn.disabled = false;
+        cancelBtn.disabled = false;
+      }
+    }
+
+    function _cancelPlannerCard(cardId) {
+      _finalizePlannerCard(cardId, 'cancelled');
+    }
+
+    function _finalizePlannerCard(cardId, status) {
+      const state = _plannerCardState[cardId];
+      _closePlannerCardCalendar(cardId);
+      const root = document.getElementById('plannerCard-' + cardId);
+      if (root) root.outerHTML = _plannerCardHtml(cardId, '', '', status);
+      if (state && typeof state.msgIndex === 'number' && currentConversation[state.msgIndex] && currentConversation[state.msgIndex].plannerCard) {
+        currentConversation[state.msgIndex].plannerCard.status = status;
+        persistConversationSilently();
+      }
+      delete _plannerCardState[cardId];
     }
 
     // ---------- Referral program (Settings > Account) ----------
