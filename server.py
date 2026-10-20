@@ -6461,7 +6461,7 @@ async def generate_title(message: Message, request: Request, _: None = Depends(r
     _guest_device.set(_device_id(request))
     message.user_id = verified_user_id
     await enforce_daily_budget(message.user_id, ip)
-    client = deepseek_client
+    client = deepseek_async_client
     # Deliberately NOT "New Chat" -- that's also the sidebar's own placeholder text for a
     # conversation that has no title yet at all (see chat.html's .new-chat-text), so a greeting
     # returning it here was indistinguishable from titling having silently never happened. Rule 4
@@ -6469,7 +6469,7 @@ async def generate_title(message: Message, request: Request, _: None = Depends(r
     # case, and _clean_title's own regex backstop falls back to the same value.
     fallback_title = "Casual Chat" if message.language != "hi" else "सामान्य चैट"
     title_lang = "entirely in Hindi (Devanagari script) — every word in Hindi, no English words mixed in" if message.language == "hi" else "in English"
-    response = client.messages.create(
+    response = await client.messages.create(
         model=DEEPSEEK_MODEL,
         max_tokens=15,
         thinking={"type": "disabled"},
@@ -6515,9 +6515,9 @@ async def summarize_answer(req: SummarizeAnswerRequest, request: Request, _: Non
     _guest_device.set(_device_id(request))
     req.user_id = verified_user_id
     await enforce_daily_budget(req.user_id, ip)
-    client = deepseek_client
+    client = deepseek_async_client
     lang_instruction = HINDI_ONLY_CORE if req.language == "hi" else "Respond in English."
-    response = client.messages.create(
+    response = await client.messages.create(
         model=DEEPSEEK_MODEL,
         max_tokens=220,
         thinking={"type": "disabled"},
