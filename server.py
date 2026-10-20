@@ -2838,6 +2838,61 @@ def _with_ncert_errata(rows: list) -> list:
         fixed.append(r if content == (r.get("content") or "") else {**r, "content": content})
     return fixed
 
+# ---------- One-time spelling-fix retry for NCERT retrieval ----------
+# A typo'd query ("oms law", "newtons 3rd lw") can embed far enough from the real term that it
+# misses NCERT_MATCH_THRESHOLD_EN entirely ("oms law" measured 0.36), well below even the
+# off-topic gate -- no amount of _generate_space_merge_variants' word-merging fixes a misspelled
+# word. A single cheap rewrite call fixes obvious spelling before falling back to "no NCERT
+# match" -- only tried when the raw query found nothing, so it costs nothing on the common path.
+NCERT_REWRITE_MAX_WORDS = 15
+
+async def _ncert_spelling_rewrite(query: str, user_id: str = "") -> Optional[str]:
+    """One cheap Qwen-Flash call (cheapest already-configured model) that returns `query` with
+    spelling/typos fixed, same language, nothing else changed. Returns None -- meaning "keep
+    today's behaviour" -- on any failure, timeout, empty result, a byte-identical result, or a
+    result more than 2x the original's length (a real spelling fix never needs to grow that
+    much). Never raises."""
+    try:
+        response = await asyncio.wait_for(
+            qwen_async_client.chat.completions.create(
+                model="qwen-flash",
+                max_tokens=40,
+                temperature=0,
+                messages=[
+                    {"role": "system", "content": (
+                        "Fix only spelling mistakes and typos in the student's short question "
+                        "below. Keep the same language and otherwise the exact same wording -- "
+                        "do not rephrase, expand, translate, answer, or add anything. Return "
+                        "ONLY the corrected question text, nothing else."
+                    )},
+                    {"role": "user", "content": query},
+                ],
+            ),
+            timeout=3,
+        )
+    except Exception:
+        return None
+    usage = getattr(response, "usage", None)
+    if usage:
+        input_tokens = usage.prompt_tokens or 0
+        output_tokens = usage.completion_tokens or 0
+        details = getattr(usage, "prompt_tokens_details", None)
+        cache_hit_tokens = (details.cached_tokens or 0) if details else 0
+        if input_tokens or output_tokens:
+            cache_miss_tokens = max(0, input_tokens - cache_hit_tokens)
+            cost = _qwen_cost(cache_miss_tokens, cache_hit_tokens, output_tokens)
+            asyncio.create_task(log_provider_usage(
+                "qwen-flash", _is_deepseek_peak_hour(), input_tokens, output_tokens, cost,
+                "/chat-ncert-rewrite", user_id, cache_hit_tokens=cache_hit_tokens
+            ))
+    try:
+        rewritten = (response.choices[0].message.content or "").strip()
+    except Exception:
+        return None
+    if not rewritten or rewritten == query.strip() or len(rewritten) > len(query) * 2:
+        return None
+    return rewritten
+
 async def search_ncert(query: str, limit: int = 3, stats: dict = None):
     # stats, if given, is filled with "language" and "top_raw_score" (the raw query's best
     # similarity before any threshold or filter) for the retrieval log -- see _log_ncert_retrieval.
@@ -5531,6 +5586,17 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
         mistake_rows_coro = fetch_student_mistake_rows(user_id) if (personalize and user_id) else _empty_list()
         search_stats = {}
         retrieved, mistake_rows, diagram_exists = await asyncio.gather(search_ncert(text, stats=search_stats), mistake_rows_coro, diagram_exists_coro)
+        # One-time spelling-fix retry (see _ncert_spelling_rewrite): only for a genuine miss on a
+        # short, text-only doubt -- never for an image/PDF doubt (nothing here to misspell) and
+        # never more than once, so a query that still finds nothing just behaves as it always has.
+        # Retrieval, the answer cache key, and everything shown to the student stay keyed on the
+        # student's own `text`; the rewrite is used for this one extra search only.
+        if not retrieved and not images and not pdf and len(text.split()) <= NCERT_REWRITE_MAX_WORDS:
+            rewritten_query = await _ncert_spelling_rewrite(text, user_id)
+            if rewritten_query:
+                retried = await search_ncert(rewritten_query)
+                if retried:
+                    retrieved = retried
         # Chunks from a clearly different subject are dropped here, so every later "was anything
         # retrieved" check (citation stripping included) treats an all-unrelated set as no retrieval.
         results = _relevant_ncert_chunks(text, retrieved)
