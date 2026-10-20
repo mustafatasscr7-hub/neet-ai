@@ -8547,8 +8547,36 @@ function plainTextFromMarkdown(text) {
     // pricing.html) so a Free user never even sees a loading spinner before being redirected, and
     // the 403 branch in loadTodos()/submitNewTodo() is a backstop in case the client's cached
     // userPlan is stale (e.g. downgraded in another tab).
-    let todoState = { tab: 'today', tasks: [], loading: false, listError: null };
+    // loaded: true once todoState.tasks reflects a real server response (from either the
+    // background prefetch below or a normal loadTodos() call) -- lets openTodoModal() paint
+    // instantly from memory instead of waiting on a fresh /todos round trip every time it opens.
+    let todoState = { tab: 'today', tasks: [], loading: false, listError: null, loaded: false };
     let todoInlineErrorTimer = null;
+
+    // Background prefetch for Pro/Max, kicked off once at page load (see the isPro() check right
+    // after refreshUsageBanner() resolves below) so the Planner pop-up has data in memory before
+    // the student ever clicks the button. Never runs for Free -- todoState just stays empty and
+    // openTodoModal() redirects to pricing.html before either code path matters.
+    let todoPrefetchPromise = null;
+    function prefetchTodos() {
+      if (todoPrefetchPromise) return todoPrefetchPromise;
+      todoPrefetchPromise = (async () => {
+        try {
+          const { data: { session } } = await client.auth.getSession();
+          if (!session) return;
+          const res = await fetch(`${API_BASE}/todos`, { headers: { 'Authorization': `Bearer ${session.access_token}` } });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) return;
+          todoState.tasks = data.tasks || [];
+          todoState.loaded = true;
+          if (document.getElementById('todoModal')) renderTodoList();
+        } catch (e) {
+          // Silent -- loadTodos() inside openTodoModal() is the real loading path and surfaces
+          // its own error if this background prefetch never managed to populate the cache.
+        }
+      })();
+      return todoPrefetchPromise;
+    }
 
     function _todoModalEscHandler(e) {
       if (e.key === 'Escape') closeTodoModal();
@@ -8566,7 +8594,15 @@ function plainTextFromMarkdown(text) {
       if (!session) { window.location.href = './login.html'; return; }
       if (!isPro()) { window.location.href = './pricing.html'; return; }
       showTodoModal();
-      loadTodos();
+      if (todoState.loaded) {
+        // Stale-while-revalidate: paint instantly from whatever the background prefetch (or a
+        // previous open this page load) already has, then quietly refresh underneath -- no
+        // loading state shown since there's already real data on screen.
+        renderTodoList();
+        refreshTodosQuietly();
+      } else {
+        loadTodos();
+      }
     }
 
     function showTodoModal() {
@@ -8927,12 +8963,34 @@ function plainTextFromMarkdown(text) {
         if (_isTodoPlanRequired(res.status, data)) { closeTodoModal(); window.location.href = './pricing.html'; return; }
         if (!res.ok) throw new Error('load failed');
         todoState.tasks = data.tasks || [];
+        todoState.loaded = true;
         todoState.loading = false;
       } catch (e) {
         todoState.loading = false;
         todoState.listError = t('chat', 'todoError');
       }
       renderTodoList();
+    }
+
+    // Quiet background refresh for the stale-while-revalidate path above -- same fetch as
+    // loadTodos() but never flips todoState.loading (no spinner over a list that's already on
+    // screen) and, on failure, leaves the cached list exactly as it was rather than erroring out
+    // a view that was working a moment ago.
+    async function refreshTodosQuietly() {
+      try {
+        const { data: { session } } = await client.auth.getSession();
+        const res = await fetch(`${API_BASE}/todos`, { headers: { 'Authorization': `Bearer ${session.access_token}` } });
+        const data = await res.json().catch(() => ({}));
+        if (_isTodoPlanRequired(res.status, data)) { closeTodoModal(); window.location.href = './pricing.html'; return; }
+        if (!res.ok) return;
+        todoState.tasks = data.tasks || [];
+        todoState.loaded = true;
+        todoState.listError = null;
+        renderTodoList();
+      } catch (e) {
+        // Keep showing the cached list -- a failed background refresh shouldn't disrupt a
+        // pop-up that's already displaying data.
+      }
     }
 
     async function submitNewTodo() {
@@ -8943,6 +9001,18 @@ function plainTextFromMarkdown(text) {
       const due_date = todoAddDateValue || null;
       const addBtn = document.getElementById('todoAddBtn');
       addBtn.disabled = true;
+
+      // Optimistic insert: a temp client-side id so the row appears immediately, swapped for the
+      // real server row (or rolled back entirely on failure) once the save resolves -- same
+      // pattern as toggleTodoDone/deleteTodoTask below.
+      const tempId = 'temp-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+      const tempTask = { id: tempId, title, due_date, done: false, created_at: new Date().toISOString(), done_at: null };
+      todoState.tasks.unshift(tempTask);
+      input.value = '';
+      resetTodoDateChips();
+      renderTodoList();
+      input.focus();
+
       try {
         const { data: { session } } = await client.auth.getSession();
         const res = await fetch(`${API_BASE}/todos`, {
@@ -8953,16 +9023,18 @@ function plainTextFromMarkdown(text) {
         const data = await res.json().catch(() => ({}));
         if (_isTodoPlanRequired(res.status, data)) { closeTodoModal(); window.location.href = './pricing.html'; return; }
         if (!res.ok || !data.task) {
+          todoState.tasks = todoState.tasks.filter(x => x.id !== tempId);
           showTodoInlineError(typeof data.detail === 'string' ? data.detail : t('chat', 'todoError'));
+          renderTodoList();
           return;
         }
-        todoState.tasks.unshift(data.task);
-        input.value = '';
-        resetTodoDateChips();
+        const idx = todoState.tasks.findIndex(x => x.id === tempId);
+        if (idx !== -1) todoState.tasks[idx] = data.task;
         renderTodoList();
-        input.focus();
       } catch (e) {
+        todoState.tasks = todoState.tasks.filter(x => x.id !== tempId);
         showTodoInlineError(t('chat', 'todoError'));
+        renderTodoList();
       } finally {
         addBtn.disabled = false;
       }
@@ -9661,7 +9733,10 @@ function plainTextFromMarkdown(text) {
           emailEl.textContent = user.email;
           emailEl.style.display = 'block';
         }
-        mergeGuestUsage(user.id, session.access_token).then(refreshUsageBanner);
+        mergeGuestUsage(user.id, session.access_token).then(refreshUsageBanner).then(() => {
+          // Pro/Max only, and only once userPlan is actually known -- never fired for Free.
+          if (isPro()) prefetchTodos();
+        });
         registerPendingReferral(session.access_token);
         updateStreak().then(() => {
   client.from('user_streaks').select('current_streak').eq('user_id', user.id).single().then(({ data }) => {

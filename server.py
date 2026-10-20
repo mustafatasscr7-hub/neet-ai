@@ -8083,6 +8083,7 @@ async def admin_set_user_plan(req: SetUserPlanRequest, _: None = Depends(verify_
         if resp.status_code >= 400:
             return {"error": resp.text}
 
+        _todo_plan_cache_invalidate(req.user_id)
         result = {"success": True}
         if is_first_paid_transition:
             referral_reward = await _try_credit_referral_reward(req.user_id)
@@ -10082,12 +10083,32 @@ TODO_PLAN_REQUIRED_DETAIL = {"code": "plan_required", "message": "Study To-do is
 TODO_MAX_TASKS = 200
 TODO_MAX_TITLE_LEN = 200
 
-async def _require_todo_plan(verified_user_id: str):
+# In-memory 60s plan cache for the Planner's hot path -- GET /todos runs this on every open of
+# the pop-up, and a plan rarely changes between opens. Skips the Supabase user_plan round trip on
+# a cache hit; the gate is still re-evaluated on EVERY request (a Free user always gets 403),
+# just against a value that can be up to 60s stale. Invalidated immediately on a real plan change
+# via admin_set_user_plan below; the TTL alone covers anything that bypasses that endpoint.
+_TODO_PLAN_CACHE_TTL = 60
+_todo_plan_cache: dict = {}  # user_id -> (plan, expires_at monotonic seconds)
+
+async def _todo_user_plan(user_id: str) -> str:
+    cached = _todo_plan_cache.get(user_id)
+    if cached and cached[1] > time.monotonic():
+        return cached[0]
+    plan = await get_user_plan(user_id)
+    _todo_plan_cache[user_id] = (plan, time.monotonic() + _TODO_PLAN_CACHE_TTL)
+    return plan
+
+def _todo_plan_cache_invalidate(user_id: str):
+    _todo_plan_cache.pop(user_id, None)
+
+async def _require_todo_plan(verified_user_id: str) -> str:
     if not verified_user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    plan = await get_user_plan(verified_user_id)
+    plan = await _todo_user_plan(verified_user_id)
     if plan not in ("pro", "max"):
         raise HTTPException(status_code=403, detail=TODO_PLAN_REQUIRED_DETAIL)
+    return plan
 
 class TodoCreateRequest(BaseModel):
     title: str
@@ -10108,13 +10129,25 @@ def _validate_todo_title(title: str) -> str:
 
 @app.get("/todos")
 async def todos_list(_: None = Depends(rate_limit(30, 60, by="account")), verified_user_id: str = Depends(_get_verified_user_id)):
-    await _require_todo_plan(verified_user_id)
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    # The plan check and the tasks read both depend only on verified_user_id, not on each other --
+    # fire them concurrently instead of waiting for the plan lookup to finish before even starting
+    # the tasks query. On a plan-cache miss this halves the number of sequential Supabase round
+    # trips on the Planner's open path. If the plan check fails, the tasks request is cancelled
+    # and nothing from it is ever read or returned.
+    plan_future = asyncio.ensure_future(_todo_user_plan(verified_user_id))
+    tasks_future = asyncio.ensure_future(async_client.get(
+        f"{SUPABASE_URL}/rest/v1/todo_tasks", headers=ADMIN_HEADERS,
+        params={"user_id": f"eq.{verified_user_id}", "select": "id,title,due_date,done,created_at,done_at",
+                "order": "created_at.desc", "limit": TODO_MAX_TASKS}
+    ))
+    plan = await plan_future
+    if plan not in ("pro", "max"):
+        tasks_future.cancel()
+        raise HTTPException(status_code=403, detail=TODO_PLAN_REQUIRED_DETAIL)
     try:
-        resp = await async_client.get(
-            f"{SUPABASE_URL}/rest/v1/todo_tasks", headers=ADMIN_HEADERS,
-            params={"user_id": f"eq.{verified_user_id}", "select": "id,title,due_date,done,created_at,done_at",
-                    "order": "created_at.desc", "limit": TODO_MAX_TASKS}
-        )
+        resp = await tasks_future
         if resp.status_code >= 400:
             raise RuntimeError(resp.text)
         return {"tasks": resp.json()}
