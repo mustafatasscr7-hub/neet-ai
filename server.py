@@ -67,7 +67,10 @@ async_client: httpx.AsyncClient = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global async_client
-    async_client = httpx.AsyncClient()
+    async_client = httpx.AsyncClient(
+        limits=httpx.Limits(max_connections=300, max_keepalive_connections=100, keepalive_expiry=30),
+        timeout=httpx.Timeout(connect=5, read=60, write=30, pool=10),
+    )
     # See _warm_openai_embedding_connection's own comment (below openai_async_client's definition)
     # for why this exists -- runs before the `yield`, so it completes before uvicorn accepts any
     # real connection.
