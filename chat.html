@@ -1568,6 +1568,11 @@
         </button>
       </div>
     <div style="display:flex;align-items:center;gap:10px;">
+<button id="todoBtn" class="todo-btn" onclick="openTodoModal()" title="Study To-do" data-i18n-title="chat.todoTitle">
+          <svg class="todo-btn-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 3h6"/><path d="M9 12l2 2 4-4"/></svg>
+          <span class="todo-btn-label" data-i18n="chat.todo">To-do</span>
+          <svg id="todoLockIcon" class="todo-btn-lock" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:none;"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+        </button>
 <div style="position:relative;" id="countdownWrapper">
           <div style="box-sizing:border-box;min-height:30px;display:flex;align-items:center;font-size:12px;font-weight:600;color:#4f8ef7;background:#4f8ef710;border:1px solid #4f8ef730;padding:4px 12px;border-radius:15px;cursor:default;"><span>NEET <span data-i18n-num>2027</span> — <span id="countdownDays">--</span> <span data-i18n="chat.daysLeft">days left</span></span></div>
           <div id="countdownTooltip" style="display:none;position:absolute;top:36px;right:0;background:#111;border:1px solid #4f8ef730;border-radius:10px;padding:16px 20px;min-width:200px;z-index:999;box-shadow:0 8px 24px rgba(0,0,0,0.6);">
@@ -1581,11 +1586,6 @@
             <div style="font-size:10px;color:#333;margin-top:10px;text-align:center;" data-i18n="chat.neetDateFormatted">May 4, 2027</div>
           </div>
        </div>
-        <button id="todoBtn" class="todo-btn" onclick="openTodoModal()" title="Study To-do" data-i18n-title="chat.todoTitle">
-          <svg class="todo-btn-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 3h6"/><path d="M9 12l2 2 4-4"/></svg>
-          <span class="todo-btn-label" data-i18n="chat.todo">To-do</span>
-          <svg id="todoLockIcon" class="todo-btn-lock" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:none;"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
-        </button>
         <button id="headerUpgradeBtn" class="upgrade-btn" onclick="window.location.href='./pricing.html'" data-i18n="chat.upgradeBtn">Upgrade</button>
       </div>
     </div>
