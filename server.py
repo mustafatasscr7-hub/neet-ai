@@ -4003,6 +4003,18 @@ async def _alert_all_providers_down(endpoint: str, error: Exception, user_id: st
         except Exception as telegram_err:
             print(f"TELEGRAM ALERT FAILED (non-fatal): {telegram_err}", flush=True)
 
+# Shown to the student instead of a raw exception's text whenever TEXT generation
+# (_stream_with_peak_fallback, used by /chat's text branch and /solve) fails outright or
+# mid-stream -- see the two call sites in stream_response/stream_solve_response below. The real
+# exception is still printed server-side, and the existing Sentry/Telegram alert above still
+# fires for a full provider-exhaustion failure via _alert_all_providers_down -- this is only
+# what reaches the client in place of the old "Error: {exception text}".
+_GENERIC_STREAM_ERROR_EN = "Something went wrong. Please try again."
+_GENERIC_STREAM_ERROR_HI = "कुछ गड़बड़ हो गई। कृपया फिर से कोशिश करें।"
+
+def _friendly_stream_error(language: str) -> str:
+    return _GENERIC_STREAM_ERROR_HI if language == "hi" else _GENERIC_STREAM_ERROR_EN
+
 async def _stream_gemini_media(media_parts: list, doubt_type: str, media_files: list, full_system: str, user_message: str, user_id: str, ip: str):
     """Shared by stream_response's images and pdf branches -- previously ~90% identical inline code
     duplicated in both (cache lookup, the actual Gemini call, cost tracking, media-doubt logging),
@@ -4491,6 +4503,35 @@ async def _update_running_summary(prev_summary: str, dropped_question: str, drop
     except Exception:
         return None
 
+# First-token-only timeout wrapper for the two text providers (_stream_qwen/_stream_deepseek),
+# used exclusively by _stream_with_peak_fallback below. Applies ONLY to the wait for the very
+# first yielded chunk -- once a provider has produced any real output, the rest of its stream is
+# passed through with no timeout at all, so a long answer already in progress is never cut off.
+# A timeout here is surfaced as a plain TimeoutError, which _stream_with_peak_fallback treats
+# identically to any other pre-first-token exception (i.e. it triggers the same single fallback).
+_FIRST_TOKEN_TIMEOUT_SECS = 15.0
+
+async def _first_token_timeout_guard(agen, timeout: float = _FIRST_TOKEN_TIMEOUT_SECS):
+    it = agen.__aiter__()
+    try:
+        first_chunk = await asyncio.wait_for(it.__anext__(), timeout)
+    except StopAsyncIteration:
+        return
+    except asyncio.TimeoutError:
+        # Cancelling the pending __anext__() above already drives a CancelledError through the
+        # generator's own try/finally (same cleanup path a client disconnect already exercises --
+        # see _stream_qwen/_stream_deepseek's own finally comments), so this aclose() is mostly
+        # defensive: it's a no-op if the generator is already finished, and otherwise guarantees
+        # the underlying provider connection is actually torn down rather than left dangling.
+        try:
+            await it.aclose()
+        except Exception:
+            pass
+        raise TimeoutError(f"no first token within {timeout}s")
+    yield first_chunk
+    async for chunk in it:
+        yield chunk
+
 async def _stream_with_peak_fallback(system: str, messages: list, user_id: str, ip: str, endpoint: str, billing_context: dict = None, force_qwen: bool = False, max_tokens: int = ANSWER_MAX_TOKENS):
     """Routes text-doubt generation (/chat, /solve -- never image/PDF doubts, those stay on
     Gemini regardless of time of day) to Qwen-Flash during DeepSeek's published peak-pricing
@@ -4501,26 +4542,28 @@ async def _stream_with_peak_fallback(system: str, messages: list, user_id: str, 
     force_qwen: set by the caller when a Max-plan user has crossed MAX_BREAKEVEN_THRESHOLD for
     today (see check_max_usage_tier) -- routes to Qwen regardless of the real peak/off-peak clock,
     since Qwen's flat rate has no peak surcharge and is reliably cheap. Deliberately reuses this
-    same function (not a separate code path) specifically to inherit its existing Qwen-then-
-    DeepSeek failover for free: if Qwen is ever down, a downgraded Max user still gets a normal
-    answer via DeepSeek, never an error -- exactly the "no error, no message" requirement for
-    Max's silent handling. is_peak passed to the DeepSeek fallback below still reflects the REAL
-    clock (not force_qwen) -- a force-routed call during a genuinely off-peak hour that has to
-    fall back to DeepSeek must still bill DeepSeek's off-peak rate, not be charged peak pricing
-    just because Qwen was tried first.
+    same function (not a separate code path) specifically to inherit its existing failover for
+    free: if Qwen is ever down, a downgraded Max user still gets a normal answer via DeepSeek,
+    never an error -- exactly the "no error, no message" requirement for Max's silent handling.
+    is_peak passed to the DeepSeek fallback below still reflects the REAL clock (not force_qwen)
+    -- a force-routed call during a genuinely off-peak hour that has to fall back to DeepSeek
+    must still bill DeepSeek's off-peak rate, not be charged peak pricing just because Qwen was
+    tried first.
 
-    Failover: if Qwen fails before yielding anything, the same request is retried on DeepSeek
-    transparently -- the student never sees the difference, and this accepts DeepSeek's peak
-    cost rather than failing the request outright (availability over cost optimization). If Qwen
-    fails after already streaming part of an answer, there's no clean way to hand off to a
-    different model mid-response without duplicating or garbling what the student already saw,
-    so the failure just propagates like any other mid-stream error in this file -- the caller's
-    own try/except turns it into a yielded "Error: ..." message and correctly skips caching a
-    partial answer, exactly as it already does for a mid-stream DeepSeek failure.
+    Failover is symmetric and applies BEFORE the first token only: whichever provider is primary
+    for this request (Qwen during peak/force_qwen, DeepSeek otherwise), if it raises *or* sits
+    silent past _FIRST_TOKEN_TIMEOUT_SECS with no first token (see _first_token_timeout_guard),
+    the exact same request is retried once, transparently, on the other provider -- the student
+    never sees the difference. At most one fallback per request: if that second attempt also
+    fails before its first token, there's no third text provider to try, so the exception
+    propagates (see the outer try/except below). If a provider fails AFTER already streaming
+    part of an answer, there's no clean way to hand off to a different model mid-response without
+    duplicating or garbling what the student already saw, so that failure just propagates as-is
+    -- the caller's own try/except turns it into a friendly message (see _friendly_stream_error)
+    and correctly skips caching a partial answer.
 
-    Whole body wrapped in one more try/except: DeepSeek is always the last resort here (whether
-    reached directly, off-peak, or as Qwen's own fallback) -- there's no third text provider to
-    try after it, so any exception escaping this function means text generation is genuinely
+    Whole body wrapped in one more try/except: once both the primary and its one fallback attempt
+    have been exhausted, any exception escaping this function means text generation is genuinely
     exhausted for this request (see _alert_all_providers_down). Re-raised unchanged so the
     existing per-endpoint catch-all in stream_response/stream_solve_response still does its
     normal job -- this only adds the alert, nothing about the failure itself changes.
@@ -4529,20 +4572,24 @@ async def _stream_with_peak_fallback(system: str, messages: list, user_id: str, 
     try:
         is_peak = _is_deepseek_peak_hour()
         if force_qwen or is_peak:
-            sent_any = False
-            try:
-                async for chunk in _stream_qwen(system, messages, user_id, ip, endpoint, billing_context, max_tokens=max_tokens):
-                    sent_any = True
-                    yield chunk
-                return
-            except Exception as e:
-                if sent_any:
-                    raise
-                print(f"QWEN UNAVAILABLE BEFORE FIRST TOKEN, FALLING BACK TO DEEPSEEK: {e}", flush=True)
-            async for chunk in _stream_deepseek(system, messages, user_id, ip, is_peak, endpoint, billing_context, max_tokens=max_tokens):
+            primary = _stream_qwen(system, messages, user_id, ip, endpoint, billing_context, max_tokens=max_tokens)
+            fallback_factory = lambda: _stream_deepseek(system, messages, user_id, ip, is_peak, endpoint, billing_context, max_tokens=max_tokens)
+            fallback_label = "DEEPSEEK"
+        else:
+            primary = _stream_deepseek(system, messages, user_id, ip, False, endpoint, billing_context, max_tokens=max_tokens)
+            fallback_factory = lambda: _stream_qwen(system, messages, user_id, ip, endpoint, billing_context, max_tokens=max_tokens)
+            fallback_label = "QWEN"
+        sent_any = False
+        try:
+            async for chunk in _first_token_timeout_guard(primary):
+                sent_any = True
                 yield chunk
             return
-        async for chunk in _stream_deepseek(system, messages, user_id, ip, False, endpoint, billing_context, max_tokens=max_tokens):
+        except Exception as e:
+            if sent_any:
+                raise
+            print(f"PRIMARY PROVIDER UNAVAILABLE BEFORE FIRST TOKEN, FALLING BACK TO {fallback_label}: {e}", flush=True)
+        async for chunk in _first_token_timeout_guard(fallback_factory()):
             yield chunk
     except Exception as e:
         await _alert_all_providers_down(endpoint, e, user_id)
@@ -6118,7 +6165,7 @@ the question, ignore this instruction entirely and use the plain "Answer:" heade
                     yield _encode_running_summary_marker(new_summary)
     except Exception as e:
         print(f"STREAMING ERROR: {e}")
-        yield f"Error: {str(e)}"
+        yield _friendly_stream_error(language)
 
 SOLVE_CACHE_HEADERS = {
     "apikey": SUPABASE_SERVICE_KEY,
@@ -6315,7 +6362,8 @@ async def stream_solve_response(req: SolveRequest, cached_solution, ip: str):
             else:
                 await _cache_or_regenerate_solution(req, full_solution, ip)
     except Exception as e:
-        yield f"Error: {str(e)}"
+        print(f"SOLVE STREAMING ERROR: {e}")
+        yield _friendly_stream_error(req.language)
 
 async def _fetch_gemini_image_part(url: str):
     """Fetches a diagram's real bytes from its public Storage URL and wraps them as a Gemini
