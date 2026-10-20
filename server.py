@@ -6460,7 +6460,10 @@ async def send_otp(req: PhoneOtpRequest, request: Request, _: None = Depends(_ra
     _check_otp_limits(phone, _client_ip(request))
 
     try:
-        response = http_requests.post(
+        # await async_client, not the blocking http_requests (sync `requests`) this used to call --
+        # same single-event-loop stall as the other blocking-call fixes elsewhere in this file, but
+        # worse here since every OTP request blocks every other in-flight user for its duration.
+        response = await async_client.post(
             f"{SUPABASE_URL}/auth/v1/otp",
             headers={"apikey": SUPABASE_KEY, "Content-Type": "application/json"},
             json={"phone": phone}
