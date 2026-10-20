@@ -713,7 +713,9 @@ const TRANSLATIONS = {
       todoDateToday: 'Today',
       todoDateTomorrow: 'Tomorrow',
       todoPickDate: 'Pick date',
-      todoClearDate: 'Clear date'
+      todoClearDate: 'Clear date',
+      todoCalPrevMonth: 'Previous month',
+      todoCalNextMonth: 'Next month'
     },
     hi: {
       newChat: 'नई चैट',
@@ -920,7 +922,9 @@ const TRANSLATIONS = {
       todoDateToday: 'आज',
       todoDateTomorrow: 'कल',
       todoPickDate: 'तारीख चुनें',
-      todoClearDate: 'तारीख हटाएं'
+      todoClearDate: 'तारीख हटाएं',
+      todoCalPrevMonth: 'पिछला महीना',
+      todoCalNextMonth: 'अगला महीना'
     }
   },
 

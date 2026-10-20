@@ -465,12 +465,11 @@
     .todo-add-btn:hover { background: #3d7ce0; }
     .todo-add-btn:disabled { opacity: 0.5; cursor: not-allowed; }
     .todo-add-btn:focus-visible { outline: 2px solid #4f8ef7; outline-offset: 2px; }
-    /* Quick-add date chips replace a visible mm/dd/yyyy box: Today/Tomorrow set the date directly,
-       "Pick date" only opens the native picker on click (never shown as its own input row), and the
-       hidden date input it drives is visually invisible but still focusable/functional. Single-select
-       like the Saved Questions difficulty chips elsewhere in the site -- clicking the active chip
-       again clears it back to "no due date". */
-    .todo-date-chips { display: flex; align-items: center; gap: 6px; padding: 0 20px 14px; flex-shrink: 0; flex-wrap: wrap; }
+    /* Quick-add date chips: Today/Tomorrow set the date directly, "Pick date" opens the custom
+       calendar popover below (see .todo-calendar-popover) -- no native <input type="date"> anywhere.
+       Single-select like the Saved Questions difficulty chips elsewhere in the site -- clicking the
+       active chip again clears it back to "no due date". */
+    .todo-date-chips { display: flex; align-items: center; gap: 6px; padding: 0 20px 14px; flex-shrink: 0; flex-wrap: wrap; position: relative; }
     .todo-date-chip {
       background: transparent; border: 1px solid #2a2a2a; color: #999; font-family: 'Inter', sans-serif;
       font-size: 12px; font-weight: 600; padding: 5px 11px; border-radius: 999px; cursor: pointer;
@@ -479,7 +478,35 @@
     .todo-date-chip:hover { color: #ccc; border-color: #3a3a3a; }
     .todo-date-chip.active { background: rgba(79,142,247,0.14); border-color: #4f8ef7; color: #4f8ef7; }
     .todo-date-chip:focus-visible { outline: 2px solid #4f8ef7; outline-offset: 1px; }
-    .todo-date-hidden-input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+    /* Positioned in JS (see _positionTodoCalendar) relative to this relatively-positioned container:
+       left is clamped to the container's width so it shifts left instead of clipping off the panel's
+       right edge, and it flips to open upward when there isn't room below within the modal panel
+       (the panel's own overflow:hidden is what would otherwise clip it, not the viewport). */
+    .todo-calendar-popover {
+      position: absolute; z-index: 10; width: 224px; background: #1f1f1f; border: 1px solid #2f2f2f;
+      border-radius: 12px; padding: 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+    }
+    .todo-cal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+    .todo-cal-month-year { font-size: 12.5px; font-weight: 700; color: #ececec; }
+    .todo-cal-nav {
+      background: transparent; border: none; color: #999; cursor: pointer; display: flex;
+      align-items: center; justify-content: center; padding: 4px; border-radius: 6px;
+    }
+    .todo-cal-nav:hover { color: #ececec; background: rgba(255,255,255,0.08); }
+    .todo-cal-nav:focus-visible { outline: 2px solid #4f8ef7; outline-offset: 1px; }
+    .todo-cal-weekdays { display: grid; grid-template-columns: repeat(7, 1fr); margin-bottom: 2px; }
+    .todo-cal-weekdays span { text-align: center; font-size: 10px; font-weight: 600; color: #666; padding: 2px 0; }
+    .todo-cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+    .todo-cal-day {
+      background: transparent; border: none; color: #ccc; font-family: 'Inter', sans-serif; font-size: 11.5px;
+      padding: 0; height: 27px; border-radius: 8px; cursor: pointer; display: flex; align-items: center;
+      justify-content: center; transition: background-color 120ms ease, color 120ms ease;
+    }
+    .todo-cal-day:hover { background: rgba(255,255,255,0.08); }
+    .todo-cal-day.other-month { color: #444; }
+    .todo-cal-day.is-today { box-shadow: inset 0 0 0 1.5px #4f8ef7; }
+    .todo-cal-day.selected { background: #4f8ef7; color: #fff; font-weight: 700; box-shadow: none; }
+    .todo-cal-day:focus-visible { outline: 2px solid #4f8ef7; outline-offset: 1px; }
     .todo-date-tag {
       display: inline-flex; align-items: center; gap: 5px; background: rgba(79,142,247,0.12); color: #4f8ef7;
       font-size: 11.5px; font-weight: 600; padding: 4px 6px 4px 10px; border-radius: 999px;
@@ -8407,6 +8434,7 @@ function plainTextFromMarkdown(text) {
       const modal = document.getElementById('todoModal');
       if (modal) modal.remove();
       document.removeEventListener('keydown', _todoModalEscHandler);
+      closeTodoCalendar();
       if (todoInlineErrorTimer) { clearTimeout(todoInlineErrorTimer); todoInlineErrorTimer = null; }
     }
 
@@ -8440,14 +8468,26 @@ function plainTextFromMarkdown(text) {
           <div class="todo-date-chips">
             <button type="button" class="todo-date-chip" data-chip="today" data-i18n="chat.todoDateToday">Today</button>
             <button type="button" class="todo-date-chip" data-chip="tomorrow" data-i18n="chat.todoDateTomorrow">Tomorrow</button>
-            <button type="button" class="todo-date-chip" data-chip="pick" data-i18n="chat.todoPickDate">Pick date</button>
-            <input type="date" id="todoAddDateHidden" class="todo-date-hidden-input" tabindex="-1" aria-hidden="true" />
+            <button type="button" id="todoPickDateChip" class="todo-date-chip" data-chip="pick" data-i18n="chat.todoPickDate" aria-haspopup="dialog" aria-expanded="false">Pick date</button>
             <span id="todoDateTag" class="todo-date-tag" style="display:none;">
               <span id="todoDateTagText"></span>
               <button type="button" id="todoDateTagClear" class="todo-date-tag-clear" data-i18n-aria-label="chat.todoClearDate" aria-label="${t('chat', 'todoClearDate')}">
                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M18 6L6 18"/><path d="M6 6l12 12"/></svg>
               </button>
             </span>
+            <div id="todoCalendarPopover" class="todo-calendar-popover" style="display:none;" role="dialog" aria-label="${t('chat', 'todoPickDate')}">
+              <div class="todo-cal-header">
+                <button type="button" id="todoCalPrev" class="todo-cal-nav" aria-label="${t('chat', 'todoCalPrevMonth')}" data-i18n-aria-label="chat.todoCalPrevMonth">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+                </button>
+                <span id="todoCalMonthYear" class="todo-cal-month-year"></span>
+                <button type="button" id="todoCalNext" class="todo-cal-nav" aria-label="${t('chat', 'todoCalNextMonth')}" data-i18n-aria-label="chat.todoCalNextMonth">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+                </button>
+              </div>
+              <div class="todo-cal-weekdays" id="todoCalWeekdays"></div>
+              <div class="todo-cal-grid" id="todoCalGrid" role="grid"></div>
+            </div>
           </div>
           <div id="todoInlineError" class="todo-inline-error" style="display:none;"></div>
           <div class="todo-tabs" role="tablist">
@@ -8476,34 +8516,41 @@ function plainTextFromMarkdown(text) {
 
     // ---------- Quick-add date chips (Today / Tomorrow / Pick date) ----------
     // Single-select like the Saved Questions difficulty chips: clicking the already-active chip
-    // clears it back to "no due date" instead of just re-selecting it. "Pick date" never shows its
-    // own input row -- it drives a visually hidden native <input type="date"> and only opens the
-    // browser's picker on click, same native control as before, just not rendered as a visible box.
+    // clears it back to "no due date" instead of just re-selecting it. "Pick date" opens the custom
+    // calendar popover below -- no native <input type="date"> anywhere, so no browser-chrome
+    // calendar and no UTC-vs-local mismatch between what's picked and what's shown/saved.
     let todoAddDateChip = null;   // 'today' | 'tomorrow' | 'pick' | null
-    let todoAddDateValue = null;  // 'YYYY-MM-DD' | null
+    let todoAddDateValue = null;  // 'YYYY-MM-DD' | null (always built from local date parts)
 
+    // All "today"/"tomorrow" date-only strings for the Planner are built from local Date parts
+    // (getFullYear/getMonth/getDate), never toISOString/UTC -- otherwise a student just west of the
+    // UTC boundary could see "today" roll over hours early/late and land a task in the wrong tab.
+    function _todoLocalDateStr(d) {
+      return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    }
+    function _todoTodayStr() { return _todoLocalDateStr(new Date()); }
     function _todoTomorrowStr() {
       const d = new Date();
       d.setDate(d.getDate() + 1);
-      return d.toISOString().slice(0, 10);
+      return _todoLocalDateStr(d);
+    }
+    // Parses a 'YYYY-MM-DD' string as a local-midnight Date (never via `new Date(str)`, which UTC-parses
+    // a bare date string and can land on the wrong calendar day depending on the student's timezone).
+    function _todoParseDateStr(s) {
+      const [y, m, d] = s.split('-').map(Number);
+      return new Date(y, m - 1, d);
     }
 
     function initTodoDateChips() {
-      const hiddenInput = document.getElementById('todoAddDateHidden');
       document.querySelectorAll('#todoModal .todo-date-chip').forEach(chip => {
         chip.onclick = () => {
           const kind = chip.dataset.chip;
           if (kind === 'pick') {
-            if (todoAddDateChip === 'pick') {
-              if (hiddenInput.showPicker) hiddenInput.showPicker(); else hiddenInput.click();
-            } else if (hiddenInput.showPicker) {
-              hiddenInput.showPicker();
-            } else {
-              hiddenInput.click();
-            }
+            if (_isTodoCalendarOpen()) closeTodoCalendar(); else openTodoCalendar();
             return;
           }
-          const value = kind === 'today' ? new Date().toISOString().slice(0, 10) : _todoTomorrowStr();
+          closeTodoCalendar();
+          const value = kind === 'today' ? _todoTodayStr() : _todoTomorrowStr();
           if (todoAddDateChip === kind) {
             todoAddDateChip = null; todoAddDateValue = null;
           } else {
@@ -8512,14 +8559,11 @@ function plainTextFromMarkdown(text) {
           renderTodoDateChips();
         };
       });
-      hiddenInput.onchange = () => {
-        if (!hiddenInput.value) return;
-        todoAddDateChip = 'pick';
-        todoAddDateValue = hiddenInput.value;
-        renderTodoDateChips();
-      };
+      document.getElementById('todoCalPrev').onclick = () => _todoCalGotoMonth(-1);
+      document.getElementById('todoCalNext').onclick = () => _todoCalGotoMonth(1);
       document.getElementById('todoDateTagClear').onclick = () => {
-        todoAddDateChip = null; todoAddDateValue = null; hiddenInput.value = '';
+        todoAddDateChip = null; todoAddDateValue = null;
+        closeTodoCalendar();
         renderTodoDateChips();
       };
       renderTodoDateChips();
@@ -8528,8 +8572,7 @@ function plainTextFromMarkdown(text) {
     function resetTodoDateChips() {
       todoAddDateChip = null;
       todoAddDateValue = null;
-      const hiddenInput = document.getElementById('todoAddDateHidden');
-      if (hiddenInput) hiddenInput.value = '';
+      closeTodoCalendar();
       renderTodoDateChips();
     }
 
@@ -8543,6 +8586,186 @@ function plainTextFromMarkdown(text) {
       if (todoAddDateChip !== 'pick' || !todoAddDateValue) { tag.style.display = 'none'; return; }
       tagText.textContent = formatTodoDueDate(todoAddDateValue);
       tag.style.display = '';
+    }
+
+    // ---------- Custom calendar popover (replaces the native <input type="date">) ----------
+    let todoCalViewYear = null;
+    let todoCalViewMonth = null;   // 0-indexed
+    let todoCalFocusDate = null;   // 'YYYY-MM-DD' currently keyboard-focused cell
+    let _todoCalOutsideClickHandler = null;
+    let _todoCalKeydownHandler = null;
+
+    function _isTodoCalendarOpen() {
+      const popover = document.getElementById('todoCalendarPopover');
+      return !!popover && popover.style.display !== 'none';
+    }
+
+    function _todoCalLocale() { return getLang() === 'hi' ? 'hi-IN' : 'en-IN'; }
+
+    // Mon-Sun labels regardless of locale's own week-start convention -- Jan 2 2023 is a Monday.
+    function _todoCalWeekdayLabels() {
+      const fmt = new Intl.DateTimeFormat(_todoCalLocale(), { weekday: 'short' });
+      const base = new Date(2023, 0, 2);
+      const labels = [];
+      for (let i = 0; i < 7; i++) {
+        const d = new Date(base);
+        d.setDate(base.getDate() + i);
+        labels.push(fmt.format(d));
+      }
+      return labels;
+    }
+
+    function openTodoCalendar() {
+      const popover = document.getElementById('todoCalendarPopover');
+      const chip = document.getElementById('todoPickDateChip');
+      if (!popover || !chip) return;
+      const hasSelection = todoAddDateChip === 'pick' && todoAddDateValue;
+      const base = hasSelection ? _todoParseDateStr(todoAddDateValue) : new Date();
+      todoCalViewYear = base.getFullYear();
+      todoCalViewMonth = base.getMonth();
+      todoCalFocusDate = hasSelection ? todoAddDateValue : _todoTodayStr();
+      renderTodoCalendar();
+      popover.style.display = '';
+      chip.setAttribute('aria-expanded', 'true');
+      _positionTodoCalendar();
+      _todoCalOutsideClickHandler = (e) => {
+        if (!popover.contains(e.target) && !chip.contains(e.target)) closeTodoCalendar();
+      };
+      _todoCalKeydownHandler = _handleTodoCalKeydown;
+      document.addEventListener('mousedown', _todoCalOutsideClickHandler, true);
+      document.addEventListener('keydown', _todoCalKeydownHandler, true);
+    }
+
+    function closeTodoCalendar() {
+      const popover = document.getElementById('todoCalendarPopover');
+      const chip = document.getElementById('todoPickDateChip');
+      if (popover) popover.style.display = 'none';
+      if (chip) chip.setAttribute('aria-expanded', 'false');
+      if (_todoCalOutsideClickHandler) { document.removeEventListener('mousedown', _todoCalOutsideClickHandler, true); _todoCalOutsideClickHandler = null; }
+      if (_todoCalKeydownHandler) { document.removeEventListener('keydown', _todoCalKeydownHandler, true); _todoCalKeydownHandler = null; }
+    }
+
+    // Anchors the popover to the Pick-date chip inside their shared (position:relative) container.
+    // Clamped horizontally so it shifts left instead of overflowing the panel's right edge, and
+    // flips to open upward when there isn't room below *within the panel* -- the panel's own
+    // overflow:hidden is what would clip it, not the viewport, since the popover is its descendant.
+    function _positionTodoCalendar() {
+      const popover = document.getElementById('todoCalendarPopover');
+      const chip = document.getElementById('todoPickDateChip');
+      const container = document.querySelector('#todoModal .todo-date-chips');
+      const panel = document.querySelector('#todoModal .todo-modal-panel');
+      if (!popover || !chip || !container || !panel) return;
+      const popoverWidth = popover.offsetWidth || 224;
+      const popoverHeight = popover.offsetHeight || 250;
+      let left = chip.offsetLeft;
+      const maxLeft = container.clientWidth - popoverWidth - 4;
+      left = Math.max(4, Math.min(left, maxLeft));
+      popover.style.left = left + 'px';
+
+      const chipRect = chip.getBoundingClientRect();
+      const panelRect = panel.getBoundingClientRect();
+      const spaceBelow = panelRect.bottom - chipRect.bottom;
+      const spaceAbove = chipRect.top - panelRect.top;
+      if (spaceBelow < popoverHeight + 12 && spaceAbove > popoverHeight + 12) {
+        popover.style.bottom = (container.clientHeight - chip.offsetTop) + 6 + 'px';
+        popover.style.top = 'auto';
+      } else {
+        popover.style.top = (chip.offsetTop + chip.offsetHeight + 6) + 'px';
+        popover.style.bottom = 'auto';
+      }
+    }
+
+    function _handleTodoCalKeydown(e) {
+      if (!_isTodoCalendarOpen()) return;
+      if (e.key === 'Escape') {
+        e.preventDefault(); e.stopPropagation();
+        closeTodoCalendar();
+        document.getElementById('todoPickDateChip').focus();
+        return;
+      }
+      const deltas = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7 };
+      if (e.key in deltas) {
+        e.preventDefault(); e.stopPropagation();
+        const d = _todoParseDateStr(todoCalFocusDate);
+        d.setDate(d.getDate() + deltas[e.key]);
+        todoCalFocusDate = _todoLocalDateStr(d);
+        todoCalViewYear = d.getFullYear();
+        todoCalViewMonth = d.getMonth();
+        renderTodoCalendar();
+        _focusTodoCalDay(todoCalFocusDate);
+        return;
+      }
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault(); e.stopPropagation();
+        _selectTodoCalDay(todoCalFocusDate);
+      }
+    }
+
+    function _focusTodoCalDay(dateStr) {
+      const el = document.querySelector(`#todoCalGrid [data-date="${dateStr}"]`);
+      if (el) el.focus();
+    }
+
+    function _selectTodoCalDay(dateStr) {
+      todoAddDateChip = 'pick';
+      todoAddDateValue = dateStr;
+      closeTodoCalendar();
+      renderTodoDateChips();
+      document.getElementById('todoPickDateChip').focus();
+    }
+
+    function _todoCalGotoMonth(delta) {
+      todoCalViewMonth += delta;
+      if (todoCalViewMonth < 0) { todoCalViewMonth = 11; todoCalViewYear--; }
+      else if (todoCalViewMonth > 11) { todoCalViewMonth = 0; todoCalViewYear++; }
+      const daysInNewMonth = new Date(todoCalViewYear, todoCalViewMonth + 1, 0).getDate();
+      const focusDay = Math.min(_todoParseDateStr(todoCalFocusDate).getDate(), daysInNewMonth);
+      todoCalFocusDate = _todoLocalDateStr(new Date(todoCalViewYear, todoCalViewMonth, focusDay));
+      renderTodoCalendar();
+    }
+
+    function renderTodoCalendar() {
+      const monthYearEl = document.getElementById('todoCalMonthYear');
+      const weekdaysEl = document.getElementById('todoCalWeekdays');
+      const gridEl = document.getElementById('todoCalGrid');
+      if (!monthYearEl || !weekdaysEl || !gridEl) return;
+      const locale = _todoCalLocale();
+      const monthLabel = new Intl.DateTimeFormat(locale, { month: 'long', year: 'numeric' }).format(new Date(todoCalViewYear, todoCalViewMonth, 1));
+      monthYearEl.textContent = localizeNum(monthLabel);
+      weekdaysEl.innerHTML = _todoCalWeekdayLabels().map(l => `<span>${escapeHtml(l)}</span>`).join('');
+
+      const todayStr = _todoTodayStr();
+      const selectedStr = todoAddDateChip === 'pick' ? todoAddDateValue : null;
+      const firstOfMonth = new Date(todoCalViewYear, todoCalViewMonth, 1);
+      const firstWeekday = (firstOfMonth.getDay() + 6) % 7; // 0 = Monday
+      const daysInMonth = new Date(todoCalViewYear, todoCalViewMonth + 1, 0).getDate();
+      const daysInPrevMonth = new Date(todoCalViewYear, todoCalViewMonth, 0).getDate();
+
+      const cells = [];
+      for (let i = 0; i < firstWeekday; i++) {
+        const dayNum = daysInPrevMonth - firstWeekday + 1 + i;
+        cells.push({ dateStr: _todoLocalDateStr(new Date(todoCalViewYear, todoCalViewMonth - 1, dayNum)), dayNum, otherMonth: true });
+      }
+      for (let day = 1; day <= daysInMonth; day++) {
+        cells.push({ dateStr: _todoLocalDateStr(new Date(todoCalViewYear, todoCalViewMonth, day)), dayNum: day, otherMonth: false });
+      }
+      let nextDay = 1;
+      while (cells.length % 7 !== 0) {
+        cells.push({ dateStr: _todoLocalDateStr(new Date(todoCalViewYear, todoCalViewMonth + 1, nextDay)), dayNum: nextDay, otherMonth: true });
+        nextDay++;
+      }
+
+      gridEl.innerHTML = cells.map(c => {
+        const classes = ['todo-cal-day'];
+        if (c.otherMonth) classes.push('other-month');
+        if (c.dateStr === todayStr) classes.push('is-today');
+        if (c.dateStr === selectedStr) classes.push('selected');
+        const focusable = c.dateStr === todoCalFocusDate;
+        return `<button type="button" class="${classes.join(' ')}" data-date="${c.dateStr}" tabindex="${focusable ? '0' : '-1'}" aria-label="${escapeHtml(c.dateStr)}">${localizeNum(c.dayNum)}</button>`;
+      }).join('');
+      gridEl.querySelectorAll('.todo-cal-day').forEach(btn => {
+        btn.onclick = () => _selectTodoCalDay(btn.dataset.date);
+      });
     }
 
     function switchTodoTab(tabName) {
@@ -8675,7 +8898,7 @@ function plainTextFromMarkdown(text) {
       if (task.done) return 'done';
       const due = _todoDateOnly(task.due_date);
       if (!due) return 'upcoming';
-      return due <= new Date().toISOString().slice(0, 10) ? 'today' : 'upcoming';
+      return due <= _todoTodayStr() ? 'today' : 'upcoming';
     }
 
     function formatTodoDueDate(dateStr) {
@@ -8688,14 +8911,14 @@ function plainTextFromMarkdown(text) {
     // Today/Tomorrow read better on a task row than "20 Oct"/"21 Oct" would -- falls back to the
     // short date for anything further out, same formatTodoDueDate used by the add-row's date tag.
     function _todoDueDateLabel(dateStr) {
-      const todayStr = new Date().toISOString().slice(0, 10);
+      const todayStr = _todoTodayStr();
       if (dateStr === todayStr) return t('chat', 'todoDateToday');
       if (dateStr === _todoTomorrowStr()) return t('chat', 'todoDateTomorrow');
       return formatTodoDueDate(dateStr);
     }
 
     function renderTodoItem(task) {
-      const todayStr = new Date().toISOString().slice(0, 10);
+      const todayStr = _todoTodayStr();
       const overdue = !task.done && task.due_date && _todoDateOnly(task.due_date) < todayStr;
       const dateLabel = task.due_date ? _todoDueDateLabel(_todoDateOnly(task.due_date)) : '';
       return `
