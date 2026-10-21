@@ -10150,10 +10150,12 @@ async def _require_todo_plan(verified_user_id: str) -> str:
 class TodoCreateRequest(BaseModel):
     title: str
     due_date: Optional[str] = None
+    due_time: Optional[str] = None
 
 class TodoUpdateRequest(BaseModel):
     title: Optional[str] = None
     due_date: Optional[str] = None
+    due_time: Optional[str] = None
     done: Optional[bool] = None
 
 def _validate_todo_title(title: str) -> str:
@@ -10163,6 +10165,15 @@ def _validate_todo_title(title: str) -> str:
     if len(title) > TODO_MAX_TITLE_LEN:
         raise HTTPException(status_code=400, detail=f"Title must be {TODO_MAX_TITLE_LEN} characters or fewer")
     return title
+
+TODO_DUE_TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
+def _validate_todo_due_time(due_time: Optional[str]) -> Optional[str]:
+    # Stored as a plain "HH:MM" (24-hour) string in local IST, not converted to UTC.
+    due_time = due_time.strip() if due_time else None
+    if due_time and not TODO_DUE_TIME_RE.match(due_time):
+        raise HTTPException(status_code=422, detail="due_time must be in HH:MM (24-hour) format")
+    return due_time
 
 @app.get("/todos")
 async def todos_list(_: None = Depends(rate_limit(30, 60, by="account")), verified_user_id: str = Depends(_get_verified_user_id)):
@@ -10176,7 +10187,7 @@ async def todos_list(_: None = Depends(rate_limit(30, 60, by="account")), verifi
     plan_future = asyncio.ensure_future(_todo_user_plan(verified_user_id))
     tasks_future = asyncio.ensure_future(async_client.get(
         f"{SUPABASE_URL}/rest/v1/todo_tasks", headers=ADMIN_HEADERS,
-        params={"user_id": f"eq.{verified_user_id}", "select": "id,title,due_date,done,created_at,done_at",
+        params={"user_id": f"eq.{verified_user_id}", "select": "id,title,due_date,due_time,done,created_at,done_at",
                 "order": "created_at.desc", "limit": TODO_MAX_TASKS}
     ))
     plan = await plan_future
@@ -10197,6 +10208,7 @@ async def todos_create(body: TodoCreateRequest, _: None = Depends(rate_limit(20,
     await _require_todo_plan(verified_user_id)
     title = _validate_todo_title(body.title)
     due_date = body.due_date.strip() if body.due_date else None
+    due_time = _validate_todo_due_time(body.due_time)
     try:
         count_resp = await async_client.get(
             f"{SUPABASE_URL}/rest/v1/todo_tasks", headers={**ADMIN_HEADERS, "Prefer": "count=exact"},
@@ -10204,10 +10216,13 @@ async def todos_create(body: TodoCreateRequest, _: None = Depends(rate_limit(20,
         )
         if _account_rows_affected(count_resp) >= TODO_MAX_TASKS:
             raise HTTPException(status_code=400, detail=f"You can have up to {TODO_MAX_TASKS} tasks — delete or finish some first.")
+        insert_fields = {"user_id": verified_user_id, "title": title, "due_date": due_date}
+        if due_time is not None:
+            insert_fields["due_time"] = due_time
         resp = await async_client.post(
             f"{SUPABASE_URL}/rest/v1/todo_tasks",
             headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
-            json={"user_id": verified_user_id, "title": title, "due_date": due_date}
+            json=insert_fields
         )
         if resp.status_code >= 400:
             raise RuntimeError(resp.text)
@@ -10229,6 +10244,8 @@ async def todos_update(task_id: str, body: TodoUpdateRequest, _: None = Depends(
         update_fields["title"] = _validate_todo_title(body.title)
     if "due_date" in body.model_fields_set:
         update_fields["due_date"] = body.due_date.strip() if body.due_date else None
+    if "due_time" in body.model_fields_set:
+        update_fields["due_time"] = _validate_todo_due_time(body.due_time)
     if "done" in body.model_fields_set:
         update_fields["done"] = bool(body.done)
         update_fields["done_at"] = datetime.now(timezone.utc).isoformat() if body.done else None
