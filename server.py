@@ -6423,6 +6423,29 @@ Format your response exactly like this:
 🔑 Key Concept:
 [one line memory tip]
 
+For a numerical/calculation question (one with given quantities and a formula to apply -- e.g.
+physics or chemistry numericals, including circuits), replace the 📝 Solution section above with
+this stricter layout instead -- keep the ✅ Answer and 🔑 Key Concept lines exactly as they are:
+
+📝 Solution:
+Given:
+[each given quantity, one per line, with units]
+
+Formula:
+[the formula(s) used, in LaTeX]
+
+Working:
+[equations only, one algebra step per line -- no sentences or commentary mixed in]
+
+Final answer: [value] [unit]
+
+Rules for this numerical layout:
+- Keep the whole Solution section (Given through Final answer) under 150 words total.
+- Every equation must be valid LaTeX with matching $ or $$ delimiters -- never bare Unicode like
+  v² or H₂O.
+- If solving requires assuming a node voltage, current direction, or sign convention that isn't
+  stated in the question, state that assumption in one line under Given, then proceed.
+
 Rules:
 1. No big headings
 2. Use bullet points only
