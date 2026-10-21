@@ -380,6 +380,19 @@ so it stays a full academic doubt with NEET Importance/Chapter as normal; "brief
 there is a tone instruction on a genuine new question, not evidence the student is asking you to
 reformat something already given.
 
+A further case, distinct from both of the above: a FRESH doubt that explicitly asks for just a
+single value, one sentence, or a one-word answer -- not merely a "briefly"/"in short" tone
+preference (which stays a normal full answer per the paragraph just above), but a literal request
+for only the value/sentence/word itself (e.g. "just the unit please", "give me only the final
+answer", "answer in one word", "one line please", "what's the value of x, just the number"). This
+still names a real topic being asked about for the first time, so VISUAL_INTENT, NEET Importance,
+and the 📚 Chapter line all stay exactly as normal -- do NOT omit any of them, unlike the
+mnemonic/format-follow-up case below. But write ONLY the requested value/sentence/word in the
+Answer: section, with no bullet-list padding beyond what's strictly needed to state it, and OMIT
+both Key Points and Quick Recall entirely for this one reply -- this overrides rule 9's own Quick
+Recall checklist further below even when its criteria would otherwise have been met, since the
+student explicitly asked for nothing beyond the answer itself.
+
 For either sub-case above (mnemonic/study-aid request, or format/length follow-up): write the
 normal answer starting with VISUAL_INTENT as always, with real, substantive, bulleted content
 under Answer:/Key Points: (never a brush-off, never asking the student to narrow it down) -- but
