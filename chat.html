@@ -567,9 +567,21 @@
     }
     .todo-delete-btn:hover { color: #f87171; background: rgba(248,113,113,0.1); }
     .todo-delete-btn:focus-visible { outline: 2px solid #4f8ef7; outline-offset: 1px; opacity: 1; }
+    .todo-edit-btn {
+      flex-shrink: 0; margin-top: 1px; background: transparent; border: none; color: #666; cursor: pointer;
+      padding: 5px; border-radius: 6px; opacity: 0; transition: opacity 120ms ease, color 120ms ease, background-color 120ms ease;
+    }
+    .todo-item:hover .todo-edit-btn { opacity: 1; }
+    .todo-edit-btn:hover { color: #4f8ef7; background: rgba(79,142,247,0.1); }
+    .todo-edit-btn:focus-visible { outline: 2px solid #4f8ef7; outline-offset: 1px; opacity: 1; }
+    .todo-item-title-input {
+      width: 100%; font-size: 13.5px; font-family: inherit; color: #ececec; line-height: 1.4;
+      background: rgba(255,255,255,0.06); border: 1px solid #4f8ef7; border-radius: 6px; padding: 3px 6px; margin: -3px -6px;
+    }
+    .todo-item-title-input:focus { outline: none; }
     @media (max-width: 620px) {
       .todo-modal-panel { width: 100vw; height: 100vh; max-width: 100vw; max-height: 100vh; border-radius: 0; }
-      .todo-delete-btn { opacity: 1; }
+      .todo-delete-btn, .todo-edit-btn { opacity: 1; }
     }
 
     /* Planner quick-add card (chat.html's PLANNER_TASK/PLANNER_UPGRADE markers) -- same dark-inset
@@ -9067,6 +9079,65 @@ function plainTextFromMarkdown(text) {
       }
     }
 
+    function startEditTodoTitle(id) {
+      const titleEl = document.getElementById(`todoItemTitle-${id}`);
+      if (!titleEl) return;
+      const task = todoState.tasks.find(x => x.id === id);
+      if (!task) return;
+      const original = task.title;
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'todo-item-title-input';
+      input.value = original;
+      input.maxLength = 500;
+      titleEl.replaceWith(input);
+      input.focus();
+      input.select();
+      let done = false;
+      const finish = (save) => {
+        if (done) return;
+        done = true;
+        const value = input.value.trim();
+        if (save && value && value !== original) {
+          saveTodoTitle(id, value);
+        } else {
+          input.replaceWith(titleEl);
+        }
+      };
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+        else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+      });
+      input.addEventListener('blur', () => finish(true));
+    }
+
+    async function saveTodoTitle(id, title) {
+      const idx = todoState.tasks.findIndex(x => x.id === id);
+      if (idx === -1) return;
+      const prev = todoState.tasks[idx];
+      todoState.tasks[idx] = { ...prev, title };
+      renderTodoList();
+      try {
+        const { data: { session } } = await client.auth.getSession();
+        const res = await fetch(`${API_BASE}/todos/${encodeURIComponent(id)}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
+          body: JSON.stringify({ title })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (_isTodoPlanRequired(res.status, data)) { closeTodoModal(); window.location.href = './pricing.html'; return; }
+        if (!res.ok || !data.task) throw new Error('update failed');
+        const idx2 = todoState.tasks.findIndex(x => x.id === id);
+        if (idx2 !== -1) todoState.tasks[idx2] = data.task;
+        renderTodoList();
+      } catch (e) {
+        const idx3 = todoState.tasks.findIndex(x => x.id === id);
+        if (idx3 !== -1) todoState.tasks[idx3] = prev;
+        showTodoInlineError(t('chat', 'todoError'));
+        renderTodoList();
+      }
+    }
+
     async function deleteTodoTask(id) {
       const prevTasks = todoState.tasks;
       todoState.tasks = todoState.tasks.filter(x => x.id !== id);
@@ -9120,9 +9191,12 @@ function plainTextFromMarkdown(text) {
         <div class="todo-item${task.done ? ' todo-item-done' : ''}" id="todoItem-${task.id}">
           <button class="todo-check${task.done ? ' checked' : ''}" onclick="toggleTodoDone('${task.id}', ${!task.done})" aria-label="${task.done ? t('chat', 'todoMarkNotDone') : t('chat', 'todoMarkDone')}">${task.done ? '&#10003;' : ''}</button>
           <div class="todo-item-body">
-            <div class="todo-item-title">${escapeHtml(task.title)}</div>
+            <div class="todo-item-title" id="todoItemTitle-${task.id}">${escapeHtml(task.title)}</div>
             ${dateLabel ? `<div class="todo-item-date${overdue ? ' overdue' : ''}">${escapeHtml(dateLabel)}</div>` : ''}
           </div>
+          <button class="todo-edit-btn" onclick="startEditTodoTitle('${task.id}')" title="${t('chat', 'todoEdit')}" data-i18n-title="chat.todoEdit" aria-label="${t('chat', 'todoEdit')}">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+          </button>
           <button class="todo-delete-btn" onclick="deleteTodoTask('${task.id}')" title="${t('chat', 'todoDelete')}" data-i18n-title="chat.todoDelete" aria-label="${t('chat', 'todoDelete')}">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
           </button>
