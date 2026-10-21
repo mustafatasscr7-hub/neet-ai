@@ -556,6 +556,7 @@
     .todo-item-body { flex: 1; min-width: 0; padding-top: 2px; }
     .todo-item-title { font-size: 13.5px; color: #ececec; line-height: 1.4; word-break: break-word; transition: color 150ms ease; }
     .todo-item-done .todo-item-title { color: #666; text-decoration: line-through; }
+    .todo-item-time { font-size: 11px; font-weight: 600; color: #999; }
     .todo-item-date {
       display: inline-block; margin-top: 6px; font-size: 11px; font-weight: 600; color: #999;
       background: rgba(255,255,255,0.06); border-radius: 999px; padding: 2px 9px;
@@ -579,6 +580,13 @@
       background: rgba(255,255,255,0.06); border: 1px solid #4f8ef7; border-radius: 6px; padding: 3px 6px; margin: -3px -6px;
     }
     .todo-item-title-input:focus { outline: none; }
+    .todo-item-edit-row { display: flex; align-items: center; gap: 6px; }
+    .todo-item-edit-row .todo-item-title-input { flex: 1; width: auto; }
+    .todo-item-time-input {
+      flex-shrink: 0; font-size: 12.5px; font-family: inherit; color: #ececec; line-height: 1.4;
+      background: rgba(255,255,255,0.06); border: 1px solid #4f8ef7; border-radius: 6px; padding: 2px 4px;
+    }
+    .todo-item-time-input:focus { outline: none; }
     @media (max-width: 620px) {
       .todo-modal-panel { width: 100vw; height: 100vh; max-width: 100vw; max-height: 100vh; border-radius: 0; }
       .todo-delete-btn, .todo-edit-btn { opacity: 1; }
@@ -8640,6 +8648,7 @@ function plainTextFromMarkdown(text) {
             <button type="button" class="todo-date-chip" data-chip="today" data-i18n="chat.todoDateToday">Today</button>
             <button type="button" class="todo-date-chip" data-chip="tomorrow" data-i18n="chat.todoDateTomorrow">Tomorrow</button>
             <button type="button" id="todoPickDateChip" class="todo-date-chip" data-chip="pick" data-i18n="chat.todoPickDate" aria-haspopup="dialog" aria-expanded="false">Pick date</button>
+            <input type="time" id="todoAddTimeInput" class="todo-item-time-input" data-i18n-aria-label="chat.todoTime" aria-label="${t('chat', 'todoTime')}" />
             <span id="todoDateTag" class="todo-date-tag" style="display:none;">
               <span id="todoDateTagText"></span>
               <button type="button" id="todoDateTagClear" class="todo-date-tag-clear" data-i18n-aria-label="chat.todoClearDate" aria-label="${t('chat', 'todoClearDate')}">
@@ -8682,6 +8691,8 @@ function plainTextFromMarkdown(text) {
       todoState.tab = 'today';
       todoAddDateChip = null;
       todoAddDateValue = null;
+      const timeInput = document.getElementById('todoAddTimeInput');
+      if (timeInput) timeInput.value = '';
       initTodoDateChips();
     }
 
@@ -8743,6 +8754,8 @@ function plainTextFromMarkdown(text) {
     function resetTodoDateChips() {
       todoAddDateChip = null;
       todoAddDateValue = null;
+      const timeInput = document.getElementById('todoAddTimeInput');
+      if (timeInput) timeInput.value = '';
       closeTodoCalendar();
       renderTodoDateChips();
     }
@@ -9011,6 +9024,8 @@ function plainTextFromMarkdown(text) {
       const title = input.value.trim();
       if (!title) return;
       const due_date = todoAddDateValue || null;
+      const timeInput = document.getElementById('todoAddTimeInput');
+      const due_time = (timeInput && timeInput.value) || null;
       const addBtn = document.getElementById('todoAddBtn');
       addBtn.disabled = true;
 
@@ -9018,7 +9033,7 @@ function plainTextFromMarkdown(text) {
       // real server row (or rolled back entirely on failure) once the save resolves -- same
       // pattern as toggleTodoDone/deleteTodoTask below.
       const tempId = 'temp-' + Date.now() + '-' + Math.random().toString(36).slice(2);
-      const tempTask = { id: tempId, title, due_date, done: false, created_at: new Date().toISOString(), done_at: null };
+      const tempTask = { id: tempId, title, due_date, due_time, done: false, created_at: new Date().toISOString(), done_at: null };
       todoState.tasks.unshift(tempTask);
       input.value = '';
       resetTodoDateChips();
@@ -9027,10 +9042,12 @@ function plainTextFromMarkdown(text) {
 
       try {
         const { data: { session } } = await client.auth.getSession();
+        const body = { title, due_date };
+        if (due_time) body.due_time = due_time;
         const res = await fetch(`${API_BASE}/todos`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
-          body: JSON.stringify({ title, due_date })
+          body: JSON.stringify(body)
         });
         const data = await res.json().catch(() => ({}));
         if (_isTodoPlanRequired(res.status, data)) { closeTodoModal(); window.location.href = './pricing.html'; return; }
@@ -9085,12 +9102,21 @@ function plainTextFromMarkdown(text) {
       const task = todoState.tasks.find(x => x.id === id);
       if (!task) return;
       const original = task.title;
+      const originalTime = task.due_time || null;
+      const wrapper = document.createElement('div');
+      wrapper.className = 'todo-item-edit-row';
       const input = document.createElement('input');
       input.type = 'text';
       input.className = 'todo-item-title-input';
       input.value = original;
       input.maxLength = 500;
-      titleEl.replaceWith(input);
+      const timeInput = document.createElement('input');
+      timeInput.type = 'time';
+      timeInput.className = 'todo-item-time-input';
+      timeInput.value = originalTime || '';
+      wrapper.appendChild(input);
+      wrapper.appendChild(timeInput);
+      titleEl.replaceWith(wrapper);
       input.focus();
       input.select();
       let done = false;
@@ -9098,31 +9124,42 @@ function plainTextFromMarkdown(text) {
         if (done) return;
         done = true;
         const value = input.value.trim();
-        if (save && value && value !== original) {
-          saveTodoTitle(id, value);
+        const timeValue = timeInput.value || null;
+        const titleChanged = Boolean(save && value && value !== original);
+        const timeChanged = save && timeValue !== originalTime;
+        if (titleChanged || timeChanged) {
+          const patch = {};
+          if (titleChanged) patch.title = value;
+          if (timeChanged) patch.due_time = timeValue;
+          saveTodoEdit(id, patch);
         } else {
-          input.replaceWith(titleEl);
+          wrapper.replaceWith(titleEl);
         }
       };
       input.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') { e.preventDefault(); finish(true); }
         else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
       });
-      input.addEventListener('blur', () => finish(true));
+      timeInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+        else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+      });
+      input.addEventListener('blur', (e) => { if (e.relatedTarget !== timeInput) finish(true); });
+      timeInput.addEventListener('blur', (e) => { if (e.relatedTarget !== input) finish(true); });
     }
 
-    async function saveTodoTitle(id, title) {
+    async function saveTodoEdit(id, patch) {
       const idx = todoState.tasks.findIndex(x => x.id === id);
       if (idx === -1) return;
       const prev = todoState.tasks[idx];
-      todoState.tasks[idx] = { ...prev, title };
+      todoState.tasks[idx] = { ...prev, ...patch };
       renderTodoList();
       try {
         const { data: { session } } = await client.auth.getSession();
         const res = await fetch(`${API_BASE}/todos/${encodeURIComponent(id)}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
-          body: JSON.stringify({ title })
+          body: JSON.stringify(patch)
         });
         const data = await res.json().catch(() => ({}));
         if (_isTodoPlanRequired(res.status, data)) { closeTodoModal(); window.location.href = './pricing.html'; return; }
@@ -9174,6 +9211,14 @@ function plainTextFromMarkdown(text) {
       return localizeNum(d.toLocaleDateString(locale, { month: 'short', day: 'numeric' }));
     }
 
+    function formatTodoDueTime(timeStr) {
+      const [h, m] = timeStr.split(':').map(Number);
+      const d = new Date(2000, 0, 1, h, m);
+      if (isNaN(d.getTime())) return timeStr;
+      const locale = getLang() === 'hi' ? 'hi-IN' : 'en-IN';
+      return localizeNum(d.toLocaleTimeString(locale, { hour: 'numeric', minute: '2-digit' }));
+    }
+
     // Today/Tomorrow read better on a task row than "20 Oct"/"21 Oct" would -- falls back to the
     // short date for anything further out, same formatTodoDueDate used by the add-row's date tag.
     function _todoDueDateLabel(dateStr) {
@@ -9191,7 +9236,7 @@ function plainTextFromMarkdown(text) {
         <div class="todo-item${task.done ? ' todo-item-done' : ''}" id="todoItem-${task.id}">
           <button class="todo-check${task.done ? ' checked' : ''}" onclick="toggleTodoDone('${task.id}', ${!task.done})" aria-label="${task.done ? t('chat', 'todoMarkNotDone') : t('chat', 'todoMarkDone')}">${task.done ? '&#10003;' : ''}</button>
           <div class="todo-item-body">
-            <div class="todo-item-title" id="todoItemTitle-${task.id}">${escapeHtml(task.title)}</div>
+            <div class="todo-item-title" id="todoItemTitle-${task.id}">${escapeHtml(task.title)}${task.due_time ? ` <span class="todo-item-time">${escapeHtml(formatTodoDueTime(task.due_time))}</span>` : ''}</div>
             ${dateLabel ? `<div class="todo-item-date${overdue ? ' overdue' : ''}">${escapeHtml(dateLabel)}</div>` : ''}
           </div>
           <button class="todo-edit-btn" onclick="startEditTodoTitle('${task.id}')" title="${t('chat', 'todoEdit')}" data-i18n-title="chat.todoEdit" aria-label="${t('chat', 'todoEdit')}">
@@ -9239,7 +9284,11 @@ function plainTextFromMarkdown(text) {
         if (!a.due_date && !b.due_date) return 0;
         if (!a.due_date) return 1;
         if (!b.due_date) return -1;
-        return a.due_date.localeCompare(b.due_date);
+        if (a.due_date !== b.due_date) return a.due_date.localeCompare(b.due_date);
+        if (!a.due_time && !b.due_time) return 0;
+        if (!a.due_time) return 1;
+        if (!b.due_time) return -1;
+        return a.due_time.localeCompare(b.due_time);
       });
       area.innerHTML = sorted.map(renderTodoItem).join('');
     }
