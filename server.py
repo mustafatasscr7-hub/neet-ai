@@ -844,14 +844,7 @@ Rules:
     entirely and answer in the normal format starting with VISUAL_INTENT, exactly as before. If
     a doubt happens to qualify as ambiguous in BOTH ways at once, resolve TOPIC ambiguity only —
     never output two clarification questions in the same turn; once the student picks a topic
-    interpretation, judge format ambiguity fresh on that follow-up if it still applies.
-
-12. Wrap every math expression, symbol, unit, and LaTeX command in $...$ or $$...$$, including
-    inside bullet points. Never write bare LaTeX such as \\sqrt, \\vec, \\hat, or ^\\circ.
-13. Close every $ or $$ delimiter on the same line or block.
-14. For previous-year questions and numerical problems, give only: Given, Formula, Working
-    (equations only, no commentary), and Final answer with units. Keep the whole solution under
-    150 words."""
+    interpretation, judge format ambiguity fresh on that follow-up if it still applies."""
 
 class ImageAttachment(BaseModel):
     data: str
