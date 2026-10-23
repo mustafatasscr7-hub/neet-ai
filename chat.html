@@ -1183,7 +1183,7 @@
        alongside it: a flex item's default min-width is auto (its content's intrinsic width), which
        overrides any wrapping rule and lets an unbroken string stretch the bubble regardless. */
     .message-bubble { padding: 12px 16px; border-radius: 12px; font-size: var(--chat-font-size, 14px); line-height: 1.7; overflow-wrap: anywhere; word-break: break-word; min-width: 0; }
-    .message-bubble.user { background: #1e1e2e; border: 1px solid #2a2a3a; color: #ececec; max-width: 500px; }
+    .message-bubble.user { background: #1e1e2e; border: 1px solid #2a2a3a; color: #ececec; max-width: 500px; white-space: pre-wrap; }
     .message-bubble.ai { background: transparent; color: #d4d4d4; padding: 4px 0; font-family: var(--chat-font-family, 'Inter', sans-serif); }
     /* KaTeX ships its own @font-face rules targeting .katex/.katex * directly, so inheriting a
        chat-font change from an ancestor never actually overrides them in practice (an element's

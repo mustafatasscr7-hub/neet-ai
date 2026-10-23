@@ -5018,8 +5018,14 @@ def _answer_cache_language(language: str) -> str:
 def _answer_cache_style(answer_style: str) -> str:
     return "concise" if answer_style == "concise" else "detailed"
 
+_ANSWER_CACHE_MATH_MARKER_RE = re.compile(r'[$\\^_=]|[A-Za-z]\d|\d[A-Za-z]')
+
 def _answer_cache_key(text: str, language: str, answer_style: str) -> str:
-    normalized = " ".join((text or "").split()).lower()
+    collapsed = " ".join((text or "").split())
+    # Case carries meaning in maths (V vs v, E vs e), so lowercasing two formulas that
+    # differ only by case would collide them onto the same cached answer. Plain text has
+    # no such risk, so it keeps lowercasing for the usual case-insensitive cache hits.
+    normalized = collapsed if _ANSWER_CACHE_MATH_MARKER_RE.search(collapsed) else collapsed.lower()
     return hashlib.sha256(
         f"{ANSWER_CACHE_PROMPT_VERSION}:{_answer_cache_language(language)}:{_answer_cache_style(answer_style)}:{normalized}".encode()
     ).hexdigest()
