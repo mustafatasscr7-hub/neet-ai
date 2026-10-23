@@ -1183,18 +1183,27 @@
        alongside it: a flex item's default min-width is auto (its content's intrinsic width), which
        overrides any wrapping rule and lets an unbroken string stretch the bubble regardless. */
     .message-bubble { padding: 12px 16px; border-radius: 12px; font-size: var(--chat-font-size, 14px); line-height: 1.7; overflow-wrap: anywhere; word-break: break-word; min-width: 0; }
-    .message-bubble.user { background: #1e1e2e; border: 1px solid #2a2a3a; color: #ececec; max-width: 500px; white-space: pre-wrap; }
+    /* max-width is min(500px, viewport-relative) rather than a flat 500px -- a $$...$$ display
+       formula (KaTeX markup, unlike plain text) has no break-anywhere fallback, so .message-
+       content.user's width:fit-content can't shrink it below its natural width the way it
+       shrinks ordinary text, and the bubble was measured pushing past the left edge of the
+       screen on a narrow viewport instead of respecting .chat-math-display's own overflow-x:auto
+       scroll. The vw ceiling catches that case directly; it's a no-op for normal text, which
+       already fits well under 500px on any screen this narrow. */
+    .message-bubble.user { background: #1e1e2e; border: 1px solid #2a2a3a; color: #ececec; max-width: min(500px, calc(100vw - 64px)); white-space: pre-wrap; }
     .message-bubble.ai { background: transparent; color: #d4d4d4; padding: 4px 0; font-family: var(--chat-font-family, 'Inter', sans-serif); }
     /* KaTeX ships its own @font-face rules targeting .katex/.katex * directly, so inheriting a
        chat-font change from an ancestor never actually overrides them in practice (an element's
        own explicit rule always wins over an inherited value, regardless of source order) -- this
        is a defensive, explicit backstop for that guarantee, not a fix for an observed leak. */
-    .message-bubble.ai .katex, .message-bubble.ai .katex * { font-family: KaTeX_Main, KaTeX_Math, "Times New Roman", serif !important; }
+    .message-bubble.ai .katex, .message-bubble.ai .katex *,
+    .message-bubble.user .katex, .message-bubble.user .katex * { font-family: KaTeX_Main, KaTeX_Math, "Times New Roman", serif !important; }
     /* Scoped to .message-bubble.ai so the same wrapper class parseWithMath() also produces for
        the PYQ-modal solve box (a different container, not an answer bubble) is unaffected --
-       this rule simply doesn't match there, no JS-side conditional needed. */
-    .message-bubble.ai .chat-math-inline { font-size: 1.15em; }
-    .message-bubble.ai .chat-math-display { font-size: 1.3em; }
+       this rule simply doesn't match there, no JS-side conditional needed. .message-bubble.user
+       gets the same sizing so a student's own \(...\)/$...$ matches the AI answer's scale. */
+    .message-bubble.ai .chat-math-inline, .message-bubble.user .chat-math-inline { font-size: 1.15em; }
+    .message-bubble.ai .chat-math-display, .message-bubble.user .chat-math-display { font-size: 1.3em; }
     /* Unscoped (not .message-bubble.ai-prefixed like the two rules above) -- unlike those,
        this needs to render identically inside the PYQ-modal solve box too, a different
        container outside .message-bubble.ai entirely. max-width is required for margin:0 auto
@@ -3183,6 +3192,59 @@ let selectedImages = [];
       return DOMPurify.sanitize(marked.parse(html, { breaks: true }));
     }
 
+    // A bare $...$ pair is ambiguous with plain currency text ("it costs $5 and $10"), unlike
+    // \(...\), \[...\] and $$...$$ which the student had to type deliberately. Rejecting any
+    // pair whose content starts/ends with whitespace catches the currency case (the regex below
+    // always grabs through the word between two unrelated $ signs, e.g. "5 and " trailing into
+    // a space before the next $) while still accepting real inline maths like "E = mc^2", which
+    // never has a space right against either $.
+    function looksLikeUserMathDollar(content) {
+      return !!content && !/^\s|\s$/.test(content);
+    }
+
+    // Student-typed message bubble equivalent of parseWithMath: same KaTeX call/options/macros
+    // (addFracSpacing, throwOnError:false, output:'html') and same .chat-math-inline/-display
+    // classes, but never runs the raw text through marked/DOMPurify -- a student's own message
+    // isn't trusted markdown source, it's plain text that may happen to contain \( \), \[ \],
+    // $ or $$ math. Every non-math segment is escaped via escapeHtml and never touched by
+    // innerHTML with raw content, so a pasted <script> or onerror= attribute can only ever end
+    // up as literal escaped text, never executed.
+    function parseUserMathText(text) {
+      const raw = text == null ? '' : String(text);
+      const segRe = /\$\$([^$]+?)\$\$|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)|\$([^$\n]+)\$/g;
+      const matches = [];
+      let mm;
+      while ((mm = segRe.exec(raw)) !== null) matches.push(mm);
+
+      const parts = [];
+      let lastIndex = 0;
+      matches.forEach(function(m) {
+        if (m.index > lastIndex) parts.push({ text: raw.slice(lastIndex, m.index) });
+        lastIndex = m.index + m[0].length;
+        const isDisplay = m[1] !== undefined || m[2] !== undefined;
+        const content = m[1] !== undefined ? m[1] : (m[2] !== undefined ? m[2] : (m[3] !== undefined ? m[3] : m[4]));
+        const isBareDollar = m[4] !== undefined;
+        if (isBareDollar && !looksLikeUserMathDollar(content)) {
+          parts.push({ text: m[0] });
+        } else {
+          parts.push({ math: content.trim(), display: isDisplay, raw: m[0] });
+        }
+      });
+      if (lastIndex < raw.length) parts.push({ text: raw.slice(lastIndex) });
+
+      return parts.map(function(p) {
+        if (p.text !== undefined) return escapeHtml(p.text);
+        try {
+          const html = katex.renderToString(addFracSpacing(p.math), { displayMode: p.display, throwOnError: false, output: 'html' });
+          return p.display
+            ? '<div class="chat-math-display" style="text-align:center;margin:12px 0;overflow-x:auto;">' + html + '</div>'
+            : '<span class="chat-math-inline">' + html + '</span>';
+        } catch (e) {
+          return escapeHtml(p.raw);
+        }
+      }).join('');
+    }
+
     // Scans for the longest prefix of `text` where every $$...$$, $...$ and **...**
     // pair is fully closed. Streaming text past that point is still mid-delimiter
     // (e.g. "$$\frac{1}{2}mv" with no closing $$ yet) and unsafe to run through
@@ -5104,7 +5166,7 @@ let selectedImages = [];
         // matches the live imgRow's own `${text ? ... : ''}` conditional, which the reload path
         // never mirrored before.
         if (text) {
-          bubble.textContent = text;
+          bubble.innerHTML = parseUserMathText(text);
           contentWrapper.appendChild(bubble);
         }
         contentWrapper.appendChild(buildActionsDiv('user', timeStr));
