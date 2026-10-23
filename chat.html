@@ -478,10 +478,10 @@
     .todo-date-chip:hover { color: #ccc; border-color: #3a3a3a; }
     .todo-date-chip.active { background: rgba(79,142,247,0.14); border-color: #4f8ef7; color: #4f8ef7; }
     .todo-date-chip:focus-visible { outline: 2px solid #4f8ef7; outline-offset: 1px; }
-    /* Positioned in JS (see _positionTodoCalendar) relative to this relatively-positioned container:
-       left is clamped to the container's width so it shifts left instead of clipping off the panel's
-       right edge, and it flips to open upward when there isn't room below within the modal panel
-       (the panel's own overflow:hidden is what would otherwise clip it, not the viewport). */
+    /* Base popover look, still anchor-positioned in JS for the chat quick-add card's calendar (see
+       _positionPlannerCardCalendar). The Planner modal's own add-row/edit-row calendars instead
+       move this element into the shared .todo-cal-overlay (see _openTodoCalOverlay below) so they
+       can never be clipped by the add row or the scrolling task list. */
     .todo-calendar-popover {
       position: absolute; z-index: 10; width: 224px; background: #1f1f1f; border: 1px solid #2f2f2f;
       border-radius: 12px; padding: 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.45);
@@ -531,7 +531,14 @@
       border-radius: 999px; padding: 1px 6px; line-height: 1.5; transition: background-color 150ms ease, color 150ms ease;
     }
     .todo-tab.active .todo-tab-count { color: #4f8ef7; background: rgba(79,142,247,0.18); }
-    .todo-list-area { flex: 1; overflow-y: auto; padding: 8px 12px 16px; min-height: 200px; }
+    .todo-list-area {
+      flex: 1; overflow-y: auto; padding: 8px 12px 16px; min-height: 200px;
+      scrollbar-width: thin; scrollbar-color: #3a3a3a #1a1a1a;
+    }
+    .todo-list-area::-webkit-scrollbar { width: 8px; }
+    .todo-list-area::-webkit-scrollbar-track { background: #1a1a1a; }
+    .todo-list-area::-webkit-scrollbar-thumb { background: #3a3a3a; border-radius: 4px; }
+    .todo-list-area::-webkit-scrollbar-thumb:hover { background: #4a4a4a; }
     .todo-state-msg { text-align: center; color: #666; font-size: 13px; padding: 36px 16px; }
     .todo-state-error { color: #f87171; }
     .todo-empty { display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; color: #555; font-size: 13px; padding: 40px 16px; }
@@ -583,6 +590,43 @@
     .todo-item-edit-row .todo-item-title-input { width: 100%; }
     .todo-edit-date-chips { padding: 0; }
     .todo-edit-date-chips .todo-date-tag { padding: 4px 10px; }
+    /* Save/Cancel always visible at the bottom of the edit row -- never hidden behind the
+       calendar (which now renders in its own overlay, see .todo-cal-overlay below) or clipped
+       by the scrolling list. */
+    .todo-edit-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 2px; }
+    .todo-edit-cancel-btn {
+      background: transparent; border: 1px solid #2a2a2a; color: #999; font-family: 'Inter', sans-serif;
+      font-size: 12.5px; font-weight: 600; padding: 7px 14px; border-radius: 8px; cursor: pointer;
+      transition: background-color 150ms ease, color 150ms ease;
+    }
+    .todo-edit-cancel-btn:hover:not(:disabled) { color: #ccc; background: rgba(255,255,255,0.05); }
+    .todo-edit-cancel-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .todo-edit-save-btn {
+      background: #4f8ef7; border: none; color: #fff; font-family: 'Inter', sans-serif; font-size: 12.5px;
+      font-weight: 600; padding: 7px 16px; border-radius: 8px; cursor: pointer; transition: background-color 150ms ease;
+    }
+    .todo-edit-save-btn:hover:not(:disabled) { background: #3d7ce0; }
+    .todo-edit-save-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+    .todo-edit-error { font-size: 12px; color: #f87171; margin-top: 2px; }
+    .todo-item-saved-badge {
+      display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 700;
+      color: #4f8ef7; background: rgba(79,142,247,0.12); border-radius: 999px; padding: 2px 9px;
+      margin-top: 6px;
+    }
+    /* Overlay layer for both the add-row and edit-row date pickers -- the popover is moved here
+       (see _openTodoCalOverlay) instead of positioning it absolutely inside the scrolling task
+       list or the add row, which would clip it. Centered over the whole viewport with a dim
+       backdrop so it reads the same on desktop and at phone widths. */
+    .todo-cal-overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 1200;
+      display: flex; align-items: center; justify-content: center; padding: 20px;
+    }
+    .todo-calendar-popover.todo-cal-overlay-content {
+      position: static; width: min(300px, calc(100vw - 32px));
+      box-shadow: 0 16px 40px rgba(0,0,0,0.5);
+    }
+    .todo-calendar-popover.todo-cal-overlay-content .todo-cal-day { height: 40px; font-size: 13.5px; }
+    .todo-calendar-popover.todo-cal-overlay-content .todo-cal-nav { padding: 8px; }
     @media (max-width: 620px) {
       .todo-modal-panel { width: 100vw; height: 100vh; max-width: 100vw; max-height: 100vh; border-radius: 0; }
       .todo-delete-btn, .todo-edit-btn { opacity: 1; }
@@ -8767,8 +8811,59 @@ function plainTextFromMarkdown(text) {
     let todoCalViewYear = null;
     let todoCalViewMonth = null;   // 0-indexed
     let todoCalFocusDate = null;   // 'YYYY-MM-DD' currently keyboard-focused cell
-    let _todoCalOutsideClickHandler = null;
     let _todoCalKeydownHandler = null;
+
+    // ---------- Shared calendar overlay (used by both the add row and the edit row) ----------
+    // The popover never renders inline inside the add row or the scrolling task list -- both
+    // would clip it (the add row has no room, and .todo-list-area's overflow:auto would cut it
+    // off for any row near the bottom). Instead the popover element itself is moved into a
+    // fixed, full-viewport overlay with a dim backdrop, then moved back to its original spot
+    // (and hidden) on close. Only one calendar can be open at a time (add row and edit row are
+    // mutually exclusive already), so a single overlay instance is reused.
+    let _todoCalOverlayEl = null;
+    let _todoCalOverlayPopover = null;
+    let _todoCalOverlayParent = null;
+    let _todoCalOverlayNextSibling = null;
+
+    function _openTodoCalOverlay(popover, onBackdropClose) {
+      if (_todoCalOverlayEl) _closeTodoCalOverlay();
+      const overlay = document.createElement('div');
+      overlay.className = 'todo-cal-overlay';
+      overlay.onmousedown = (e) => { if (e.target === overlay) onBackdropClose(); };
+      document.body.appendChild(overlay);
+
+      _todoCalOverlayParent = popover.parentNode;
+      _todoCalOverlayNextSibling = popover.nextSibling;
+      popover.classList.add('todo-cal-overlay-content');
+      popover.style.left = ''; popover.style.top = ''; popover.style.bottom = '';
+      overlay.appendChild(popover);
+
+      _todoCalOverlayEl = overlay;
+      _todoCalOverlayPopover = popover;
+    }
+
+    function _closeTodoCalOverlay() {
+      if (!_todoCalOverlayEl) return;
+      const popover = _todoCalOverlayPopover;
+      if (popover) {
+        popover.classList.remove('todo-cal-overlay-content');
+        popover.style.display = 'none';
+        if (_todoCalOverlayParent) _todoCalOverlayParent.insertBefore(popover, _todoCalOverlayNextSibling);
+      }
+      _todoCalOverlayEl.remove();
+      _todoCalOverlayEl = null;
+      _todoCalOverlayPopover = null;
+      _todoCalOverlayParent = null;
+      _todoCalOverlayNextSibling = null;
+    }
+
+    // True while either calendar's popover is currently moved into the shared overlay -- used by
+    // the edit row's focusout handler so clicking a day/nav button inside the overlay (which now
+    // lives outside the edit row in the DOM) doesn't read as "focus left the edit row" and
+    // prematurely save/close it.
+    function _todoCalOverlayContains(node) {
+      return !!_todoCalOverlayEl && _todoCalOverlayEl.contains(node);
+    }
 
     function _isTodoCalendarOpen() {
       const popover = document.getElementById('todoCalendarPopover');
@@ -8802,52 +8897,16 @@ function plainTextFromMarkdown(text) {
       renderTodoCalendar();
       popover.style.display = '';
       chip.setAttribute('aria-expanded', 'true');
-      _positionTodoCalendar();
-      _todoCalOutsideClickHandler = (e) => {
-        if (!popover.contains(e.target) && !chip.contains(e.target)) closeTodoCalendar();
-      };
+      _openTodoCalOverlay(popover, () => { closeTodoCalendar(); chip.focus(); });
       _todoCalKeydownHandler = _handleTodoCalKeydown;
-      document.addEventListener('mousedown', _todoCalOutsideClickHandler, true);
       document.addEventListener('keydown', _todoCalKeydownHandler, true);
     }
 
     function closeTodoCalendar() {
-      const popover = document.getElementById('todoCalendarPopover');
       const chip = document.getElementById('todoPickDateChip');
-      if (popover) popover.style.display = 'none';
+      _closeTodoCalOverlay();
       if (chip) chip.setAttribute('aria-expanded', 'false');
-      if (_todoCalOutsideClickHandler) { document.removeEventListener('mousedown', _todoCalOutsideClickHandler, true); _todoCalOutsideClickHandler = null; }
       if (_todoCalKeydownHandler) { document.removeEventListener('keydown', _todoCalKeydownHandler, true); _todoCalKeydownHandler = null; }
-    }
-
-    // Anchors the popover to the Pick-date chip inside their shared (position:relative) container.
-    // Clamped horizontally so it shifts left instead of overflowing the panel's right edge, and
-    // flips to open upward when there isn't room below *within the panel* -- the panel's own
-    // overflow:hidden is what would clip it, not the viewport, since the popover is its descendant.
-    function _positionTodoCalendar() {
-      const popover = document.getElementById('todoCalendarPopover');
-      const chip = document.getElementById('todoPickDateChip');
-      const container = document.getElementById('todoAddDateChips');
-      const panel = document.querySelector('#todoModal .todo-modal-panel');
-      if (!popover || !chip || !container || !panel) return;
-      const popoverWidth = popover.offsetWidth || 224;
-      const popoverHeight = popover.offsetHeight || 250;
-      let left = chip.offsetLeft;
-      const maxLeft = container.clientWidth - popoverWidth - 4;
-      left = Math.max(4, Math.min(left, maxLeft));
-      popover.style.left = left + 'px';
-
-      const chipRect = chip.getBoundingClientRect();
-      const panelRect = panel.getBoundingClientRect();
-      const spaceBelow = panelRect.bottom - chipRect.bottom;
-      const spaceAbove = chipRect.top - panelRect.top;
-      if (spaceBelow < popoverHeight + 12 && spaceAbove > popoverHeight + 12) {
-        popover.style.bottom = (container.clientHeight - chip.offsetTop) + 6 + 'px';
-        popover.style.top = 'auto';
-      } else {
-        popover.style.top = (chip.offsetTop + chip.offsetHeight + 6) + 'px';
-        popover.style.bottom = 'auto';
-      }
     }
 
     function _handleTodoCalKeydown(e) {
@@ -9091,7 +9150,7 @@ function plainTextFromMarkdown(text) {
     // a time (starting a new edit always blurs -- and so finishes -- any edit already in progress),
     // so fixed element ids (no per-task suffix) are safe here, same simplifying assumption the
     // top-level add-row calendar singleton already makes.
-    let todoEditState = null; // { dateChip, dateValue, calViewYear, calViewMonth, _outsideHandler, _keyHandler }
+    let todoEditState = null; // { dateChip, dateValue, calViewYear, calViewMonth, _keyHandler }
 
     function _todoEditChipsHtml() {
       return `
@@ -9113,7 +9172,12 @@ function plainTextFromMarkdown(text) {
             <div class="todo-cal-weekdays" id="todoEditCalWeekdays"></div>
             <div class="todo-cal-grid" id="todoEditCalGrid"></div>
           </div>
-        </div>`;
+        </div>
+        <div class="todo-edit-actions">
+          <button type="button" class="todo-edit-cancel-btn" id="todoEditCancelBtn" data-i18n="chat.todoEditCancel">${escapeHtml(t('chat', 'todoEditCancel'))}</button>
+          <button type="button" class="todo-edit-save-btn" id="todoEditSaveBtn" data-i18n="chat.todoEditSave">${escapeHtml(t('chat', 'todoEditSave'))}</button>
+        </div>
+        <div class="todo-edit-error" id="todoEditErrorMsg" style="display:none;"></div>`;
     }
 
     // No "clear" control and no toggle-off on an already-active chip here -- a task's date can
@@ -9124,7 +9188,7 @@ function plainTextFromMarkdown(text) {
         dateChip: originalDue === _todoTodayStr() ? 'today' : originalDue === _todoTomorrowStr() ? 'tomorrow' : originalDue ? 'pick' : null,
         dateValue: originalDue || null,
         calViewYear: null, calViewMonth: null,
-        _outsideHandler: null, _keyHandler: null,
+        _keyHandler: null,
       };
       document.querySelectorAll('#todoEditDateChips .todo-date-chip').forEach(chip => {
         chip.onclick = () => {
@@ -9173,58 +9237,20 @@ function plainTextFromMarkdown(text) {
       _renderTodoEditCalendar();
       popover.style.display = '';
       chip.setAttribute('aria-expanded', 'true');
-      _positionTodoEditCalendar();
-      todoEditState._outsideHandler = (e) => {
-        if (!popover.contains(e.target) && !chip.contains(e.target)) _closeTodoEditCalendar();
-      };
+      _openTodoCalOverlay(popover, () => { _closeTodoEditCalendar(); chip.focus(); });
       todoEditState._keyHandler = (e) => {
         if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); _closeTodoEditCalendar(); chip.focus(); }
       };
-      document.addEventListener('mousedown', todoEditState._outsideHandler, true);
       document.addEventListener('keydown', todoEditState._keyHandler, true);
     }
 
     function _closeTodoEditCalendar() {
-      const popover = document.getElementById('todoEditCalendarPopover');
       const chip = document.getElementById('todoEditPickChip');
-      if (popover) popover.style.display = 'none';
+      _closeTodoCalOverlay();
       if (chip) chip.setAttribute('aria-expanded', 'false');
-      if (todoEditState) {
-        if (todoEditState._outsideHandler) { document.removeEventListener('mousedown', todoEditState._outsideHandler, true); todoEditState._outsideHandler = null; }
-        if (todoEditState._keyHandler) { document.removeEventListener('keydown', todoEditState._keyHandler, true); todoEditState._keyHandler = null; }
-      }
-    }
-
-    // Same flip/clamp idea as _positionTodoCalendar, but the "space above" boundary is the task
-    // list's own scrollable area (#todoListArea), not the whole panel -- unlike the add row, which
-    // sits directly under the header, an edit row can be anywhere in the scrolled task list, and
-    // the header/add-row/tabs above the list are fixed chrome, not free space the popover can flip
-    // into (using the panel's top here would let it flip upward right over that chrome).
-    function _positionTodoEditCalendar() {
-      const popover = document.getElementById('todoEditCalendarPopover');
-      const chip = document.getElementById('todoEditPickChip');
-      const container = document.getElementById('todoEditDateChips');
-      const panel = document.querySelector('#todoModal .todo-modal-panel');
-      const listArea = document.getElementById('todoListArea');
-      if (!popover || !chip || !container || !panel) return;
-      const popoverWidth = popover.offsetWidth || 224;
-      const popoverHeight = popover.offsetHeight || 250;
-      let left = chip.offsetLeft;
-      const maxLeft = container.clientWidth - popoverWidth - 4;
-      left = Math.max(4, Math.min(left, maxLeft));
-      popover.style.left = left + 'px';
-
-      const chipRect = chip.getBoundingClientRect();
-      const panelRect = panel.getBoundingClientRect();
-      const aboveBound = listArea ? listArea.getBoundingClientRect().top : panelRect.top;
-      const spaceBelow = panelRect.bottom - chipRect.bottom;
-      const spaceAbove = chipRect.top - aboveBound;
-      if (spaceBelow < popoverHeight + 12 && spaceAbove > popoverHeight + 12) {
-        popover.style.bottom = (container.clientHeight - chip.offsetTop) + 6 + 'px';
-        popover.style.top = 'auto';
-      } else {
-        popover.style.top = (chip.offsetTop + chip.offsetHeight + 6) + 'px';
-        popover.style.bottom = 'auto';
+      if (todoEditState && todoEditState._keyHandler) {
+        document.removeEventListener('keydown', todoEditState._keyHandler, true);
+        todoEditState._keyHandler = null;
       }
     }
 
@@ -9301,49 +9327,109 @@ function plainTextFromMarkdown(text) {
       wrapper.innerHTML = `<input type="text" class="todo-item-title-input" id="todoEditTitleInput" maxlength="500" value="${escapeHtml(original)}" />${_todoEditChipsHtml()}`;
       titleEl.replaceWith(wrapper);
       const input = document.getElementById('todoEditTitleInput');
+      const saveBtn = document.getElementById('todoEditSaveBtn');
+      const cancelBtn = document.getElementById('todoEditCancelBtn');
+      const errEl = document.getElementById('todoEditErrorMsg');
       input.focus();
       input.select();
       _initTodoEditDateChips(originalDue);
 
-      let done = false;
-      const finish = (save) => {
-        if (done) return;
-        done = true;
-        const value = input.value.trim();
-        const newDue = todoEditState ? todoEditState.dateValue : originalDue;
+      // Scroll the row fully into view the moment it grows into edit mode (title input + date
+      // chips + Save/Cancel), so a row near the bottom of a long list doesn't leave its own
+      // action buttons clipped below the scrolling list's edge.
+      const itemEl = wrapper.closest('.todo-item');
+      if (itemEl) itemEl.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+
+      let closed = false;
+      let saving = false;
+
+      const setSaving = (isSaving) => {
+        saving = isSaving;
+        input.disabled = isSaving;
+        saveBtn.disabled = isSaving;
+        cancelBtn.disabled = isSaving;
+        saveBtn.textContent = isSaving ? t('chat', 'todoEditSaving') : t('chat', 'todoEditSave');
+      };
+
+      const cancel = () => {
+        if (closed || saving) return;
+        closed = true;
         _closeTodoEditCalendar();
         todoEditState = null;
-        const titleChanged = Boolean(save && value && value !== original);
-        const dateChanged = Boolean(save && newDue !== originalDue);
-        if (titleChanged || dateChanged) {
-          const patch = {};
-          if (titleChanged) patch.title = value;
-          if (dateChanged) patch.due_date = newDue;
-          saveTodoEdit(id, patch);
+        wrapper.replaceWith(titleEl);
+      };
+
+      const save = async () => {
+        if (closed || saving) return;
+        _closeTodoEditCalendar();
+        const value = input.value.trim();
+        const newDue = todoEditState ? todoEditState.dateValue : originalDue;
+        const titleChanged = Boolean(value && value !== original);
+        const dateChanged = Boolean(newDue !== originalDue);
+        if (!titleChanged && !dateChanged) { cancel(); return; }
+        const patch = {};
+        if (titleChanged) patch.title = value;
+        if (dateChanged) patch.due_date = newDue;
+        errEl.style.display = 'none';
+        setSaving(true);
+        const ok = await saveTodoEdit(id, patch);
+        if (closed) return; // row was torn down (e.g. modal closed) while the request was in flight
+        setSaving(false);
+        if (ok) {
+          closed = true;
+          todoEditState = null;
+          renderTodoList();
+          _flashTodoSavedBadge(id);
         } else {
-          wrapper.replaceWith(titleEl);
+          errEl.textContent = t('chat', 'todoError');
+          errEl.style.display = '';
+          input.focus();
         }
       };
-      input.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') { e.preventDefault(); finish(true); }
-        else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+
+      saveBtn.onclick = save;
+      cancelBtn.onclick = cancel;
+      // Delegated on the wrapper, not just the title input -- focus can be on a date chip or a
+      // Save/Cancel button when Escape is pressed (e.g. right after picking a date), and Escape
+      // must cancel the edit row from any of them rather than falling through, unhandled, to the
+      // Planner modal's own document-level Escape handler (which would close the whole modal).
+      // stopPropagation keeps it from doing exactly that.
+      wrapper.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && e.target === input) { e.preventDefault(); save(); }
+        else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancel(); }
       });
       // Delegated on the wrapper (not just the title input) via the bubbling 'focusout' event --
       // the edit row now has several focusable controls (date chips, calendar nav, calendar day
-      // cells), and focus can leave any of them, not just the title input, once the student starts
-      // clicking around the date picker. 'blur' doesn't bubble, so a single listener per control
-      // would be needed instead; 'focusout' bubbles, so one listener on the wrapper catches focus
-      // leaving any descendant. Only finishes when focus actually leaves the row (relatedTarget
-      // outside wrapper) -- moving focus between the row's own controls must not save/close it.
-      wrapper.addEventListener('focusout', (e) => { if (!wrapper.contains(e.relatedTarget)) finish(true); });
+      // cells, Save/Cancel), and focus can leave any of them, not just the title input, once the
+      // student starts clicking around the date picker. 'blur' doesn't bubble, so a single
+      // listener per control would be needed instead; 'focusout' bubbles, so one listener on the
+      // wrapper catches focus leaving any descendant. Only saves when focus actually leaves the
+      // row -- moving focus between the row's own controls, or into the calendar overlay (which
+      // now lives outside the wrapper in the DOM while open), must not save/close it. Also skips
+      // while a save is already in flight, since disabling the inputs mid-save triggers a
+      // synchronous blur/focusout of its own.
+      wrapper.addEventListener('focusout', (e) => {
+        if (closed || saving) return;
+        if (wrapper.contains(e.relatedTarget) || _todoCalOverlayContains(e.relatedTarget)) return;
+        save();
+      });
+    }
+
+    // Briefly shows a "Saved" confirmation under the row's title after a successful edit --
+    // no-ops if the task moved out of the currently-active tab (e.g. its due date changed) and so
+    // isn't rendered after renderTodoList() rebuilds the list.
+    function _flashTodoSavedBadge(id) {
+      const itemEl = document.getElementById(`todoItem-${id}`);
+      const body = itemEl ? itemEl.querySelector('.todo-item-body') : null;
+      if (!body) return;
+      const badge = document.createElement('div');
+      badge.className = 'todo-item-saved-badge';
+      badge.textContent = t('chat', 'todoEditSaved');
+      body.appendChild(badge);
+      setTimeout(() => { badge.remove(); }, 1500);
     }
 
     async function saveTodoEdit(id, patch) {
-      const idx = todoState.tasks.findIndex(x => x.id === id);
-      if (idx === -1) return;
-      const prev = todoState.tasks[idx];
-      todoState.tasks[idx] = { ...prev, ...patch };
-      renderTodoList();
       try {
         const { data: { session } } = await client.auth.getSession();
         const res = await fetch(`${API_BASE}/todos/${encodeURIComponent(id)}`, {
@@ -9352,16 +9438,13 @@ function plainTextFromMarkdown(text) {
           body: JSON.stringify(patch)
         });
         const data = await res.json().catch(() => ({}));
-        if (_isTodoPlanRequired(res.status, data)) { closeTodoModal(); window.location.href = './pricing.html'; return; }
-        if (!res.ok || !data.task) throw new Error('update failed');
-        const idx2 = todoState.tasks.findIndex(x => x.id === id);
-        if (idx2 !== -1) todoState.tasks[idx2] = data.task;
-        renderTodoList();
+        if (_isTodoPlanRequired(res.status, data)) { closeTodoModal(); window.location.href = './pricing.html'; return false; }
+        if (!res.ok || !data.task) return false;
+        const idx = todoState.tasks.findIndex(x => x.id === id);
+        if (idx !== -1) todoState.tasks[idx] = data.task;
+        return true;
       } catch (e) {
-        const idx3 = todoState.tasks.findIndex(x => x.id === id);
-        if (idx3 !== -1) todoState.tasks[idx3] = prev;
-        showTodoInlineError(t('chat', 'todoError'));
-        renderTodoList();
+        return false;
       }
     }
 
