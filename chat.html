@@ -556,7 +556,6 @@
     .todo-item-body { flex: 1; min-width: 0; padding-top: 2px; }
     .todo-item-title { font-size: 13.5px; color: #ececec; line-height: 1.4; word-break: break-word; transition: color 150ms ease; }
     .todo-item-done .todo-item-title { color: #666; text-decoration: line-through; }
-    .todo-item-time { font-size: 11px; font-weight: 600; color: #999; }
     .todo-item-date {
       display: inline-block; margin-top: 6px; font-size: 11px; font-weight: 600; color: #999;
       background: rgba(255,255,255,0.06); border-radius: 999px; padding: 2px 9px;
@@ -580,13 +579,10 @@
       background: rgba(255,255,255,0.06); border: 1px solid #4f8ef7; border-radius: 6px; padding: 3px 6px; margin: -3px -6px;
     }
     .todo-item-title-input:focus { outline: none; }
-    .todo-item-edit-row { display: flex; align-items: center; gap: 6px; }
-    .todo-item-edit-row .todo-item-title-input { flex: 1; width: auto; }
-    .todo-item-time-input {
-      flex-shrink: 0; font-size: 12.5px; font-family: inherit; color: #ececec; line-height: 1.4;
-      background: rgba(255,255,255,0.06); border: 1px solid #4f8ef7; border-radius: 6px; padding: 2px 4px;
-    }
-    .todo-item-time-input:focus { outline: none; }
+    .todo-item-edit-row { display: flex; flex-direction: column; align-items: stretch; gap: 6px; }
+    .todo-item-edit-row .todo-item-title-input { width: 100%; }
+    .todo-edit-date-chips { padding: 0; }
+    .todo-edit-date-chips .todo-date-tag { padding: 4px 10px; }
     @media (max-width: 620px) {
       .todo-modal-panel { width: 100vw; height: 100vh; max-width: 100vw; max-height: 100vh; border-radius: 0; }
       .todo-delete-btn, .todo-edit-btn { opacity: 1; }
@@ -8644,11 +8640,10 @@ function plainTextFromMarkdown(text) {
             <input type="text" id="todoAddInput" class="todo-add-input" maxlength="200" data-i18n-placeholder="chat.todoAddPlaceholder" placeholder="${t('chat', 'todoAddPlaceholder')}" />
             <button id="todoAddBtn" class="todo-add-btn" data-i18n="chat.todoAdd">Add</button>
           </div>
-          <div class="todo-date-chips">
+          <div class="todo-date-chips" id="todoAddDateChips">
             <button type="button" class="todo-date-chip" data-chip="today" data-i18n="chat.todoDateToday">Today</button>
             <button type="button" class="todo-date-chip" data-chip="tomorrow" data-i18n="chat.todoDateTomorrow">Tomorrow</button>
             <button type="button" id="todoPickDateChip" class="todo-date-chip" data-chip="pick" data-i18n="chat.todoPickDate" aria-haspopup="dialog" aria-expanded="false">Pick date</button>
-            <input type="time" id="todoAddTimeInput" class="todo-item-time-input" data-i18n-aria-label="chat.todoTime" aria-label="${t('chat', 'todoTime')}" />
             <span id="todoDateTag" class="todo-date-tag" style="display:none;">
               <span id="todoDateTagText"></span>
               <button type="button" id="todoDateTagClear" class="todo-date-tag-clear" data-i18n-aria-label="chat.todoClearDate" aria-label="${t('chat', 'todoClearDate')}">
@@ -8689,10 +8684,8 @@ function plainTextFromMarkdown(text) {
       addInput.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); submitNewTodo(); } };
       addInput.focus();
       todoState.tab = 'today';
-      todoAddDateChip = null;
-      todoAddDateValue = null;
-      const timeInput = document.getElementById('todoAddTimeInput');
-      if (timeInput) timeInput.value = '';
+      todoAddDateChip = 'today';
+      todoAddDateValue = _todoTodayStr();
       initTodoDateChips();
     }
 
@@ -8724,7 +8717,7 @@ function plainTextFromMarkdown(text) {
     }
 
     function initTodoDateChips() {
-      document.querySelectorAll('#todoModal .todo-date-chip').forEach(chip => {
+      document.querySelectorAll('#todoAddDateChips .todo-date-chip').forEach(chip => {
         chip.onclick = () => {
           const kind = chip.dataset.chip;
           if (kind === 'pick') {
@@ -8752,16 +8745,14 @@ function plainTextFromMarkdown(text) {
     }
 
     function resetTodoDateChips() {
-      todoAddDateChip = null;
-      todoAddDateValue = null;
-      const timeInput = document.getElementById('todoAddTimeInput');
-      if (timeInput) timeInput.value = '';
+      todoAddDateChip = 'today';
+      todoAddDateValue = _todoTodayStr();
       closeTodoCalendar();
       renderTodoDateChips();
     }
 
     function renderTodoDateChips() {
-      document.querySelectorAll('#todoModal .todo-date-chip').forEach(chip => {
+      document.querySelectorAll('#todoAddDateChips .todo-date-chip').forEach(chip => {
         chip.classList.toggle('active', chip.dataset.chip === todoAddDateChip);
       });
       const tag = document.getElementById('todoDateTag');
@@ -8836,7 +8827,7 @@ function plainTextFromMarkdown(text) {
     function _positionTodoCalendar() {
       const popover = document.getElementById('todoCalendarPopover');
       const chip = document.getElementById('todoPickDateChip');
-      const container = document.querySelector('#todoModal .todo-date-chips');
+      const container = document.getElementById('todoAddDateChips');
       const panel = document.querySelector('#todoModal .todo-modal-panel');
       if (!popover || !chip || !container || !panel) return;
       const popoverWidth = popover.offsetWidth || 224;
@@ -9024,8 +9015,6 @@ function plainTextFromMarkdown(text) {
       const title = input.value.trim();
       if (!title) return;
       const due_date = todoAddDateValue || null;
-      const timeInput = document.getElementById('todoAddTimeInput');
-      const due_time = (timeInput && timeInput.value) || null;
       const addBtn = document.getElementById('todoAddBtn');
       addBtn.disabled = true;
 
@@ -9033,7 +9022,7 @@ function plainTextFromMarkdown(text) {
       // real server row (or rolled back entirely on failure) once the save resolves -- same
       // pattern as toggleTodoDone/deleteTodoTask below.
       const tempId = 'temp-' + Date.now() + '-' + Math.random().toString(36).slice(2);
-      const tempTask = { id: tempId, title, due_date, due_time, done: false, created_at: new Date().toISOString(), done_at: null };
+      const tempTask = { id: tempId, title, due_date, done: false, created_at: new Date().toISOString(), done_at: null };
       todoState.tasks.unshift(tempTask);
       input.value = '';
       resetTodoDateChips();
@@ -9043,7 +9032,6 @@ function plainTextFromMarkdown(text) {
       try {
         const { data: { session } } = await client.auth.getSession();
         const body = { title, due_date };
-        if (due_time) body.due_time = due_time;
         const res = await fetch(`${API_BASE}/todos`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
@@ -9096,41 +9084,241 @@ function plainTextFromMarkdown(text) {
       }
     }
 
+    // ---------- Inline edit (title + date) for an existing task ----------
+    // Own chip/calendar state (todoEditState), completely separate from the add row's
+    // todoAddDateChip/todoAddDateValue -- editing a task never touches the add row's selection,
+    // and adding a task never touches an in-progress edit. Only one edit row exists in the DOM at
+    // a time (starting a new edit always blurs -- and so finishes -- any edit already in progress),
+    // so fixed element ids (no per-task suffix) are safe here, same simplifying assumption the
+    // top-level add-row calendar singleton already makes.
+    let todoEditState = null; // { dateChip, dateValue, calViewYear, calViewMonth, _outsideHandler, _keyHandler }
+
+    function _todoEditChipsHtml() {
+      return `
+        <div class="todo-date-chips todo-edit-date-chips" id="todoEditDateChips">
+          <button type="button" class="todo-date-chip" data-chip="today" data-i18n="chat.todoDateToday">${escapeHtml(t('chat', 'todoDateToday'))}</button>
+          <button type="button" class="todo-date-chip" data-chip="tomorrow" data-i18n="chat.todoDateTomorrow">${escapeHtml(t('chat', 'todoDateTomorrow'))}</button>
+          <button type="button" id="todoEditPickChip" class="todo-date-chip" data-chip="pick" data-i18n="chat.todoPickDate" aria-haspopup="dialog" aria-expanded="false">${escapeHtml(t('chat', 'todoPickDate'))}</button>
+          <span id="todoEditDateTag" class="todo-date-tag" style="display:none;"><span id="todoEditDateTagText"></span></span>
+          <div id="todoEditCalendarPopover" class="todo-calendar-popover" style="display:none;" role="dialog" aria-label="${escapeHtml(t('chat', 'todoPickDate'))}">
+            <div class="todo-cal-header">
+              <button type="button" id="todoEditCalPrev" class="todo-cal-nav" data-i18n-aria-label="chat.todoCalPrevMonth" aria-label="${escapeHtml(t('chat', 'todoCalPrevMonth'))}">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+              </button>
+              <span id="todoEditCalMonthYear" class="todo-cal-month-year"></span>
+              <button type="button" id="todoEditCalNext" class="todo-cal-nav" data-i18n-aria-label="chat.todoCalNextMonth" aria-label="${escapeHtml(t('chat', 'todoCalNextMonth'))}">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+              </button>
+            </div>
+            <div class="todo-cal-weekdays" id="todoEditCalWeekdays"></div>
+            <div class="todo-cal-grid" id="todoEditCalGrid"></div>
+          </div>
+        </div>`;
+    }
+
+    // No "clear" control and no toggle-off on an already-active chip here -- a task's date can
+    // never be made empty from the edit row (unlike the add row's quick-add chips, which can
+    // clear back to "no due date").
+    function _initTodoEditDateChips(originalDue) {
+      todoEditState = {
+        dateChip: originalDue === _todoTodayStr() ? 'today' : originalDue === _todoTomorrowStr() ? 'tomorrow' : originalDue ? 'pick' : null,
+        dateValue: originalDue || null,
+        calViewYear: null, calViewMonth: null,
+        _outsideHandler: null, _keyHandler: null,
+      };
+      document.querySelectorAll('#todoEditDateChips .todo-date-chip').forEach(chip => {
+        chip.onclick = () => {
+          const kind = chip.dataset.chip;
+          if (kind === 'pick') {
+            if (_isTodoEditCalOpen()) _closeTodoEditCalendar(); else _openTodoEditCalendar();
+            return;
+          }
+          _closeTodoEditCalendar();
+          todoEditState.dateChip = kind;
+          todoEditState.dateValue = kind === 'today' ? _todoTodayStr() : _todoTomorrowStr();
+          _renderTodoEditDateChips();
+        };
+      });
+      document.getElementById('todoEditCalPrev').onclick = () => _todoEditCalGotoMonth(-1);
+      document.getElementById('todoEditCalNext').onclick = () => _todoEditCalGotoMonth(1);
+      _renderTodoEditDateChips();
+    }
+
+    function _renderTodoEditDateChips() {
+      if (!todoEditState) return;
+      document.querySelectorAll('#todoEditDateChips .todo-date-chip').forEach(chip => {
+        chip.classList.toggle('active', chip.dataset.chip === todoEditState.dateChip);
+      });
+      const tag = document.getElementById('todoEditDateTag');
+      const tagText = document.getElementById('todoEditDateTagText');
+      if (!tag || !tagText) return;
+      if (todoEditState.dateChip !== 'pick' || !todoEditState.dateValue) { tag.style.display = 'none'; return; }
+      tagText.textContent = formatTodoDueDate(todoEditState.dateValue);
+      tag.style.display = '';
+    }
+
+    function _isTodoEditCalOpen() {
+      const popover = document.getElementById('todoEditCalendarPopover');
+      return !!popover && popover.style.display !== 'none';
+    }
+
+    function _openTodoEditCalendar() {
+      const popover = document.getElementById('todoEditCalendarPopover');
+      const chip = document.getElementById('todoEditPickChip');
+      if (!todoEditState || !popover || !chip) return;
+      const hasSel = todoEditState.dateChip === 'pick' && todoEditState.dateValue;
+      const base = hasSel ? _todoParseDateStr(todoEditState.dateValue) : new Date();
+      todoEditState.calViewYear = base.getFullYear();
+      todoEditState.calViewMonth = base.getMonth();
+      _renderTodoEditCalendar();
+      popover.style.display = '';
+      chip.setAttribute('aria-expanded', 'true');
+      _positionTodoEditCalendar();
+      todoEditState._outsideHandler = (e) => {
+        if (!popover.contains(e.target) && !chip.contains(e.target)) _closeTodoEditCalendar();
+      };
+      todoEditState._keyHandler = (e) => {
+        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); _closeTodoEditCalendar(); chip.focus(); }
+      };
+      document.addEventListener('mousedown', todoEditState._outsideHandler, true);
+      document.addEventListener('keydown', todoEditState._keyHandler, true);
+    }
+
+    function _closeTodoEditCalendar() {
+      const popover = document.getElementById('todoEditCalendarPopover');
+      const chip = document.getElementById('todoEditPickChip');
+      if (popover) popover.style.display = 'none';
+      if (chip) chip.setAttribute('aria-expanded', 'false');
+      if (todoEditState) {
+        if (todoEditState._outsideHandler) { document.removeEventListener('mousedown', todoEditState._outsideHandler, true); todoEditState._outsideHandler = null; }
+        if (todoEditState._keyHandler) { document.removeEventListener('keydown', todoEditState._keyHandler, true); todoEditState._keyHandler = null; }
+      }
+    }
+
+    // Same flip/clamp idea as _positionTodoCalendar, but the "space above" boundary is the task
+    // list's own scrollable area (#todoListArea), not the whole panel -- unlike the add row, which
+    // sits directly under the header, an edit row can be anywhere in the scrolled task list, and
+    // the header/add-row/tabs above the list are fixed chrome, not free space the popover can flip
+    // into (using the panel's top here would let it flip upward right over that chrome).
+    function _positionTodoEditCalendar() {
+      const popover = document.getElementById('todoEditCalendarPopover');
+      const chip = document.getElementById('todoEditPickChip');
+      const container = document.getElementById('todoEditDateChips');
+      const panel = document.querySelector('#todoModal .todo-modal-panel');
+      const listArea = document.getElementById('todoListArea');
+      if (!popover || !chip || !container || !panel) return;
+      const popoverWidth = popover.offsetWidth || 224;
+      const popoverHeight = popover.offsetHeight || 250;
+      let left = chip.offsetLeft;
+      const maxLeft = container.clientWidth - popoverWidth - 4;
+      left = Math.max(4, Math.min(left, maxLeft));
+      popover.style.left = left + 'px';
+
+      const chipRect = chip.getBoundingClientRect();
+      const panelRect = panel.getBoundingClientRect();
+      const aboveBound = listArea ? listArea.getBoundingClientRect().top : panelRect.top;
+      const spaceBelow = panelRect.bottom - chipRect.bottom;
+      const spaceAbove = chipRect.top - aboveBound;
+      if (spaceBelow < popoverHeight + 12 && spaceAbove > popoverHeight + 12) {
+        popover.style.bottom = (container.clientHeight - chip.offsetTop) + 6 + 'px';
+        popover.style.top = 'auto';
+      } else {
+        popover.style.top = (chip.offsetTop + chip.offsetHeight + 6) + 'px';
+        popover.style.bottom = 'auto';
+      }
+    }
+
+    function _todoEditCalGotoMonth(delta) {
+      if (!todoEditState) return;
+      todoEditState.calViewMonth += delta;
+      if (todoEditState.calViewMonth < 0) { todoEditState.calViewMonth = 11; todoEditState.calViewYear--; }
+      else if (todoEditState.calViewMonth > 11) { todoEditState.calViewMonth = 0; todoEditState.calViewYear++; }
+      _renderTodoEditCalendar();
+    }
+
+    function _renderTodoEditCalendar() {
+      const monthYearEl = document.getElementById('todoEditCalMonthYear');
+      const weekdaysEl = document.getElementById('todoEditCalWeekdays');
+      const gridEl = document.getElementById('todoEditCalGrid');
+      if (!todoEditState || !monthYearEl || !weekdaysEl || !gridEl) return;
+      const locale = _todoCalLocale();
+      const monthLabel = new Intl.DateTimeFormat(locale, { month: 'long', year: 'numeric' }).format(new Date(todoEditState.calViewYear, todoEditState.calViewMonth, 1));
+      monthYearEl.textContent = localizeNum(monthLabel);
+      weekdaysEl.innerHTML = _todoCalWeekdayLabels().map(l => `<span>${escapeHtml(l)}</span>`).join('');
+
+      const todayStr = _todoTodayStr();
+      const selectedStr = todoEditState.dateChip === 'pick' ? todoEditState.dateValue : null;
+      const firstOfMonth = new Date(todoEditState.calViewYear, todoEditState.calViewMonth, 1);
+      const firstWeekday = (firstOfMonth.getDay() + 6) % 7;
+      const daysInMonth = new Date(todoEditState.calViewYear, todoEditState.calViewMonth + 1, 0).getDate();
+      const daysInPrevMonth = new Date(todoEditState.calViewYear, todoEditState.calViewMonth, 0).getDate();
+
+      const cells = [];
+      for (let i = 0; i < firstWeekday; i++) {
+        const dayNum = daysInPrevMonth - firstWeekday + 1 + i;
+        cells.push({ dateStr: _todoLocalDateStr(new Date(todoEditState.calViewYear, todoEditState.calViewMonth - 1, dayNum)), dayNum, otherMonth: true });
+      }
+      for (let day = 1; day <= daysInMonth; day++) {
+        cells.push({ dateStr: _todoLocalDateStr(new Date(todoEditState.calViewYear, todoEditState.calViewMonth, day)), dayNum: day, otherMonth: false });
+      }
+      let nextDay = 1;
+      while (cells.length % 7 !== 0) {
+        cells.push({ dateStr: _todoLocalDateStr(new Date(todoEditState.calViewYear, todoEditState.calViewMonth + 1, nextDay)), dayNum: nextDay, otherMonth: true });
+        nextDay++;
+      }
+
+      gridEl.innerHTML = cells.map(c => {
+        const classes = ['todo-cal-day'];
+        if (c.otherMonth) classes.push('other-month');
+        if (c.dateStr === todayStr) classes.push('is-today');
+        if (c.dateStr === selectedStr) classes.push('selected');
+        return `<button type="button" class="${classes.join(' ')}" data-date="${c.dateStr}">${localizeNum(c.dayNum)}</button>`;
+      }).join('');
+      gridEl.querySelectorAll('.todo-cal-day').forEach(btn => {
+        btn.onclick = () => {
+          todoEditState.dateChip = 'pick';
+          todoEditState.dateValue = btn.dataset.date;
+          _closeTodoEditCalendar();
+          _renderTodoEditDateChips();
+          // Same as the add row's _selectTodoCalDay: refocus the Pick-date chip (still inside the
+          // edit row) instead of leaving focus on the now-hidden day button, which the browser
+          // would otherwise drop to <body> -- outside the row, which would read as "the edit is
+          // finished" to the focusout handler below before the student is done editing.
+          document.getElementById('todoEditPickChip').focus();
+        };
+      });
+    }
+
     function startEditTodoTitle(id) {
       const titleEl = document.getElementById(`todoItemTitle-${id}`);
       if (!titleEl) return;
       const task = todoState.tasks.find(x => x.id === id);
       if (!task) return;
       const original = task.title;
-      const originalTime = task.due_time || null;
+      const originalDue = _todoDateOnly(task.due_date);
       const wrapper = document.createElement('div');
       wrapper.className = 'todo-item-edit-row';
-      const input = document.createElement('input');
-      input.type = 'text';
-      input.className = 'todo-item-title-input';
-      input.value = original;
-      input.maxLength = 500;
-      const timeInput = document.createElement('input');
-      timeInput.type = 'time';
-      timeInput.className = 'todo-item-time-input';
-      timeInput.value = originalTime || '';
-      wrapper.appendChild(input);
-      wrapper.appendChild(timeInput);
+      wrapper.innerHTML = `<input type="text" class="todo-item-title-input" id="todoEditTitleInput" maxlength="500" value="${escapeHtml(original)}" />${_todoEditChipsHtml()}`;
       titleEl.replaceWith(wrapper);
+      const input = document.getElementById('todoEditTitleInput');
       input.focus();
       input.select();
+      _initTodoEditDateChips(originalDue);
+
       let done = false;
       const finish = (save) => {
         if (done) return;
         done = true;
         const value = input.value.trim();
-        const timeValue = timeInput.value || null;
+        const newDue = todoEditState ? todoEditState.dateValue : originalDue;
+        _closeTodoEditCalendar();
+        todoEditState = null;
         const titleChanged = Boolean(save && value && value !== original);
-        const timeChanged = save && timeValue !== originalTime;
-        if (titleChanged || timeChanged) {
+        const dateChanged = Boolean(save && newDue !== originalDue);
+        if (titleChanged || dateChanged) {
           const patch = {};
           if (titleChanged) patch.title = value;
-          if (timeChanged) patch.due_time = timeValue;
+          if (dateChanged) patch.due_date = newDue;
           saveTodoEdit(id, patch);
         } else {
           wrapper.replaceWith(titleEl);
@@ -9140,12 +9328,14 @@ function plainTextFromMarkdown(text) {
         if (e.key === 'Enter') { e.preventDefault(); finish(true); }
         else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
       });
-      timeInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') { e.preventDefault(); finish(true); }
-        else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
-      });
-      input.addEventListener('blur', (e) => { if (e.relatedTarget !== timeInput) finish(true); });
-      timeInput.addEventListener('blur', (e) => { if (e.relatedTarget !== input) finish(true); });
+      // Delegated on the wrapper (not just the title input) via the bubbling 'focusout' event --
+      // the edit row now has several focusable controls (date chips, calendar nav, calendar day
+      // cells), and focus can leave any of them, not just the title input, once the student starts
+      // clicking around the date picker. 'blur' doesn't bubble, so a single listener per control
+      // would be needed instead; 'focusout' bubbles, so one listener on the wrapper catches focus
+      // leaving any descendant. Only finishes when focus actually leaves the row (relatedTarget
+      // outside wrapper) -- moving focus between the row's own controls must not save/close it.
+      wrapper.addEventListener('focusout', (e) => { if (!wrapper.contains(e.relatedTarget)) finish(true); });
     }
 
     async function saveTodoEdit(id, patch) {
@@ -9211,14 +9401,6 @@ function plainTextFromMarkdown(text) {
       return localizeNum(d.toLocaleDateString(locale, { month: 'short', day: 'numeric' }));
     }
 
-    function formatTodoDueTime(timeStr) {
-      const [h, m] = timeStr.split(':').map(Number);
-      const d = new Date(2000, 0, 1, h, m);
-      if (isNaN(d.getTime())) return timeStr;
-      const locale = getLang() === 'hi' ? 'hi-IN' : 'en-IN';
-      return localizeNum(d.toLocaleTimeString(locale, { hour: 'numeric', minute: '2-digit' }));
-    }
-
     // Today/Tomorrow read better on a task row than "20 Oct"/"21 Oct" would -- falls back to the
     // short date for anything further out, same formatTodoDueDate used by the add-row's date tag.
     function _todoDueDateLabel(dateStr) {
@@ -9236,7 +9418,7 @@ function plainTextFromMarkdown(text) {
         <div class="todo-item${task.done ? ' todo-item-done' : ''}" id="todoItem-${task.id}">
           <button class="todo-check${task.done ? ' checked' : ''}" onclick="toggleTodoDone('${task.id}', ${!task.done})" aria-label="${task.done ? t('chat', 'todoMarkNotDone') : t('chat', 'todoMarkDone')}">${task.done ? '&#10003;' : ''}</button>
           <div class="todo-item-body">
-            <div class="todo-item-title" id="todoItemTitle-${task.id}">${escapeHtml(task.title)}${task.due_time ? ` <span class="todo-item-time">${escapeHtml(formatTodoDueTime(task.due_time))}</span>` : ''}</div>
+            <div class="todo-item-title" id="todoItemTitle-${task.id}">${escapeHtml(task.title)}</div>
             ${dateLabel ? `<div class="todo-item-date${overdue ? ' overdue' : ''}">${escapeHtml(dateLabel)}</div>` : ''}
           </div>
           <button class="todo-edit-btn" onclick="startEditTodoTitle('${task.id}')" title="${t('chat', 'todoEdit')}" data-i18n-title="chat.todoEdit" aria-label="${t('chat', 'todoEdit')}">
@@ -9284,11 +9466,7 @@ function plainTextFromMarkdown(text) {
         if (!a.due_date && !b.due_date) return 0;
         if (!a.due_date) return 1;
         if (!b.due_date) return -1;
-        if (a.due_date !== b.due_date) return a.due_date.localeCompare(b.due_date);
-        if (!a.due_time && !b.due_time) return 0;
-        if (!a.due_time) return 1;
-        if (!b.due_time) return -1;
-        return a.due_time.localeCompare(b.due_time);
+        return a.due_date.localeCompare(b.due_date);
       });
       area.innerHTML = sorted.map(renderTodoItem).join('');
     }
