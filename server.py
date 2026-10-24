@@ -4391,6 +4391,10 @@ def _answer_max_tokens(language: str) -> int:
 # stream_response's per-request answer instructions, kept as constants so the shared answer
 # cache's prompt version (ANSWER_CACHE_PROMPT_VERSION) changes whenever one of them does.
 CONCISE_STYLE_CONTEXT = "\n\nIMPORTANT: The student has selected CONCISE mode. Give a very short answer — maximum 3 sentences only. No bullet points, no key points section, no memory tricks. Just the core answer."
+# Deliberately NOT folded into ANSWER_CACHE_PROMPT_VERSION below -- that would reshuffle the
+# hash prefix for every cached answer_style (including detailed), invalidating the existing
+# cache. Medium is new, so it has no old cache to preserve.
+MEDIUM_STYLE_CONTEXT = "\n\nIMPORTANT: the student has selected MEDIUM mode. Give a balanced answer: the NEET importance line, the chapter line, a clear direct answer, then 2 to 3 key points. Keep every fact needed for a correct answer. Skip the memory trick, extra worked examples, and any repeated explanation. Aim for about half the length of a full detailed answer. Keep formulas, units and numbers exact."
 HINDI_LANG_CONTEXT = (
     f"\n\nIMPORTANT: {HINDI_ONLY_CORE} Proper nouns like NEET or NCERT also stay exactly "
     "as-is -- do not translate or romanize them. For the section headers specifically, use "
@@ -5016,8 +5020,15 @@ _ANSWER_CACHE_HEADERS = {"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bear
 def _answer_cache_language(language: str) -> str:
     return "hi" if language == "hi" else "en"
 
+_VALID_ANSWER_STYLES = ("concise", "medium", "detailed")
+
+def _normalize_answer_style(answer_style: Optional[str]) -> str:
+    """The single place that turns a client-supplied answer_style into one of the three known
+    values. Anything missing or unrecognized becomes "detailed", matching pre-medium behavior."""
+    return answer_style if answer_style in _VALID_ANSWER_STYLES else "detailed"
+
 def _answer_cache_style(answer_style: str) -> str:
-    return "concise" if answer_style == "concise" else "detailed"
+    return _normalize_answer_style(answer_style)
 
 _ANSWER_CACHE_MATH_MARKER_RE = re.compile(r'[$\\^_=]|[A-Za-z]\d|\d[A-Za-z]')
 
@@ -5736,6 +5747,7 @@ def _planner_upgrade_response(language: str) -> str:
     return f"PLANNER_UPGRADE: yes\n\n{reply}"
 
 async def stream_response(text: str, history: list = [], images: list = [], pdf: str = None, answer_style: str = "detailed", student_name: str = "", language: str = "en", user_id: str = "", personalize: bool = True, skip_cache: bool = False, ip: str = "", running_summary: str = "", dropped_question: str = "", dropped_answer: str = ""):
+    answer_style = _normalize_answer_style(answer_style)
     images = (images or [])[:3]
 
     # See _detect_image_correction's own docstring. Re-fetch failure (deleted file, network
@@ -5909,7 +5921,7 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
         import sys
         usable_student_name = _usable_student_name(student_name)
         name_context = f"\n\nThe student name is {usable_student_name}. Use their name naturally and occasionally in responses to make it personal." if usable_student_name else ""
-        style_context = CONCISE_STYLE_CONTEXT if answer_style == "concise" else ""
+        style_context = CONCISE_STYLE_CONTEXT if answer_style == "concise" else (MEDIUM_STYLE_CONTEXT if answer_style == "medium" else "")
         answer_max_tokens = _answer_max_tokens(language)
         # Deliberately NOT folded into full_system below -- appended last, after
         # student_context/graph_context/conciseness_context/mcq_context and (in the text branch)
@@ -9411,6 +9423,7 @@ async def chat_alternate_method_endpoint(req: ChatAlternateMethodRequest, reques
     if not req.question or not req.primary_answer:
         return {"alternate_method": ""}
 
+    req.answer_style = _normalize_answer_style(req.answer_style)
     # Same key the /chat shared cache uses (_answer_cache_key), computed here rather than trusting
     # a client-supplied hash, so this can never be pointed at the wrong cache row -- and only for a
     # chat's first message, the only kind of message the shared cache holds.

@@ -10704,8 +10704,8 @@ function openSettings() {
         set: (v) => setChatFont(v)
       },
       answerStyle: {
-        options: [{ value: 'concise', labelKey: 'concise' }, { value: 'detailed', labelKey: 'detailed' }],
-        get: () => localStorage.getItem('answerStyle') || 'detailed',
+        options: [{ value: 'concise', labelKey: 'concise' }, { value: 'medium', labelKey: 'medium' }, { value: 'detailed', labelKey: 'detailed' }],
+        get: () => { const v = localStorage.getItem('answerStyle'); return (v === 'concise' || v === 'medium' || v === 'detailed') ? v : 'detailed'; },
         set: (v) => setAnswerStyle(v)
       },
       language: {
