@@ -907,6 +907,7 @@ class ReportQuestionRequest(BaseModel):
     reason: str
     optional_note: str = ""
     solution_open: bool = False
+    source: Optional[str] = None  # None/"pyq" (default, real pyq.id) or "mock_test_question"
 
 class ReportDiagramRequest(BaseModel):
     diagram_id: int
@@ -7074,16 +7075,38 @@ async def report_question(req: ReportQuestionRequest, _: None = Depends(rate_lim
     req.user_id = verified_user_id
     if req.reason not in REPORT_REASONS:
         return {"error": "Invalid reason"}
+    is_mock_question = req.source == "mock_test_question"
     try:
         if req.user_id not in UNLIMITED_REPORT_USER_IDS:
+            # Daily cap is per source table -- a mock-test question report doesn't land in
+            # question_reports, so it's counted against mock_test_question_reports instead.
+            cap_table = "mock_test_question_reports" if is_mock_question else "question_reports"
             today_rows = await async_client.get(
-                f"{SUPABASE_URL}/rest/v1/question_reports", headers=ADMIN_HEADERS,
+                f"{SUPABASE_URL}/rest/v1/{cap_table}", headers=ADMIN_HEADERS,
                 params={"user_id": f"eq.{req.user_id}", "created_at": f"gte.{_ist_today_start_utc_iso()}",
                         "select": "id", "limit": MAX_REPORTS_PER_DAY}
             )
             if len(today_rows.json()) >= MAX_REPORTS_PER_DAY:
                 raise HTTPException(status_code=429, detail="You've reached today's report limit. Try again tomorrow.")
         note = (req.optional_note or "").strip()[:500] or None
+
+        if is_mock_question:
+            # Separate table from question_reports -- mock_test_questions.id is a bigint, while
+            # question_reports.pyq_id is a uuid tied to the `pyq` table, so this id can't be
+            # stored there (see create_mock_test_question_reports_table.sql). Official mock tests
+            # are a fixed paper, not a pool any student-facing query filters live the way
+            # pyq.is_active does, so there's no deactivate-on-report step here.
+            report_payload = {"question_id": req.pyq_id, "user_id": req.user_id, "reason": req.reason,
+                               "optional_note": note, "solution_open_at_report": req.solution_open}
+            response = await async_client.post(
+                f"{SUPABASE_URL}/rest/v1/mock_test_question_reports",
+                headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=minimal"},
+                json=report_payload
+            )
+            if response.status_code >= 400:
+                return {"error": response.text}
+            return {"success": True}
+
         report_payload = {"pyq_id": req.pyq_id, "user_id": req.user_id, "reason": req.reason, "optional_note": note, "solution_open_at_report": req.solution_open}
         response = await async_client.post(
             f"{SUPABASE_URL}/rest/v1/question_reports",
