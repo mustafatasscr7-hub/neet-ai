@@ -4121,7 +4121,7 @@ async def _stream_gemini_media(media_parts: list, doubt_type: str, media_files: 
         await _alert_all_providers_down(f"/chat ({doubt_type})", e, user_id)
         raise
 
-async def log_provider_usage(provider: str, peak_window: bool, input_tokens: int, output_tokens: int, cost: float, endpoint: str, user_id: str = "", cache_hit_tokens: int = 0, output_capped: bool = False):
+async def log_provider_usage(provider: str, peak_window: bool, input_tokens: int, output_tokens: int, cost: float, endpoint: str, user_id: str = "", cache_hit_tokens: int = 0, output_capped: bool = False, status: str = "ok"):
     """Additive to log_token_usage() (which drives per-user daily budget enforcement, keyed by
     total tokens only) -- this is purely for cost/provider analytics: one row per completed
     request in provider_usage_log (see create_provider_usage_log_table.sql; RLS locked to the
@@ -4131,9 +4131,11 @@ async def log_provider_usage(provider: str, peak_window: bool, input_tokens: int
 
     input_tokens is the TOTAL prompt (cache hits included); cache_hit_tokens is the part of it
     the provider billed at its cache-hit rate. output_capped marks a reply cut off by its
-    max_tokens. Both columns come from alter_provider_usage_log_cache_hits_and_endpoints.sql --
-    until that has been run, the insert is retried without them so cost rows keep landing."""
-    print(f"PROVIDER USAGE: provider={provider} peak_window={str(peak_window).lower()} input={input_tokens} cache_hit={cache_hit_tokens} output={output_tokens} cost=${cost:.6f} endpoint={endpoint}" + (" OUTPUT_CAPPED" if output_capped else ""), flush=True)
+    max_tokens. status defaults to "ok"; a failed primary-provider attempt (see
+    _stream_with_peak_fallback) logs "failed" with zero tokens/cost instead. All three of
+    cache_hit_tokens/output_capped/status come from migrations that may not have run yet --
+    until they have, the insert is retried without them so cost rows keep landing."""
+    print(f"PROVIDER USAGE: provider={provider} peak_window={str(peak_window).lower()} input={input_tokens} cache_hit={cache_hit_tokens} output={output_tokens} cost=${cost:.6f} endpoint={endpoint} status={status}" + (" OUTPUT_CAPPED" if output_capped else ""), flush=True)
     row = {
         "user_id": user_id or None,
         "provider": provider,
@@ -4144,13 +4146,14 @@ async def log_provider_usage(provider: str, peak_window: bool, input_tokens: int
         "endpoint": endpoint,
         "cache_hit_tokens": cache_hit_tokens,
         "output_capped": output_capped,
+        "status": status,
     }
     url = f"{SUPABASE_URL}/rest/v1/provider_usage_log"
     headers = {**ADMIN_HEADERS, "Content-Type": "application/json"}
     try:
         resp = await async_client.post(url, headers=headers, json=row)
         if resp.status_code >= 400 and "column" in resp.text:
-            legacy = {k: v for k, v in row.items() if k not in ("cache_hit_tokens", "output_capped")}
+            legacy = {k: v for k, v in row.items() if k not in ("cache_hit_tokens", "output_capped", "status")}
             await async_client.post(url, headers=headers, json=legacy)
     except Exception:
         pass
@@ -4615,10 +4618,12 @@ async def _stream_with_peak_fallback(system: str, messages: list, user_id: str, 
         is_peak = _is_deepseek_peak_hour()
         if force_qwen or is_peak:
             primary = _stream_qwen(system, messages, user_id, ip, endpoint, billing_context, max_tokens=max_tokens)
+            primary_provider, primary_peak_window = "qwen-flash", True
             fallback_factory = lambda: _stream_deepseek(system, messages, user_id, ip, is_peak, endpoint, billing_context, max_tokens=max_tokens)
             fallback_label = "DEEPSEEK"
         else:
             primary = _stream_deepseek(system, messages, user_id, ip, False, endpoint, billing_context, max_tokens=max_tokens)
+            primary_provider, primary_peak_window = DEEPSEEK_MODEL, False
             fallback_factory = lambda: _stream_qwen(system, messages, user_id, ip, endpoint, billing_context, max_tokens=max_tokens)
             fallback_label = "QWEN"
         sent_any = False
@@ -4631,6 +4636,10 @@ async def _stream_with_peak_fallback(system: str, messages: list, user_id: str, 
             if sent_any:
                 raise
             print(f"PRIMARY PROVIDER UNAVAILABLE BEFORE FIRST TOKEN, FALLING BACK TO {fallback_label}: {e}", flush=True)
+            try:
+                asyncio.create_task(log_provider_usage(primary_provider, primary_peak_window, 0, 0, 0, endpoint, user_id, status=f"failed:{type(e).__name__}"))
+            except Exception:
+                pass
         async for chunk in _first_token_timeout_guard(fallback_factory()):
             yield chunk
     except Exception as e:
