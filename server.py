@@ -4053,6 +4053,13 @@ _GENERIC_STREAM_ERROR_HI = "कुछ गड़बड़ हो गई। कृ
 def _friendly_stream_error(language: str) -> str:
     return _GENERIC_STREAM_ERROR_HI if language == "hi" else _GENERIC_STREAM_ERROR_EN
 
+# Prefix so clients can detect a friendly stream error (vs normal model output) and strip it
+# before display / skip saving it to history. Must stay in sync with chat.html's marker check.
+STREAM_ERROR_MARKER = "[[NEETAI_ERROR]]"
+
+def _error_stream_chunk(language: str) -> str:
+    return STREAM_ERROR_MARKER + _friendly_stream_error(language)
+
 async def _stream_gemini_media(media_parts: list, doubt_type: str, media_files: list, full_system: str, user_message: str, user_id: str, ip: str):
     """Shared by stream_response's images and pdf branches -- previously ~90% identical inline code
     duplicated in both (cache lookup, the actual Gemini call, cost tracking, media-doubt logging),
@@ -6381,7 +6388,7 @@ the question, ignore this instruction entirely and use the plain "Answer:" heade
                     yield _encode_running_summary_marker(new_summary)
     except Exception as e:
         print(f"STREAMING ERROR: {e}")
-        yield _friendly_stream_error(language)
+        yield _error_stream_chunk(language)
 
 SOLVE_CACHE_HEADERS = {
     "apikey": SUPABASE_SERVICE_KEY,
@@ -6602,7 +6609,7 @@ async def stream_solve_response(req: SolveRequest, cached_solution, ip: str):
                 await _cache_or_regenerate_solution(req, full_solution, ip)
     except Exception as e:
         print(f"SOLVE STREAMING ERROR: {e}")
-        yield _friendly_stream_error(req.language)
+        yield _error_stream_chunk(req.language)
 
 async def _fetch_gemini_image_part(url: str):
     """Fetches a diagram's real bytes from its public Storage URL and wraps them as a Gemini

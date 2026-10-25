@@ -3307,6 +3307,16 @@ let selectedImages = [];
     // line -- instead of waiting for the entire answer. extractAnswerMeta no-ops safely (returns
     // the text unchanged) both before that line is complete and for any bubble that never has one
     // (e.g. the alternate-method sub-explanation rendered via this same function at solDiv).
+    // Prefix server.py adds to a friendly stream error (its STREAM_ERROR_MARKER constant) so this
+    // page can tell a failed stream apart from real model output -- used to strip it before
+    // display and to skip saving it to currentConversation/Supabase. Must stay in sync with that
+    // server-side constant.
+    const STREAM_ERROR_MARKER = '[[NEETAI_ERROR]]';
+    function stripStreamErrorMarker(text) {
+      if (text.startsWith(STREAM_ERROR_MARKER)) return { isError: true, text: text.slice(STREAM_ERROR_MARKER.length) };
+      return { isError: false, text };
+    }
+
     function renderStreamingText(bubble, fullText) {
       const { cleanText, metaHtml } = extractAnswerMeta(fullText);
       const safeLen = findSafeRenderBoundary(cleanText);
@@ -4399,7 +4409,7 @@ let selectedImages = [];
                     fullText += chunk[ci];
                     const now = Date.now();
                     if (now - lastRenderTime >= RENDER_THROTTLE_MS) {
-                      renderStreamingText(solDiv, fullText);
+                      renderStreamingText(solDiv, stripStreamErrorMarker(fullText).text);
                       lastRenderTime = now;
                     }
                     // Same fix as streamAIResponse's main loop -- yielding every character
@@ -4408,7 +4418,14 @@ let selectedImages = [];
                     if (ci % 50 === 0) await new Promise(r => setTimeout(r, 1));
                   }
                 }
-                solDiv.innerHTML = parseWithMath(fullText);
+                {
+                  const { isError: solveIsError, text: solveErrorText } = stripStreamErrorMarker(fullText);
+                  if (solveIsError) {
+                    solDiv.innerHTML = `<span style="color:#ef4444;">${parseWithMath(solveErrorText)}</span>`;
+                  } else {
+                    solDiv.innerHTML = parseWithMath(fullText);
+                  }
+                }
                 solved = true;
                 visible = true;
                 solBtn.textContent = 'Hide Solution';
@@ -8191,7 +8208,7 @@ function plainTextFromMarkdown(text) {
             }
             const now = Date.now();
             if (!isClarification && !isPlannerTask && !isPlannerUpgrade && now - lastRenderTime >= RENDER_THROTTLE_MS) {
-              renderStreamingText(textArea, fullText);
+              renderStreamingText(textArea, stripStreamErrorMarker(fullText).text);
               lastRenderTime = now;
               // Deliberately no scrollBottom() here -- the one scrollBottom() call made when the
               // typing indicator first appears (see above, right after streamAIResponse starts)
@@ -8337,6 +8354,16 @@ function plainTextFromMarkdown(text) {
           refreshUsageBanner();
         } else {
 
+        const { isError: streamIsError, text: streamErrorText } = stripStreamErrorMarker(fullText);
+        if (streamIsError) {
+          // server.py's friendly-error marker (STREAM_ERROR_MARKER) -- this turn failed, so show
+          // the message like a plain AI reply but treat it as a dead end: no metaHtml/diagram/PYQ
+          // buttons, no alternate-method lookup, and never saved to currentConversation/Supabase,
+          // so a reload or retry never replays a stale error as if it were the real answer.
+          textArea.innerHTML = parseWithMath(streamErrorText);
+          refreshUsageBanner();
+        } else {
+
         // Backstop for the rare case where the model's entire completion was just a stripped
         // marker line with nothing else at all (confirmed live: Qwen returning only
         // "DOUBT_TYPE: conversational" and stopping generation right there, for an unusual/
@@ -8472,6 +8499,7 @@ function plainTextFromMarkdown(text) {
           await client.from('chats').update({ messages: currentConversation }).eq('id', conv.supabaseId).eq('user_id', sessionAfter.user.id);
         }
         refreshUsageBanner();
+        }
         }
         replyReceived = true;
 
