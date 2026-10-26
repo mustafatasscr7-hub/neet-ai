@@ -1,0 +1,43 @@
+/* Site-wide scrollbar style, shared by every student-facing page. One consistent dark,
+   blue-theme-matching look instead of each page/element inventing its own width and colors.
+   Chromium/Safari read the ::-webkit-scrollbar rules below; Firefox ignores those entirely
+   and needs scrollbar-width/scrollbar-color instead -- but Chrome and Edge now disable their
+   OWN ::-webkit-scrollbar support the moment scrollbar-width or scrollbar-color is set on the
+   same element, so that fallback is scoped behind @supports not selector(::-webkit-scrollbar)
+   to keep it Firefox-only and avoid a double/conflicting scrollbar in Chromium. */
+:root {
+  --scrollbar-size: 8px;
+  --scrollbar-track: transparent;
+  --scrollbar-thumb: #3a3a42;
+  --scrollbar-thumb-hover: #55555f;
+}
+body.light-mode {
+  --scrollbar-thumb: #d0d0d5;
+  --scrollbar-thumb-hover: #b8b8c0;
+}
+
+*::-webkit-scrollbar {
+  width: var(--scrollbar-size);
+  height: var(--scrollbar-size);
+}
+*::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-thumb:hover,
+*::-webkit-scrollbar-thumb:active {
+  background: var(--scrollbar-thumb-hover);
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: auto;
+    scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+  }
+}
