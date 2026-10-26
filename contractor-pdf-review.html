@@ -61,6 +61,8 @@
   .scan-btn { background: #4f8ef7; border: none; border-radius: 8px; padding: 10px 20px; color: white; font-size: 13px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
   .scan-btn:hover:not(:disabled) { background: #3b7de8; }
   .scan-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  #scanProgress { display: none; height: 4px; background: #1e1e1e; border-radius: 2px; margin-top: 8px; overflow: hidden; }
+  #scanProgressFill { height: 100%; width: 0; background: #4f8ef7; transition: width 0.3s; }
   #scanStatus { font-size: 12px; color: #4f8ef7; margin-top: 10px; display: none; }
 
   #summaryBar { display: none; align-items: center; gap: 16px; flex-wrap: wrap; background: #111; border: 1px solid #1e1e1e; border-radius: 10px; padding: 14px 16px; margin-bottom: 16px; }
@@ -264,12 +266,23 @@
 
     <div id="pdfModeSection">
       <h2>2. Upload PDF</h2>
+      <div style="margin-bottom:10px;">
+        <label style="display:block;font-size:11px;color:#888;margin-bottom:4px;">Layout</label>
+        <select id="pdfLayoutSelect" style="width:100%;max-width:300px;background:#0d0d0d;border:1px solid #2a2a2a;border-radius:8px;padding:8px 10px;color:#ececec;font-family:'Inter',sans-serif;font-size:13px;">
+          <option value="standard">Standard (official question papers)</option>
+          <option value="3col_book">3-column book (coaching-book PYQ chapters)</option>
+          <option value="scanned_ocr">Scanned pages (free OCR)</option>
+          <!-- Gemini scanned mode kept hidden here too, matching admin-pdf-review.html (2026-10-14) -->
+        </select>
+      </div>
       <div class="upload-row">
         <input type="file" id="pdfFile" accept="application/pdf" onchange="updateScanButton()"/>
         <button type="button" class="scan-btn" id="scanBtn" disabled onclick="scanPdf()">Scan PDF</button>
       </div>
       <div id="scanBtnHint" style="font-size:11px;color:#666;margin-top:8px;">Pick a subject above and choose a PDF file to enable scanning.</div>
       <div id="scanStatus"></div>
+      <div id="scanProgress"><div id="scanProgressFill"></div></div>
+      <div id="scanModeHint" style="display:none;font-size:12px;color:#4f8ef7;margin-top:8px;">Looks like scanned pages, try Scanned pages (free OCR) mode.</div>
     </div>
 
     <div id="pasteModeSection" style="display:none;">
@@ -1656,10 +1669,47 @@
     }
   }
 
+  // Scanned mode only: every page is a paid Gemini vision call, so show the estimate (and the
+  // per-run page cap) before anything runs. Returns null if cancelled, otherwise
+  // { confirmOverCap } to send with the scan. Ported verbatim from admin-pdf-review.html.
+  async function confirmScannedRun(b64) {
+    const res = await fetch(`${API_BASE}/admin/scan-pdf/estimate`, {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ subject: currentSubject, data: b64 })
+    });
+    if (res.status === 401) { logout(); return null; }
+    if (!res.ok) throw new Error(await describeHttpError(res));
+    const est = await res.json();
+    if (est.error) throw new Error(est.error);
+    const overCap = est.pages > est.max_pages;
+    const lines = [
+      `${est.pages} page${est.pages === 1 ? '' : 's'}: ${est.uncached_pages} to read, ${est.cached_pages} already cached (free).`,
+      `Estimated cost: $${est.estimated_usd.toFixed(4)} (${est.model}).`
+    ];
+    if (overCap) lines.push(`\nThis is over the ${est.max_pages}-page cap for one run. Run all ${est.pages} pages anyway?`);
+    const ok = await showConfirmModal(lines.join('\n'), { confirmLabel: overCap ? 'Run anyway' : 'Run scan' });
+    return ok ? { confirmOverCap: overCap } : null;
+  }
+
   async function scanPdf() {
     const file = document.getElementById('pdfFile').files[0];
     if (!file || !currentSubject || !currentUploaderName) return;
     if (!(await checkPdfAlreadyProcessed(file.name))) return;
+    const layout = document.getElementById('pdfLayoutSelect').value;
+    let confirmOverCap = false;
+    if (layout === 'scanned') {
+      const statusEl = document.getElementById('scanStatus');
+      try {
+        const choice = await confirmScannedRun(await fileToBase64(file));
+        if (!choice) return;
+        confirmOverCap = choice.confirmOverCap;
+      } catch (e) {
+        statusEl.style.display = 'block';
+        statusEl.textContent = 'Could not estimate cost: ' + e.message;
+        return;
+      }
+    }
     currentPdfFilename = file.name;
     currentBatchId = newBatchId(currentPdfFilename);
     currentProcessedPdfId = null;
@@ -1668,18 +1718,29 @@
     const scanBtn = document.getElementById('scanBtn');
     scanBtn.disabled = true;
     statusEl.style.display = 'block';
-    statusEl.textContent = 'Scanning your PDF... this can take a while for many pages.';
+    statusEl.textContent = layout === 'scanned_ocr'
+      ? 'Starting free OCR...'
+      : 'Scanning your PDF... this can take a while for many pages.';
     document.getElementById('flaggedPagesBanner').style.display = 'none';
+    document.getElementById('scanModeHint').style.display = 'none';
     try {
       const b64 = await fileToBase64(file);
-      const res = await fetch(`${API_BASE}/admin/scan-pdf`, {
-        method: 'POST',
-        headers: authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ subject: currentSubject, data: b64, filename: file.name, uploader_name: currentUploaderName })
-      });
-      if (res.status === 401) return logout();
-      if (!res.ok) { statusEl.textContent = 'Scan failed: ' + await describeHttpError(res); return; }
-      const data = await res.json();
+      const body = { subject: currentSubject, data: b64, filename: file.name, uploader_name: currentUploaderName, layout };
+      if (layout === 'scanned') body.confirm_over_cap = confirmOverCap;
+      let data;
+      if (layout === 'scanned_ocr') {
+        data = await runOcrJob(body, statusEl);
+        if (!data) return;
+      } else {
+        const res = await fetch(`${API_BASE}/admin/scan-pdf`, {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify(body)
+        });
+        if (res.status === 401) return logout();
+        if (!res.ok) { statusEl.textContent = 'Scan failed: ' + await describeHttpError(res); return; }
+        data = await res.json();
+      }
       currentProcessedPdfId = data.processed_pdf_id || null;
       if (data.error) { statusEl.textContent = 'Scan failed: ' + data.error; return; }
       statusEl.style.display = 'none';
@@ -1691,7 +1752,9 @@
         correct_answer: q.correct_answer || '', question_type: q.question_type || 'mcq',
         has_diagram: !!q.has_diagram, diagram_url: null,
         option_a_diagram_url: null, option_b_diagram_url: null, option_c_diagram_url: null, option_d_diagram_url: null,
-        year: q.year, source_page: q.source_page, display_number: null,
+        year: q.year, source_page: q.source_page,
+        // Only scanned mode returns the printed question number; the other modes keep auto-numbering.
+        display_number: q.question_number != null ? String(q.question_number) : null,
         saved: false, savePending: false
       }));
       document.getElementById('statPageCount').textContent = data.pages_scanned || 0;
@@ -1699,11 +1762,69 @@
       updateSummaryBar();
       document.getElementById('summaryBar').style.display = 'flex';
       renderFlaggedPagesBanner(data.flagged_pages || []);
+      if (data.cost && layout === 'scanned_ocr') {
+        statusEl.style.display = 'block';
+        const cachedNote = data.cost.pages_cached ? `, ${data.cost.pages_cached} from cache` : '';
+        statusEl.textContent = `Free OCR read ${data.cost.pages_called} page${data.cost.pages_called === 1 ? '' : 's'}${cachedNote} in ${data.cost.seconds}s (${data.cost.seconds_per_page}s per page). Cost: $0.`;
+      } else if (data.cost) {
+        statusEl.style.display = 'block';
+        statusEl.textContent = `Read ${data.cost.pages_called} page${data.cost.pages_called === 1 ? '' : 's'} (${data.cost.pages_cached} from cache). Actual cost: $${data.cost.usd.toFixed(4)}.`;
+      }
+      if (layout === 'standard' && (data.flagged_pages || []).some(f => (f.reason || '').startsWith('Extraction found little or no usable text'))) {
+        document.getElementById('scanModeHint').style.display = 'block';
+      }
       saveDraftNow(); // a fresh scan just replaced the whole batch -- worth persisting right away, not after a debounce delay
     } catch (e) {
       statusEl.textContent = 'Scan failed — check connection and try again.';
     } finally {
+      document.getElementById('scanProgress').style.display = 'none';
       scanBtn.disabled = !currentUploaderName || !currentSubject || !document.getElementById('pdfFile').files[0];
+    }
+  }
+
+  // Free OCR mode runs as a server-side job (a long chapter would outlast one request): start it,
+  // then poll pages done / total into the progress bar. Ported verbatim from admin-pdf-review.html.
+  async function runOcrJob(body, statusEl) {
+    const bar = document.getElementById('scanProgress');
+    const fill = document.getElementById('scanProgressFill');
+    const res = await fetch(`${API_BASE}/admin/scan-pdf/ocr-job`, {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(body)
+    });
+    if (res.status === 401) { logout(); return null; }
+    if (!res.ok) { statusEl.textContent = 'Scan failed: ' + await describeHttpError(res); return null; }
+    const start = await res.json();
+    if (start.error) { statusEl.textContent = 'Scan failed: ' + start.error; return null; }
+    fill.style.width = '0';
+    bar.style.display = 'block';
+    let misses = 0;
+    while (true) {
+      await new Promise(r => setTimeout(r, 2000));
+      let job;
+      try {
+        const poll = await fetch(`${API_BASE}/admin/scan-pdf/ocr-job/${encodeURIComponent(start.job_id)}`, { headers: authHeaders() });
+        if (poll.status === 401) { logout(); return null; }
+        if (!poll.ok) throw new Error(await describeHttpError(poll));
+        job = await poll.json();
+        misses = 0;
+      } catch (e) {
+        // A dropped poll isn't a failed scan -- the job keeps running server-side.
+        if (++misses >= 5) { statusEl.textContent = 'Lost contact with the server while scanning: ' + e.message; return null; }
+        continue;
+      }
+      if (job.error && !job.status) { statusEl.textContent = 'Scan failed: ' + job.error; return null; }
+      const total = job.pages_total || start.pages_total || 0;
+      const done = job.pages_done || 0;
+      fill.style.width = total ? `${Math.round(100 * done / total)}%` : '0';
+      if (job.status === 'queued') statusEl.textContent = 'Waiting for another free OCR scan to finish...';
+      else if (job.status === 'running') statusEl.textContent = `Running free OCR... ${done} of ${total} page${total === 1 ? '' : 's'} read.`;
+      else if (job.status === 'error') { statusEl.textContent = 'Scan failed: ' + job.error; return null; }
+      else if (job.status === 'done') {
+        const data = job.result;
+        if (data.error) { statusEl.textContent = 'Scan failed: ' + data.error; return null; }
+        return data;
+      }
     }
   }
 
