@@ -40,6 +40,14 @@
   .subject-btn:hover { border-color: #4f8ef750; }
   .subject-btn.active { border-color: #4f8ef7; background: #4f8ef712; color: #4f8ef7; }
 
+  /* Own class, not .subject-btn -- same reasoning as .mode-btn below: selectSubject() and
+     selectUploader() each re-query only their own class to toggle "active", so one picker's
+     selection never clears the other's. */
+  .uploader-picker { display: flex; gap: 10px; margin-bottom: 14px; }
+  .uploader-btn { flex: 1; background: #0d0d0d; border: 1px solid #2a2a2a; color: #ccc; padding: 12px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; text-align: center; }
+  .uploader-btn:hover { border-color: #4f8ef750; }
+  .uploader-btn.active { border-color: #4f8ef7; background: #4f8ef712; color: #4f8ef7; }
+
   /* Separate class from .subject-btn (not just a style choice) -- selectSubject() re-queries
      every .subject-btn on the page to toggle its own active state, and a shared class would
      have made it silently clear the mode-tab's active highlight every time the subject changes. */
@@ -241,6 +249,12 @@
       <button type="button" class="mode-btn" data-mode="paste" onclick="selectInputMode('paste')">📋 Paste LaTeX (Mathpix/SimpleTex)</button>
     </div>
 
+    <h2>Who is uploading?</h2>
+    <div class="uploader-picker" id="uploaderPicker">
+      <button type="button" class="uploader-btn" data-uploader="Mr. Md Moniruzzaman" onclick="selectUploader('Mr. Md Moniruzzaman')">Mr. Md Moniruzzaman</button>
+      <button type="button" class="uploader-btn" data-uploader="Admin" onclick="selectUploader('Admin')">Admin</button>
+    </div>
+
     <h2>1. Choose subject</h2>
     <div class="subject-picker" id="subjectPicker">
       <button type="button" class="subject-btn" data-subject="Biology" onclick="selectSubject('Biology')">Biology</button>
@@ -298,6 +312,9 @@
   // this repo for setup.
   const API_BASE = '/api';
   let adminKey = sessionStorage.getItem('admin_key') || '';
+  const UPLOADER_STORAGE_KEY = 'contractor_uploader_name'; // remembers the last picked name across reloads (per browser, not per server session)
+  let ALLOWED_UPLOADER_NAMES = ['Mr. Md Moniruzzaman', 'Admin']; // overwritten from /contractor-pdf-review/verify once logged in, so a future name change doesn't need a redeploy of this page
+  let currentUploaderName = (function() { try { return localStorage.getItem(UPLOADER_STORAGE_KEY) || null; } catch (e) { return null; } })();
   let currentSubject = null;
   let currentPdfFilename = null; // filename of the last-scanned PDF, attached to saves so it shows up in Processed PDFs
   let currentBatchId = null; // one upload batch per scanned PDF / parsed paste -- saved as pyq.batch_id for the review filters
@@ -473,11 +490,43 @@
     document.getElementById('gatePassword').value = '';
   }
 
+  function selectUploader(name) {
+    currentUploaderName = name;
+    try { localStorage.setItem(UPLOADER_STORAGE_KEY, name); } catch (e) {}
+    document.querySelectorAll('.uploader-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.uploader === name));
+    updateScanButton();
+  }
+
+  // Hits the portal's own login-check endpoint again (harmless -- it's stateless) purely to read
+  // the allowed-names list it now returns, so this page doesn't need the two names hardcoded in
+  // two places. Also clears a stale localStorage pick from a possible future name change.
+  async function loadAllowedUploaderNames() {
+    try {
+      const res = await fetch(`${API_BASE}/contractor-pdf-review/verify`, { method: 'POST', headers: authHeaders() });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (Array.isArray(data.uploader_names) && data.uploader_names.length) {
+        ALLOWED_UPLOADER_NAMES = data.uploader_names;
+        if (currentUploaderName && !ALLOWED_UPLOADER_NAMES.includes(currentUploaderName)) {
+          currentUploaderName = null;
+          try { localStorage.removeItem(UPLOADER_STORAGE_KEY); } catch (e) {}
+          document.querySelectorAll('.uploader-btn').forEach(btn => btn.classList.remove('active'));
+          updateScanButton();
+        }
+      }
+    } catch (e) {}
+  }
+
   function enterDashboard() {
     document.getElementById('gateOverlay').style.display = 'none';
     document.getElementById('dashboard').style.display = 'block';
+    if (currentUploaderName) {
+      document.querySelectorAll('.uploader-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.uploader === currentUploaderName));
+    }
+    loadAllowedUploaderNames();
     checkForDraftAndShowBanner();
     loadFixList();
+    updateScanButton();
   }
 
   if (adminKey) enterDashboard();
@@ -664,10 +713,11 @@
     updateParseButton();
     populatePasteChapterSelect();
     const file = document.getElementById('pdfFile').files[0];
-    document.getElementById('scanBtn').disabled = !currentSubject || !file;
+    document.getElementById('scanBtn').disabled = !currentUploaderName || !currentSubject || !file;
     const hintEl = document.getElementById('scanBtnHint');
     if (!hintEl) return;
-    if (currentSubject && file) hintEl.textContent = '';
+    if (!currentUploaderName) hintEl.textContent = 'Choose who is uploading above to enable scanning.';
+    else if (currentSubject && file) hintEl.textContent = '';
     else if (!currentSubject && !file) hintEl.textContent = 'Pick a subject above and choose a PDF file to enable scanning.';
     else if (!currentSubject) hintEl.textContent = 'Pick a subject above to enable scanning.';
     else hintEl.textContent = 'Choose a PDF file to enable scanning.';
@@ -676,9 +726,11 @@
   function updateParseButton() {
     const btn = document.getElementById('parseTextBtn');
     if (!btn) return;
-    btn.disabled = !currentSubject;
+    btn.disabled = !currentUploaderName || !currentSubject;
     const hintEl = document.getElementById('parseBtnHint');
-    if (hintEl) hintEl.textContent = currentSubject ? '' : 'Pick a subject above to enable parsing.';
+    if (!hintEl) return;
+    if (!currentUploaderName) hintEl.textContent = 'Choose who is uploading above to enable parsing.';
+    else hintEl.textContent = currentSubject ? '' : 'Pick a subject above to enable parsing.';
   }
 
   // ---------------- Input mode: PDF Scan vs Paste LaTeX ----------------
@@ -1399,6 +1451,7 @@
   function parsePastedTextIntoBlocks() {
     const raw = document.getElementById('pasteTextarea').value;
     const hintEl = document.getElementById('parseHint');
+    if (!currentUploaderName) { hintEl.textContent = 'Choose who is uploading first.'; hintEl.style.color = '#ef4444'; return; }
     if (!currentSubject) { hintEl.textContent = 'Pick a subject first.'; hintEl.style.color = '#ef4444'; return; }
     if (!raw.trim()) { hintEl.textContent = 'Paste some Mathpix or SimpleTex text first.'; hintEl.style.color = '#ef4444'; return; }
     // Mathpix's \item[N.] marker is unambiguous and already has its own dedicated, unchanged
@@ -1605,7 +1658,7 @@
 
   async function scanPdf() {
     const file = document.getElementById('pdfFile').files[0];
-    if (!file || !currentSubject) return;
+    if (!file || !currentSubject || !currentUploaderName) return;
     if (!(await checkPdfAlreadyProcessed(file.name))) return;
     currentPdfFilename = file.name;
     currentBatchId = newBatchId(currentPdfFilename);
@@ -1622,7 +1675,7 @@
       const res = await fetch(`${API_BASE}/admin/scan-pdf`, {
         method: 'POST',
         headers: authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ subject: currentSubject, data: b64, filename: file.name })
+        body: JSON.stringify({ subject: currentSubject, data: b64, filename: file.name, uploader_name: currentUploaderName })
       });
       if (res.status === 401) return logout();
       if (!res.ok) { statusEl.textContent = 'Scan failed: ' + await describeHttpError(res); return; }
@@ -1650,7 +1703,7 @@
     } catch (e) {
       statusEl.textContent = 'Scan failed — check connection and try again.';
     } finally {
-      scanBtn.disabled = !currentSubject || !document.getElementById('pdfFile').files[0];
+      scanBtn.disabled = !currentUploaderName || !currentSubject || !document.getElementById('pdfFile').files[0];
     }
   }
 
@@ -2632,7 +2685,7 @@
       const res = await fetch(`${API_BASE}/admin/pyq-bulk-create`, {
         method: 'POST',
         headers: authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ questions: [payload], batch_id: currentBatchId })
+        body: JSON.stringify({ questions: [payload], batch_id: currentBatchId, uploader_name: currentUploaderName })
       });
       if (res.status === 401) return logout();
       if (!res.ok) {
@@ -2724,7 +2777,7 @@
         const res = await fetch(`${API_BASE}/admin/pyq-bulk-create`, {
           method: 'POST',
           headers: authHeaders({ 'Content-Type': 'application/json' }),
-          body: JSON.stringify({ questions: toSave.map(t => t.payload), batch_id: currentBatchId })
+          body: JSON.stringify({ questions: toSave.map(t => t.payload), batch_id: currentBatchId, uploader_name: currentUploaderName })
         });
         if (res.status === 401) return logout();
         if (!res.ok) { alert('Bulk save failed: ' + await describeHttpError(res)); return; }

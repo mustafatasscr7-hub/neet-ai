@@ -980,6 +980,12 @@ class ScanPdfRequest(BaseModel):
     subject: str
     data: str  # base64-encoded PDF bytes
     filename: Optional[str] = None  # original filename, for processed_pdfs tracking
+    # Who is actually at the keyboard for this upload (contractor-pdf-review.html's "Who is
+    # uploading?" picker) -- validated against PYQ_UPLOADER_NAMES below but never persisted from
+    # this endpoint itself (scan-pdf doesn't write to the pyq table); the real save happens via
+    # pyq-bulk-create, which stores it. Kept here too so an invalid value is caught at scan time,
+    # not only at save time.
+    uploader_name: Optional[str] = None
     # "standard" (default) = process_pyq_vision's existing pipeline, completely unchanged.
     # "3col_book" = process_pyq_book_3col's layout for 3-column coaching-book PDFs (zero-padded
     # question numbers, lettered (a)-(d) options, printed "Ans. (x)") -- a separate module, never
@@ -1091,12 +1097,21 @@ class PyqQuestionCreate(BaseModel):
     uploaded_by: Optional[str] = None
     uploaded_at: Optional[str] = None
     batch_id: Optional[str] = None
+    # Undo-restore-only, same reasoning as uploaded_by right above: lets a restored row keep the
+    # uploader name it had before deletion. A contractor's request never sets this (only the
+    # admin-key branch in pyq-bulk-create reads it).
+    uploader_name: Optional[str] = None
 
 class PyqBulkCreate(BaseModel):
     questions: List[PyqQuestionCreate]
     # One id per upload session (a PDF's review), made by the uploading page so several saves
     # from the same PDF land in the same batch. Missing or malformed -> the server makes one.
     batch_id: Optional[str] = None
+    # Who is uploading this whole batch (contractor-pdf-review.html's "Who is uploading?" picker),
+    # shared across every question in `questions` the same way batch_id is. None (an old cached
+    # portal page, or the admin tool's own undo-restore call) stores null -- meaning "earlier
+    # upload" everywhere that reads this column.
+    uploader_name: Optional[str] = None
 
 class PageRange(BaseModel):
     start: int
@@ -1244,6 +1259,10 @@ def verify_admin(request: Request, x_admin_key: str = Header(None)):
 # touching the founder's own admin login. Unset by default (contractor access is opt-in via env).
 CONTRACTOR_PDF_KEY = os.getenv("CONTRACTOR_PDF_KEY")
 
+# The two people allowed to be named as a question's uploader (contractor-pdf-review.html's "Who
+# is uploading?" picker) -- not auth, just an attribution tag stored in pyq.uploader_name.
+PYQ_UPLOADER_NAMES = ("Mr. Md Moniruzzaman", "Admin")
+
 def verify_contractor_pdf_review(request: Request, x_admin_key: str = Header(None)):
     """Login check for the isolated tool's own gate -- deliberately its OWN endpoint
     (/contractor-pdf-review/verify) rather than widening /admin/verify, because /admin/verify is
@@ -1299,7 +1318,7 @@ def verify_admin_or_contractor_pdf(request: Request, x_admin_key: str = Header(N
 
 @app.post("/contractor-pdf-review/verify")
 async def contractor_pdf_review_verify(_: None = Depends(verify_contractor_pdf_review)):
-    return {"ok": True}
+    return {"ok": True, "uploader_names": list(PYQ_UPLOADER_NAMES)}
 
 # ---------- Rate limiting ----------
 # Carrier NAT puts many students behind one public IP, so limits are keyed on who is asking, not
@@ -8394,6 +8413,7 @@ async def admin_pyq_search(
     reviewed: str = None,
     review_status: str = None,
     uploaded_by: str = None,
+    uploader_name: str = None,
     batch_id: str = None,
     uploaded_date: str = None,
     warnings: bool = False,
@@ -8418,7 +8438,7 @@ async def admin_pyq_search(
             "is_active,year,source_tag,class,has_diagram,diagram_url,option_a_diagram_url,"
             "option_b_diagram_url,option_c_diagram_url,option_d_diagram_url,reviewed,created_at,"
             "question_type,difficulty,"
-            "review_status,review_note,uploaded_by,uploaded_at,batch_id,reviewed_at,reviewed_by"
+            "review_status,review_note,uploaded_by,uploaded_at,batch_id,reviewed_at,reviewed_by,uploader_name"
             if full else
             "id,subject,chapter,question,correct_answer,is_active,year"
         )
@@ -8445,6 +8465,13 @@ async def admin_pyq_search(
             params["review_status"] = f"eq.{review_status}"
         if uploaded_by in PYQ_UPLOADERS:
             params["uploaded_by"] = f"eq.{uploaded_by}"
+        # "__earlier__" is the admin preview's sentinel for "no name" (every row uploaded before
+        # this column existed, plus any row genuinely saved without one) -- a real uploader_name
+        # value is never this string, so there's no collision to worry about.
+        if uploader_name == "__earlier__":
+            params["uploader_name"] = "is.null"
+        elif uploader_name in PYQ_UPLOADER_NAMES:
+            params["uploader_name"] = f"eq.{uploader_name}"
         if batch_id and _BATCH_ID_RE.match(batch_id):
             params["batch_id"] = f"eq.{batch_id}"
         # One India-time calendar day of uploads, as a plain and-group so it combines with the
@@ -9589,6 +9616,8 @@ def admin_scan_pdf(req: ScanPdfRequest, _: None = Depends(verify_admin_or_contra
         return {"error": "Invalid subject"}
     if req.layout not in ("standard", "3col_book", "scanned", "scanned_ocr"):
         return {"error": "Invalid layout"}
+    if req.uploader_name and req.uploader_name not in PYQ_UPLOADER_NAMES:
+        raise HTTPException(status_code=400, detail="Invalid uploader name")
     try:
         pdf_bytes = base64.b64decode(req.data)
     except Exception:
@@ -10653,6 +10682,8 @@ async def admin_pyq_bulk_create(body: PyqBulkCreate, role: str = Depends(verify_
         return {"error": "No questions provided"}
     if any(q.subject not in ("Biology", "Physics", "Chemistry") for q in body.questions):
         return {"error": "Invalid subject"}
+    if body.uploader_name is not None and body.uploader_name not in PYQ_UPLOADER_NAMES:
+        raise HTTPException(status_code=400, detail="Invalid uploader name")
     # Who uploaded comes from the key that authenticated this request, never from the body.
     # Contractor rows start pending and stay out of every student path until an admin approves.
     batch_id = body.batch_id if body.batch_id and _BATCH_ID_RE.match(body.batch_id) else f"{role}-{uuid.uuid4().hex[:12]}"
@@ -10685,6 +10716,11 @@ async def admin_pyq_bulk_create(body: PyqBulkCreate, role: str = Depends(verify_
         # entirely keeps every save working before that migration is run, not just this feature.
         if q.source_pdf_filename:
             item["source_pdf_filename"] = q.source_pdf_filename
+        # Same reasoning: uploader_name needs its own migration too, and omitting the key for a
+        # row with no name (an old cached contractor-portal page, or any pre-feature caller)
+        # leaves the column at its default of NULL, which is exactly "earlier upload".
+        if body.uploader_name:
+            item["uploader_name"] = body.uploader_name
         # Undo-delete restore passes these through to make the restored row match what was
         # actually deleted; normal creation never sets them, so this stays a no-op for every
         # other caller (PDF review, scanned-paste parser).
@@ -10704,6 +10740,8 @@ async def admin_pyq_bulk_create(body: PyqBulkCreate, role: str = Depends(verify_
                 item["review_note"] = q.review_note
             if q.uploaded_by in PYQ_UPLOADERS:
                 item["uploaded_by"] = q.uploaded_by
+            if q.uploader_name in PYQ_UPLOADER_NAMES:
+                item["uploader_name"] = q.uploader_name
             if q.uploaded_at:
                 item["uploaded_at"] = q.uploaded_at
             if q.batch_id and _BATCH_ID_RE.match(q.batch_id):

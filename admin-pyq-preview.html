@@ -129,6 +129,7 @@
     .q-status.pending { background: #f59e0b20; color: #f59e0b; }
     .q-status.needs_fix { background: #f9731620; color: #fb923c; }
     .q-upload-meta { color: #555; }
+    .q-uploader-tag { color: #555; font-style: italic; }
     .q-warn { font-size: 11px; padding: 3px 9px; border-radius: 20px; font-weight: 600; background: #f59e0b1c; color: #f5b445; text-decoration: none; }
     a.q-warn:hover { text-decoration: underline; }
     .q-review-note { margin-top: 12px; padding: 10px 12px; border-radius: 8px; background: #f9731612; border: 1px solid #f9731640; color: #fdba74; font-size: 12px; line-height: 1.5; white-space: pre-wrap; }
@@ -296,17 +297,18 @@
           <option value="needs_fix">Needs fix</option>
           <option value="approved">Approved</option>
         </select>
-        <select id="filterUploadedBy" onchange="onFilterChange()" title="Uploaded by">
-          <option value="">Uploaded by anyone</option>
-          <option value="contractor">Contractor</option>
-          <option value="admin">Admin</option>
+        <select id="filterUploadedBy" onchange="onFilterChange()" title="Uploader name">
+          <option value="">Anyone</option>
+          <option value="Mr. Md Moniruzzaman">Mr. Md Moniruzzaman</option>
+          <option value="Admin">Admin</option>
+          <option value="__earlier__">Earlier uploads (no name)</option>
         </select>
         <select id="filterBatch" onchange="onFilterChange()" title="Upload batch" hidden>
           <option value="">All batches</option>
         </select>
         <input type="date" id="filterUploadedDate" onchange="onFilterChange()" title="Uploaded on (India time)" hidden/>
       </span>
-      <button type="button" id="dupToggleBtn" class="dup-toggle-btn" onclick="toggleDuplicatesView()">🔁 Find Duplicates (50%+)</button>
+      <button type="button" id="dupToggleBtn" class="dup-toggle-btn" onclick="toggleDuplicatesView()">🔁 Find Duplicates</button>
       <button type="button" id="reviewToggleBtn" class="dup-toggle-btn" onclick="toggleReviewMode()">📋 Review Queue</button>
       <button type="button" id="reportsToggleBtn" class="dup-toggle-btn" onclick="toggleReportsView()">🚩 Reported</button>
       <button type="button" id="diagramToggleBtn" class="dup-toggle-btn" onclick="toggleDiagramMode()">🖼️ Diagram Review</button>
@@ -881,11 +883,11 @@
       if (onlyDiagram) params.set('with_uploaded_diagram', 'true');
       if (reviewMode) params.set('reviewed', 'false');
       const reviewStatus = document.getElementById('filterReviewStatus').value;
-      const uploadedBy = document.getElementById('filterUploadedBy').value;
+      const uploaderName = document.getElementById('filterUploadedBy').value;
       const batchId = document.getElementById('filterBatch').value;
       const uploadedDate = document.getElementById('filterUploadedDate').value;
       if (reviewStatus) params.set('review_status', reviewStatus);
-      if (uploadedBy) params.set('uploaded_by', uploadedBy);
+      if (uploaderName) params.set('uploader_name', uploaderName);
       if (batchId) params.set('batch_id', batchId);
       if (uploadedDate) params.set('uploaded_date', uploadedDate);
       params.set('page', currentPage);
@@ -1111,6 +1113,7 @@
         const when = q.uploaded_at ? new Date(q.uploaded_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
         parts.push(`<span class="q-upload-meta">${q.uploaded_by === 'contractor' ? 'Contractor' : 'Admin'}${when ? ' · ' + escapeHtml(when) : ''}</span>`);
       }
+      if (q.uploader_name) parts.push(`<span class="q-uploader-tag">${escapeHtml(q.uploader_name)}</span>`);
       return parts.join('');
     }
 
@@ -2540,6 +2543,7 @@
             option_c_diagram_url: r.option_c_diagram_url, option_d_diagram_url: r.option_d_diagram_url,
             reviewed: r.reviewed, difficulty: r.difficulty,
             review_status: r.review_status, review_note: r.review_note, uploaded_by: r.uploaded_by,
+            uploader_name: r.uploader_name,
             uploaded_at: r.uploaded_at, batch_id: r.batch_id
           }))
         };
