@@ -1262,6 +1262,7 @@ CONTRACTOR_PDF_KEY = os.getenv("CONTRACTOR_PDF_KEY")
 # The two people allowed to be named as a question's uploader (contractor-pdf-review.html's "Who
 # is uploading?" picker) -- not auth, just an attribution tag stored in pyq.uploader_name.
 PYQ_UPLOADER_NAMES = ("Mr. Md Moniruzzaman", "Admin")
+CONTRACTOR_UPLOADER_NAME = PYQ_UPLOADER_NAMES[0]
 
 def verify_contractor_pdf_review(request: Request, x_admin_key: str = Header(None)):
     """Login check for the isolated tool's own gate -- deliberately its OWN endpoint
@@ -8477,6 +8478,14 @@ async def admin_pyq_search(
         # One India-time calendar day of uploads, as a plain and-group so it combines with the
         # or-groups below instead of overwriting them.
         and_parts = []
+        # The Review Queue (reviewed=false) now excludes the contractor's own uploads
+        # unconditionally -- those live only in the admin preview's separate Contractor Queue,
+        # which queries uploader_name+review_status directly instead of this reviewed param.
+        # Forced as its own and-group entry (not just the uploader_name param above) so it still
+        # applies even if a non-contractor uploader_name filter is also selected, and correctly
+        # yields zero rows in the edge case where the contractor's name is explicitly selected too.
+        if reviewed == "false":
+            and_parts.append(f"uploader_name.neq.{CONTRACTOR_UPLOADER_NAME}")
         if uploaded_date:
             try:
                 day_start, day_end = _ist_day_bounds_utc(uploaded_date)
@@ -8499,6 +8508,21 @@ async def admin_pyq_search(
                 "or(diagram_url.neq.,option_a_diagram_url.neq.,"
                 "option_b_diagram_url.neq.,option_c_diagram_url.neq.,"
                 "option_d_diagram_url.neq.)"
+            )
+        elif with_uploaded_diagram == "false":
+            # The Contractor Queue's "Without diagram" filter -- every one of the 5 image
+            # columns must be genuinely empty (NULL or ''). Simply negating the "true" branch's
+            # or(...neq....) group would wrongly exclude an all-NULL row too: NOT(NULL<>'') is
+            # NULL, not TRUE, under 3-valued logic, so it's spelled out explicitly per column
+            # instead of as a negation. Goes into and_parts, not or_groups -- the latter's
+            # single-item case below assumes its one entry is already "or(...)"-prefixed for the
+            # top-level or= shortcut, which this and(...) entry is not.
+            and_parts.append(
+                "and(or(diagram_url.is.null,diagram_url.eq.),"
+                "or(option_a_diagram_url.is.null,option_a_diagram_url.eq.),"
+                "or(option_b_diagram_url.is.null,option_b_diagram_url.eq.),"
+                "or(option_c_diagram_url.is.null,option_c_diagram_url.eq.),"
+                "or(option_d_diagram_url.is.null,option_d_diagram_url.eq.))"
             )
         if search:
             # Previously only checked `question`, so searching for a term that's only in one
@@ -8703,6 +8727,25 @@ async def _pyq_count(params: dict) -> int:
     )
     tail = resp.headers.get("content-range", "").split("/")[-1]
     return int(tail) if tail.isdigit() else 0
+
+@app.get("/admin/pyq-contractor-queue-counts")
+async def admin_pyq_contractor_queue_counts(_: None = Depends(verify_admin)):
+    """Numbers only for the Contractor Queue's side panel -- the contractor's own uploads still
+    awaiting a first check (review_status='pending'), split by whether a diagram has actually
+    been uploaded. Two count queries, never a row download; "without" is the simple subtraction
+    rather than a second, more complex negated-or count query."""
+    try:
+        base = {"review_status": "eq.pending", "uploader_name": f"eq.{CONTRACTOR_UPLOADER_NAME}"}
+        diagram_or = ("(diagram_url.neq.,option_a_diagram_url.neq.,"
+                      "option_b_diagram_url.neq.,option_c_diagram_url.neq.,"
+                      "option_d_diagram_url.neq.)")
+        total, with_diagram = await asyncio.gather(
+            _pyq_count(base),
+            _pyq_count({**base, "or": diagram_or}),
+        )
+        return {"with_diagram": with_diagram, "without_diagram": max(0, total - with_diagram)}
+    except Exception as e:
+        return {"error": str(e)}
 
 @app.get("/admin/pyq-review-summary")
 async def admin_pyq_review_summary(_: None = Depends(verify_admin)):

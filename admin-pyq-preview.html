@@ -132,6 +132,30 @@
     .q-uploader-tag { color: #555; font-style: italic; }
     .q-warn { font-size: 11px; padding: 3px 9px; border-radius: 20px; font-weight: 600; background: #f59e0b1c; color: #f5b445; text-decoration: none; }
     a.q-warn:hover { text-decoration: underline; }
+
+    /* Contractor Queue -- a slim side panel on desktop, a compact strip above the list on
+       phones (see the max-width media query below). Blue accent only, no emoji, matches the
+       rest of this file's dark palette. */
+    .contractor-layout { display: flex; gap: 16px; align-items: flex-start; }
+    .contractor-layout #resultsArea { flex: 1; min-width: 0; }
+    .contractor-panel { display: none; width: 190px; flex-shrink: 0; background: #111; border: 1px solid #1e1e1e; border-radius: 10px; padding: 14px; position: sticky; top: 16px; }
+    .contractor-panel.cq-visible { display: block; }
+    .contractor-panel-title { font-size: 11px; color: #888; font-weight: 600; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.04em; }
+    .contractor-count-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; border-radius: 8px; border: 1px solid #2a2a2a; background: #1a1a1a; margin-bottom: 8px; cursor: pointer; }
+    .contractor-count-row:last-child { margin-bottom: 0; }
+    .contractor-count-row:hover { border-color: #4f8ef7; }
+    .contractor-count-row.active { background: #4f8ef7; border-color: #4f8ef7; }
+    .contractor-count-row.active .contractor-count-label, .contractor-count-row.active .contractor-count-num { color: #fff; }
+    .contractor-count-label { font-size: 12px; color: #ccc; }
+    .contractor-count-num { font-size: 16px; font-weight: 700; color: #ececec; }
+    .contractor-panel-empty { font-size: 12px; color: #666; }
+    @media (max-width: 480px) {
+      .contractor-layout { flex-direction: column; }
+      .contractor-panel { width: 100%; position: static; }
+      .contractor-panel.cq-visible { display: flex; gap: 8px; }
+      .contractor-count-row { flex: 1; flex-direction: column; align-items: center; gap: 2px; margin-bottom: 0; }
+      .contractor-panel-title { display: none; }
+    }
     .q-review-note { margin-top: 12px; padding: 10px 12px; border-radius: 8px; background: #f9731612; border: 1px solid #f9731640; color: #fdba74; font-size: 12px; line-height: 1.5; white-space: pre-wrap; }
     .q-review-note b { color: #fb923c; }
     .q-fix-btn { background: transparent; border: 1px solid #f9731660; color: #fb923c; padding: 5px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
@@ -310,6 +334,7 @@
       </span>
       <button type="button" id="dupToggleBtn" class="dup-toggle-btn" onclick="toggleDuplicatesView()">🔁 Find Duplicates</button>
       <button type="button" id="reviewToggleBtn" class="dup-toggle-btn" onclick="toggleReviewMode()">📋 Review Queue</button>
+      <button type="button" id="contractorToggleBtn" class="dup-toggle-btn" onclick="toggleContractorMode()">Contractor Queue</button>
       <button type="button" id="reportsToggleBtn" class="dup-toggle-btn" onclick="toggleReportsView()">🚩 Reported</button>
       <button type="button" id="diagramToggleBtn" class="dup-toggle-btn" onclick="toggleDiagramMode()">🖼️ Diagram Review</button>
       <select id="reviewSortOrder" onchange="onFilterChange()" style="display:none">
@@ -345,7 +370,10 @@
       <button type="button" class="q-edit-btn" onclick="clearSelection()">Clear</button>
     </div>
 
-    <div id="resultsArea"><div class="loading-text">Loading...</div></div>
+    <div class="contractor-layout">
+      <div class="contractor-panel" id="contractorPanel"></div>
+      <div id="resultsArea"><div class="loading-text">Loading...</div></div>
+    </div>
 
     <div class="pagination" id="paginationBar">
       <button id="prevPageBtn" onclick="changePage(-1)">← Prev</button>
@@ -371,6 +399,10 @@
     let reviewMode = false;
     let reportsMode = false;
     let diagramMode = false;
+    let contractorMode = false;
+    let contractorDiagramFilter = null; // null | 'with' | 'without'
+    let contractorCountsCache = { with_diagram: 0, without_diagram: 0 };
+    const CONTRACTOR_UPLOADER_NAME = 'Mr. Md Moniruzzaman';
     let allDiagrams = [];
     let diagramEditingIds = new Set();
     let diagramReportGroups = [];
@@ -890,6 +922,16 @@
       if (uploaderName) params.set('uploader_name', uploaderName);
       if (batchId) params.set('batch_id', batchId);
       if (uploadedDate) params.set('uploaded_date', uploadedDate);
+      // Contractor Queue overrides whatever the (hidden, in this mode) uploader/status/diagram
+      // filters hold -- uploader_name + review_status=pending define the queue, and the side
+      // panel's selected count (if any) narrows it further by diagram presence.
+      if (contractorMode) {
+        params.set('uploader_name', CONTRACTOR_UPLOADER_NAME);
+        params.set('review_status', 'pending');
+        if (contractorDiagramFilter === 'with') params.set('with_uploaded_diagram', 'true');
+        else if (contractorDiagramFilter === 'without') params.set('with_uploaded_diagram', 'false');
+        else params.delete('with_uploaded_diagram');
+      }
       params.set('page', currentPage);
       params.set('sort_by', 'created_at');
       params.set('sort_dir', reviewMode ? document.getElementById('reviewSortOrder').value : 'desc');
@@ -1003,7 +1045,8 @@
         if (!u) return;
         Object.assign(q, u);
         if (q.review_status === 'approved') q.reviewed = true;
-        if ((filter && q.review_status !== filter) || (reviewMode && q.reviewed)) removed.add(q.id);
+        if ((filter && q.review_status !== filter) || (reviewMode && q.reviewed) ||
+            (contractorMode && q.review_status !== 'pending')) removed.add(q.id);
       });
       currentRows = currentRows.filter(q => !removed.has(q.id));
       totalRows = Math.max(0, totalRows - removed.size);
@@ -1014,6 +1057,7 @@
       updateBulkBar();
       updateApproveCleanBtn();
       loadReviewSummary();
+      if (contractorMode) loadContractorCounts();
     }
 
     async function reviewApprove(id, btnEl) {
@@ -1285,6 +1329,7 @@
         renderResults();
         renderPagination();
         updateResultCountText();
+        if (contractorMode) loadContractorCounts();
       }
       pushUndoEntry(deletedRows);
       updateBulkBar();
@@ -1625,6 +1670,7 @@
         delete editDrafts[id];
         rerenderCurrentView();
         if (idx !== -1 && currentRows[idx].warnings) refreshRowWarnings(id);
+        if (contractorMode) loadContractorCounts();
       } catch (e) {
         alert(e.name === 'AbortError' ? 'Timed out waiting for the server -- check your connection and try again.' : 'Could not reach server.');
         btnEl.disabled = false;
@@ -1717,6 +1763,8 @@
       document.getElementById('reviewToggleBtn').classList.remove('active');
       document.getElementById('reportsToggleBtn').classList.remove('active');
       document.getElementById('diagramToggleBtn').classList.remove('active');
+      document.getElementById('contractorToggleBtn').classList.remove('active');
+      document.getElementById('contractorPanel').classList.remove('cq-visible');
       document.getElementById('reviewSortOrder').style.display = 'none';
       document.getElementById('filterChapter').disabled = false;
       document.getElementById('filterSearch').disabled = false;
@@ -1738,6 +1786,7 @@
       duplicatesMode = !duplicatesMode;
       reviewMode = false;
       reportsMode = false;
+      contractorMode = false;
       resetModeToggleUi();
       document.getElementById('dupToggleBtn').classList.toggle('active', duplicatesMode);
       document.getElementById('reviewFilters').style.display = duplicatesMode ? 'none' : '';
@@ -1759,6 +1808,7 @@
       reviewMode = !reviewMode;
       duplicatesMode = false;
       reportsMode = false;
+      contractorMode = false;
       resetModeToggleUi();
       document.getElementById('reviewToggleBtn').classList.toggle('active', reviewMode);
       document.getElementById('reviewSortOrder').style.display = reviewMode ? 'inline-block' : 'none';
@@ -1769,10 +1819,81 @@
       loadResults();
     }
 
+    // Admin uploads and null/earlier uploads stay in the Review Queue above (server now
+    // excludes the contractor's own rows from that reviewed=false query) -- this is the
+    // contractor's dedicated queue, scoped to their still-pending uploads only.
+    async function toggleContractorMode() {
+      contractorMode = !contractorMode;
+      duplicatesMode = false;
+      reviewMode = false;
+      reportsMode = false;
+      diagramMode = false;
+      contractorDiagramFilter = null;
+      resetModeToggleUi();
+      document.getElementById('contractorToggleBtn').classList.toggle('active', contractorMode);
+      document.getElementById('contractorPanel').classList.toggle('cq-visible', contractorMode);
+      document.getElementById('reviewFilters').style.display = contractorMode ? 'none' : '';
+      document.querySelector('.filter-bar label.check-label').style.display = contractorMode ? 'none' : '';
+      document.getElementById('resultNote').textContent = contractorMode
+        ? 'Questions uploaded by the contractor, still waiting for a first check.'
+        : '';
+      currentPage = 1;
+      if (contractorMode) {
+        renderContractorPanel(contractorCountsCache);
+        loadContractorCounts();
+      }
+      loadResults();
+    }
+
+    async function loadContractorCounts() {
+      try {
+        const res = await fetch(`${API_BASE}/admin/pyq-contractor-queue-counts`, { headers: authHeaders() });
+        if (res.status === 401) return logout();
+        if (!res.ok) { renderContractorPanelError(await describeHttpError(res)); return; }
+        const data = await res.json();
+        if (data.error) { renderContractorPanelError(data.error); return; }
+        contractorCountsCache = data;
+        renderContractorPanel(data);
+      } catch (e) {
+        renderContractorPanelError('Could not reach server.');
+      }
+    }
+
+    function renderContractorPanelError(msg) {
+      document.getElementById('contractorPanel').innerHTML =
+        `<div class="contractor-panel-title">Contractor Queue</div><div class="contractor-panel-empty">Counts unavailable: ${escapeHtml(msg)}</div>`;
+    }
+
+    function renderContractorPanel(data) {
+      const panel = document.getElementById('contractorPanel');
+      const withCount = data.with_diagram || 0;
+      const withoutCount = data.without_diagram || 0;
+      if (withCount + withoutCount === 0) {
+        panel.innerHTML = '<div class="contractor-panel-title">Contractor Queue</div><div class="contractor-panel-empty">Nothing waiting in the contractor queue.</div>';
+        return;
+      }
+      const row = (key, label, count) => `
+        <div class="contractor-count-row${contractorDiagramFilter === key ? ' active' : ''}" onclick="toggleContractorDiagramFilter('${key}')">
+          <span class="contractor-count-label">${label}</span>
+          <span class="contractor-count-num">${count}</span>
+        </div>`;
+      panel.innerHTML = '<div class="contractor-panel-title">Contractor Queue</div>'
+        + row('with', 'With diagram', withCount)
+        + row('without', 'Without diagram', withoutCount);
+    }
+
+    function toggleContractorDiagramFilter(key) {
+      contractorDiagramFilter = contractorDiagramFilter === key ? null : key;
+      currentPage = 1;
+      renderContractorPanel(contractorCountsCache);
+      loadResults();
+    }
+
     async function toggleReportsView() {
       reportsMode = !reportsMode;
       duplicatesMode = false;
       reviewMode = false;
+      contractorMode = false;
       resetModeToggleUi();
       document.getElementById('reportsToggleBtn').classList.toggle('active', reportsMode);
       document.getElementById('reviewFilters').style.display = reportsMode ? 'none' : '';
@@ -1795,6 +1916,7 @@
       duplicatesMode = false;
       reviewMode = false;
       reportsMode = false;
+      contractorMode = false;
       resetModeToggleUi();
       document.getElementById('diagramToggleBtn').classList.toggle('active', diagramMode);
       document.getElementById('reviewFilters').style.display = diagramMode ? 'none' : '';
@@ -2635,6 +2757,7 @@
         renderPagination();
         updateResultCountText();
         updateBulkBar();
+        if (contractorMode) loadContractorCounts();
       }
     }
 
