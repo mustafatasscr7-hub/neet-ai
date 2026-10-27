@@ -1673,6 +1673,9 @@
       if (layout === 'scanned_ocr') {
         data = await runOcrJob(body, statusEl);
         if (!data) return;
+      } else if (layout === 'standard' || layout === '3col_book') {
+        data = await runScanJob(body, statusEl);
+        if (!data) return;
       } else {
         const res = await fetch(`${API_BASE}/admin/scan-pdf`, {
           method: 'POST',
@@ -1762,6 +1765,53 @@
       fill.style.width = total ? `${Math.round(100 * done / total)}%` : '0';
       if (job.status === 'queued') statusEl.textContent = 'Waiting for another free OCR scan to finish...';
       else if (job.status === 'running') statusEl.textContent = `Running free OCR... ${done} of ${total} page${total === 1 ? '' : 's'} read.`;
+      else if (job.status === 'error') { statusEl.textContent = 'Scan failed: ' + job.error; return null; }
+      else if (job.status === 'done') {
+        const data = job.result;
+        if (data.error) { statusEl.textContent = 'Scan failed: ' + data.error; return null; }
+        return data;
+      }
+    }
+  }
+
+  // "standard" and "3col_book" layouts run as a server-side job too, same reasoning as free OCR
+  // above: a long chapter would otherwise outlast one request. Mirrors runOcrJob's start+poll
+  // shape against the separate /admin/scan-pdf/job endpoints.
+  async function runScanJob(body, statusEl) {
+    const bar = document.getElementById('scanProgress');
+    const fill = document.getElementById('scanProgressFill');
+    const res = await fetch(`${API_BASE}/admin/scan-pdf/job`, {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(body)
+    });
+    if (res.status === 401) { logout(); return null; }
+    if (!res.ok) { statusEl.textContent = 'Scan failed: ' + await describeHttpError(res); return null; }
+    const start = await res.json();
+    if (start.error) { statusEl.textContent = 'Scan failed: ' + start.error; return null; }
+    fill.style.width = '0';
+    bar.style.display = 'block';
+    let misses = 0;
+    while (true) {
+      await new Promise(r => setTimeout(r, 2000));
+      let job;
+      try {
+        const poll = await fetch(`${API_BASE}/admin/scan-pdf/job/${encodeURIComponent(start.job_id)}`, { headers: authHeaders() });
+        if (poll.status === 401) { logout(); return null; }
+        if (!poll.ok) throw new Error(await describeHttpError(poll));
+        job = await poll.json();
+        misses = 0;
+      } catch (e) {
+        // A dropped poll isn't a failed scan -- the job keeps running server-side.
+        if (++misses >= 5) { statusEl.textContent = 'Lost contact with the server while scanning: ' + e.message; return null; }
+        continue;
+      }
+      if (job.error && !job.status) { statusEl.textContent = 'Scan failed: ' + job.error; return null; }
+      const total = job.pages_total || start.pages_total || 0;
+      const done = job.pages_done || 0;
+      fill.style.width = total ? `${Math.round(100 * done / total)}%` : '0';
+      if (job.status === 'queued') statusEl.textContent = 'Waiting for another scan to finish...';
+      else if (job.status === 'running') statusEl.textContent = job.message || `Scanning... ${done} of ${total} page${total === 1 ? '' : 's'} read.`;
       else if (job.status === 'error') { statusEl.textContent = 'Scan failed: ' + job.error; return null; }
       else if (job.status === 'done') {
         const data = job.result;

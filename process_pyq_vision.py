@@ -754,16 +754,19 @@ def _detect_vector_diagrams_yolo(doc, pages_meta):
 
     session = _get_yolo_session()  # raises if unavailable -- caller catches and no-ops
 
-    page_arrays = []
-    for page in doc:
-        pix = page.get_pixmap(dpi=_YOLO_DPI)
-        img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
-        page_arrays.append(np.array(img))
     scale = 72.0 / _YOLO_DPI  # pixel coords (at _YOLO_DPI) -> PDF point coords
 
+    # Pixmaps rendered and discarded one page at a time (not all kept resident at once) -- a
+    # large chapter PDF otherwise holds every page's full raster in memory simultaneously for no
+    # reason, since inference below is already sequential (see this function's own docstring for
+    # why concurrent inference isn't an option here).
     out = {}
-    for i, arr in enumerate(page_arrays):
+    for i, page in enumerate(doc):
         try:
+            pix = page.get_pixmap(dpi=_YOLO_DPI)
+            img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+            arr = np.array(img)
+            del pix, img
             pm = pages_meta[i]
             markers = []
             for x0, y0, x1, y1 in _yolo_infer_figure_boxes(session, arr, cv2, np):
@@ -1147,8 +1150,11 @@ def extract_questions_from_text(page_text, page_num, subject="Biology", model=TE
 
     return _parse_extraction_json(text, page_num)
 
-def scan_pdf_bytes(pdf_bytes, subject, max_workers=4):
+def scan_pdf_bytes(pdf_bytes, subject, max_workers=4, progress=None):
     """Callable entry point for the admin review pipeline (server.py's /admin/scan-pdf).
+    progress(done, total), when given, is called once after the cheap PyMuPDF pass (for pages
+    skipped as garbled/empty, counted done immediately) and again after each page's extraction
+    call completes -- used by /admin/scan-pdf/job's progress bar, a no-op for the old endpoint.
     Text-layer PDFs only (not scanned/image PDFs) - extracts real text + programmatic diagram
     detection for free, then a TEXT-ONLY (no Vision, cheaper) Gemini call per page to structure
     it into questions. Returns raw extracted questions - no chapter/class/correct_answer
@@ -1178,6 +1184,11 @@ def scan_pdf_bytes(pdf_bytes, subject, max_workers=4):
         else:
             to_extract[i] = page["text"]
 
+    total_pages = len(pages)
+    done = total_pages - len(to_extract)
+    if progress:
+        progress(done, total_pages)
+
     results = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_index = {
@@ -1192,6 +1203,9 @@ def scan_pdf_bytes(pdf_bytes, subject, max_workers=4):
                 print(f"    Error extracting page {idx + 1}: {e}")
                 flagged_pages.append({"page": idx + 1, "reason": f"Extraction call failed: {e}"})
                 results[idx] = []
+            done += 1
+            if progress:
+                progress(done, total_pages)
 
     # General safety net, not tied to any one specific root cause: a page with several "N."
     # question-start markers in its own raw text that STILL came back with zero extracted

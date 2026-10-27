@@ -26,6 +26,7 @@ import json
 import re
 import shutil
 import tempfile
+import threading
 import uuid
 from dotenv import load_dotenv
 import os
@@ -9721,6 +9722,142 @@ def admin_scan_pdf_ocr_job_status(job_id: str, _: None = Depends(verify_admin_or
     job = get_ocr_job(job_id)
     if job is None:
         return {"error": "This scan job is unknown or expired (the server may have restarted). Start the scan again -- pages already read come back from cache."}
+    return job
+
+# ---------- Background jobs: "standard" and "3col_book" scan layouts ----------
+#
+# Same long-request problem the free-OCR job above exists for: a multi-page "standard" scan holds
+# one HTTP request open for the whole run (minutes, on a big chapter), which is exactly what a
+# proxy/client timeout cuts off mid-scan. A separate job store and semaphore from the OCR one
+# above -- that one's own single-job-at-a-time behavior is unrelated and stays unchanged. Up to 2
+# of these run at once; a 3rd queues (never rejected). Jobs live in memory only (one worker today,
+# same as the OCR jobs), pruned ~30 minutes after they finish, with a hard count cap as a backstop
+# in case a job is started and never polled to completion.
+_SCAN_JOB_TTL_SECONDS = 1800
+_SCAN_JOB_MAX = 50
+_scan_jobs = {}
+_scan_jobs_lock = threading.Lock()
+_scan_job_slots = threading.Semaphore(2)
+
+
+def _prune_scan_jobs(now):
+    for jid in [j for j, job in _scan_jobs.items() if job["finished_at"] and now - job["finished_at"] > _SCAN_JOB_TTL_SECONDS]:
+        del _scan_jobs[jid]
+    if len(_scan_jobs) > _SCAN_JOB_MAX:
+        # Oldest-first, so a job nobody ever polls to completion can't pin memory forever --
+        # never refuses to start a new job over this.
+        for jid, _job in sorted(_scan_jobs.items(), key=lambda kv: kv[1]["created_at"])[:len(_scan_jobs) - _SCAN_JOB_MAX]:
+            del _scan_jobs[jid]
+
+
+def start_scan_job(pdf_bytes, subject, layout, role, on_finish=None, scan_fn=None):
+    """Starts a "standard" or "3col_book" scan in a background thread, returns its job id right
+    away. on_finish(result) runs in the job thread when it ends (result is the scan_pdf_bytes /
+    scan_book_pdf_bytes dict, or {"error": ...}). `role` ("admin" or "contractor", from
+    verify_admin_or_contractor_pdf) is stored on the job so only that same role can poll it back.
+    scan_fn is for tests."""
+    if scan_fn is None:
+        scan_fn = scan_pdf_bytes if layout == "standard" else scan_book_pdf_bytes
+    with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+        total = len(doc)
+    job_id = uuid.uuid4().hex
+    now = time.time()
+    with _scan_jobs_lock:
+        _prune_scan_jobs(now)
+        _scan_jobs[job_id] = {"status": "queued", "role": role, "pages_done": 0, "pages_total": total,
+                               "message": None, "result": None, "error": None, "created_at": now, "finished_at": None}
+
+    def progress(done, total_):
+        with _scan_jobs_lock:
+            if job_id in _scan_jobs:
+                _scan_jobs[job_id].update(pages_done=done, pages_total=total_)
+
+    def run():
+        with _scan_job_slots:
+            with _scan_jobs_lock:
+                if job_id not in _scan_jobs:
+                    return  # pruned/evicted before it ever got a slot
+                _scan_jobs[job_id]["status"] = "running"
+            try:
+                if layout == "standard":
+                    result = scan_fn(pdf_bytes, subject, progress=progress)
+                else:
+                    # 3col_book has no model call and no natural per-page checkpoint to report
+                    # granular progress against (see scan_book_pdf_bytes's own docstring) -- a
+                    # short status message is all the progress bar gets until it's done.
+                    with _scan_jobs_lock:
+                        if job_id in _scan_jobs:
+                            _scan_jobs[job_id]["message"] = "Parsing pages..."
+                    result = scan_fn(pdf_bytes, subject)
+            except Exception as e:
+                result = {"error": str(e)}
+            if on_finish:
+                try:
+                    on_finish(result)
+                except Exception as e:
+                    print(f"    Scan job {job_id}: on_finish failed ({e})")
+            with _scan_jobs_lock:
+                job = _scan_jobs.get(job_id)
+                if job is None:
+                    return  # pruned/evicted while running -- nothing left to update
+                if result.get("error"):
+                    job.update(status="error", error=result["error"])
+                else:
+                    job.update(status="done", result=result, pages_done=job["pages_total"])
+                job["finished_at"] = time.time()
+
+    threading.Thread(target=run, name=f"scan-job-{job_id[:8]}", daemon=True).start()
+    return job_id
+
+
+def get_scan_job(job_id, role):
+    """Snapshot of a job for this caller's role, or None if unknown/expired/started by the other
+    role -- deliberately indistinguishable from each other, so a contractor key can't probe
+    whether a given job id belongs to the admin key (or vice versa)."""
+    with _scan_jobs_lock:
+        job = _scan_jobs.get(job_id)
+        if job is None or job["role"] != role:
+            return None
+        out = {k: job[k] for k in ("status", "pages_done", "pages_total", "message")}
+        if job["status"] == "done":
+            out["result"] = job["result"]
+        if job["status"] == "error":
+            out["error"] = job["error"]
+        return out
+
+@app.post("/admin/scan-pdf/job")
+def admin_scan_pdf_job(req: ScanPdfRequest, role: str = Depends(verify_admin_or_contractor_pdf), __: None = Depends(rate_limit(10, 300, by="ip"))):
+    """Background-job version of /admin/scan-pdf for the "standard" and "3col_book" layouts --
+    see start_scan_job's docstring. Same validation and processed_pdfs tracking as the old
+    endpoint, which stays untouched below for any page still caching it."""
+    if req.subject not in ("Biology", "Physics", "Chemistry"):
+        return {"error": "Invalid subject"}
+    if req.layout not in ("standard", "3col_book"):
+        return {"error": "Invalid layout for a background scan job"}
+    if req.uploader_name and req.uploader_name not in PYQ_UPLOADER_NAMES:
+        raise HTTPException(status_code=400, detail="Invalid uploader name")
+    try:
+        pdf_bytes = base64.b64decode(req.data)
+        with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+            page_count = len(doc)
+    except Exception:
+        return {"error": "Could not open PDF"}
+
+    processed_pdf_id = _create_processed_pdf_row(req.filename, req.subject) if req.filename else None
+
+    def on_finish(result):
+        if result.get("error"):
+            _update_processed_pdf_row(processed_pdf_id, "failed", error_message=result["error"])
+        result["processed_pdf_id"] = processed_pdf_id
+
+    job_id = start_scan_job(pdf_bytes, req.subject, req.layout, role, on_finish=on_finish)
+    return {"job_id": job_id, "pages_total": page_count, "processed_pdf_id": processed_pdf_id}
+
+@app.get("/admin/scan-pdf/job/{job_id}")
+def admin_scan_pdf_job_status(job_id: str, role: str = Depends(verify_admin_or_contractor_pdf)):
+    job = get_scan_job(job_id, role)
+    if job is None:
+        return {"error": "This scan job is unknown or expired (the server may have restarted). Start the scan again."}
     return job
 
 @app.post("/admin/scan-pdf/estimate")
