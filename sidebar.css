@@ -173,6 +173,13 @@ body.light-mode #searchChatsInput::placeholder { color: #9a9aa5 !important; }
   .sidebar { position: fixed; top: 0; left: 0; bottom: 0; z-index: 200; box-shadow: 0 0 30px rgba(0,0,0,0.5); }
 }
 
+/* Main content pane, phones: the sidebar above is already off-flow (position:fixed) by 640px, so
+   .page-main-content (flex:1, min-width:0 further up) already gets the full viewport width on its
+   own -- this is just a horizontal-scroll safety net for whatever a given page puts inside it. */
+@media (max-width: 768px) {
+  .page-main-content { overflow-x: hidden; }
+}
+
 /* Collapsed-sidebar icon tooltips -- appended to document.body by sidebar.js (see
    initSidebarTooltips there), never nested inside .sidebar, for the same reason the account
    menu's flyouts are: .sidebar has overflow:hidden (needed so the collapsed icon rail clips

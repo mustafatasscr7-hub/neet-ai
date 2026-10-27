@@ -234,6 +234,15 @@
     /* Smooth fade-in on page load */
     body { animation: pageFadeIn 0.22s ease; }
     @keyframes pageFadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+    @media (max-width: 480px) {
+      body { padding: 16px; height: auto; min-height: 100vh; }
+      .login-box { padding: 32px 24px; gap: 18px; }
+      .google-btn, .phone-btn, .submit-btn { padding: 14px 20px; font-size: 15px; }
+      .input-field { padding: 14px 16px; font-size: 15px; }
+      .otp-input { font-size: 20px; letter-spacing: 0.4em; }
+      .country-select { flex: 0 0 84px; padding: 14px 6px; }
+    }
   </style>
 </head>
 <body>
