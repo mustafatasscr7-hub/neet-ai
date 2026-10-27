@@ -66,7 +66,9 @@
     .question-card { position: relative; background: #111; border: 1px solid #1e1e1e; border-radius: 12px; padding: 20px 48px 20px 20px; margin-bottom: 12px; }
     .q-select-corner { position: absolute; top: 16px; right: 16px; cursor: pointer; }
     .q-select-corner input[type="checkbox"] { width: 18px; height: 18px; cursor: pointer; accent-color: #4f8ef7; }
-    .q-meta { font-size: 11px; color: #555; margin-bottom: 10px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    .q-meta { font-size: 11px; color: #555; margin-bottom: 10px; display: flex; flex-direction: column; gap: 4px; }
+    .q-meta-primary { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    .q-meta-secondary { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 10px; color: #555; }
     .q-year { color: #4f8ef7; font-weight: 600; }
     .q-text { font-size: 14px; color: #ececec; line-height: 1.7; margin-bottom: 16px; }
     /* The global `* { margin: 0 }` reset at the top of this file zeroes out marked.parse()'s
@@ -93,7 +95,12 @@
     .seq-list-item { padding: 3px 0; }
     .seq-list-item p { margin: 0; display: inline; }
     .q-options { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
-    .q-option { padding: 10px 14px; border-radius: 8px; font-size: 13px; background: #1a1a1a; color: #888; border: 1px solid #2a2a2a; display: flex; gap: 10px; }
+    /* Label gets its own fixed-width column so wrapped option text stays aligned under
+       itself instead of under the (variable-width) letter -- without this, text starting
+       with its own digit (e.g. "1. (i) (iv)...") read as running straight into the label. */
+    .q-option { padding: 10px 14px; border-radius: 8px; font-size: 13px; background: #1a1a1a; color: #888; border: 1px solid #2a2a2a; display: flex; align-items: flex-start; gap: 8px; }
+    .q-option > strong { flex: 0 0 30px; min-width: 30px; }
+    .q-option > span { flex: 1; min-width: 0; }
     .q-option.correct { background: #4ade8020; border-color: #4ade80; color: #4ade80; }
     .q-diagram-img { max-width: 100%; height: auto; border-radius: 8px; margin: 12px 0; border: 1px solid #2a2a2a; display: block; }
     /* An <img> occasionally shows up embedded directly inside question/option text itself
@@ -133,29 +140,21 @@
     .q-warn { font-size: 11px; padding: 3px 9px; border-radius: 20px; font-weight: 600; background: #f59e0b1c; color: #f5b445; text-decoration: none; }
     a.q-warn:hover { text-decoration: underline; }
 
-    /* Contractor Queue -- a slim side panel on desktop, a compact strip above the list on
-       phones (see the max-width media query below). Blue accent only, no emoji, matches the
-       rest of this file's dark palette. */
-    .contractor-layout { display: flex; gap: 16px; align-items: flex-start; }
-    .contractor-layout #resultsArea { flex: 1; min-width: 0; }
-    .contractor-panel { display: none; width: 190px; flex-shrink: 0; background: #111; border: 1px solid #1e1e1e; border-radius: 10px; padding: 14px; position: sticky; top: 16px; }
-    .contractor-panel.cq-visible { display: block; }
-    .contractor-panel-title { font-size: 11px; color: #888; font-weight: 600; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.04em; }
-    .contractor-count-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; border-radius: 8px; border: 1px solid #2a2a2a; background: #1a1a1a; margin-bottom: 8px; cursor: pointer; }
-    .contractor-count-row:last-child { margin-bottom: 0; }
+    /* Contractor Queue -- a compact horizontal counts bar pinned above the list, same at
+       every width (phones included: the two buttons just share the row, same as desktop).
+       Blue accent only, no emoji, matches the rest of this file's dark palette. */
+    .contractor-panel { display: none; }
+    .contractor-panel.cq-visible {
+      display: flex; gap: 8px; position: sticky; top: 0; z-index: 30;
+      background: #0d0d0d; border-bottom: 1px solid #1e1e1e; padding: 10px 0; margin-bottom: 12px;
+    }
+    .contractor-count-row { flex: 1; display: flex; justify-content: center; align-items: center; gap: 8px; padding: 10px 14px; border-radius: 8px; border: 1px solid #2a2a2a; background: #1a1a1a; cursor: pointer; }
     .contractor-count-row:hover { border-color: #4f8ef7; }
     .contractor-count-row.active { background: #4f8ef7; border-color: #4f8ef7; }
     .contractor-count-row.active .contractor-count-label, .contractor-count-row.active .contractor-count-num { color: #fff; }
     .contractor-count-label { font-size: 12px; color: #ccc; }
     .contractor-count-num { font-size: 16px; font-weight: 700; color: #ececec; }
-    .contractor-panel-empty { font-size: 12px; color: #666; }
-    @media (max-width: 480px) {
-      .contractor-layout { flex-direction: column; }
-      .contractor-panel { width: 100%; position: static; }
-      .contractor-panel.cq-visible { display: flex; gap: 8px; }
-      .contractor-count-row { flex: 1; flex-direction: column; align-items: center; gap: 2px; margin-bottom: 0; }
-      .contractor-panel-title { display: none; }
-    }
+    .contractor-panel-empty { font-size: 12px; color: #666; padding: 10px 2px; }
     .q-review-note { margin-top: 12px; padding: 10px 12px; border-radius: 8px; background: #f9731612; border: 1px solid #f9731640; color: #fdba74; font-size: 12px; line-height: 1.5; white-space: pre-wrap; }
     .q-review-note b { color: #fb923c; }
     .q-fix-btn { background: transparent; border: 1px solid #f9731660; color: #fb923c; padding: 5px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
@@ -370,10 +369,8 @@
       <button type="button" class="q-edit-btn" onclick="clearSelection()">Clear</button>
     </div>
 
-    <div class="contractor-layout">
-      <div class="contractor-panel" id="contractorPanel"></div>
-      <div id="resultsArea"><div class="loading-text">Loading...</div></div>
-    </div>
+    <div class="contractor-panel" id="contractorPanel"></div>
+    <div id="resultsArea"><div class="loading-text">Loading...</div></div>
 
     <div class="pagination" id="paginationBar">
       <button id="prevPageBtn" onclick="changePage(-1)">← Prev</button>
@@ -1149,10 +1146,17 @@
         : `<span class="q-warn">⚠ ${escapeHtml(w.text)}</span>`).join('');
     }
 
-    function reviewMetaHtml(q) {
+    // Split into a primary line (status badge -- sits with year/subject/chapter) and a
+    // secondary line (uploader name + upload time -- its own smaller row so the card doesn't
+    // look crowded) rather than one combined row of spans.
+    function reviewStatusHtml(q) {
+      if (q.review_status === 'pending') return '<span class="q-status pending">Pending review</span>';
+      if (q.review_status === 'needs_fix') return '<span class="q-status needs_fix">Needs fix</span>';
+      return '';
+    }
+
+    function reviewUploadMetaHtml(q) {
       const parts = [];
-      if (q.review_status === 'pending') parts.push('<span class="q-status pending">Pending review</span>');
-      if (q.review_status === 'needs_fix') parts.push('<span class="q-status needs_fix">Needs fix</span>');
       if (q.uploaded_by) {
         const when = q.uploaded_at ? new Date(q.uploaded_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
         parts.push(`<span class="q-upload-meta">${q.uploaded_by === 'contractor' ? 'Contractor' : 'Admin'}${when ? ' · ' + escapeHtml(when) : ''}</span>`);
@@ -1716,12 +1720,15 @@
         <div class="question-card">
           <label class="q-select-corner"><input type="checkbox" class="q-select-checkbox" ${selectedIds.has(q.id) ? 'checked' : ''} onchange="toggleQuestionSelect('${q.id}', this.checked)"/></label>
           <div class="q-meta">
-            <span class="q-year">${q.year || ''}</span>
-            <span>${escapeHtml(q.subject || '')}</span>
-            ${q.chapter ? `<span>${escapeHtml(q.chapter)}</span>` : ''}
-            ${q.source_tag ? `<span>${escapeHtml(q.source_tag)}</span>` : ''}
-            ${!q.is_active ? '<span class="q-inactive-flag">Inactive</span>' : ''}
-            ${reviewMetaHtml(q)}
+            <div class="q-meta-primary">
+              <span class="q-year">${q.year || ''}</span>
+              <span>${escapeHtml(q.subject || '')}</span>
+              ${q.chapter ? `<span>${escapeHtml(q.chapter)}</span>` : ''}
+              ${q.source_tag ? `<span>${escapeHtml(q.source_tag)}</span>` : ''}
+              ${!q.is_active ? '<span class="q-inactive-flag">Inactive</span>' : ''}
+              ${reviewStatusHtml(q)}
+            </div>
+            ${reviewUploadMetaHtml(q) ? `<div class="q-meta-secondary">${reviewUploadMetaHtml(q)}</div>` : ''}
           </div>
           <div class="q-text">${parseWithMath(q.question)}</div>
           ${q.diagram_url ? `<img class="q-diagram-img" src="${escapeHtml(q.diagram_url)}">` : ''}
@@ -1861,7 +1868,7 @@
 
     function renderContractorPanelError(msg) {
       document.getElementById('contractorPanel').innerHTML =
-        `<div class="contractor-panel-title">Contractor Queue</div><div class="contractor-panel-empty">Counts unavailable: ${escapeHtml(msg)}</div>`;
+        `<div class="contractor-panel-empty">Counts unavailable: ${escapeHtml(msg)}</div>`;
     }
 
     function renderContractorPanel(data) {
@@ -1869,7 +1876,7 @@
       const withCount = data.with_diagram || 0;
       const withoutCount = data.without_diagram || 0;
       if (withCount + withoutCount === 0) {
-        panel.innerHTML = '<div class="contractor-panel-title">Contractor Queue</div><div class="contractor-panel-empty">Nothing waiting in the contractor queue.</div>';
+        panel.innerHTML = '<div class="contractor-panel-empty">Nothing waiting in the contractor queue.</div>';
         return;
       }
       const row = (key, label, count) => `
@@ -1877,8 +1884,7 @@
           <span class="contractor-count-label">${label}</span>
           <span class="contractor-count-num">${count}</span>
         </div>`;
-      panel.innerHTML = '<div class="contractor-panel-title">Contractor Queue</div>'
-        + row('with', 'With diagram', withCount)
+      panel.innerHTML = row('with', 'With diagram', withCount)
         + row('without', 'Without diagram', withoutCount);
     }
 
