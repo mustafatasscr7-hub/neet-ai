@@ -1544,6 +1544,45 @@
     /* Smooth fade-in on page load */
     body { animation: pageFadeIn 0.22s ease; }
     @keyframes pageFadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+    /* ---------------- Phone-width layout (chat/doubt-solving screen only) ----------------
+       .sidebar already goes off-canvas (position:fixed) below 640px via sidebar.css, and .main
+       already has overflow:hidden, so neither needs anything here -- this block only tightens
+       up .main's own children (header/messages/input) so they fit comfortably at ~375px instead
+       of just failing to scroll. Desktop (>768px) is untouched; every rule below is additive
+       inside this query, same pattern as mocktest.html's own .header mobile override. */
+    @media (max-width: 768px) {
+      .header { flex-wrap: wrap; row-gap: 8px; padding: 10px 14px; }
+      .header > div { flex-wrap: wrap; row-gap: 6px; }
+      /* .chat-title-btn and the controls below all carry an inline style="..." in the markup
+         (see the buttons right after <body>) -- an element's own inline style always beats a
+         stylesheet rule for the same property regardless of @media, so every override of one
+         of those properties here needs !important, matching this file's existing precedent for
+         the same situation (see the body.light-mode rules earlier in this block). */
+      .chat-title-btn { max-width: 55vw !important; }
+
+      .message-row { padding: 12px 12px; gap: 10px; }
+      .message-content { max-width: calc(100vw - 100px); }
+      .message-bubble.user { max-width: calc(100vw - 100px); }
+
+      .input-area { padding: 10px 10px 14px; }
+      .input-wrapper { padding: 10px 12px; }
+      .welcome { padding: 24px 16px; }
+      .welcome-search { padding: 10px 12px; }
+
+      /* Slightly larger hit areas for the +/voice/send controls at phone width -- still
+         comfortably inside the input row's flex layout, just roomier to tap. */
+      #plusBtn, #welcomePlusBtn, #voiceBtn, #welcomeVoiceBtn { padding: 8px !important; }
+      .send-btn, .welcome-send { width: 38px; height: 38px; }
+
+      /* The "+" attachment popup gets its left offset from JS (togglePlusMenu), but its width is
+         a plain (non-important) inline 200px -- max-width is a different property, so the
+         browser takes the smaller of the two for layout without needing !important here, and it
+         can no longer run off a narrow screen regardless of where the button that opened it sits. */
+      #plusMenu { max-width: calc(100vw - 24px); }
+
+      #countdownWrapper > div { padding: 4px 9px !important; }
+    }
   </style>
 </head>
 <body>
