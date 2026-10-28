@@ -1562,6 +1562,12 @@
 
       .header { flex-wrap: wrap; row-gap: 8px; padding: 10px 14px; }
       .header > div { flex-wrap: wrap; row-gap: 6px; }
+
+      /* Collapsed rail (.sidebar.collapsed, 56px wide) is position:fixed at this width, so it
+         overlays .header's left edge instead of pushing it over -- "NEET-AI" rendered as "-AI"
+         underneath the rail. Push just the header clear of it; .main itself stays full-width so
+         messages/input area are unaffected. */
+      .sidebar.collapsed ~ .main .header { padding-left: 60px; }
       /* .chat-title-btn and the controls below all carry an inline style="..." in the markup
          (see the buttons right after <body>) -- an element's own inline style always beats a
          stylesheet rule for the same property regardless of @media, so every override of one
