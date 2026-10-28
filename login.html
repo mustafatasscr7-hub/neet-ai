@@ -236,12 +236,12 @@
     @keyframes pageFadeIn { from { opacity: 0; } to { opacity: 1; } }
 
     @media (max-width: 480px) {
-      body { padding: 16px; height: auto; min-height: 100vh; }
-      .login-box { padding: 32px 24px; gap: 18px; }
-      .google-btn, .phone-btn, .submit-btn { padding: 14px 20px; font-size: 15px; }
-      .input-field { padding: 14px 16px; font-size: 15px; }
-      .otp-input { font-size: 20px; letter-spacing: 0.4em; }
-      .country-select { flex: 0 0 84px; padding: 14px 6px; }
+      body { padding: clamp(12px, 4vw, 16px); height: auto; min-height: 100vh; }
+      .login-box { padding: clamp(24px, 8vw, 32px) clamp(16px, 5vw, 24px); gap: clamp(14px, 4vw, 18px); }
+      .google-btn, .phone-btn, .submit-btn { padding: clamp(12px, 3.5vw, 14px) clamp(16px, 5vw, 20px); font-size: clamp(14px, 3.8vw, 15px); }
+      .input-field { padding: clamp(12px, 3.5vw, 14px) clamp(12px, 4vw, 16px); font-size: clamp(14px, 3.8vw, 15px); }
+      .otp-input { font-size: clamp(18px, 5vw, 20px); letter-spacing: 0.4em; }
+      .country-select { flex: 0 0 84px; padding: clamp(12px, 3.5vw, 14px) 6px; }
     }
   </style>
 </head>

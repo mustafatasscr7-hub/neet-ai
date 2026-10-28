@@ -111,7 +111,7 @@
     .generate-btn:disabled { background: #2a2a2a; color: #666; cursor: not-allowed; }
 
     @media (max-width: 640px) {
-      .catalog-body { padding: 24px 16px 40px; }
+      .catalog-body { padding: clamp(16px, 6vw, 24px) clamp(12px, 4vw, 16px) clamp(28px, 8vw, 40px); }
     }
 
     /* ===== TEST SCREEN (adapted from mocktest.html) ===== */
@@ -259,7 +259,7 @@
 
     @media (max-width: 640px) {
       .subject-grid { grid-template-columns: 1fr; }
-      .custom-panel { padding: 24px; }
+      .custom-panel { padding: clamp(16px, 6vw, 24px); }
     }
 
     @media (max-width: 768px) {
@@ -267,9 +267,9 @@
          stacked fix as mocktest.html's identical layout. .sidebar here used to just be hidden
          below 640px with nothing replacing it, leaving phones with no way to jump to a
          specific question -- now it's a full-width drawer under the question instead. */
-      .header { flex-wrap: wrap; row-gap: 8px; padding-left: 16px; padding-right: 16px; }
+      .header { flex-wrap: wrap; row-gap: 8px; padding-left: clamp(12px, 4vw, 16px); padding-right: clamp(12px, 4vw, 16px); }
       .body { flex-direction: column; }
-      .question-area { padding: 16px; }
+      .question-area { padding: clamp(12px, 4vw, 16px); }
       .question-actions { flex-wrap: wrap; }
       .nav-btns { width: 100%; margin-left: 0; }
       .prev-btn, .next-btn { flex: 1; }

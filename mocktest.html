@@ -230,7 +230,7 @@
     body.light-mode .submitting-spinner { border-color: #e3e3ea !important; border-top-color: #4f8ef7 !important; }
 
     @media (max-width: 768px) {
-      .header { flex-wrap: wrap; row-gap: 8px; padding-left: 16px; padding-right: 16px; }
+      .header { flex-wrap: wrap; row-gap: 8px; padding-left: clamp(12px, 4vw, 16px); padding-right: clamp(12px, 4vw, 16px); }
 
       /* Exam screen: question + navigator stack vertically instead of sitting side by side
          (the 280px fixed-width panel otherwise left ~95px for the question itself). Each half
@@ -238,7 +238,7 @@
          own .question-grid does too via test-navigator.css), so neither needs the page itself
          to scroll. */
       .body { flex-direction: column; }
-      .question-area { padding: 16px; }
+      .question-area { padding: clamp(12px, 4vw, 16px); }
       .question-actions { flex-wrap: wrap; }
       .nav-btns { width: 100%; margin-left: 0; }
       .prev-btn, .next-btn { flex: 1; }

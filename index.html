@@ -158,21 +158,21 @@
     .footer-columns { grid-template-columns: 1fr 1fr; gap: 32px; }
   }
   @media (max-width: 640px) {
-    nav.top { padding: 20px 20px; }
+    nav.top { padding: clamp(14px, 5vw, 20px); }
     .nav-links { display: none; }
-    .intro, .chat-frame, .grade-note { padding: 0 20px; }
-    .intro { margin-top: 40px; }
-    .chat-frame { margin-top: 36px; }
-    .message-row { padding: 8px 16px; }
-    .chat-inputbar { padding: 12px 16px; }
-    section.block { padding: 64px 20px; }
-    .cta-block { padding: 72px 20px 88px; }
-    .footer-columns { grid-template-columns: 1fr; padding: 48px 20px 36px; text-align: left; }
-    .footer-bottom { padding: 20px; flex-direction: column; align-items: flex-start; }
+    .intro, .chat-frame, .grade-note { padding: 0 clamp(14px, 5vw, 20px); }
+    .intro { margin-top: clamp(28px, 8vw, 40px); }
+    .chat-frame { margin-top: clamp(24px, 7vw, 36px); }
+    .message-row { padding: clamp(6px, 2vw, 8px) clamp(10px, 4vw, 16px); }
+    .chat-inputbar { padding: clamp(10px, 3vw, 12px) clamp(12px, 4vw, 16px); }
+    section.block { padding: clamp(40px, 10vw, 64px) clamp(14px, 5vw, 20px); }
+    .cta-block { padding: clamp(48px, 11vw, 72px) clamp(14px, 5vw, 20px) clamp(56px, 13vw, 88px); }
+    .footer-columns { grid-template-columns: 1fr; padding: clamp(32px, 8vw, 48px) clamp(14px, 5vw, 20px) clamp(24px, 6vw, 36px); text-align: left; }
+    .footer-bottom { padding: clamp(14px, 5vw, 20px); flex-direction: column; align-items: flex-start; }
 
     .head-actions { display: block; }
-    .btn-primary { width: 100%; text-align: center; padding: 14px 20px; font-size: 15px; }
-    .cta-block .btn-primary { padding: 14px 20px; }
+    .btn-primary { width: 100%; text-align: center; padding: clamp(12px, 3.5vw, 14px) clamp(16px, 5vw, 20px); font-size: clamp(14px, 3.8vw, 15px); }
+    .cta-block .btn-primary { padding: clamp(12px, 3.5vw, 14px) clamp(16px, 5vw, 20px); }
     .message-bubble.user { max-width: 78%; }
   }
 

@@ -400,7 +400,7 @@
       .settings-sidebar { width: 100%; flex-direction: row; overflow-x: auto; -webkit-overflow-scrolling: touch; border-right: none; border-bottom: 1px solid #1e1e1e; padding: 8px 52px 8px 8px; gap: 6px; }
       .settings-sidebar-title { display: none; }
       .settings-sidebar .settings-nav-item { flex-shrink: 0; white-space: nowrap; }
-      .settings-content-area { padding: 20px; }
+      .settings-content-area { padding: clamp(16px, 5vw, 20px); }
 
       #settingsContent [style*="justify-content:space-between"] { flex-wrap: wrap; row-gap: 10px; }
       #displayNameInputGroup { width: 100%; }
@@ -1560,7 +1560,7 @@
     @media (max-width: 768px) {
       .sidebar { position: fixed; top: 0; left: 0; bottom: 0; z-index: 200; box-shadow: 0 0 30px rgba(0,0,0,0.5); }
 
-      .header { flex-wrap: wrap; row-gap: 8px; padding: 10px 14px; }
+      .header { flex-wrap: wrap; row-gap: 8px; padding: clamp(8px, 2.5vw, 10px) clamp(10px, 3.5vw, 14px); }
       .header > div { flex-wrap: wrap; row-gap: 6px; }
 
       /* Collapsed rail (.sidebar.collapsed, 56px wide) is position:fixed at this width, so it
@@ -1575,14 +1575,14 @@
          the same situation (see the body.light-mode rules earlier in this block). */
       .chat-title-btn { max-width: 55vw !important; }
 
-      .message-row { padding: 12px 12px; gap: 10px; }
+      .message-row { padding: clamp(8px, 3vw, 12px); gap: 10px; }
       .message-content { max-width: calc(100vw - 100px); }
       .message-bubble.user { max-width: calc(100vw - 100px); }
 
-      .input-area { padding: 10px 10px 14px; }
-      .input-wrapper { padding: 10px 12px; }
-      .welcome { padding: 24px 16px; }
-      .welcome-search { padding: 10px 12px; }
+      .input-area { padding: clamp(8px, 2.5vw, 10px) clamp(8px, 2.5vw, 10px) clamp(10px, 3.5vw, 14px); }
+      .input-wrapper { padding: clamp(8px, 2.5vw, 10px) clamp(10px, 3vw, 12px); }
+      .welcome { padding: clamp(16px, 6vw, 24px) clamp(12px, 4vw, 16px); }
+      .welcome-search { padding: clamp(8px, 2.5vw, 10px) clamp(10px, 3vw, 12px); }
 
       /* Slightly larger hit areas for the +/voice/send controls at phone width -- still
          comfortably inside the input row's flex layout, just roomier to tap. */
