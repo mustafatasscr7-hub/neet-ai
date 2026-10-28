@@ -1546,12 +1546,20 @@
     @keyframes pageFadeIn { from { opacity: 0; } to { opacity: 1; } }
 
     /* ---------------- Phone-width layout (chat/doubt-solving screen only) ----------------
-       .sidebar already goes off-canvas (position:fixed) below 640px via sidebar.css, and .main
-       already has overflow:hidden, so neither needs anything here -- this block only tightens
-       up .main's own children (header/messages/input) so they fit comfortably at ~375px instead
-       of just failing to scroll. Desktop (>768px) is untouched; every rule below is additive
-       inside this query, same pattern as mocktest.html's own .header mobile override. */
+       chat.html keeps its own full copy of the sidebar rules (not sidebar.css -- it has extra
+       chat-specific behavior sidebar.css deliberately omits, see sidebar.css's own top comment),
+       so the off-canvas treatment sidebar.css gives every other page's `.sidebar` at narrow
+       widths has to be repeated here too, not assumed. Without it .sidebar stayed a normal
+       260px-wide flex sibling of .main at any viewport width, crushing .main down to ~115px on a
+       real phone instead of just sitting on top of it. position:fixed takes it out of that flex
+       flow so .main (flex:1) reclaims the full width underneath, same mechanism as sidebar.css's
+       own `@media (max-width: 640px) { .sidebar { position: fixed; ... } }` -- kept at this
+       file's existing 768px breakpoint instead of sidebar.css's 640px so it lines up with every
+       other rule in this block rather than introducing a second phone threshold. .main already
+       has overflow:hidden so it doesn't need anything here. */
     @media (max-width: 768px) {
+      .sidebar { position: fixed; top: 0; left: 0; bottom: 0; z-index: 200; box-shadow: 0 0 30px rgba(0,0,0,0.5); }
+
       .header { flex-wrap: wrap; row-gap: 8px; padding: 10px 14px; }
       .header > div { flex-wrap: wrap; row-gap: 6px; }
       /* .chat-title-btn and the controls below all carry an inline style="..." in the markup
@@ -1582,6 +1590,11 @@
       #plusMenu { max-width: calc(100vw - 24px); }
 
       #countdownWrapper > div { padding: 4px 9px !important; }
+
+      /* #countdownTooltip is anchored right:0 off the pill in the markup, which runs it past
+         the right edge of a 375px screen. At phone width, center it under the pill instead and
+         cap its width so it always stays fully on-screen regardless of where the pill lands. */
+      #countdownTooltip { left: 50% !important; right: auto !important; transform: translateX(-50%); max-width: calc(100vw - 32px); box-sizing: border-box; }
     }
   </style>
 </head>
@@ -2106,12 +2119,29 @@
     renderWelcomeGreeting();
 
     document.getElementById('countdownWrapper').addEventListener('mouseenter', function() {
+      if (window.innerWidth <= 768) return; // phone width uses tap-to-toggle below instead
       document.getElementById('countdownTooltip').style.display = 'block';
     });
     document.getElementById('countdownWrapper').addEventListener('mouseleave', function() {
+      if (window.innerWidth <= 768) return;
       document.getElementById('countdownTooltip').style.display = 'none';
     });
-    
+    // Touchscreens (phone width) have no real hover -- browsers still fire a compatibility
+    // mouseenter/click pair after a tap, which would fight the handlers above, so those are
+    // guarded off at this width and tap-to-toggle is the only thing driving the tooltip here.
+    document.getElementById('countdownWrapper').addEventListener('click', function(e) {
+      if (window.innerWidth > 768) return;
+      e.stopPropagation();
+      const tooltip = document.getElementById('countdownTooltip');
+      tooltip.style.display = tooltip.style.display === 'block' ? 'none' : 'block';
+    });
+    document.addEventListener('click', function(e) {
+      if (window.innerWidth > 768) return;
+      if (!document.getElementById('countdownWrapper').contains(e.target)) {
+        document.getElementById('countdownTooltip').style.display = 'none';
+      }
+    });
+
 function toggleSearchChats() {
       const box = document.getElementById('searchChatsBox');
       const input = document.getElementById('searchChatsInput');
@@ -2168,6 +2198,11 @@ function toggleSearchChats() {
       const collapsing = !sidebar.classList.contains('collapsed');
       sidebar.classList.toggle('collapsed');
       sidebar.style.width = collapsing ? '' : (getSavedSidebarWidth() + 'px');
+      // Remembered across reloads/navigation by initSidebarWidth below -- without this, every
+      // phone visit starts back at the full 260px sidebar (which goes position:fixed and covers
+      // the whole screen below 768px, see that block's own comment) until the user re-taps this
+      // same toggle, every single time.
+      localStorage.setItem('sidebarCollapsed', collapsing ? '1' : '0');
       // Re-sync pinnedList/pinnedLabel's inline display with the new collapsed state --
       // see refreshPinnedSectionVisibility for why that inline style has to track it.
       if (typeof refreshPinnedSectionVisibility === 'function') refreshPinnedSectionVisibility();
@@ -2175,7 +2210,15 @@ function toggleSearchChats() {
     }
 
     (function initSidebarWidth() {
-      document.querySelector('.sidebar').style.width = getSavedSidebarWidth() + 'px';
+      const sidebar = document.querySelector('.sidebar');
+      const savedCollapsed = localStorage.getItem('sidebarCollapsed');
+      // No explicit preference yet (first visit): default collapsed on a phone-width screen --
+      // the alternative is the full 260px sidebar covering the whole screen on first load (see
+      // the position:fixed phone-layout rule above) with no hint that tapping the top-left icon
+      // fixes it. Desktop keeps today's always-expanded default untouched.
+      const collapsed = savedCollapsed === null ? window.innerWidth <= 768 : savedCollapsed === '1';
+      if (collapsed) sidebar.classList.add('collapsed');
+      sidebar.style.width = collapsed ? '' : getSavedSidebarWidth() + 'px';
     })();
 
     // Collapsed-sidebar icon tooltips -- just each item's own label (identifying an icon-only

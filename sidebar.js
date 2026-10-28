@@ -192,7 +192,16 @@ document.addEventListener('click', function(e) {
 function initSidebar() {
   const sidebar = document.querySelector('.sidebar');
   if (!sidebar) return;
-  sidebar.style.width = getSavedSidebarWidth() + 'px';
+
+  // Same first-load collapse default as chat.html's own initSidebarWidth: no explicit
+  // preference yet (first visit) means collapsed on a phone-width screen, since .sidebar is
+  // position:fixed (overlay, not push) and an expanded 260px sidebar on a 375px screen covers
+  // the whole viewport and intercepts taps meant for the content underneath it.
+  const savedCollapsed = localStorage.getItem('sidebarCollapsed');
+  const collapsed = savedCollapsed === null ? window.innerWidth <= 768 : savedCollapsed === '1';
+  if (collapsed) sidebar.classList.add('collapsed');
+  sidebar.style.width = collapsed ? '' : getSavedSidebarWidth() + 'px';
+
   initSidebarTooltips();
 
   const searchInput = document.getElementById('searchChatsInput');
