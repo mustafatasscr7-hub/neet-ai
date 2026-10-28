@@ -171,6 +171,10 @@ body.light-mode #searchChatsInput::placeholder { color: #9a9aa5 !important; }
 
 @media (max-width: 640px) {
   .sidebar { position: fixed; top: 0; left: 0; bottom: 0; z-index: 200; box-shadow: 0 0 30px rgba(0,0,0,0.5); }
+  /* Collapsed rail is fixed/overlay here, not an in-flow flex sibling, so .page-main-content no
+     longer gets pushed over by its 56px width -- page content's left edge sits underneath the
+     icon rail unless pushed clear of it manually. */
+  .sidebar.collapsed ~ .page-main-content { padding-left: 56px; }
 }
 
 /* Main content pane, phones: the sidebar above is already off-flow (position:fixed) by 640px, so
