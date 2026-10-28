@@ -816,6 +816,15 @@
     .sidebar-tooltip { position: fixed; transform: translateY(-50%); background: #1e1e1e; color: #ececec; padding: 6px 12px; border-radius: 999px; font-size: 12.5px; font-family: 'Inter', sans-serif; white-space: nowrap; display: flex; align-items: center; gap: 8px; pointer-events: none; opacity: 0; visibility: hidden; transition: opacity 0.12s ease; z-index: 9999; box-shadow: 0 4px 14px rgba(0,0,0,0.45); border: 1px solid #2a2a2a; }
     .sidebar-tooltip.visible { opacity: 1; visibility: visible; }
     body.light-mode .sidebar-tooltip { background: #ffffff !important; color: #16161d !important; border-color: #e0e0e5 !important; box-shadow: 0 4px 14px rgba(0,0,0,0.12) !important; }
+
+    /* Mobile drawer hamburger (header) + dimming backdrop -- both hidden outside the phone-width
+       media query above, which turns them on. */
+    .sidebar-backdrop { display: none; }
+    .sidebar-hamburger-btn { display: none; align-items: center; justify-content: center; width: 32px; height: 32px; flex-shrink: 0; background: transparent; border: none; color: #ececec; cursor: pointer; padding: 4px; border-radius: 6px; }
+    .sidebar-hamburger-btn:hover { background: rgba(255,255,255,0.08); }
+    body.light-mode .sidebar-hamburger-btn { color: #333338 !important; }
+    body.light-mode .sidebar-hamburger-btn:hover { background: rgba(0,0,0,0.06) !important; }
+
     .logo { display: flex; align-items: center; gap: 10px; padding: 6px 12px; margin-bottom: 4px; }
     /* Was an inline style="justify-content:space-between" on the element itself -- moved into CSS
        because an inline style outranks every stylesheet rule regardless of specificity, permanently
@@ -1558,16 +1567,30 @@
        other rule in this block rather than introducing a second phone threshold. .main already
        has overflow:hidden so it doesn't need anything here. */
     @media (max-width: 768px) {
-      .sidebar { position: fixed; top: 0; left: 0; bottom: 0; z-index: 200; box-shadow: 0 0 30px rgba(0,0,0,0.5); }
+      /* ChatGPT-style mobile drawer: hidden off-screen by default, opened by #sidebarHamburgerBtn
+         (see the header markup) which toggles `.mobile-open`, sliding the sidebar in as a full
+         overlay above #sidebarBackdrop. `.collapsed` (the old 56px icon rail) is desktop-only now
+         -- toggleSidebar()/initSidebarWidth() below never add it at this width. */
+      .sidebar {
+        position: fixed; top: 0; left: 0; bottom: 0; z-index: 200;
+        box-shadow: 0 0 30px rgba(0,0,0,0.5);
+        transform: translateX(-100%);
+        transition: transform 0.25s ease-in-out;
+      }
+      .sidebar.mobile-open { transform: translateX(0); }
+      .sidebar-resize-handle { display: none; }
+
+      .sidebar-backdrop {
+        display: block; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 199;
+        opacity: 0; visibility: hidden; transition: opacity 0.25s ease-in-out;
+      }
+      .sidebar-backdrop.visible { opacity: 1; visibility: visible; }
+
+      .sidebar-hamburger-btn { display: inline-flex; }
 
       .header { flex-wrap: wrap; row-gap: 8px; padding: clamp(8px, 2.5vw, 10px) clamp(10px, 3.5vw, 14px); }
       .header > div { flex-wrap: wrap; row-gap: 6px; }
 
-      /* Collapsed rail (.sidebar.collapsed, 56px wide) is position:fixed at this width, so it
-         overlays .header's left edge instead of pushing it over -- "NEET-AI" rendered as "-AI"
-         underneath the rail. Push just the header clear of it; .main itself stays full-width so
-         messages/input area are unaffected. */
-      .sidebar.collapsed ~ .main .header { padding-left: 60px; }
       /* .chat-title-btn and the controls below all carry an inline style="..." in the markup
          (see the buttons right after <body>) -- an element's own inline style always beats a
          stylesheet rule for the same property regardless of @media, so every override of one
@@ -1740,10 +1763,15 @@
     </div>
   </div>
 
+  <div class="sidebar-backdrop" id="sidebarBackdrop" onclick="closeMobileSidebar()"></div>
+
   <div class="main">
   <div class="header">
       <div style="display:flex;align-items:center;gap:12px;">
 
+        <button class="sidebar-hamburger-btn" id="sidebarHamburgerBtn" onclick="toggleSidebar()" aria-label="Open menu" title="Menu">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+        </button>
         <span class="logo-brand" id="headerBrand" style="font-size:15px;font-weight:700;color:#fff;">NEET<span style="color:#4f8ef7;">-AI</span></span>
         <button class="chat-title-btn" id="chatTitleBtn" style="display:none;align-items:center;gap:6px;background:transparent;border:none;color:#ececec;font-size:15px;font-weight:600;font-family:'Inter',sans-serif;cursor:pointer;padding:6px 8px;border-radius:8px;max-width:280px;">
           <span id="chatTitleText" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
@@ -2199,15 +2227,39 @@ function toggleSearchChats() {
       return (saved >= SIDEBAR_MIN_WIDTH && saved <= SIDEBAR_MAX_WIDTH) ? saved : SIDEBAR_DEFAULT_WIDTH;
     }
 
-   function toggleSidebar() {
+   // Mobile (<=768px) drawer: a separate mechanism from desktop's collapse/expand (`.collapsed`,
+    // 56px icon rail) -- the sidebar is fully off-canvas by default there (see the phone-width
+    // media query above) and `.mobile-open` slides it in as a full overlay instead. Not
+    // persisted across reloads/navigation (ChatGPT's own behavior: closed every fresh load),
+    // unlike desktop's `sidebarCollapsed` localStorage preference below.
+    function isMobileSidebarWidth() {
+      return window.innerWidth <= 768;
+    }
+
+    function closeMobileSidebar() {
       const sidebar = document.querySelector('.sidebar');
+      if (!sidebar) return;
+      sidebar.classList.remove('mobile-open');
+      const backdrop = document.getElementById('sidebarBackdrop');
+      if (backdrop) backdrop.classList.remove('visible');
+    }
+
+    function toggleSidebar() {
+      const sidebar = document.querySelector('.sidebar');
+      if (isMobileSidebarWidth()) {
+        const opening = !sidebar.classList.contains('mobile-open');
+        sidebar.classList.toggle('mobile-open', opening);
+        const backdrop = document.getElementById('sidebarBackdrop');
+        if (backdrop) backdrop.classList.toggle('visible', opening);
+        hideSidebarTooltip();
+        return;
+      }
       const collapsing = !sidebar.classList.contains('collapsed');
       sidebar.classList.toggle('collapsed');
       sidebar.style.width = collapsing ? '' : (getSavedSidebarWidth() + 'px');
       // Remembered across reloads/navigation by initSidebarWidth below -- without this, every
-      // phone visit starts back at the full 260px sidebar (which goes position:fixed and covers
-      // the whole screen below 768px, see that block's own comment) until the user re-taps this
-      // same toggle, every single time.
+      // desktop visit would start back at whatever the hardcoded expanded default is until the
+      // user re-toggles, every single time.
       localStorage.setItem('sidebarCollapsed', collapsing ? '1' : '0');
       // Re-sync pinnedList/pinnedLabel's inline display with the new collapsed state --
       // see refreshPinnedSectionVisibility for why that inline style has to track it.
@@ -2217,14 +2269,30 @@ function toggleSearchChats() {
 
     (function initSidebarWidth() {
       const sidebar = document.querySelector('.sidebar');
-      const savedCollapsed = localStorage.getItem('sidebarCollapsed');
-      // No explicit preference yet (first visit): default collapsed on a phone-width screen --
-      // the alternative is the full 260px sidebar covering the whole screen on first load (see
-      // the position:fixed phone-layout rule above) with no hint that tapping the top-left icon
-      // fixes it. Desktop keeps today's always-expanded default untouched.
-      const collapsed = savedCollapsed === null ? window.innerWidth <= 768 : savedCollapsed === '1';
+      // Mobile: always starts closed (no `.collapsed` rail -- see toggleSidebar's own comment),
+      // never reads/writes the desktop-only `sidebarCollapsed` preference below.
+      if (isMobileSidebarWidth()) {
+        sidebar.classList.remove('collapsed');
+        sidebar.style.width = '';
+        return;
+      }
+      const collapsed = localStorage.getItem('sidebarCollapsed') === '1';
       if (collapsed) sidebar.classList.add('collapsed');
       sidebar.style.width = collapsed ? '' : getSavedSidebarWidth() + 'px';
+    })();
+
+    // Tapping a nav link/chat/new-chat inside the drawer closes it, same as ChatGPT -- everything
+    // else inside the sidebar (profile menu, search box, resize handle) is excluded since those
+    // open their own UI in place rather than navigating/loading a chat.
+    (function setupMobileSidebarAutoClose() {
+      const sidebar = document.querySelector('.sidebar');
+      sidebar.addEventListener('click', function(e) {
+        if (!isMobileSidebarWidth()) return;
+        if (e.target.closest('#navSearch') || e.target.closest('.profile-btn') || e.target.closest('.sidebar-resize-handle')) return;
+        if (e.target.closest('.history-item') || e.target.closest('.nav-item') || e.target.closest('.new-chat-btn')) {
+          closeMobileSidebar();
+        }
+      });
     })();
 
     // Collapsed-sidebar icon tooltips -- just each item's own label (identifying an icon-only

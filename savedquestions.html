@@ -327,9 +327,14 @@
     </div>
   </div>
 
+  <div class="sidebar-backdrop" id="sidebarBackdrop" onclick="closeMobileSidebar()"></div>
+
   <div class="page-main-content">
   <div class="header">
     <div style="display:flex;align-items:center;gap:16px;">
+      <button class="sidebar-hamburger-btn" id="sidebarHamburgerBtn" onclick="toggleSidebar()" aria-label="Open menu" title="Menu">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+      </button>
       <span class="header-title">NEET<span>-AI</span> <span data-i18n="savedquestions.headerTitle">Saved Questions</span></span>
     </div>
     <div style="display:flex;gap:10px;">
