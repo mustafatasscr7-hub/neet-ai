@@ -8781,6 +8781,50 @@ async def _pyq_delete_log_count(uploader_name: str) -> int:
     except Exception:
         return 0
 
+def _pyq_row_has_diagram(row: dict) -> bool:
+    """Same definition as the With diagram / Without diagram split above: any of the 5
+    diagram-url columns actually filled in."""
+    return any(
+        row.get(col) for col in
+        ("diagram_url", "option_a_diagram_url", "option_b_diagram_url",
+         "option_c_diagram_url", "option_d_diagram_url")
+    )
+
+async def _log_pyq_upload(pyq_id: str, uploader_name: str, has_diagram: bool):
+    """One pyq_upload_log row per NEW contractor-uploaded PYQ question -- feeds the Contractor
+    Queue's permanent "Uploaded so far" totals, which only ever go up (edits, Needs fix re-saves,
+    approvals and deletes never call this). Best-effort, like _log_pyq_delete: a failed insert
+    (including the table not existing yet, before pyq_upload_log.sql is run) is swallowed here
+    and only printed -- logging must never be what blocks or surfaces an error for a save that
+    otherwise succeeded. ON CONFLICT DO NOTHING (via ignore-duplicates) on the pyq_id unique
+    index means a question can never be logged, and so counted, twice."""
+    try:
+        resp = await async_client.post(
+            f"{SUPABASE_URL}/rest/v1/pyq_upload_log",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "resolution=ignore-duplicates"},
+            json={"pyq_id": pyq_id, "uploader_name": uploader_name, "has_diagram": has_diagram}
+        )
+        if resp.status_code >= 400:
+            print(f"PYQ UPLOAD LOG FAILED (pyq_id={pyq_id}): {resp.status_code} {resp.text[:200]}", flush=True)
+    except Exception as e:
+        print(f"PYQ UPLOAD LOG FAILED (pyq_id={pyq_id}): {e}", flush=True)
+
+async def _pyq_upload_log_count(uploader_name: str, has_diagram: bool) -> int:
+    """Count of pyq_upload_log rows for one uploader/diagram split -- 0 (not an error) if the
+    table hasn't been created yet, same as _pyq_delete_log_count."""
+    try:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/pyq_upload_log", headers={**ADMIN_HEADERS, "Prefer": "count=exact"},
+            params={"uploader_name": f"eq.{uploader_name}", "has_diagram": f"eq.{str(has_diagram).lower()}",
+                    "select": "id", "limit": 1}
+        )
+        if resp.status_code >= 400:
+            return 0
+        tail = resp.headers.get("content-range", "").split("/")[-1]
+        return int(tail) if tail.isdigit() else 0
+    except Exception:
+        return 0
+
 @app.get("/admin/pyq-contractor-queue-counts")
 async def admin_pyq_contractor_queue_counts(_: None = Depends(verify_admin)):
     """Numbers only for the Contractor Queue's side panel -- the contractor's own uploads still
@@ -8793,16 +8837,20 @@ async def admin_pyq_contractor_queue_counts(_: None = Depends(verify_admin)):
         diagram_or = ("(diagram_url.neq.,option_a_diagram_url.neq.,"
                       "option_b_diagram_url.neq.,option_c_diagram_url.neq.,"
                       "option_d_diagram_url.neq.)")
-        total, with_diagram, approved, needs_fix, deleted = await asyncio.gather(
+        (total, with_diagram, approved, needs_fix, deleted,
+         uploaded_with_diagram, uploaded_without_diagram) = await asyncio.gather(
             _pyq_count(base),
             _pyq_count({**base, "or": diagram_or}),
             _pyq_count({"review_status": "eq.approved", "uploader_name": f"eq.{CONTRACTOR_UPLOADER_NAME}"}),
             _pyq_count({"review_status": "eq.needs_fix", "uploader_name": f"eq.{CONTRACTOR_UPLOADER_NAME}"}),
             _pyq_delete_log_count(CONTRACTOR_UPLOADER_NAME),
+            _pyq_upload_log_count(CONTRACTOR_UPLOADER_NAME, True),
+            _pyq_upload_log_count(CONTRACTOR_UPLOADER_NAME, False),
         )
         return {
             "with_diagram": with_diagram, "without_diagram": max(0, total - with_diagram),
             "approved": approved, "needs_fix": needs_fix, "deleted": deleted,
+            "uploaded_with_diagram": uploaded_with_diagram, "uploaded_without_diagram": uploaded_without_diagram,
         }
     except Exception as e:
         return {"error": str(e)}
@@ -11026,6 +11074,13 @@ async def admin_pyq_bulk_create(body: PyqBulkCreate, role: str = Depends(verify_
                 row["id"], row.get("question"), row.get("chapter"),
                 row.get("option_a"), row.get("option_b"), row.get("option_c"), row.get("option_d")
             ))
+            # Permanent "Uploaded so far" totals for the Contractor Queue bar: one log row per
+            # NEW row actually saved with the contractor's name, regardless of which role or
+            # page created it (role=="admin" can tag a row with the contractor's name too, via
+            # the uploader-name picker) -- read back from `row` itself, since that's the name
+            # PostgREST actually stored, not the request's role or body.uploader_name.
+            if row.get("uploader_name") == CONTRACTOR_UPLOADER_NAME:
+                asyncio.create_task(_log_pyq_upload(row["id"], CONTRACTOR_UPLOADER_NAME, _pyq_row_has_diagram(row)))
         return {"created": created, "batch_id": batch_id}
     except Exception as e:
         return {"error": str(e)}

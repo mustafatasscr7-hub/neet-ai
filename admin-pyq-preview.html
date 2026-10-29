@@ -163,6 +163,12 @@
     .contractor-count-row.secondary .contractor-count-label { font-size: 10px; color: #777; }
     .contractor-count-row.secondary .contractor-count-num { font-size: 13px; font-weight: 600; color: #999; }
     .contractor-panel-empty { font-size: 12px; color: #666; padding: 10px 2px; flex: 2 1 0; }
+    /* "Uploaded so far" -- a third, permanent-totals group, same quiet/secondary look as
+       Approved/Needs fix/Deleted, with one shared label before its two boxes instead of
+       repeating it in each. Sits beside main/secondary on desktop; stacks under them (its own
+       compact row) at phone width via the existing flex-direction:column rule above. */
+    .contractor-panel-uploaded { display: flex; align-items: center; gap: 6px; flex: 1.6 1 0; }
+    .contractor-uploaded-label { font-size: 10px; color: #777; white-space: nowrap; }
     @media (max-width: 480px) {
       .contractor-panel.cq-visible { flex-direction: column; }
     }
@@ -1963,13 +1969,21 @@
           <span class="contractor-count-label">${label}</span>
           <span class="contractor-count-num">${count}</span>
         </div>`;
+      // Permanent totals -- unlike every other box here, these never go down (not scoped to
+      // "pending" or any filter), so they're rendered the same way whether or not the pending
+      // queue is currently empty.
+      const uploadedHtml = `<div class="contractor-panel-uploaded">
+          <span class="contractor-uploaded-label">Uploaded so far</span>
+          ${secondaryRow('With diagram', data.uploaded_with_diagram || 0)}
+          ${secondaryRow('Without diagram', data.uploaded_without_diagram || 0)}
+        </div>`;
       if (withCount + withoutCount === 0) {
         const emptySecondaryHtml = `<div class="contractor-panel-secondary">`
           + secondaryRow('Approved', data.approved || 0)
           + secondaryRow('Needs fix', data.needs_fix || 0)
           + secondaryRow('Deleted', data.deleted || 0)
           + `</div>`;
-        panel.innerHTML = '<div class="contractor-panel-empty">Nothing waiting in the contractor queue.</div>' + emptySecondaryHtml;
+        panel.innerHTML = '<div class="contractor-panel-empty">Nothing waiting in the contractor queue.</div>' + emptySecondaryHtml + uploadedHtml;
         return;
       }
       const row = (key, label, count) => `
@@ -1988,7 +2002,7 @@
         + secondaryRow('Deleted', data.deleted || 0)
         + contractorDupButtonHtml()
         + `</div>`;
-      panel.innerHTML = mainHtml + secondaryHtml;
+      panel.innerHTML = mainHtml + secondaryHtml + uploadedHtml;
     }
 
     function toggleContractorDiagramFilter(key) {
