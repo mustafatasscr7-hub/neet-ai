@@ -242,7 +242,13 @@
       .question-actions { flex-wrap: wrap; }
       .nav-btns { width: 100%; margin-left: 0; }
       .prev-btn, .next-btn { flex: 1; }
-      .qnav-panel { width: 100%; height: 38vh; border-left: none; border-top: 1px solid #1e1e1e; }
+      /* vh is the large/static viewport (ignores the address bar), but .body's own height
+         comes from the dvh fallback below body's 100vh -- so on a device where the address bar
+         is showing, vh overstates the real visible height and the two heights disagree, leaving
+         .question-area's flex:1 remainder short of what's actually visible and squeezing its
+         last option(s) out of view before the user's reached the end of real content. dvh keeps
+         this panel sized against the same visual viewport the rest of the page already uses. */
+      .qnav-panel { width: 100%; height: 38vh; height: 38dvh; border-left: none; border-top: 1px solid #1e1e1e; }
     }
   </style>
 </head>
@@ -1213,6 +1219,14 @@ function formatQuestionTextInner(text) {
         else if (marked[i]) cls += ' marked';
         return `<button class="${cls}" onclick="goTo(${i})">${localizeNum(i + 1)}</button>`;
       }).join('');
+
+      // The grid container's scrollTop isn't reset by the innerHTML rebuild above -- it's the
+      // same DOM node across a resume, a restart, or a subject-filter switch, so a scroll
+      // position left over from browsing the grid earlier would otherwise stay put even though
+      // the active question (and its highlighted button) moved. Bring it back into view every
+      // render, not just on navigation, so it also covers load and resume.
+      const currentBtn = grid.querySelector('.grid-btn.current');
+      if (currentBtn) currentBtn.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     }
 
     function filterSubject(subject) {
