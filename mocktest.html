@@ -233,16 +233,18 @@
       .header { flex-wrap: wrap; row-gap: 8px; padding-left: clamp(12px, 4vw, 16px); padding-right: clamp(12px, 4vw, 16px); }
 
       /* Exam screen: question + navigator stack vertically instead of sitting side by side
-         (the 280px fixed-width panel otherwise left ~95px for the question itself). Each half
-         keeps its own internal scroll (question-area already had overflow-y:auto; .qnav-panel's
-         own .question-grid does too via test-navigator.css), so neither needs the page itself
-         to scroll. */
-      .body { flex-direction: column; }
-      .question-area { padding: clamp(12px, 4vw, 16px); }
+         (the 280px fixed-width panel otherwise left ~95px for the question itself). The navigator
+         used to be capped at 38dvh with its own internal scroll, behaving like a pinned drawer --
+         now it flows in normal document order below the options and takes its natural height, so
+         .body (not question-area or the grid individually) is the one scroll container and
+         question + options + navigator all move together under the still-fixed header. */
+      .body { flex-direction: column; overflow-y: auto; }
+      .question-area { padding: clamp(12px, 4vw, 16px); overflow-y: visible; }
       .question-actions { flex-wrap: wrap; }
       .nav-btns { width: 100%; margin-left: 0; }
       .prev-btn, .next-btn { flex: 1; }
-      .qnav-panel { width: 100%; height: 38vh; border-left: none; border-top: 1px solid #1e1e1e; }
+      .qnav-panel { width: 100%; height: auto; overflow: visible; border-left: none; border-top: 1px solid #1e1e1e; }
+      .qnav-panel .question-grid { overflow-y: visible; flex: none; min-height: auto; }
     }
   </style>
 </head>
@@ -1213,6 +1215,18 @@ function formatQuestionTextInner(text) {
         else if (marked[i]) cls += ' marked';
         return `<button class="${cls}" onclick="goTo(${i})">${localizeNum(i + 1)}</button>`;
       }).join('');
+
+      // The grid container's scrollTop isn't reset by the innerHTML rebuild above -- it's the
+      // same DOM node across a resume, a restart, or a subject-filter switch, so a scroll
+      // position left over from browsing the grid earlier would otherwise stay put even though
+      // the active question (and its highlighted button) moved. Bring it back into view every
+      // render, not just on navigation, so it also covers load and resume. Desktop only -- on
+      // mobile the grid no longer scrolls internally (it flows in the page below the question),
+      // so "nearest" would instead jump the whole page down to the navigator on every render.
+      if (window.innerWidth > 768) {
+        const currentBtn = grid.querySelector('.grid-btn.current');
+        if (currentBtn) currentBtn.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      }
     }
 
     function filterSubject(subject) {
