@@ -148,11 +148,17 @@ app.add_middleware(_HSTSMiddleware)
 # Authorization in this list, fails with "Failed to fetch" without it. Never reached production
 # (still running older code as of this fix), but would have broken every authenticated request the
 # moment the JWT-verification commit shipped.
-_LOCALHOST_ORIGIN_REGEX = r"^http://(localhost|127\.0\.0\.1)(:\d+)?$"
+# Vercel preview deployments (branch pushes) get a URL of the form
+# https://neet-ai-git-<branch-slug>-tass7.vercel.app -- allowlisted by pattern, scoped to this
+# project's team slug, so future preview branches don't need a repeat hardcoded-origin fix.
+_LOCALHOST_OR_PREVIEW_ORIGIN_REGEX = (
+    r"^(http://(localhost|127\.0\.0\.1)(:\d+)?"
+    r"|https://neet-ai-git-[a-z0-9-]+-tass7\.vercel\.app)$"
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["https://neet-ai-jet.vercel.app"],
-    allow_origin_regex=_LOCALHOST_ORIGIN_REGEX,
+    allow_origin_regex=_LOCALHOST_OR_PREVIEW_ORIGIN_REGEX,
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     # X-Device-Id: api-device.js adds it to every website call for per-device rate limits -- same
     # preflight trap as Authorization above if it were missing.
