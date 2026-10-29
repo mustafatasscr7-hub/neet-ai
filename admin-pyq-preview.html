@@ -166,6 +166,46 @@
     @media (max-width: 480px) {
       .contractor-panel.cq-visible { flex-direction: column; }
     }
+
+    /* Contractor Queue "Duplicates" button -- lives in the secondary (quiet) row alongside
+       Approved/Needs fix/Deleted, same sizing, but clickable like the main With/Without-diagram
+       rows and using the same blue-accent "active" state (the filter is on) as the rest of the
+       file. No emoji, no purple. */
+    .contractor-count-row.dup-btn { cursor: pointer; }
+    .contractor-count-row.dup-btn .contractor-count-label { font-size: 12px; color: #ccc; }
+    .contractor-count-row.dup-btn .contractor-count-num { font-size: 13px; font-weight: 600; color: #999; }
+    .contractor-count-row.dup-btn.active .contractor-count-label,
+    .contractor-count-row.dup-btn.active .contractor-count-num { color: #fff; }
+    .contractor-count-row.dup-btn.has-error { border-color: #ef444460; }
+
+    /* "Possible duplicate of N questions" box under a flagged card in the Duplicates filter */
+    .dup-match-box { margin-top: 14px; padding-top: 14px; border-top: 1px dashed #2a2a2a; }
+    .dup-match-box-title { font-size: 12px; font-weight: 600; color: #ccc; margin-bottom: 8px; }
+    .dup-match-row { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; padding: 7px 0; border-bottom: 1px solid #1a1a1a; font-size: 12px; }
+    .dup-match-row:last-child { border-bottom: none; }
+    .dup-match-pct { font-weight: 700; color: #f59e0b; flex: 0 0 auto; }
+    .dup-match-pct.exact { color: #ef4444; }
+    .dup-match-meta { color: #777; flex: 0 0 auto; white-space: nowrap; }
+    .dup-match-tag { font-size: 10px; padding: 2px 7px; border-radius: 20px; font-weight: 600; flex: 0 0 auto; white-space: nowrap; }
+    .dup-match-tag.status-approved { background: #4ade8020; color: #4ade80; }
+    .dup-match-tag.status-pending { background: #f59e0b20; color: #f59e0b; }
+    .dup-match-tag.status-needs_fix { background: #f9731620; color: #fb923c; }
+    .dup-match-tag.loc { background: #2a2a2a; color: #999; }
+    .dup-match-tag.duplicate-flag { background: #ef444420; color: #ef4444; }
+    .dup-match-tag.also-asked { background: #4f8ef720; color: #4f8ef7; }
+    .dup-match-tag.year-unknown { background: #66666625; color: #999; }
+    .dup-match-preview { color: #888; flex: 1 1 260px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .dup-match-more-btn { background: transparent; border: 1px solid #2a2a2a; color: #888; padding: 5px 12px; border-radius: 6px; font-size: 11px; cursor: pointer; font-family: 'Inter', sans-serif; margin-top: 8px; }
+    .dup-match-more-btn:hover { border-color: #4f8ef7; color: #4f8ef7; }
+    .dup-match-cap-note { font-size: 11px; color: #666; margin-top: 6px; }
+    .dup-original-note { font-size: 11px; color: #666; margin-top: 8px; font-style: italic; }
+    .dup-card-actions { display: flex; gap: 8px; margin-top: 10px; }
+    .dup-keep-btn { background: transparent; border: 1px solid #2a2a2a; color: #888; padding: 5px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; font-family: 'Inter', sans-serif; }
+    .dup-keep-btn:hover { border-color: #4ade80; color: #4ade80; }
+    @media (max-width: 480px) {
+      .dup-match-row { flex-direction: column; align-items: flex-start; gap: 3px; }
+      .dup-match-preview { white-space: normal; }
+    }
     .q-review-note { margin-top: 12px; padding: 10px 12px; border-radius: 8px; background: #f9731612; border: 1px solid #f9731640; color: #fdba74; font-size: 12px; line-height: 1.5; white-space: pre-wrap; }
     .q-review-note b { color: #fb923c; }
     .q-fix-btn { background: transparent; border: 1px solid #f9731660; color: #fb923c; padding: 5px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
@@ -411,6 +451,16 @@
     let contractorDiagramFilter = null; // null | 'with' | 'without'
     let contractorCountsCache = { with_diagram: 0, without_diagram: 0 };
     const CONTRACTOR_UPLOADER_NAME = 'Mr. Md Moniruzzaman';
+    // Contractor Queue "Duplicates" button -- reuses /admin/pyq-duplicates' own matching, scoped
+    // to the queue. null = not checked yet this session; once checked, the result is kept until
+    // Contractor Queue is left (same lifecycle as contractorDiagramFilter above) so repeat
+    // presses just toggle the filter instead of re-scanning every time.
+    let contractorDupData = null; // null | { flagged: {id: {row, matches, total_matches, capped, original_id?, original_in_queue?}}, checked, flagged_count, threshold }
+    let contractorDupFilterOn = false;
+    let contractorDupLoading = false;
+    let contractorDupError = null;
+    let dupMatchExpanded = new Set(); // flagged question ids whose "Show all" is expanded
+    const DUP_KEPT_STORAGE_KEY = 'admin_pyq_dup_kept_ids';
     let allDiagrams = [];
     let diagramEditingIds = new Set();
     let diagramReportGroups = [];
@@ -542,12 +592,14 @@
       }
       currentPage = 1;
       if (duplicatesMode) { renderDuplicatePairs(subject); return; }
+      if (contractorMode && contractorDupFilterOn) { renderResults(); return; }
       loadResults();
     }
 
     function onFilterChange() {
       currentPage = 1;
       if (duplicatesMode) { renderDuplicatePairs(document.getElementById('filterSubject').value); return; }
+      if (contractorMode && contractorDupFilterOn) { renderResults(); return; }
       loadResults();
     }
 
@@ -1023,7 +1075,7 @@
     function updateApproveCleanBtn() {
       const clean = currentRows.filter(q => awaitingReview(q) && !(q.warnings || []).length);
       const btn = document.getElementById('approveCleanBtn');
-      btn.style.display = clean.length && !duplicatesMode && !reportsMode && !diagramMode ? 'inline-block' : 'none';
+      btn.style.display = clean.length && !duplicatesMode && !reportsMode && !diagramMode && !contractorDupFilterOn ? 'inline-block' : 'none';
       btn.textContent = `✅ Approve ${clean.length} clean row${clean.length === 1 ? '' : 's'} on this page`;
     }
 
@@ -1195,6 +1247,9 @@
     }
 
     function updateResultCountText() {
+      // The Duplicates filter writes its own "N flagged questions" count (renderContractorDuplicatesList)
+      // -- leave it alone here rather than stomping it with the page's normal row count.
+      if (contractorMode && contractorDupFilterOn) return;
       document.getElementById('resultCount').textContent = reviewMode
         ? `${totalRows} question${totalRows === 1 ? '' : 's'} awaiting review`
         : `${totalRows} matching row${totalRows === 1 ? '' : 's'}`;
@@ -1710,8 +1765,14 @@
       return flags;
     }
 
-    function questionCardHtml(q) {
+    function questionCardHtml(q, opts_) {
       if (editingIds.has(q.id)) return editFormHtml(q);
+      // minimalActions: used only by the Contractor Queue's Duplicates filter -- that view's
+      // flagged question isn't tracked in currentRows (it comes from the duplicate-check
+      // response instead), so Edit/Approve/Needs-fix/bulk-select here would silently go stale
+      // after use. "Delete this one" and "Keep" (rendered by duplicateMatchBoxHtml below this
+      // card instead) are the only actions the spec wants on these cards anyway.
+      const minimalActions = !!(opts_ && opts_.minimalActions);
       const correctLetter = (q.correct_answer || '').toLowerCase().trim();
       const opts = ['a', 'b', 'c', 'd'].map(opt => {
         // Some questions have diagram-only options (no text at all) -- skipping whenever
@@ -1725,11 +1786,11 @@
       // checks and more; computeFlags stays as the fallback for views that don't fetch them.
       const flags = q.warnings ? [] : computeFlags(q);
       // Review actions only in the plain list -- Duplicates/Reported keep their own row maps.
-      const reviewActions = !duplicatesMode && !reportsMode;
+      const reviewActions = !duplicatesMode && !reportsMode && !minimalActions;
       const waiting = reviewActions && awaitingReview(q);
       return `
         <div class="question-card">
-          <label class="q-select-corner"><input type="checkbox" class="q-select-checkbox" ${selectedIds.has(q.id) ? 'checked' : ''} onchange="toggleQuestionSelect('${q.id}', this.checked)"/></label>
+          ${minimalActions ? '' : `<label class="q-select-corner"><input type="checkbox" class="q-select-checkbox" ${selectedIds.has(q.id) ? 'checked' : ''} onchange="toggleQuestionSelect('${q.id}', this.checked)"/></label>`}
           <div class="q-meta">
             <div class="q-meta-primary">
               <span class="q-year">${q.year || ''}</span>
@@ -1749,11 +1810,11 @@
             <span class="q-admin-id">${escapeHtml(q.id)}</span>
             ${flags.map(f => `<span class="q-flag">${escapeHtml(f)}</span>`).join('')}
             ${reviewWarningsHtml(q)}
-            <button class="q-edit-btn" onclick="startEdit('${q.id}')">✏️ Edit</button>
+            ${minimalActions ? '' : `<button class="q-edit-btn" onclick="startEdit('${q.id}')">✏️ Edit</button>`}
             ${waiting ? `<button class="q-approve-btn" onclick="reviewApprove('${q.id}', this)">✅ Approve for students</button>` : ''}
             ${reviewMode && !waiting ? `<button class="q-approve-btn" onclick="approveQuestion('${q.id}', this)">✅ Approve</button>` : ''}
             ${reviewActions && q.review_status && !noteOpenIds.has(q.id) ? `<button class="q-fix-btn" onclick="openNeedsFix('${q.id}')">🔧 Needs fix</button>` : ''}
-            <button class="q-delete-btn" onclick="deleteQuestion('${q.id}', this)">🗑 Delete</button>
+            ${minimalActions ? '' : `<button class="q-delete-btn" onclick="deleteQuestion('${q.id}', this)">🗑 Delete</button>`}
           </div>
           ${reviewActions ? needsFixBoxHtml(q) : ''}
         </div>`;
@@ -1762,6 +1823,12 @@
     function renderResults() {
       const area = document.getElementById('resultsArea');
       area.querySelectorAll('textarea[id^="fix-note-"]').forEach(t => { noteDrafts[t.id.slice('fix-note-'.length)] = t.value; });
+      // The Duplicates filter shows every flagged row across the whole queue, not just this
+      // page -- it replaces the normal paginated currentRows list while it's on.
+      if (contractorMode && contractorDupFilterOn && contractorDupData) {
+        renderContractorDuplicatesList();
+        return;
+      }
       if (currentRows.length === 0) {
         area.innerHTML = '<div class="empty-text">No rows match these filters.</div>';
         return;
@@ -1847,6 +1914,11 @@
       reportsMode = false;
       diagramMode = false;
       contractorDiagramFilter = null;
+      contractorDupData = null;
+      contractorDupFilterOn = false;
+      contractorDupLoading = false;
+      contractorDupError = null;
+      dupMatchExpanded = new Set();
       resetModeToggleUi();
       document.getElementById('contractorToggleBtn').classList.toggle('active', contractorMode);
       document.getElementById('contractorPanel').classList.toggle('cq-visible', contractorMode);
@@ -1891,13 +1963,13 @@
           <span class="contractor-count-label">${label}</span>
           <span class="contractor-count-num">${count}</span>
         </div>`;
-      const secondaryHtml = `<div class="contractor-panel-secondary">`
-        + secondaryRow('Approved', data.approved || 0)
-        + secondaryRow('Needs fix', data.needs_fix || 0)
-        + secondaryRow('Deleted', data.deleted || 0)
-        + `</div>`;
       if (withCount + withoutCount === 0) {
-        panel.innerHTML = '<div class="contractor-panel-empty">Nothing waiting in the contractor queue.</div>' + secondaryHtml;
+        const emptySecondaryHtml = `<div class="contractor-panel-secondary">`
+          + secondaryRow('Approved', data.approved || 0)
+          + secondaryRow('Needs fix', data.needs_fix || 0)
+          + secondaryRow('Deleted', data.deleted || 0)
+          + `</div>`;
+        panel.innerHTML = '<div class="contractor-panel-empty">Nothing waiting in the contractor queue.</div>' + emptySecondaryHtml;
         return;
       }
       const row = (key, label, count) => `
@@ -1907,6 +1979,15 @@
         </div>`;
       const mainHtml = `<div class="contractor-panel-main">` + row('with', 'With diagram', withCount)
         + row('without', 'Without diagram', withoutCount) + `</div>`;
+      // The "Duplicates" button sits beside the other (display-only) counts here, in the second
+      // row -- same quiet style, just clickable, with the file's one blue accent only once the
+      // filter it drives is actually on.
+      const secondaryHtml = `<div class="contractor-panel-secondary">`
+        + secondaryRow('Approved', data.approved || 0)
+        + secondaryRow('Needs fix', data.needs_fix || 0)
+        + secondaryRow('Deleted', data.deleted || 0)
+        + contractorDupButtonHtml()
+        + `</div>`;
       panel.innerHTML = mainHtml + secondaryHtml;
     }
 
@@ -1915,6 +1996,200 @@
       currentPage = 1;
       renderContractorPanel(contractorCountsCache);
       loadResults();
+    }
+
+    // ---------------- Contractor Queue "Duplicates" button ----------------
+    function contractorDupButtonHtml() {
+      let label = 'Duplicates';
+      let errorClass = '';
+      if (contractorDupLoading) {
+        label = 'Checking…';
+      } else if (contractorDupError) {
+        label = 'Duplicates — failed';
+        errorClass = ' has-error';
+      } else if (contractorDupData) {
+        label = `Duplicates ${visibleFlaggedCount()}`;
+      }
+      const title = contractorDupError
+        ? contractorDupError
+        : 'Check the pending queue for possible duplicates against the question bank and itself';
+      return `
+        <div class="contractor-count-row dup-btn${contractorDupFilterOn ? ' active' : ''}${errorClass}" onclick="onContractorDuplicatesClick()" title="${escapeHtml(title)}">
+          <span class="contractor-count-label">${escapeHtml(label)}</span>
+        </div>`;
+    }
+
+    function getKeptDupIds() {
+      try { return new Set(JSON.parse(localStorage.getItem(DUP_KEPT_STORAGE_KEY) || '[]')); }
+      catch (e) { return new Set(); }
+    }
+
+    function addKeptDupId(id) {
+      const kept = getKeptDupIds();
+      kept.add(id);
+      try { localStorage.setItem(DUP_KEPT_STORAGE_KEY, JSON.stringify([...kept])); } catch (e) {}
+    }
+
+    function visibleFlaggedCount() {
+      if (!contractorDupData) return 0;
+      const kept = getKeptDupIds();
+      return Object.keys(contractorDupData.flagged || {}).filter(id => !kept.has(id)).length;
+    }
+
+    // First press runs the check and shows the count (list stays as-is); once checked, every
+    // press just toggles the filter on/off against the already-fetched result -- no re-scan
+    // needed to flip the view back and forth.
+    async function onContractorDuplicatesClick() {
+      if (contractorDupLoading) return;
+      if (!contractorDupData) {
+        contractorDupLoading = true;
+        contractorDupError = null;
+        renderContractorPanel(contractorCountsCache);
+        try {
+          const res = await fetch(`${API_BASE}/admin/pyq-contractor-duplicates`, { headers: authHeaders() });
+          if (res.status === 401) return logout();
+          if (!res.ok) throw new Error(await describeHttpError(res));
+          const data = await res.json();
+          if (data.error) throw new Error(data.error);
+          contractorDupData = data;
+        } catch (e) {
+          contractorDupError = e.message || 'Could not reach server.';
+          setTimeout(() => {
+            contractorDupError = null;
+            if (contractorMode) renderContractorPanel(contractorCountsCache);
+          }, 4000);
+        } finally {
+          contractorDupLoading = false;
+          renderContractorPanel(contractorCountsCache);
+        }
+        return;
+      }
+      contractorDupFilterOn = !contractorDupFilterOn;
+      document.getElementById('paginationBar').style.display = contractorDupFilterOn ? 'none' : 'flex';
+      document.getElementById('filterChapter').disabled = contractorDupFilterOn;
+      document.getElementById('filterSearch').disabled = contractorDupFilterOn;
+      document.getElementById('filterDiagram').disabled = contractorDupFilterOn;
+      renderContractorPanel(contractorCountsCache);
+      renderResults();
+    }
+
+    function dupStatusLabel(status) {
+      return status === 'approved' ? 'Approved' : status === 'needs_fix' ? 'Needs fix' : status === 'pending' ? 'Pending review' : (status || '');
+    }
+
+    function dupMatchRowHtml(m) {
+      const pct = Math.round(m.overlap * 100);
+      let yearTag;
+      if (m.year_relation === 'same') {
+        yearTag = `<span class="dup-match-tag duplicate-flag">Duplicate</span>`;
+      } else if (m.year_relation === 'different') {
+        yearTag = `<span class="dup-match-tag also-asked">Also asked in ${escapeHtml(String(m.year))}</span>`;
+      } else {
+        yearTag = `<span class="dup-match-tag year-unknown">Year unknown</span>`;
+      }
+      const statusTag = `<span class="dup-match-tag status-${escapeHtml(m.review_status)}">${escapeHtml(dupStatusLabel(m.review_status))}</span>`;
+      const locTag = `<span class="dup-match-tag loc">${m.location === 'queue' ? 'This queue' : 'Question bank'}</span>`;
+      return `
+        <div class="dup-match-row">
+          <span class="dup-match-pct${m.exact ? ' exact' : ''}">${pct}%</span>
+          <span class="dup-match-meta">${m.year || '—'} · ${escapeHtml(m.chapter || 'No chapter')}</span>
+          ${yearTag}
+          ${statusTag}
+          ${locTag}
+          <span class="dup-match-preview" title="${escapeHtml(m.preview || '')}">${escapeHtml(m.preview || '')}</span>
+        </div>`;
+    }
+
+    // "Show all N" / "Show fewer" below the first 5 rows -- never silently drops a match, just
+    // collapses the long tail by default.
+    function duplicateMatchBoxHtml(id, info) {
+      const matches = info.matches || [];
+      const expanded = dupMatchExpanded.has(id);
+      const visible = expanded ? matches : matches.slice(0, 5);
+      const remaining = matches.length - visible.length;
+      const capNote = info.capped
+        ? `<div class="dup-match-cap-note">and ${Math.max(0, (info.total_matches || 0) - matches.length)} more (capped at 50)</div>`
+        : '';
+      const originalNote = info.original_id
+        ? `<div class="dup-original-note">Keeping question ${escapeHtml(String(info.original_id).slice(0, 8))} as the original${info.original_in_queue ? ' (also in this queue)' : ''} -- not flagged.</div>`
+        : '';
+      return `
+        <div class="dup-match-box">
+          <div class="dup-match-box-title">Possible duplicate of ${matches.length} question${matches.length === 1 ? '' : 's'}</div>
+          ${visible.map(dupMatchRowHtml).join('')}
+          ${remaining > 0 ? `<button type="button" class="dup-match-more-btn" onclick="toggleDupMatchExpand('${id}')">Show all ${matches.length}</button>` : ''}
+          ${expanded && matches.length > 5 ? `<button type="button" class="dup-match-more-btn" onclick="toggleDupMatchExpand('${id}')">Show fewer</button>` : ''}
+          ${capNote}
+          ${originalNote}
+          <div class="dup-card-actions">
+            <button type="button" class="q-delete-btn" onclick="deleteFlaggedDuplicate('${id}', this)">🗑 Delete this one</button>
+            <button type="button" class="dup-keep-btn" onclick="keepFlaggedDuplicate('${id}')">Keep</button>
+          </div>
+        </div>`;
+    }
+
+    function toggleDupMatchExpand(id) {
+      if (dupMatchExpanded.has(id)) dupMatchExpanded.delete(id); else dupMatchExpanded.add(id);
+      renderResults();
+    }
+
+    function renderContractorDuplicatesList() {
+      const area = document.getElementById('resultsArea');
+      const kept = getKeptDupIds();
+      const subjectFilter = document.getElementById('filterSubject').value;
+      let ids = Object.keys(contractorDupData.flagged).filter(id => !kept.has(id));
+      if (subjectFilter) {
+        ids = ids.filter(id => ((contractorDupData.flagged[id].row || {}).subject) === subjectFilter);
+      }
+      ids.sort((a, b) => {
+        const ma = (contractorDupData.flagged[a].matches[0] || {}).overlap || 0;
+        const mb = (contractorDupData.flagged[b].matches[0] || {}).overlap || 0;
+        return mb - ma;
+      });
+      document.getElementById('resultCount').textContent = `${ids.length} flagged question${ids.length === 1 ? '' : 's'}`;
+      if (ids.length === 0) {
+        area.innerHTML = '<div class="empty-text">No flagged duplicates right now.</div>';
+        return;
+      }
+      area.innerHTML = ids.map(id => {
+        const info = contractorDupData.flagged[id];
+        return questionCardHtml(info.row, { minimalActions: true }) + duplicateMatchBoxHtml(id, info);
+      }).join('');
+      area.querySelectorAll('.q-edit-field textarea').forEach(autoResizeTextarea);
+    }
+
+    // Reuses the same delete flow (confirm + DELETE /admin/pyq-delete/{id} + Ctrl+Z undo + the
+    // delete log that feeds the Contractor Queue's Deleted count) as the card's own 🗑 Delete
+    // button -- this one also removes the flagged entry and updates the Duplicates count
+    // without a full reload.
+    async function deleteFlaggedDuplicate(id, btnEl) {
+      if (!(await showConfirmModal('Permanently delete this question from Supabase? (Ctrl+Z to undo right after)', { confirmLabel: 'Delete', danger: true }))) return;
+      const originalLabel = btnEl ? btnEl.textContent : null;
+      if (btnEl) { btnEl.disabled = true; btnEl.textContent = 'Deleting...'; }
+      const result = await deleteOneQuietly(id);
+      if (result.error === 'unauthorized') return logout();
+      if (result.error) {
+        alert('Delete failed: ' + result.error);
+        if (btnEl) { btnEl.disabled = false; btnEl.textContent = originalLabel; }
+        return;
+      }
+      const flaggedRow = (contractorDupData && contractorDupData.flagged[id] && contractorDupData.flagged[id].row) || null;
+      pushUndoEntry([result.row || flaggedRow]);
+      if (contractorDupData && contractorDupData.flagged) delete contractorDupData.flagged[id];
+      selectedIds.delete(id);
+      currentRows = currentRows.filter(r => r.id !== id);
+      totalRows = Math.max(0, totalRows - 1);
+      loadContractorCounts();
+      renderContractorPanel(contractorCountsCache);
+      renderResults();
+    }
+
+    // Display-only: hides this one flagged card from the Duplicates filter from now on (kept in
+    // localStorage, so it stays hidden after a refresh). Doesn't touch the question itself.
+    function keepFlaggedDuplicate(id) {
+      addKeptDupId(id);
+      renderContractorPanel(contractorCountsCache);
+      renderResults();
     }
 
     async function toggleReportsView() {

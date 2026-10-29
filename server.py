@@ -8662,10 +8662,21 @@ def _pyq_dup_tokens(row: dict) -> set:
         row.get("question"), row.get("option_a"), row.get("option_b"), row.get("option_c"), row.get("option_d")
     ])))
 
+# Full enough to both tokenize AND (for the Contractor Queue "Duplicates" button, which reuses
+# this same cache) render a flagged row's own card and describe what it matched against --
+# same column list /admin/pyq-search's full=true uses, so a row read from here looks exactly
+# like one read from there.
+PYQ_DUP_CORPUS_SELECT = (
+    "id,subject,chapter,question,option_a,option_b,option_c,option_d,correct_answer,"
+    "is_active,year,source_tag,class,has_diagram,diagram_url,option_a_diagram_url,"
+    "option_b_diagram_url,option_c_diagram_url,option_d_diagram_url,created_at,"
+    "review_status,review_note,uploaded_by,uploaded_at,uploader_name"
+)
+
 async def _pyq_dup_corpus(subject: str):
-    """[(id, tokens)] for every pyq row in the subject, any status -- cached briefly since the
-    review page asks for it on every page turn. None if the read fails (the duplicate check is
-    then skipped, never guessed)."""
+    """[(id, tokens, row)] for every pyq row in the subject, any status -- cached briefly since
+    the review page asks for it on every page turn. None if the read fails (the duplicate check
+    is then skipped, never guessed)."""
     hit = _pyq_dup_corpus_cache.get(subject)
     if hit and time.time() - hit[0] < PYQ_DUP_CORPUS_TTL:
         return hit[1]
@@ -8673,7 +8684,7 @@ async def _pyq_dup_corpus(subject: str):
     while True:
         resp = await async_client.get(
             f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
-            params={"subject": f"eq.{subject}", "select": "id,question,option_a,option_b,option_c,option_d",
+            params={"subject": f"eq.{subject}", "select": PYQ_DUP_CORPUS_SELECT,
                     "order": "id.asc", "limit": page_size, "offset": offset}
         )
         page = resp.json() if resp.status_code < 400 else None
@@ -8684,13 +8695,13 @@ async def _pyq_dup_corpus(subject: str):
         if len(page) < page_size:
             break
         offset += page_size
-    corpus = [(r["id"], _pyq_dup_tokens(r)) for r in rows]
+    corpus = [(r["id"], _pyq_dup_tokens(r), r) for r in rows]
     _pyq_dup_corpus_cache[subject] = (time.time(), corpus)
     return corpus
 
 def _best_duplicate(row_id, tokens: set, corpus: list) -> tuple:
     best_id, best = None, 0.0
-    for other_id, other_tokens in corpus:
+    for other_id, other_tokens, _row in corpus:
         if other_id == row_id or not other_tokens:
             continue
         shared = len(tokens & other_tokens)
@@ -8699,6 +8710,26 @@ def _best_duplicate(row_id, tokens: set, corpus: list) -> tuple:
             if overlap > best:
                 best_id, best = other_id, overlap
     return best_id, best
+
+def _dup_matches(row_id, tokens: set, corpus: list, threshold: float, cap: int = 50) -> tuple:
+    """Every corpus row at or above `threshold` against (row_id, tokens), most-similar first --
+    same token-overlap scoring _best_duplicate uses, just returning every hit instead of only
+    the best one. Returns (hits, total) where hits is [(overlap, other_id, other_row), ...]
+    capped at `cap`, and total is the uncapped count (so a caller can say "and N more")."""
+    hits = []
+    for other_id, other_tokens, other_row in corpus:
+        if other_id == row_id or not other_tokens:
+            continue
+        if other_row.get("is_active") is False:
+            continue
+        shared = len(tokens & other_tokens)
+        if not shared:
+            continue
+        overlap = shared / len(tokens | other_tokens)
+        if overlap >= threshold:
+            hits.append((overlap, other_id, other_row))
+    hits.sort(key=lambda h: h[0], reverse=True)
+    return hits[:cap], len(hits)
 
 async def _attach_pyq_review_warnings(rows: list):
     """Adds row["warnings"] = [{code, text}] to each row. The duplicate check (a subject-wide
@@ -8715,8 +8746,8 @@ async def _attach_pyq_review_warnings(rows: list):
             if corpus is None:
                 continue
             # This page's own rows too, in case they were saved after the cached corpus was read.
-            known = {i for i, _ in corpus}
-            combined = corpus + [(o["id"], _pyq_dup_tokens(o)) for o in rows if o.get("subject") == subject and o.get("id") not in known]
+            known = {i for i, _, _ in corpus}
+            combined = corpus + [(o["id"], _pyq_dup_tokens(o), o) for o in rows if o.get("subject") == subject and o.get("id") not in known]
             for row in (r for r in to_check if r["subject"] == subject):
                 tokens = _pyq_dup_tokens(row)
                 if not tokens:
@@ -9066,6 +9097,12 @@ async def admin_pyq_delete(pyq_id: str, _: None = Depends(verify_admin)):
         # i.e. before the row is gone) rather than a separate query -- same data, one round trip.
         # Fire-and-forget: never delays or risks this response.
         asyncio.create_task(_log_pyq_delete(deleted[0].get("id"), deleted[0].get("uploader_name")))
+        # Drop this subject's duplicate-corpus cache so the next duplicate check (review-page
+        # warnings or the Contractor Queue's Duplicates button) re-reads from the DB instead of
+        # still seeing the just-deleted row for up to PYQ_DUP_CORPUS_TTL more seconds -- otherwise
+        # a group whose "original" was just deleted could keep pointing at it a little longer.
+        if deleted[0].get("subject"):
+            _pyq_dup_corpus_cache.pop(deleted[0]["subject"], None)
         # Returning the deleted row (not just success:true) is what lets the admin tool's
         # Ctrl+Z undo restore it -- this is a hard DELETE, so this response is the only place
         # that data still exists once the request completes.
@@ -11461,6 +11498,160 @@ def admin_pyq_dismiss_duplicate(req: DismissDuplicateRequest, _: None = Depends(
         if response.status_code >= 400:
             return {"error": response.text}
         return {"success": True}
+    except Exception as e:
+        return {"error": str(e)}
+
+# ---------- Contractor Queue "Duplicates" button ----------
+# Checks the contractor's still-pending uploads against the whole bank AND the rest of the
+# queue, reusing /admin/pyq-duplicates' own 50% token-overlap rule and the per-subject corpus
+# cache (_pyq_dup_corpus, 120s TTL) the review-page duplicate warning above already reads --
+# never a fresh full-bank download. Every match at/above threshold comes back (capped at
+# CONTRACTOR_DUP_MATCH_CAP per question), not just the best one.
+CONTRACTOR_DUP_THRESHOLD = 0.5
+CONTRACTOR_DUP_MATCH_CAP = 50
+
+def _is_contractor_queue_row(row: dict) -> bool:
+    return row.get("review_status") == "pending" and row.get("uploader_name") == CONTRACTOR_UPLOADER_NAME
+
+def _dup_match_preview(row: dict) -> str:
+    parts = [row.get("question") or ""]
+    for letter in "abcd":
+        opt = (row.get(f"option_{letter}") or "").strip()
+        if opt:
+            parts.append(f"{letter.upper()}) {opt}")
+    text = re.sub(r"\s+", " ", " · ".join(p.strip() for p in parts if p and p.strip())).strip()
+    return text[:220] + ("…" if len(text) > 220 else "")
+
+@app.get("/admin/pyq-contractor-duplicates")
+async def admin_pyq_contractor_duplicates(_: None = Depends(verify_admin)):
+    """Flags contractor-queue rows (review_status='pending', uploaded by the contractor) that
+    look like duplicates. Same-year matches are real candidate duplicates; a different-year
+    match is purely informational ("also asked in"); a missing year on either side is flagged
+    for a human instead of guessed either way. When several rows are all copies of each other
+    (same year, at/above threshold, transitively), exactly one is picked as the group's
+    "original" (an already-approved row, else any row already in the bank, else whichever was
+    uploaded earliest) and only the OTHER members come back flagged -- so this can never point
+    at every copy of a question for deletion at once."""
+    try:
+        # Cheap id/subject lookup for the still-pending queue -- the actual token/field data for
+        # every one of these comes from the (cached) per-subject corpus below, not a second
+        # heavy fetch.
+        to_check_ids = []
+        offset, page_size = 0, 1000
+        while True:
+            resp = await async_client.get(
+                f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
+                params={"review_status": "eq.pending", "uploader_name": f"eq.{CONTRACTOR_UPLOADER_NAME}",
+                        "select": "id,subject", "order": "id.asc", "limit": page_size, "offset": offset}
+            )
+            if resp.status_code >= 400:
+                return {"error": resp.text}
+            page = resp.json()
+            to_check_ids.extend(page)
+            if len(page) < page_size:
+                break
+            offset += page_size
+
+        subjects = sorted({r["subject"] for r in to_check_ids if r.get("subject")})
+        corpora = dict(zip(subjects, await asyncio.gather(*[_pyq_dup_corpus(s) for s in subjects])))
+        to_check = [r["id"] for r in to_check_ids if r.get("subject") in corpora and corpora[r["subject"]] is not None]
+        subject_of = {r["id"]: r["subject"] for r in to_check_ids}
+
+        def scan():
+            flagged = {}
+            meta_by_id = {}
+            for subject, corpus in corpora.items():
+                if corpus is None:
+                    continue
+                for oid, _toks, row in corpus:
+                    meta_by_id[oid] = row
+            by_id = {oid: (toks, row) for corpus in corpora.values() if corpus for oid, toks, row in corpus}
+
+            for qid in to_check:
+                subject = subject_of.get(qid)
+                corpus = corpora.get(subject)
+                toks, q_row = by_id.get(qid, (None, None))
+                if not corpus or not toks:
+                    continue
+                hits, total = _dup_matches(qid, toks, corpus, CONTRACTOR_DUP_THRESHOLD, CONTRACTOR_DUP_MATCH_CAP)
+                if not hits:
+                    continue
+                # Every hit is shown -- a pure different-year match still surfaces here (with an
+                # "Also asked in" tag, never a duplicate badge) so the admin can see it, even
+                # though it alone never flags the question as a real candidate duplicate or puts
+                # it in a same-year group (that grouping/union-find below only ever runs on
+                # year_relation == "same" edges).
+                q_year = q_row.get("year")
+                matches = []
+                for overlap, other_id, other_row in hits:
+                    o_year = other_row.get("year")
+                    if q_year is None or o_year is None:
+                        relation = "unknown"
+                    elif q_year == o_year:
+                        relation = "same"
+                    else:
+                        relation = "different"
+                    matches.append({
+                        "id": other_id, "overlap": round(overlap, 3), "exact": overlap >= 0.999,
+                        "year": o_year, "chapter": other_row.get("chapter"),
+                        "review_status": other_row.get("review_status") or "approved",
+                        "location": "queue" if _is_contractor_queue_row(other_row) else "bank",
+                        "year_relation": relation, "preview": _dup_match_preview(other_row),
+                    })
+                flagged[qid] = {
+                    "row": q_row, "matches": matches, "total_matches": total,
+                    "capped": total > CONTRACTOR_DUP_MATCH_CAP,
+                }
+
+            # Union-find over same-year edges only, across the whole matched population, so an
+            # already-approved/bank row can anchor a group even if it was never itself flagged.
+            parent = {}
+            def find(x):
+                parent.setdefault(x, x)
+                while parent[x] != x:
+                    parent[x] = parent[parent[x]]
+                    x = parent[x]
+                return x
+            def union(a, b):
+                ra, rb = find(a), find(b)
+                if ra != rb:
+                    parent[ra] = rb
+            for qid, info in flagged.items():
+                for m in info["matches"]:
+                    if m["year_relation"] == "same":
+                        union(qid, m["id"])
+
+            groups = {}
+            for node in parent:
+                groups.setdefault(find(node), set()).add(node)
+
+            def original_key(rid):
+                row = meta_by_id.get(rid) or {}
+                approved_rank = 0 if row.get("review_status") == "approved" else 1
+                queue_rank = 1 if _is_contractor_queue_row(row) else 0
+                return (approved_rank, queue_rank, row.get("created_at") or "", str(rid))
+
+            originals = {}
+            for members in groups.values():
+                if len(members) < 2:
+                    continue
+                chosen = min(members, key=original_key)
+                for m in members:
+                    originals[m] = chosen
+
+            for qid in list(flagged.keys()):
+                original_id = originals.get(qid)
+                if original_id == qid:
+                    del flagged[qid]  # this row IS its group's chosen original -- never flag it
+                    continue
+                if original_id:
+                    flagged[qid]["original_id"] = original_id
+                    flagged[qid]["original_in_queue"] = _is_contractor_queue_row(meta_by_id.get(original_id) or {})
+            return flagged
+
+        flagged = await asyncio.to_thread(scan)
+        return {"flagged": flagged, "checked": len(to_check), "flagged_count": len(flagged),
+                "threshold": CONTRACTOR_DUP_THRESHOLD}
     except Exception as e:
         return {"error": str(e)}
 
