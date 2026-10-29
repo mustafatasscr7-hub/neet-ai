@@ -402,6 +402,15 @@
       .settings-sidebar .settings-nav-item { flex-shrink: 0; white-space: nowrap; }
       .settings-content-area { padding: clamp(16px, 5vw, 20px); }
 
+      /* The close X is position:absolute over the tab strip's top-right corner (see the
+         comment above .usage-header-row). With a transparent background it visually collides
+         with whichever tab -- Usage, at both 375px and 412px widths -- happens to render
+         underneath it before the strip is scrolled, reading as broken/overlapping text. A
+         solid chip here (same idea as .diagram-modal-close's header backdrop) keeps the X
+         legible without changing desktop, where no tab ever reaches that corner. */
+      .settings-modal-close { background: #1a1a1a !important; border: 1px solid #2a2a2a !important; border-radius: 50%; }
+      body.light-mode .settings-modal-close { background: #ffffff !important; border-color: #d5d5dd !important; }
+
       #settingsContent [style*="justify-content:space-between"] { flex-wrap: wrap; row-gap: 10px; }
       #displayNameInputGroup { width: 100%; }
       #displayNameInput { flex: 1; min-width: 0; width: auto; }
@@ -10553,7 +10562,7 @@ function openSettings() {
         <div class="settings-modal-panel">
 
           <!-- Close button -->
-          <button onclick="closeSettingsModal()" style="position:absolute;top:16px;right:16px;width:36px;height:36px;display:flex;align-items:center;justify-content:center;background:transparent;border:none;color:#666;cursor:pointer;font-size:20px;z-index:10;">✕</button>
+          <button class="settings-modal-close" onclick="closeSettingsModal()" style="position:absolute;top:16px;right:16px;width:36px;height:36px;display:flex;align-items:center;justify-content:center;background:transparent;border:none;color:#666;cursor:pointer;font-size:20px;z-index:10;">✕</button>
 
           <!-- Left sidebar (becomes a horizontal scrollable tab strip on mobile, see .settings-sidebar's @media rule) -->
           <div class="settings-sidebar">
