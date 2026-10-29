@@ -148,13 +148,24 @@
       display: flex; gap: 8px; position: sticky; top: 0; z-index: 30;
       background: #0d0d0d; border-bottom: 1px solid #1e1e1e; padding: 10px 0; margin-bottom: 12px;
     }
+    .contractor-panel-main { display: flex; gap: 8px; flex: 2 1 0; }
+    .contractor-panel-secondary { display: flex; gap: 6px; flex: 1.3 1 0; }
     .contractor-count-row { flex: 1; display: flex; justify-content: center; align-items: center; gap: 8px; padding: 10px 14px; border-radius: 8px; border: 1px solid #2a2a2a; background: #1a1a1a; cursor: pointer; }
     .contractor-count-row:hover { border-color: #4f8ef7; }
     .contractor-count-row.active { background: #4f8ef7; border-color: #4f8ef7; }
     .contractor-count-row.active .contractor-count-label, .contractor-count-row.active .contractor-count-num { color: #fff; }
     .contractor-count-label { font-size: 12px; color: #ccc; }
     .contractor-count-num { font-size: 16px; font-weight: 700; color: #ececec; }
-    .contractor-panel-empty { font-size: 12px; color: #666; padding: 10px 2px; }
+    /* Secondary (display-only) boxes: quieter than the clickable diagram counts -- smaller
+       text, muted colour, thin border, no blue accent, not clickable. */
+    .contractor-count-row.secondary { padding: 6px 10px; border-color: #202020; background: #141414; cursor: default; }
+    .contractor-count-row.secondary:hover { border-color: #202020; }
+    .contractor-count-row.secondary .contractor-count-label { font-size: 10px; color: #777; }
+    .contractor-count-row.secondary .contractor-count-num { font-size: 13px; font-weight: 600; color: #999; }
+    .contractor-panel-empty { font-size: 12px; color: #666; padding: 10px 2px; flex: 2 1 0; }
+    @media (max-width: 480px) {
+      .contractor-panel.cq-visible { flex-direction: column; }
+    }
     .q-review-note { margin-top: 12px; padding: 10px 12px; border-radius: 8px; background: #f9731612; border: 1px solid #f9731640; color: #fdba74; font-size: 12px; line-height: 1.5; white-space: pre-wrap; }
     .q-review-note b { color: #fb923c; }
     .q-fix-btn { background: transparent; border: 1px solid #f9731660; color: #fb923c; padding: 5px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
@@ -1875,8 +1886,18 @@
       const panel = document.getElementById('contractorPanel');
       const withCount = data.with_diagram || 0;
       const withoutCount = data.without_diagram || 0;
+      const secondaryRow = (label, count) => `
+        <div class="contractor-count-row secondary">
+          <span class="contractor-count-label">${label}</span>
+          <span class="contractor-count-num">${count}</span>
+        </div>`;
+      const secondaryHtml = `<div class="contractor-panel-secondary">`
+        + secondaryRow('Approved', data.approved || 0)
+        + secondaryRow('Needs fix', data.needs_fix || 0)
+        + secondaryRow('Deleted', data.deleted || 0)
+        + `</div>`;
       if (withCount + withoutCount === 0) {
-        panel.innerHTML = '<div class="contractor-panel-empty">Nothing waiting in the contractor queue.</div>';
+        panel.innerHTML = '<div class="contractor-panel-empty">Nothing waiting in the contractor queue.</div>' + secondaryHtml;
         return;
       }
       const row = (key, label, count) => `
@@ -1884,8 +1905,9 @@
           <span class="contractor-count-label">${label}</span>
           <span class="contractor-count-num">${count}</span>
         </div>`;
-      panel.innerHTML = row('with', 'With diagram', withCount)
-        + row('without', 'Without diagram', withoutCount);
+      const mainHtml = `<div class="contractor-panel-main">` + row('with', 'With diagram', withCount)
+        + row('without', 'Without diagram', withoutCount) + `</div>`;
+      panel.innerHTML = mainHtml + secondaryHtml;
     }
 
     function toggleContractorDiagramFilter(key) {

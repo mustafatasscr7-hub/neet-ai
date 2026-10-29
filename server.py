@@ -8729,22 +8729,44 @@ async def _pyq_count(params: dict) -> int:
     tail = resp.headers.get("content-range", "").split("/")[-1]
     return int(tail) if tail.isdigit() else 0
 
+async def _pyq_delete_log_count(uploader_name: str) -> int:
+    """Count of pyq_delete_log rows for one uploader -- 0 (not an error) if the table hasn't
+    been created yet, same as every other spot that reads this best-effort log."""
+    try:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/pyq_delete_log", headers={**ADMIN_HEADERS, "Prefer": "count=exact"},
+            params={"uploader_name": f"eq.{uploader_name}", "select": "id", "limit": 1}
+        )
+        if resp.status_code >= 400:
+            return 0
+        tail = resp.headers.get("content-range", "").split("/")[-1]
+        return int(tail) if tail.isdigit() else 0
+    except Exception:
+        return 0
+
 @app.get("/admin/pyq-contractor-queue-counts")
 async def admin_pyq_contractor_queue_counts(_: None = Depends(verify_admin)):
     """Numbers only for the Contractor Queue's side panel -- the contractor's own uploads still
     awaiting a first check (review_status='pending'), split by whether a diagram has actually
-    been uploaded. Two count queries, never a row download; "without" is the simple subtraction
-    rather than a second, more complex negated-or count query."""
+    been uploaded, plus all-time approved/needs_fix/deleted totals for the same uploader. Count
+    queries only, never a row download; "without" is the simple subtraction rather than a
+    second, more complex negated-or count query."""
     try:
         base = {"review_status": "eq.pending", "uploader_name": f"eq.{CONTRACTOR_UPLOADER_NAME}"}
         diagram_or = ("(diagram_url.neq.,option_a_diagram_url.neq.,"
                       "option_b_diagram_url.neq.,option_c_diagram_url.neq.,"
                       "option_d_diagram_url.neq.)")
-        total, with_diagram = await asyncio.gather(
+        total, with_diagram, approved, needs_fix, deleted = await asyncio.gather(
             _pyq_count(base),
             _pyq_count({**base, "or": diagram_or}),
+            _pyq_count({"review_status": "eq.approved", "uploader_name": f"eq.{CONTRACTOR_UPLOADER_NAME}"}),
+            _pyq_count({"review_status": "eq.needs_fix", "uploader_name": f"eq.{CONTRACTOR_UPLOADER_NAME}"}),
+            _pyq_delete_log_count(CONTRACTOR_UPLOADER_NAME),
         )
-        return {"with_diagram": with_diagram, "without_diagram": max(0, total - with_diagram)}
+        return {
+            "with_diagram": with_diagram, "without_diagram": max(0, total - with_diagram),
+            "approved": approved, "needs_fix": needs_fix, "deleted": deleted,
+        }
     except Exception as e:
         return {"error": str(e)}
 
@@ -8993,6 +9015,22 @@ async def admin_pyq_bulk_update(body: AdminPyqBulkUpdate, _: None = Depends(veri
     except Exception as e:
         return {"error": str(e)}
 
+async def _log_pyq_delete(pyq_id: Optional[str], uploader_name: Optional[str]):
+    """One pyq_delete_log row per permanently-deleted PYQ question -- id + uploader only, no
+    question text. Best-effort, like the other telemetry writes (_log_ncert_retrieval etc): a
+    failed insert (including the table not existing yet, before pyq_delete_log.sql is run) is
+    swallowed here and only printed, since logging must never be what blocks or surfaces an
+    error for a delete that otherwise succeeded."""
+    try:
+        resp = await async_client.post(
+            f"{SUPABASE_URL}/rest/v1/pyq_delete_log", headers={**ADMIN_HEADERS, "Content-Type": "application/json"},
+            json={"pyq_id": pyq_id, "uploader_name": uploader_name}
+        )
+        if resp.status_code >= 400:
+            print(f"PYQ DELETE LOG FAILED (pyq_id={pyq_id}): {resp.status_code} {resp.text[:200]}", flush=True)
+    except Exception as e:
+        print(f"PYQ DELETE LOG FAILED (pyq_id={pyq_id}): {e}", flush=True)
+
 # Real, permanent delete -- not a soft is_active=false toggle. saved_questions and
 # personalised_test_sets both reference pyq.id directly, so a deleted row can leave a dangling
 # reference there (saved_questions keeps its own copy of the text so it still displays fine;
@@ -9018,6 +9056,10 @@ async def admin_pyq_delete(pyq_id: str, _: None = Depends(verify_admin)):
         deleted = response.json()
         if not deleted:
             return {"error": "Row not found"}
+        # Logged from the deleted row's own uploader_name (read via return=representation above,
+        # i.e. before the row is gone) rather than a separate query -- same data, one round trip.
+        # Fire-and-forget: never delays or risks this response.
+        asyncio.create_task(_log_pyq_delete(deleted[0].get("id"), deleted[0].get("uploader_name")))
         # Returning the deleted row (not just success:true) is what lets the admin tool's
         # Ctrl+Z undo restore it -- this is a hard DELETE, so this response is the only place
         # that data still exists once the request completes.
