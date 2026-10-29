@@ -1530,6 +1530,25 @@
        option row still puts the chevron/checkmark on the far right, not after just the icon. */
     .dropdown-option-label { display: flex; align-items: center; gap: 8px; min-width: 0; }
 
+    /* Chat Font's own current-value label ("NEET-AI Sans", "Dyslexic Friendly", ...) runs longer
+       than every sibling dropdown's (Theme/Font Size/Answer Style/Language all pick from short
+       words), so under ~380px it alone pushes its row past the point where .dropdown-trigger's
+       shared 120px min-width still fits beside the row's label text -- the trigger drops to its
+       own line while every other row stays inline. Capped + truncated only here, only in that
+       narrow range, so it rejoins its row instead of wrapping. */
+    @media (max-width: 380px) {
+      #settingsContent .settings-dropdown[data-dropdown-key="chatFont"] .dropdown-trigger {
+        min-width: 0;
+        max-width: 96px;
+      }
+      #settingsContent .settings-dropdown[data-dropdown-key="chatFont"] .dropdown-trigger .dropdown-option-label span:last-child {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        min-width: 0;
+      }
+    }
+
     body.light-mode .dropdown-trigger { background: #ffffff !important; border-color: #d5d5dd !important; color: #0d0d0d !important; }
     body.light-mode .settings-dropdown.open .dropdown-trigger { border-color: #4f8ef7 !important; }
     body.light-mode .dropdown-trigger .dropdown-chevron { color: #6b6b76 !important; }

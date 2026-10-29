@@ -114,6 +114,21 @@
       .catalog-body { padding: clamp(16px, 6vw, 24px) clamp(12px, 4vw, 16px) clamp(28px, 8vw, 40px); }
     }
 
+    /* Setup/catalog screen header only (not the test-taking or results headers, which share
+       .header but intentionally wrap under their own 768px rule below): at narrow phone widths
+       the back-button text + title + globe button no longer fit .header's single row, and since
+       this header has nothing else to drop to a second line, flex-wrap just strands the globe
+       button alone with dead space next to it instead of actually helping. Keep it on one row
+       and shrink the three pieces just enough to fit down to 360px. */
+    @media (max-width: 420px) {
+      #setupScreen .header { flex-wrap: nowrap !important; }
+      #setupScreen .header > div:first-child { gap: 8px !important; }
+      #setupScreen .header > div:first-child > button { font-size: 11px !important; }
+      #setupScreen .header-title { font-size: 13px !important; }
+      #setupScreen .lang-toggle { padding: 6px 8px !important; }
+      #setupScreen .lang-toggle svg { width: 14px !important; height: 14px !important; }
+    }
+
     /* ===== TEST SCREEN (adapted from mocktest.html) ===== */
     #testScreen { display: none; height: 100vh; height: 100dvh; flex-direction: column; overflow: hidden; }
     .header { padding: 14px 24px; border-bottom: 1px solid #1a1a1a; display: flex; align-items: center; justify-content: space-between; background: #0d0d0d; flex-shrink: 0; }
