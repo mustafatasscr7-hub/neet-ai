@@ -393,21 +393,26 @@
 
     @media (max-width: 620px) {
       .settings-modal-panel { width: 100vw; height: 100vh; max-width: 100vw; max-height: 100vh; border-radius: 0; flex-direction: column; }
-      /* Extra right padding on the strip (rather than just 8px like the other three sides) is
-         deliberate: the close button is position:absolute over this row, so without it the last
-         tab can never fully scroll clear of the button -- a real thumb-tap near the strip's right
-         edge could land on "close modal" instead of "select tab". */
-      .settings-sidebar { width: 100%; flex-direction: row; overflow-x: auto; -webkit-overflow-scrolling: touch; border-right: none; border-bottom: 1px solid #1e1e1e; padding: 8px 52px 8px 8px; gap: 6px; }
+      /* width: calc(100% - 52px), not 100% + right padding -- padding only reserves scrollable
+         space at the FAR end of the strip, so it only kept the last tab (Privacy) clear once
+         scrolled all the way over. At rest (scrollLeft 0) the viewport itself still ran the full
+         100% width, so whichever tab happened to land under the close button's 36px-wide,
+         16px-inset hit box (Usage, at both 375px and 412px) silently ate taps meant for it --
+         closing the modal instead of switching tabs -- while Privacy sat off-screen with no
+         visible hint it needed a scroll. Shrinking the viewport itself by the button's full
+         footprint (16 inset + 36 wide = 52) carves out a dead zone the strip can never render
+         into, at ANY scroll position, so every tab stays fully clear of the button. */
+      .settings-sidebar { width: calc(100% - 52px); flex-direction: row; overflow-x: auto; -webkit-overflow-scrolling: touch; border-right: none; border-bottom: 1px solid #1e1e1e; padding: 8px; gap: 6px; }
       .settings-sidebar-title { display: none; }
       .settings-sidebar .settings-nav-item { flex-shrink: 0; white-space: nowrap; }
       .settings-content-area { padding: clamp(16px, 5vw, 20px); }
 
       /* The close X is position:absolute over the tab strip's top-right corner (see the
-         comment above .usage-header-row). With a transparent background it visually collides
-         with whichever tab -- Usage, at both 375px and 412px widths -- happens to render
-         underneath it before the strip is scrolled, reading as broken/overlapping text. A
-         solid chip here (same idea as .diagram-modal-close's header backdrop) keeps the X
-         legible without changing desktop, where no tab ever reaches that corner. */
+         comment above .usage-header-row). The strip's own dead zone (above) now keeps every tab
+         clear of it, but the X still sits right at the strip's trailing edge, so a solid chip
+         here (same idea as .diagram-modal-close's header backdrop) keeps it legible against
+         whatever's immediately behind it, without changing desktop, where no tab ever reaches
+         that corner. */
       .settings-modal-close { background: #1a1a1a !important; border: 1px solid #2a2a2a !important; border-radius: 50%; }
       body.light-mode .settings-modal-close { background: #ffffff !important; border-color: #d5d5dd !important; }
 
