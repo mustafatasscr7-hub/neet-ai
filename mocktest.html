@@ -228,6 +228,22 @@
     body.light-mode .submitting-overlay { background: rgba(0,0,0,0.25) !important; }
     body.light-mode .submitting-box { background: #ffffff !important; border-color: #e3e3ea !important; color: #16161d !important; }
     body.light-mode .submitting-spinner { border-color: #e3e3ea !important; border-top-color: #4f8ef7 !important; }
+
+    @media (max-width: 768px) {
+      .header { flex-wrap: wrap; row-gap: 8px; padding-left: clamp(12px, 4vw, 16px); padding-right: clamp(12px, 4vw, 16px); }
+
+      /* Exam screen: question + navigator stack vertically instead of sitting side by side
+         (the 280px fixed-width panel otherwise left ~95px for the question itself). Each half
+         keeps its own internal scroll (question-area already had overflow-y:auto; .qnav-panel's
+         own .question-grid does too via test-navigator.css), so neither needs the page itself
+         to scroll. */
+      .body { flex-direction: column; }
+      .question-area { padding: clamp(12px, 4vw, 16px); }
+      .question-actions { flex-wrap: wrap; }
+      .nav-btns { width: 100%; margin-left: 0; }
+      .prev-btn, .next-btn { flex: 1; }
+      .qnav-panel { width: 100%; height: 38vh; border-left: none; border-top: 1px solid #1e1e1e; }
+    }
   </style>
 </head>
 <body>
@@ -350,20 +366,27 @@
       </div>
     </div>
 
+    <div class="sidebar-backdrop" id="sidebarBackdrop" onclick="closeMobileSidebar()"></div>
+
     <div class="page-main-content">
     <div id="startScreen" style="width:100%;height:100%;background:#0d0d0d;display:flex;align-items:center;justify-content:center;">
-      <div style="text-align:center;max-width:680px;padding:40px;width:100%;">
+      <div style="text-align:center;max-width:680px;padding:clamp(16px, 6vw, 40px);width:100%;">
+        <div style="position:fixed;top:16px;left:16px;">
+          <button class="sidebar-hamburger-btn" id="sidebarHamburgerBtn" onclick="toggleSidebar()" aria-label="Open menu" title="Menu">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+          </button>
+        </div>
         <div style="position:fixed;top:16px;right:16px;display:flex;gap:8px;">
           <button class="lang-toggle" onclick="toggleLangMenu(event, this)" style="background:transparent;border:1px solid #2a2a2a;color:#888;padding:8px 14px;border-radius:8px;cursor:pointer;font-size:13px;font-family:Inter,sans-serif;display:inline-flex;align-items:center;justify-content:center;"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></button>
         </div>
-        <h1 class="choose-test-heading" style="font-size:26px;font-weight:800;margin-bottom:36px;" data-i18n="mocktest.chooseTest">Choose Your Test</h1>
+        <h1 class="choose-test-heading" style="font-size:clamp(22px, 6vw, 26px);font-weight:800;margin-bottom:36px;" data-i18n="mocktest.chooseTest">Choose Your Test</h1>
         <div style="display:flex;gap:20px;flex-wrap:wrap;justify-content:center;">
           <button class="choose-test-card ctc-blue" onclick="startTest()">
-            <div class="choose-test-title" style="font-size:20px;font-weight:800;margin-bottom:6px;" data-i18n="mocktest.fullMockTest">Full Mock Test</div>
+            <div class="choose-test-title" style="font-size:clamp(16px, 4vw, 18px);font-weight:800;margin-bottom:6px;" data-i18n="mocktest.fullMockTest">Full Mock Test</div>
             <div class="choose-test-meta" style="font-size:12.5px;font-weight:400;" data-i18n="mocktest.fullMockMeta">180 Qs · 3h 20m · Max 720 marks</div>
           </button>
           <button class="choose-test-card ctc-purple" onclick="window.location.href='./personalised-test.html'">
-            <div class="choose-test-title" style="font-size:20px;font-weight:800;margin-bottom:6px;" data-i18n="mocktest.personalisedTest">Personalised Test</div>
+            <div class="choose-test-title" style="font-size:clamp(16px, 4vw, 18px);font-weight:800;margin-bottom:6px;" data-i18n="mocktest.personalisedTest">Personalised Test</div>
             <div class="choose-test-meta" style="font-size:12.5px;font-weight:400;" data-i18n="mocktest.personalisedMeta">Pick subject, chapter & count</div>
           </button>
         </div>
@@ -650,7 +673,7 @@
         const detail = e && e.message === t('mocktest', 'tooManyStarts') ? e.message : 'Make sure the backend server is running.';
         document.getElementById('startScreen').innerHTML = `
           <div style="text-align:center;">
-            <h2 style="font-size:20px;color:#ef4444;margin-bottom:8px;">Failed to load questions</h2>
+            <h2 style="font-size:clamp(18px, 5vw, 20px);color:#ef4444;margin-bottom:8px;">Failed to load questions</h2>
             <p style="color:#555;font-size:13px;margin-bottom:24px;">${escapeHtmlMock(detail)}</p>
             <button onclick="window.location.reload()" style="background:#4f8ef7;border:none;color:white;padding:10px 24px;border-radius:8px;cursor:pointer;font-size:14px;">Try Again</button>
           </div>
@@ -1410,8 +1433,8 @@ async function saveQuestionFromMock(index) {
 
     function showMockTestPicker(tests) {
       document.getElementById('startScreen').innerHTML = `
-        <div style="text-align:center;max-width:680px;padding:40px;width:100%;">
-          <h1 style="font-size:24px;font-weight:800;color:#fff;margin-bottom:28px;" data-i18n="mocktest.pickOfficialTest">Pick a Mock Test</h1>
+        <div style="text-align:center;max-width:680px;padding:clamp(16px, 6vw, 40px);width:100%;">
+          <h1 style="font-size:clamp(22px, 6vw, 24px);font-weight:800;color:#fff;margin-bottom:28px;" data-i18n="mocktest.pickOfficialTest">Pick a Mock Test</h1>
           <div style="display:flex;flex-direction:column;gap:14px;max-width:420px;margin:0 auto;">
             ${tests.map(test => `
               <button onclick="beginLoadingQuestions(${test.id})" style="background:#151515;border:1px solid #2a2a2a;color:#ececec;padding:18px 20px;border-radius:14px;cursor:pointer;font-family:Inter,sans-serif;text-align:left;transition:border-color 0.2s;" onmouseover="this.style.borderColor='#4f8ef7'" onmouseout="this.style.borderColor='#2a2a2a'">
@@ -1431,7 +1454,7 @@ async function saveQuestionFromMock(index) {
       document.getElementById('startScreen').innerHTML = `
         <div style="text-align:center;">
           <div style="font-size:48px;margin-bottom:24px;">⏳</div>
-          <h2 style="font-size:24px;font-weight:700;color:#fff;margin-bottom:8px;">Preparing your test...</h2>
+          <h2 style="font-size:clamp(20px, 5.5vw, 24px);font-weight:700;color:#fff;margin-bottom:8px;">Preparing your test...</h2>
           <p style="color:#555;font-size:14px;margin-bottom:32px;">Loading 180 questions</p>
           <div style="width:200px;height:4px;background:#1a1a1a;border-radius:4px;margin:0 auto;overflow:hidden;">
             <div id="loadBar" style="height:100%;width:0%;background:#4f8ef7;border-radius:4px;transition:width 0.25s linear;"></div>

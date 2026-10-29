@@ -400,7 +400,7 @@
       .settings-sidebar { width: 100%; flex-direction: row; overflow-x: auto; -webkit-overflow-scrolling: touch; border-right: none; border-bottom: 1px solid #1e1e1e; padding: 8px 52px 8px 8px; gap: 6px; }
       .settings-sidebar-title { display: none; }
       .settings-sidebar .settings-nav-item { flex-shrink: 0; white-space: nowrap; }
-      .settings-content-area { padding: 20px; }
+      .settings-content-area { padding: clamp(16px, 5vw, 20px); }
 
       #settingsContent [style*="justify-content:space-between"] { flex-wrap: wrap; row-gap: 10px; }
       #displayNameInputGroup { width: 100%; }
@@ -816,6 +816,15 @@
     .sidebar-tooltip { position: fixed; transform: translateY(-50%); background: #1e1e1e; color: #ececec; padding: 6px 12px; border-radius: 999px; font-size: 12.5px; font-family: 'Inter', sans-serif; white-space: nowrap; display: flex; align-items: center; gap: 8px; pointer-events: none; opacity: 0; visibility: hidden; transition: opacity 0.12s ease; z-index: 9999; box-shadow: 0 4px 14px rgba(0,0,0,0.45); border: 1px solid #2a2a2a; }
     .sidebar-tooltip.visible { opacity: 1; visibility: visible; }
     body.light-mode .sidebar-tooltip { background: #ffffff !important; color: #16161d !important; border-color: #e0e0e5 !important; box-shadow: 0 4px 14px rgba(0,0,0,0.12) !important; }
+
+    /* Mobile drawer hamburger (header) + dimming backdrop -- both hidden outside the phone-width
+       media query above, which turns them on. */
+    .sidebar-backdrop { display: none; }
+    .sidebar-hamburger-btn { display: none; align-items: center; justify-content: center; width: 32px; height: 32px; flex-shrink: 0; background: transparent; border: none; color: #ececec; cursor: pointer; padding: 4px; border-radius: 6px; }
+    .sidebar-hamburger-btn:hover { background: rgba(255,255,255,0.08); }
+    body.light-mode .sidebar-hamburger-btn { color: #333338 !important; }
+    body.light-mode .sidebar-hamburger-btn:hover { background: rgba(0,0,0,0.06) !important; }
+
     .logo { display: flex; align-items: center; gap: 10px; padding: 6px 12px; margin-bottom: 4px; }
     /* Was an inline style="justify-content:space-between" on the element itself -- moved into CSS
        because an inline style outranks every stylesheet rule regardless of specificity, permanently
@@ -1521,6 +1530,25 @@
        option row still puts the chevron/checkmark on the far right, not after just the icon. */
     .dropdown-option-label { display: flex; align-items: center; gap: 8px; min-width: 0; }
 
+    /* Chat Font's own current-value label ("NEET-AI Sans", "Dyslexic Friendly", ...) runs longer
+       than every sibling dropdown's (Theme/Font Size/Answer Style/Language all pick from short
+       words), so under ~380px it alone pushes its row past the point where .dropdown-trigger's
+       shared 120px min-width still fits beside the row's label text -- the trigger drops to its
+       own line while every other row stays inline. Capped + truncated only here, only in that
+       narrow range, so it rejoins its row instead of wrapping. */
+    @media (max-width: 380px) {
+      #settingsContent .settings-dropdown[data-dropdown-key="chatFont"] .dropdown-trigger {
+        min-width: 0;
+        max-width: 96px;
+      }
+      #settingsContent .settings-dropdown[data-dropdown-key="chatFont"] .dropdown-trigger .dropdown-option-label span:last-child {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        min-width: 0;
+      }
+    }
+
     body.light-mode .dropdown-trigger { background: #ffffff !important; border-color: #d5d5dd !important; color: #0d0d0d !important; }
     body.light-mode .settings-dropdown.open .dropdown-trigger { border-color: #4f8ef7 !important; }
     body.light-mode .dropdown-trigger .dropdown-chevron { color: #6b6b76 !important; }
@@ -1544,6 +1572,85 @@
     /* Smooth fade-in on page load */
     body { animation: pageFadeIn 0.22s ease; }
     @keyframes pageFadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+    /* ---------------- Phone-width layout (chat/doubt-solving screen only) ----------------
+       chat.html keeps its own full copy of the sidebar rules (not sidebar.css -- it has extra
+       chat-specific behavior sidebar.css deliberately omits, see sidebar.css's own top comment),
+       so the off-canvas treatment sidebar.css gives every other page's `.sidebar` at narrow
+       widths has to be repeated here too, not assumed. Without it .sidebar stayed a normal
+       260px-wide flex sibling of .main at any viewport width, crushing .main down to ~115px on a
+       real phone instead of just sitting on top of it. position:fixed takes it out of that flex
+       flow so .main (flex:1) reclaims the full width underneath, same mechanism as sidebar.css's
+       own `@media (max-width: 640px) { .sidebar { position: fixed; ... } }` -- kept at this
+       file's existing 768px breakpoint instead of sidebar.css's 640px so it lines up with every
+       other rule in this block rather than introducing a second phone threshold. .main already
+       has overflow:hidden so it doesn't need anything here. */
+    @media (max-width: 768px) {
+      /* ChatGPT-style mobile drawer: hidden off-screen by default, opened by #sidebarHamburgerBtn
+         (see the header markup) which toggles `.mobile-open`, sliding the sidebar in as a full
+         overlay above #sidebarBackdrop. `.collapsed` (the old 56px icon rail) is desktop-only now
+         -- toggleSidebar()/initSidebarWidth() below never add it at this width. */
+      .sidebar {
+        position: fixed; top: 0; left: 0; bottom: 0; z-index: 200;
+        box-shadow: 0 0 30px rgba(0,0,0,0.5);
+        transform: translateX(-100%);
+        transition: transform 0.25s ease-in-out;
+      }
+      .sidebar.mobile-open { transform: translateX(0); }
+      .sidebar-resize-handle { display: none; }
+
+      .sidebar-backdrop {
+        display: block; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 199;
+        opacity: 0; visibility: hidden; transition: opacity 0.25s ease-in-out;
+      }
+      .sidebar-backdrop.visible { opacity: 1; visibility: visible; }
+
+      .sidebar-hamburger-btn { display: inline-flex; }
+
+      .header { flex-wrap: wrap; row-gap: 8px; padding: clamp(8px, 2.5vw, 10px) clamp(10px, 3.5vw, 14px); }
+      .header > div { flex-wrap: wrap; row-gap: 6px; }
+
+      /* .chat-title-btn and the controls below all carry an inline style="..." in the markup
+         (see the buttons right after <body>) -- an element's own inline style always beats a
+         stylesheet rule for the same property regardless of @media, so every override of one
+         of those properties here needs !important, matching this file's existing precedent for
+         the same situation (see the body.light-mode rules earlier in this block). */
+      .chat-title-btn { max-width: 55vw !important; }
+
+      .message-row { padding: clamp(8px, 3vw, 12px); gap: 10px; }
+      .message-content { max-width: calc(100vw - 100px); }
+      .message-bubble.user { max-width: calc(100vw - 100px); }
+
+      .input-area { padding: clamp(8px, 2.5vw, 10px) clamp(8px, 2.5vw, 10px) clamp(10px, 3.5vw, 14px); }
+      .input-wrapper { padding: clamp(8px, 2.5vw, 10px) clamp(10px, 3vw, 12px); }
+      .welcome { padding: clamp(16px, 6vw, 24px) clamp(12px, 4vw, 16px); }
+      /* Landing heading only (not the main composer) -- scales from 22px at the narrowest
+         phones up to its existing flat 26px by ~480px, so nothing changes above that. */
+      .welcome h2 { font-size: clamp(22px, 6vw, 26px); }
+      .welcome-search { padding: clamp(5px, 1.5vw, 6px) clamp(10px, 3vw, 12px); }
+
+      /* Slightly larger hit areas for the +/voice/send controls at phone width -- still
+         comfortably inside the input row's flex layout, just roomier to tap. */
+      #plusBtn, #voiceBtn { padding: 8px !important; }
+      .send-btn { width: 38px; height: 38px; }
+      /* Landing-only versions: a touch bigger (40px, still in the 40-44px tappable range)
+         but the bar's own tighter padding above keeps the whole pill compact, ChatGPT-style. */
+      #welcomePlusBtn, #welcomeVoiceBtn { padding: 10px !important; }
+      .welcome-send { width: 40px; height: 40px; }
+
+      /* The "+" attachment popup gets its left offset from JS (togglePlusMenu), but its width is
+         a plain (non-important) inline 200px -- max-width is a different property, so the
+         browser takes the smaller of the two for layout without needing !important here, and it
+         can no longer run off a narrow screen regardless of where the button that opened it sits. */
+      #plusMenu { max-width: calc(100vw - 24px); }
+
+      #countdownWrapper > div { padding: 4px 9px !important; }
+
+      /* #countdownTooltip is anchored right:0 off the pill in the markup, which runs it past
+         the right edge of a 375px screen. At phone width, center it under the pill instead and
+         cap its width so it always stays fully on-screen regardless of where the pill lands. */
+      #countdownTooltip { left: 50% !important; right: auto !important; transform: translateX(-50%); max-width: calc(100vw - 32px); box-sizing: border-box; }
+    }
   </style>
 </head>
 <body>
@@ -1682,10 +1789,15 @@
     </div>
   </div>
 
+  <div class="sidebar-backdrop" id="sidebarBackdrop" onclick="closeMobileSidebar()"></div>
+
   <div class="main">
   <div class="header">
       <div style="display:flex;align-items:center;gap:12px;">
 
+        <button class="sidebar-hamburger-btn" id="sidebarHamburgerBtn" onclick="toggleSidebar()" aria-label="Open menu" title="Menu">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+        </button>
         <span class="logo-brand" id="headerBrand" style="font-size:15px;font-weight:700;color:#fff;">NEET<span style="color:#4f8ef7;">-AI</span></span>
         <button class="chat-title-btn" id="chatTitleBtn" style="display:none;align-items:center;gap:6px;background:transparent;border:none;color:#ececec;font-size:15px;font-weight:600;font-family:'Inter',sans-serif;cursor:pointer;padding:6px 8px;border-radius:8px;max-width:280px;">
           <span id="chatTitleText" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
@@ -2067,12 +2179,29 @@
     renderWelcomeGreeting();
 
     document.getElementById('countdownWrapper').addEventListener('mouseenter', function() {
+      if (window.innerWidth <= 768) return; // phone width uses tap-to-toggle below instead
       document.getElementById('countdownTooltip').style.display = 'block';
     });
     document.getElementById('countdownWrapper').addEventListener('mouseleave', function() {
+      if (window.innerWidth <= 768) return;
       document.getElementById('countdownTooltip').style.display = 'none';
     });
-    
+    // Touchscreens (phone width) have no real hover -- browsers still fire a compatibility
+    // mouseenter/click pair after a tap, which would fight the handlers above, so those are
+    // guarded off at this width and tap-to-toggle is the only thing driving the tooltip here.
+    document.getElementById('countdownWrapper').addEventListener('click', function(e) {
+      if (window.innerWidth > 768) return;
+      e.stopPropagation();
+      const tooltip = document.getElementById('countdownTooltip');
+      tooltip.style.display = tooltip.style.display === 'block' ? 'none' : 'block';
+    });
+    document.addEventListener('click', function(e) {
+      if (window.innerWidth > 768) return;
+      if (!document.getElementById('countdownWrapper').contains(e.target)) {
+        document.getElementById('countdownTooltip').style.display = 'none';
+      }
+    });
+
 function toggleSearchChats() {
       const box = document.getElementById('searchChatsBox');
       const input = document.getElementById('searchChatsInput');
@@ -2124,11 +2253,40 @@ function toggleSearchChats() {
       return (saved >= SIDEBAR_MIN_WIDTH && saved <= SIDEBAR_MAX_WIDTH) ? saved : SIDEBAR_DEFAULT_WIDTH;
     }
 
-   function toggleSidebar() {
+   // Mobile (<=768px) drawer: a separate mechanism from desktop's collapse/expand (`.collapsed`,
+    // 56px icon rail) -- the sidebar is fully off-canvas by default there (see the phone-width
+    // media query above) and `.mobile-open` slides it in as a full overlay instead. Not
+    // persisted across reloads/navigation (ChatGPT's own behavior: closed every fresh load),
+    // unlike desktop's `sidebarCollapsed` localStorage preference below.
+    function isMobileSidebarWidth() {
+      return window.innerWidth <= 768;
+    }
+
+    function closeMobileSidebar() {
       const sidebar = document.querySelector('.sidebar');
+      if (!sidebar) return;
+      sidebar.classList.remove('mobile-open');
+      const backdrop = document.getElementById('sidebarBackdrop');
+      if (backdrop) backdrop.classList.remove('visible');
+    }
+
+    function toggleSidebar() {
+      const sidebar = document.querySelector('.sidebar');
+      if (isMobileSidebarWidth()) {
+        const opening = !sidebar.classList.contains('mobile-open');
+        sidebar.classList.toggle('mobile-open', opening);
+        const backdrop = document.getElementById('sidebarBackdrop');
+        if (backdrop) backdrop.classList.toggle('visible', opening);
+        hideSidebarTooltip();
+        return;
+      }
       const collapsing = !sidebar.classList.contains('collapsed');
       sidebar.classList.toggle('collapsed');
       sidebar.style.width = collapsing ? '' : (getSavedSidebarWidth() + 'px');
+      // Remembered across reloads/navigation by initSidebarWidth below -- without this, every
+      // desktop visit would start back at whatever the hardcoded expanded default is until the
+      // user re-toggles, every single time.
+      localStorage.setItem('sidebarCollapsed', collapsing ? '1' : '0');
       // Re-sync pinnedList/pinnedLabel's inline display with the new collapsed state --
       // see refreshPinnedSectionVisibility for why that inline style has to track it.
       if (typeof refreshPinnedSectionVisibility === 'function') refreshPinnedSectionVisibility();
@@ -2136,7 +2294,31 @@ function toggleSearchChats() {
     }
 
     (function initSidebarWidth() {
-      document.querySelector('.sidebar').style.width = getSavedSidebarWidth() + 'px';
+      const sidebar = document.querySelector('.sidebar');
+      // Mobile: always starts closed (no `.collapsed` rail -- see toggleSidebar's own comment),
+      // never reads/writes the desktop-only `sidebarCollapsed` preference below.
+      if (isMobileSidebarWidth()) {
+        sidebar.classList.remove('collapsed');
+        sidebar.style.width = '';
+        return;
+      }
+      const collapsed = localStorage.getItem('sidebarCollapsed') === '1';
+      if (collapsed) sidebar.classList.add('collapsed');
+      sidebar.style.width = collapsed ? '' : getSavedSidebarWidth() + 'px';
+    })();
+
+    // Tapping a nav link/chat/new-chat inside the drawer closes it, same as ChatGPT -- everything
+    // else inside the sidebar (profile menu, search box, resize handle) is excluded since those
+    // open their own UI in place rather than navigating/loading a chat.
+    (function setupMobileSidebarAutoClose() {
+      const sidebar = document.querySelector('.sidebar');
+      sidebar.addEventListener('click', function(e) {
+        if (!isMobileSidebarWidth()) return;
+        if (e.target.closest('#navSearch') || e.target.closest('.profile-btn') || e.target.closest('.sidebar-resize-handle')) return;
+        if (e.target.closest('.history-item') || e.target.closest('.nav-item') || e.target.closest('.new-chat-btn')) {
+          closeMobileSidebar();
+        }
+      });
     })();
 
     // Collapsed-sidebar icon tooltips -- just each item's own label (identifying an icon-only

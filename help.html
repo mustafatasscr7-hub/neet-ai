@@ -69,6 +69,11 @@
     body.light-mode .faq-item.open .faq-chevron { color: #4f8ef7 !important; }
     body.light-mode .faq-answer { color: #55555f !important; }
     body.light-mode .faq-contact { color: #55555f !important; }
+
+    @media (max-width: 768px) {
+      .header { flex-wrap: wrap; row-gap: 8px; padding-left: clamp(12px, 4vw, 16px); padding-right: clamp(12px, 4vw, 16px); }
+      .container { padding-left: clamp(12px, 4vw, 16px); padding-right: clamp(12px, 4vw, 16px); }
+    }
   </style>
 </head>
 <body class="page-with-sidebar-layout">
@@ -191,9 +196,14 @@
     </div>
   </div>
 
+  <div class="sidebar-backdrop" id="sidebarBackdrop" onclick="closeMobileSidebar()"></div>
+
   <div class="page-main-content">
   <div class="header">
     <div style="display:flex;align-items:center;gap:16px;">
+      <button class="sidebar-hamburger-btn" id="sidebarHamburgerBtn" onclick="toggleSidebar()" aria-label="Open menu" title="Menu">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+      </button>
       <span class="header-title">NEET<span>-AI</span> Help &amp; FAQ</span>
     </div>
   </div>

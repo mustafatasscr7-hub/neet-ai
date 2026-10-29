@@ -290,6 +290,17 @@
     body.light-mode .pyq-selection-explain-btn { background: #f0f0f3 !important; color: #16161d !important; }
     body.light-mode .pyq-selection-explain-btn:hover { background: #e4e4ea !important; }
     body.light-mode .pyq-selection-ask-input { background: #f5f5f7 !important; border-color: #d5d5dd !important; color: #16161d !important; }
+
+    @media (max-width: 768px) {
+      .header { flex-wrap: wrap; row-gap: 8px; padding-left: clamp(12px, 4vw, 16px); padding-right: clamp(12px, 4vw, 16px); }
+      .container { padding-left: clamp(12px, 4vw, 16px); padding-right: clamp(12px, 4vw, 16px); }
+      .subject-grid { grid-template-columns: repeat(2, 1fr); gap: clamp(10px, 3vw, 20px); }
+      .subject-card { padding: clamp(18px, 5vw, 36px) clamp(10px, 3vw, 24px); }
+    }
+
+    @media (max-width: 480px) {
+      .subject-grid { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body class="page-with-sidebar-layout">
@@ -410,9 +421,14 @@
     </div>
   </div>
 
+  <div class="sidebar-backdrop" id="sidebarBackdrop" onclick="closeMobileSidebar()"></div>
+
   <div class="page-main-content">
  <div class="header">
     <div style="display:flex;align-items:center;gap:16px;">
+      <button class="sidebar-hamburger-btn" id="sidebarHamburgerBtn" onclick="toggleSidebar()" aria-label="Open menu" title="Menu">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+      </button>
       <span class="header-title">NEET<span>-AI</span> <span data-i18n="pyqbank.headerTitle">Question Bank</span></span>
     </div>
     <div style="display:flex;gap:10px;">

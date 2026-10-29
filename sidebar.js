@@ -19,8 +19,33 @@ function getSavedSidebarWidth() {
   return (saved >= SIDEBAR_MIN_WIDTH && saved <= SIDEBAR_MAX_WIDTH) ? saved : SIDEBAR_DEFAULT_WIDTH;
 }
 
+// Mobile (<=768px) drawer: a separate mechanism from desktop's collapse/expand (`.collapsed`,
+// 56px icon rail) -- the sidebar is fully off-canvas by default there (see sidebar.css's own
+// mobile media query) and `.mobile-open` slides it in as a full overlay instead. Not persisted
+// across reloads/navigation (ChatGPT's own behavior: closed every fresh load), unlike desktop's
+// `sidebarCollapsed` localStorage preference below.
+function isMobileSidebarWidth() {
+  return window.innerWidth <= 768;
+}
+
+function closeMobileSidebar() {
+  const sidebar = document.querySelector('.sidebar');
+  if (!sidebar) return;
+  sidebar.classList.remove('mobile-open');
+  const backdrop = document.getElementById('sidebarBackdrop');
+  if (backdrop) backdrop.classList.remove('visible');
+}
+
 function toggleSidebar() {
   const sidebar = document.querySelector('.sidebar');
+  if (isMobileSidebarWidth()) {
+    const opening = !sidebar.classList.contains('mobile-open');
+    sidebar.classList.toggle('mobile-open', opening);
+    const backdrop = document.getElementById('sidebarBackdrop');
+    if (backdrop) backdrop.classList.toggle('visible', opening);
+    hideSidebarTooltip();
+    return;
+  }
   const collapsing = !sidebar.classList.contains('collapsed');
   sidebar.classList.toggle('collapsed');
   sidebar.style.width = collapsing ? '' : (getSavedSidebarWidth() + 'px');
@@ -192,7 +217,29 @@ document.addEventListener('click', function(e) {
 function initSidebar() {
   const sidebar = document.querySelector('.sidebar');
   if (!sidebar) return;
-  sidebar.style.width = getSavedSidebarWidth() + 'px';
+
+  // Mobile: always starts closed (no `.collapsed` rail -- see toggleSidebar's own comment), never
+  // reads/writes the desktop-only `sidebarCollapsed` preference below.
+  if (isMobileSidebarWidth()) {
+    sidebar.classList.remove('collapsed');
+    sidebar.style.width = '';
+  } else {
+    const collapsed = localStorage.getItem('sidebarCollapsed') === '1';
+    if (collapsed) sidebar.classList.add('collapsed');
+    sidebar.style.width = collapsed ? '' : getSavedSidebarWidth() + 'px';
+  }
+
+  // Tapping a nav link/chat/new-chat inside the drawer closes it, same as ChatGPT -- everything
+  // else inside the sidebar (profile menu, search box, resize handle) is excluded since those
+  // open their own UI in place rather than navigating away.
+  sidebar.addEventListener('click', function(e) {
+    if (!isMobileSidebarWidth()) return;
+    if (e.target.closest('#navSearch') || e.target.closest('.profile-btn') || e.target.closest('.sidebar-resize-handle')) return;
+    if (e.target.closest('.history-item') || e.target.closest('.nav-item') || e.target.closest('.new-chat-btn')) {
+      closeMobileSidebar();
+    }
+  });
+
   initSidebarTooltips();
 
   const searchInput = document.getElementById('searchChatsInput');

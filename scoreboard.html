@@ -274,10 +274,17 @@
 
     body.light-mode .loading { color: #7a7a85 !important; }
     body.light-mode .spinner { border-color: #e5e5ea !important; border-top-color: #4f8ef7 !important; }
-  
+
     /* Smooth fade-in on page load */
     body { animation: pageFadeIn 0.22s ease; }
     @keyframes pageFadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+    @media (max-width: 768px) {
+      .header { flex-wrap: wrap; row-gap: 8px; padding-left: clamp(12px, 4vw, 16px); padding-right: clamp(12px, 4vw, 16px); }
+      .container { padding-left: clamp(12px, 4vw, 16px); padding-right: clamp(12px, 4vw, 16px); }
+      .page-title { font-size: clamp(22px, 6vw, 26px); }
+      .empty-state h3 { font-size: clamp(16px, 4vw, 18px); }
+    }
   </style>
 </head>
 <body class="page-with-sidebar-layout">
@@ -398,11 +405,16 @@
     </div>
   </div>
 
+  <div class="sidebar-backdrop" id="sidebarBackdrop" onclick="closeMobileSidebar()"></div>
+
   <div class="page-main-content">
   <div class="bg-glow"></div>
 
   <div class="header">
     <div style="display:flex;align-items:center;gap:16px;">
+      <button class="sidebar-hamburger-btn" id="sidebarHamburgerBtn" onclick="toggleSidebar()" aria-label="Open menu" title="Menu">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+      </button>
       <span class="header-title">NEET<span class="brand-accent">-AI</span> <span data-i18n="scoreboard.headerTitle">Scoreboard</span></span>
     </div>
     <div style="display:flex;gap:10px;">

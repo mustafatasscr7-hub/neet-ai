@@ -111,7 +111,23 @@
     .generate-btn:disabled { background: #2a2a2a; color: #666; cursor: not-allowed; }
 
     @media (max-width: 640px) {
-      .catalog-body { padding: 24px 16px 40px; }
+      .catalog-body { padding: clamp(16px, 6vw, 24px) clamp(12px, 4vw, 16px) clamp(28px, 8vw, 40px); }
+      .setup-title { font-size: clamp(22px, 6vw, 26px); }
+    }
+
+    /* Setup/catalog screen header only (not the test-taking or results headers, which share
+       .header but intentionally wrap under their own 768px rule below): at narrow phone widths
+       the back-button text + title + globe button no longer fit .header's single row, and since
+       this header has nothing else to drop to a second line, flex-wrap just strands the globe
+       button alone with dead space next to it instead of actually helping. Keep it on one row
+       and shrink the three pieces just enough to fit down to 360px. */
+    @media (max-width: 420px) {
+      #setupScreen .header { flex-wrap: nowrap !important; }
+      #setupScreen .header > div:first-child { gap: 8px !important; }
+      #setupScreen .header > div:first-child > button { font-size: 11px !important; }
+      #setupScreen .header-title { font-size: 13px !important; }
+      #setupScreen .lang-toggle { padding: 6px 8px !important; }
+      #setupScreen .lang-toggle svg { width: 14px !important; height: 14px !important; }
     }
 
     /* ===== TEST SCREEN (adapted from mocktest.html) ===== */
@@ -259,8 +275,21 @@
 
     @media (max-width: 640px) {
       .subject-grid { grid-template-columns: 1fr; }
-      .sidebar { display: none; }
-      .custom-panel { padding: 24px; }
+      .custom-panel { padding: clamp(16px, 6vw, 24px); }
+    }
+
+    @media (max-width: 768px) {
+      /* Exam screen (test-taking, not the setup/results screens above): same side-by-side ->
+         stacked fix as mocktest.html's identical layout. .sidebar here used to just be hidden
+         below 640px with nothing replacing it, leaving phones with no way to jump to a
+         specific question -- now it's a full-width drawer under the question instead. */
+      .header { flex-wrap: wrap; row-gap: 8px; padding-left: clamp(12px, 4vw, 16px); padding-right: clamp(12px, 4vw, 16px); }
+      .body { flex-direction: column; }
+      .question-area { padding: clamp(12px, 4vw, 16px); }
+      .question-actions { flex-wrap: wrap; }
+      .nav-btns { width: 100%; margin-left: 0; }
+      .prev-btn, .next-btn { flex: 1; }
+      .sidebar { width: 100%; height: 38vh; border-left: none; border-top: 1px solid #1e1e1e; }
     }
 
     /* ===== LIGHT MODE ===== */
