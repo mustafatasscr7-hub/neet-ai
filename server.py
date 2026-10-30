@@ -6356,6 +6356,15 @@ the question, ignore this instruction entirely and use the plain "Answer:" heade
                     if nl_idx == -1 and len(pending) < 64:
                         continue
                     first_line = (pending[:nl_idx] if nl_idx != -1 else pending).strip()
+                    if nl_idx != -1 and not first_line and len(pending) < 64:
+                        # A confirmed-complete first line (a real newline was found) that's
+                        # entirely blank never happens in a well-formed answer -- every real shape
+                        # starts with VISUAL_INTENT/DOUBT_TYPE/AMBIGUOUS on line 1. Keep buffering
+                        # past it rather than concluding "a normal answer started" and flushing
+                        # bare whitespace straight to the student -- see the empty-answer check
+                        # below, which needs this to still be unresolved if the whole completion
+                        # turns out to be nothing but whitespace.
+                        continue
                     if first_line == "DOUBT_TYPE: conversational":
                         checkpoint = 3
                         # Falls through to checkpoint 3 below in this same iteration.
@@ -6426,6 +6435,21 @@ the question, ignore this instruction entirely and use the plain "Answer:" heade
                 override_needed = True
                 override_reason = "empty_conversational"
                 pending = ""
+            # Genuinely empty completion that never even reached checkpoint 2 (real content) --
+            # e.g. DeepSeek's hidden reasoning consumed the whole max_tokens budget before any
+            # visible text was written (confirmed live even with thinking explicitly disabled via
+            # _stream_deepseek's thinking={"type": "disabled"}), or a whitespace-only completion.
+            # checkpoint != 2 guarantees this never fires for a real answer that already started
+            # streaming to the student (checkpoint 2 never touches `pending` again once reached,
+            # so pending/full_answer staying blank here only happens when nothing real was ever
+            # produced). Unlike empty_conversational above, this is never retried -- just the same
+            # friendly error already used for provider failures -- and must never be cached as a
+            # real answer, which the unmodified blank full_answer already guarantees via
+            # _answer_cache_store_block's own "empty" check below.
+            elif not override_needed and checkpoint != 2 and not full_answer.strip():
+                pending = ""
+                print(f"event=empty_answer provider={'qwen-flash' if use_qwen_for_this_request else DEEPSEEK_MODEL} endpoint=/chat", flush=True)
+                yield _error_stream_chunk(language)
             # Stream ended while still buffered (checkpoint 0 waiting for a newline that never
             # came, or checkpoint 1 similarly on the second line) -- confirmed live: a short
             # conversational reply whose ENTIRE completion is under 64 chars with no newline at
@@ -6435,7 +6459,7 @@ the question, ignore this instruction entirely and use the plain "Answer:" heade
             # reachable when override_needed is true (that path already `break`s, or the
             # checkpoint-3 case above already clears `pending`, with a fresh override attempt
             # following below either way).
-            if not override_needed and pending:
+            elif not override_needed and pending:
                 if billing_context["bill"] and full_answer.strip().startswith("AMBIGUOUS: yes"):
                     billing_context["bill"] = False
                 yield pending
