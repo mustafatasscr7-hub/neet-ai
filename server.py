@@ -79,6 +79,12 @@ async def lifespan(app: FastAPI):
     keepalive_task = asyncio.create_task(_openai_keepalive_loop())
     # In the background: the ~120 MB download must never delay startup (see _refresh_geoip_db).
     geoip_task = asyncio.create_task(_geoip_refresh_loop())
+    # One-shot: any processed_pdfs row still "processing" from before this restart can never have
+    # a live job (jobs live only in memory -- see _scan_jobs/process_pyq_scanned_ocr._jobs -- so a
+    # restart loses every one of them), so anything stale is durably marked here. See
+    # _repair_stuck_processed_pdfs's own docstring for why this matters beyond the Processed PDFs
+    # list's own read-time "Interrupted" computation.
+    asyncio.create_task(_repair_stuck_processed_pdfs())
     yield
     geoip_task.cancel()
     keepalive_task.cancel()
@@ -272,7 +278,7 @@ import requests as http_requests
 from process_pyq_vision import scan_pdf_bytes, scan_mock_test_pdf
 from process_pyq_book_3col import scan_book_pdf_bytes
 from process_pyq_scanned import scan_scanned_pdf_bytes, estimate_scanned_pdf_cost, DEFAULT_MAX_PAGES as SCANNED_DEFAULT_MAX_PAGES
-from process_pyq_scanned_ocr import scan_ocr_pdf_bytes, start_ocr_job, get_ocr_job
+from process_pyq_scanned_ocr import scan_ocr_pdf_bytes, start_ocr_job, get_ocr_job, ocr_job_is_live
 from utils.krutidev2unicode import kru2uni
 
 # Shared verbatim between INERT_PAIR_GUARD and _VERIFY_MCQ_HEDGE_SYSTEM further down
@@ -8606,6 +8612,7 @@ async def admin_pyq_search(
     uploader_name: str = None,
     batch_id: str = None,
     uploaded_date: str = None,
+    source_pdf_filename: str = None,
     warnings: bool = False,
     page: int = 1,
     sort_by: str = "id",
@@ -8625,7 +8632,7 @@ async def admin_pyq_search(
         # use any of that, so its requests stay on the smaller default select.
         select_fields = (
             "id,subject,chapter,question,option_a,option_b,option_c,option_d,correct_answer,"
-            "is_active,year,source_tag,class,has_diagram,diagram_url,option_a_diagram_url,"
+            "is_active,year,source_tag,source_pdf_filename,class,has_diagram,diagram_url,option_a_diagram_url,"
             "option_b_diagram_url,option_c_diagram_url,option_d_diagram_url,reviewed,created_at,"
             "question_type,difficulty,"
             "review_status,review_note,uploaded_by,uploaded_at,batch_id,reviewed_at,reviewed_by,uploader_name"
@@ -8664,6 +8671,11 @@ async def admin_pyq_search(
             params["uploader_name"] = f"eq.{uploader_name}"
         if batch_id and _BATCH_ID_RE.match(batch_id):
             params["batch_id"] = f"eq.{batch_id}"
+        # Contractor Queue's "PDFs" popup -> tap a row -> filter to that PDF's questions (step 6
+        # of the Processed PDFs work): exact match, same column the review pages stamp onto every
+        # saved row as source_pdf_filename.
+        if source_pdf_filename:
+            params["source_pdf_filename"] = f"eq.{source_pdf_filename}"
         # One India-time calendar day of uploads, as a plain and-group so it combines with the
         # or-groups below instead of overwriting them.
         and_parts = []
@@ -9932,6 +9944,83 @@ async def solve_alternate_method_endpoint(req: SolveAlternateMethodRequest, requ
 
 # ---------- Admin: PDF scan -> review -> save pipeline (admin-pdf-review.html) ----------
 
+# A "processing" row older than this with no live job is stuck -- either the admin's tab was
+# closed mid-review, the server restarted, or an uncaught error killed the job's thread without
+# ever reaching _update_processed_pdf_row. Same threshold for the Processed PDFs list's read-time
+# "Interrupted" computation and the startup repair below.
+_STUCK_PDF_AGE_SECONDS = 1800
+
+# processed_pdf_id -> ("scan" | "ocr", job_id), for exactly the two background-job endpoints below
+# (admin_scan_pdf_job, admin_scan_pdf_ocr_job). The synchronous /admin/scan-pdf (old endpoint,
+# "scanned" layout) never gets an entry here -- it has no job id, since it runs inline within one
+# HTTP request. Lets the Processed PDFs list tell "still actually running" apart from "stuck"
+# without exposing job internals through a new endpoint.
+_pdf_live_jobs = {}
+
+def _is_job_alive(kind: str, job_id: str) -> bool:
+    if kind == "scan":
+        with _scan_jobs_lock:
+            job = _scan_jobs.get(job_id)
+            return bool(job and job["status"] in ("queued", "running"))
+    if kind == "ocr":
+        return ocr_job_is_live(job_id)
+    return False
+
+def _pdf_job_is_live(processed_pdf_id) -> bool:
+    entry = _pdf_live_jobs.get(processed_pdf_id)
+    if not entry:
+        return False
+    alive = _is_job_alive(*entry)
+    if not alive:
+        _pdf_live_jobs.pop(processed_pdf_id, None)
+    return alive
+
+def _effective_pdf_status(row: dict) -> str:
+    """The status actually shown for a processed_pdfs row -- same as row["status"] except for a
+    stuck "processing" row (stale and no live job) or one the startup repair already wrote as
+    "failed" with its own marker error_message, both of which display as "interrupted" instead."""
+    if row["status"] == "processing":
+        age = (datetime.now(timezone.utc) - _parse_iso_ts(row["upload_date"])).total_seconds() if row.get("upload_date") else 0
+        if age > _STUCK_PDF_AGE_SECONDS and not _pdf_job_is_live(row["id"]):
+            return "interrupted"
+        return "processing"
+    if row["status"] == "failed" and (row.get("error_message") or "").startswith("Interrupted:"):
+        return "interrupted"
+    return row["status"]
+
+async def _repair_stuck_processed_pdfs():
+    """Runs once at boot (fire-and-forget, from lifespan). Any processed_pdfs row still
+    "processing" from before this restart can never have a live job -- _pdf_live_jobs and the
+    scan/OCR job stores all live in this process's memory, so a restart loses every one of them
+    unconditionally. Durably marks those rows "failed" (the status column's own check constraint
+    only allows pending/processing/completed/failed -- see create_processed_pdfs_table.sql --
+    so "interrupted" is never written, only ever shown, via _effective_pdf_status's
+    error_message-prefix check above) so that anything reading the raw status directly (e.g.
+    /admin/pdf-check-status's reprocessing warning) doesn't keep showing a long-dead "processing"
+    forever. Never touches a row younger than the same staleness window used everywhere else."""
+    try:
+        cutoff = (datetime.now(timezone.utc) - timedelta(seconds=_STUCK_PDF_AGE_SECONDS)).isoformat()
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/processed_pdfs", headers=ADMIN_HEADERS,
+            params={"status": "eq.processing", "upload_date": f"lt.{cutoff}", "select": "id"}
+        )
+        if resp.status_code >= 400:
+            print(f"Startup repair for processed_pdfs: could not read stale rows ({resp.status_code})", flush=True)
+            return
+        ids = [r["id"] for r in resp.json()]
+        if not ids:
+            return
+        await async_client.patch(
+            f"{SUPABASE_URL}/rest/v1/processed_pdfs", headers={**ADMIN_HEADERS, "Content-Type": "application/json"},
+            params={"id": f"in.({','.join(str(i) for i in ids)})"},
+            json={"status": "failed",
+                  "error_message": "Interrupted: the server restarted while this PDF was still processing.",
+                  "processed_at": datetime.now(timezone.utc).isoformat()}
+        )
+        print(f"Startup repair: marked {len(ids)} stuck processed_pdfs row(s) as failed/interrupted.", flush=True)
+    except Exception as e:
+        print(f"Startup repair for processed_pdfs failed: {e}", flush=True)
+
 def _create_processed_pdf_row(filename: str, subject: str):
     # Tracking is best-effort and must never block the actual scan -- swallow failures here
     # rather than let a processed_pdfs write error surface as a scan failure to the admin.
@@ -10030,6 +10119,8 @@ def admin_scan_pdf_ocr_job(req: ScanPdfRequest, _: None = Depends(verify_admin_o
         result["processed_pdf_id"] = processed_pdf_id
 
     job_id = start_ocr_job(pdf_bytes, req.subject, on_finish=on_finish)
+    if processed_pdf_id is not None:
+        _pdf_live_jobs[processed_pdf_id] = ("ocr", job_id)
     return {"job_id": job_id, "pages_total": page_count, "processed_pdf_id": processed_pdf_id}
 
 @app.get("/admin/scan-pdf/ocr-job/{job_id}")
@@ -10166,6 +10257,8 @@ def admin_scan_pdf_job(req: ScanPdfRequest, role: str = Depends(verify_admin_or_
         result["processed_pdf_id"] = processed_pdf_id
 
     job_id = start_scan_job(pdf_bytes, req.subject, req.layout, role, on_finish=on_finish)
+    if processed_pdf_id is not None:
+        _pdf_live_jobs[processed_pdf_id] = ("scan", job_id)
     return {"job_id": job_id, "pages_total": page_count, "processed_pdf_id": processed_pdf_id}
 
 @app.get("/admin/scan-pdf/job/{job_id}")
@@ -11296,21 +11389,186 @@ def admin_pdf_check_status(filename: str, _: None = Depends(verify_admin_or_cont
     except Exception as e:
         return {"error": str(e)}
 
+_CHAPTER_NUM_FROM_FILENAME_RE = re.compile(r'chapter\s*[-_ ]?\s*(\d+)', re.IGNORECASE)
+
+def _number_ranges_to_str(numbers) -> str:
+    """[6,7,8,9,...,35] -> "6-35"; non-consecutive runs get their own comma-separated part."""
+    nums = sorted(numbers)
+    if not nums:
+        return ""
+    parts = []
+    start = prev = nums[0]
+    for n in nums[1:]:
+        if n == prev + 1:
+            prev = n
+            continue
+        parts.append(str(start) if start == prev else f"{start}-{prev}")
+        start = prev = n
+    parts.append(str(start) if start == prev else f"{start}-{prev}")
+    return ", ".join(parts)
+
+def _processed_pdfs_gap_summary(pdfs: list) -> dict:
+    """Per subject, which chapter numbers ("Chapter N - ...") have at least one Completed PDF and
+    which don't -- "based on file names" only, never a guess past the highest chapter actually
+    seen. Unnumbered filenames (no "Chapter N" pattern) are listed separately, not folded into
+    either bucket."""
+    by_subject = {}
+    for p in pdfs:
+        if p["status"] != "completed":
+            continue
+        subject = p.get("subject") or "Unknown"
+        info = by_subject.setdefault(subject, {"found": set(), "unnumbered": []})
+        m = _CHAPTER_NUM_FROM_FILENAME_RE.search(p.get("filename") or "")
+        if m:
+            info["found"].add(int(m.group(1)))
+        else:
+            info["unnumbered"].append(p["filename"])
+    gaps = {}
+    for subject, info in by_subject.items():
+        found = sorted(info["found"])
+        highest = found[-1] if found else 0
+        missing = [n for n in range(1, highest + 1) if n not in info["found"]]
+        gaps[subject] = {
+            "found": _number_ranges_to_str(found),
+            "missing": _number_ranges_to_str(missing),
+            "unnumbered": info["unnumbered"],
+        }
+    return gaps
+
+# Same OR-group definition as _pyq_row_has_diagram / admin_pyq_contractor_queue_counts above, as
+# a PostgREST filter instead of a Python predicate -- needed here since this runs as a count
+# query, never downloading the matching rows themselves.
+_PYQ_HAS_DIAGRAM_OR = ("(diagram_url.neq.,option_a_diagram_url.neq.,"
+                       "option_b_diagram_url.neq.,option_c_diagram_url.neq.,"
+                       "option_d_diagram_url.neq.)")
+
+# One admin tool, opened occasionally -- a 30s in-memory cache (single Railway replica, same
+# assumption the scan job stores already make) is what keeps a burst of per-PDF count queries
+# (below) from re-running on every click of the Processed PDFs button in the same half-minute.
+_PROCESSED_PDFS_CACHE = {"at": 0.0, "pdfs": None, "gaps": None}
+_PROCESSED_PDFS_CACHE_TTL_SECONDS = 30
+# Caps how many of those count queries run at once -- up to ~6 per PDF row, and the list can hold
+# up to 500 rows, so this is what keeps a cold cache fill from firing thousands of simultaneous
+# requests at Supabase.
+_PROCESSED_PDFS_COUNT_CONCURRENCY = 15
+
+async def _processed_pdf_counts(filename: str) -> dict:
+    sem = _processed_pdf_counts.semaphore
+    base = {"source_pdf_filename": f"eq.{filename}"}
+
+    async def counted(params):
+        async with sem:
+            return await _pyq_count(params)
+
+    async def sampled_uploader():
+        async with sem:
+            resp = await async_client.get(
+                f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
+                params={**base, "select": "uploader_name", "order": "created_at.desc", "limit": 1}
+            )
+            if resp.status_code >= 400:
+                return None
+            rows = resp.json()
+            return rows[0].get("uploader_name") if rows else None
+
+    # "What's in the bank NOW" (step 3's own wording) -- every bucket below is scoped to
+    # is_active=true, not just the total, so a soft-deleted row (duplicate-merge etc.) never
+    # inflates approved/pending/needs_fix past what a student or reviewer would actually see.
+    active = {**base, "is_active": "eq.true"}
+    total, approved, pending, needs_fix, with_diagram, uploader_name = await asyncio.gather(
+        counted(active),
+        counted({**active, "review_status": "eq.approved"}),
+        counted({**active, "review_status": "eq.pending"}),
+        counted({**active, "review_status": "eq.needs_fix"}),
+        counted({**active, "or": _PYQ_HAS_DIAGRAM_OR}),
+        sampled_uploader(),
+    )
+    return {
+        "total": total, "approved": approved, "pending": pending, "needs_fix": needs_fix,
+        "with_diagram": with_diagram, "without_diagram": max(0, total - with_diagram),
+        "uploader_name": uploader_name,
+    }
+_processed_pdf_counts.semaphore = asyncio.Semaphore(_PROCESSED_PDFS_COUNT_CONCURRENCY)
+
+async def _processed_pdfs_detail_rows() -> list:
+    resp = await async_client.get(
+        f"{SUPABASE_URL}/rest/v1/processed_pdfs", headers=ADMIN_HEADERS,
+        params={"select": "id,filename,subject,status,questions_extracted,error_message,upload_date,processed_at",
+                "order": "upload_date.desc", "limit": 500}
+    )
+    if resp.status_code >= 400:
+        raise RuntimeError(resp.text)
+    rows = resp.json()
+
+    async def enrich(row):
+        effective_status = _effective_pdf_status(row)
+        counts = await _processed_pdf_counts(row["filename"])
+        uploader_name = counts.pop("uploader_name")
+        return {
+            **row,
+            "status": effective_status,
+            "interrupted_reason": (
+                "No activity for over 30 minutes." if effective_status == "interrupted" and row["status"] == "processing"
+                else row.get("error_message") if effective_status == "interrupted"
+                else None
+            ),
+            "counts": {**counts, "deleted": None},
+            "deleted_reason": ("pyq_delete_log only records a deleted question's id and uploader, "
+                                "not which PDF or batch it came from, so a per-PDF deleted count "
+                                "can't be computed."),
+            "uploader_name": uploader_name,
+        }
+
+    return await asyncio.gather(*(enrich(r) for r in rows))
+
 @app.get("/admin/processed-pdfs")
-def admin_processed_pdfs(_: None = Depends(verify_admin_or_contractor_pdf)):
+async def admin_processed_pdfs(force: bool = False, role: str = Depends(verify_admin_or_contractor_pdf)):
+    now = time.time()
+    fresh = _PROCESSED_PDFS_CACHE["pdfs"] is not None and now - _PROCESSED_PDFS_CACHE["at"] < _PROCESSED_PDFS_CACHE_TTL_SECONDS
+    if force or not fresh:
+        try:
+            pdfs = await _processed_pdfs_detail_rows()
+        except Exception as e:
+            return {"error": str(e)}
+        _PROCESSED_PDFS_CACHE["pdfs"] = pdfs
+        _PROCESSED_PDFS_CACHE["gaps"] = _processed_pdfs_gap_summary(pdfs)
+        _PROCESSED_PDFS_CACHE["at"] = now
+    return {
+        "pdfs": _PROCESSED_PDFS_CACHE["pdfs"],
+        "gap_summary": _PROCESSED_PDFS_CACHE["gaps"],
+        "can_remove": role == "admin",
+        "updated_at": datetime.fromtimestamp(_PROCESSED_PDFS_CACHE["at"], tz=timezone.utc).isoformat(),
+    }
+
+# Admin-only: the contractor key must never be able to remove a processed_pdfs record (it can
+# only ever read this list, same as the rest of its read-only access to this endpoint).
+@app.delete("/admin/processed-pdfs/{pdf_id}")
+async def admin_remove_processed_pdf(pdf_id: int, role: str = Depends(verify_admin_or_contractor_pdf)):
+    if role != "admin":
+        raise HTTPException(status_code=403, detail="Only the admin key can remove a processed-PDF record")
     try:
-        response = http_requests.get(
-            f"{SUPABASE_URL}/rest/v1/processed_pdfs",
-            headers=ADMIN_HEADERS,
-            params={
-                "select": "id,filename,subject,status,questions_extracted,error_message,upload_date,processed_at",
-                "order": "upload_date.desc",
-                "limit": 500
-            }
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/processed_pdfs", headers=ADMIN_HEADERS,
+            params={"id": f"eq.{pdf_id}", "select": "id,status,error_message,upload_date"}
         )
-        if response.status_code >= 400:
-            return {"error": response.text}
-        return {"pdfs": response.json()}
+        if resp.status_code >= 400:
+            return {"error": resp.text}
+        rows = resp.json()
+        if not rows:
+            return {"error": "Record not found"}
+        # Guards against removing a record that's actually Completed or still genuinely
+        # Processing -- recomputed server-side rather than trusting whatever status the client
+        # last rendered, since this never re-scans or touches any question either way.
+        if _effective_pdf_status(rows[0]) not in ("interrupted", "failed"):
+            return {"error": "Only an Interrupted or Failed record can be removed."}
+        del_resp = await async_client.delete(
+            f"{SUPABASE_URL}/rest/v1/processed_pdfs", headers=ADMIN_HEADERS,
+            params={"id": f"eq.{pdf_id}"}
+        )
+        if del_resp.status_code >= 400:
+            return {"error": del_resp.text}
+        _PROCESSED_PDFS_CACHE["pdfs"] = None  # next list read re-fetches instead of showing a removed row
+        return {"success": True}
     except Exception as e:
         return {"error": str(e)}
 

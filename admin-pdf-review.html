@@ -223,13 +223,64 @@
     </div>
   </div>
 
-  <div id="pdfHistoryOverlay" style="display:none;position:fixed;inset:0;background:#000000a0;z-index:900;align-items:center;justify-content:center;">
-    <div style="background:#111;border:1px solid #2a2a2a;border-radius:14px;padding:24px;width:100%;max-width:560px;max-height:80vh;overflow-y:auto;">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
-        <h2 style="font-size:15px;">Processed PDFs</h2>
-        <button type="button" class="action-btn" onclick="closePdfHistory()">Close</button>
+  <style>
+    #pdfHistoryOverlay { position:fixed; inset:0; background:#000000a0; z-index:900; align-items:center; justify-content:center; padding:16px; }
+    .pdf-history-box { background:#111; border:1px solid #2a2a2a; border-radius:14px; padding:18px; width:100%; max-width:560px; max-height:85vh; display:flex; flex-direction:column; font-family:'Inter',sans-serif; }
+    .pdf-history-head { display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
+    .pdf-history-head h2 { font-size:15px; margin:0; color:#ececec; }
+    .pdf-history-head-actions { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+    .pdf-history-updated { font-size:11px; color:#666; }
+    .pdf-history-gaps { font-size:11px; color:#999; margin-bottom:10px; max-height:90px; overflow-y:auto; }
+    .pdf-gap-row { padding:3px 0; word-break:break-word; }
+    .pdf-gap-note { color:#555; }
+    .pdf-history-filters { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px; }
+    .pdf-history-filters input, .pdf-history-filters select { background:#0d0d0d; border:1px solid #2a2a2a; border-radius:7px; color:#ececec; font-family:'Inter',sans-serif; font-size:12px; padding:6px 8px; }
+    .pdf-history-filters input { flex:2; min-width:120px; }
+    .pdf-history-filters select { flex:1; min-width:90px; }
+    .pdf-history-list { overflow-y:auto; overflow-x:hidden; flex:1; scrollbar-width:thin; scrollbar-color:#333 transparent; }
+    .pdf-history-list::-webkit-scrollbar { width:6px; }
+    .pdf-history-list::-webkit-scrollbar-track { background:transparent; }
+    .pdf-history-list::-webkit-scrollbar-thumb { background:#333; border-radius:3px; }
+    .pdf-history-empty { color:#666; font-size:12px; padding:20px 0; text-align:center; }
+    .pdf-history-row { border-bottom:1px solid #1e1e1e; padding:10px 2px; }
+    .pdf-history-row.clickable { cursor:pointer; }
+    .pdf-history-row.clickable:hover { background:#161616; }
+    .pdf-history-row-top { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; }
+    .pdf-history-filename { color:#ececec; font-weight:600; font-size:12.5px; word-break:break-word; overflow-wrap:anywhere; flex:1; }
+    .pdf-history-badge { font-size:9px; font-weight:700; text-transform:uppercase; border:1px solid currentColor; border-radius:4px; padding:1px 5px; white-space:nowrap; flex-shrink:0; }
+    .pdf-history-row-meta { color:#777; font-size:11px; margin-top:3px; word-break:break-word; }
+    .pdf-history-row-counts { color:#888; font-size:11px; margin-top:4px; word-break:break-word; }
+    .pdf-history-row-reason { color:#e0a030; font-size:11px; margin-top:4px; word-break:break-word; }
+    .pdf-history-remove-btn { margin-top:6px; font-size:11px; padding:4px 10px; }
+  </style>
+  <div id="pdfHistoryOverlay" style="display:none;">
+    <div class="pdf-history-box">
+      <div class="pdf-history-head">
+        <h2>Processed PDFs</h2>
+        <div class="pdf-history-head-actions">
+          <span id="pdfHistoryUpdatedAt" class="pdf-history-updated"></span>
+          <button type="button" class="action-btn" onclick="refreshPdfHistory()">Refresh</button>
+          <button type="button" class="action-btn" onclick="closePdfHistory()">Close</button>
+        </div>
       </div>
-      <div id="pdfHistoryList" style="font-size:13px;color:#ccc;">Loading...</div>
+      <div id="pdfHistoryGaps" class="pdf-history-gaps"></div>
+      <div class="pdf-history-filters">
+        <input type="text" id="pdfHistorySearch" placeholder="Search filename..." oninput="renderPdfHistoryList()">
+        <select id="pdfHistoryStatusFilter" onchange="renderPdfHistoryList()">
+          <option value="">All statuses</option>
+          <option value="completed">Completed</option>
+          <option value="processing">Processing</option>
+          <option value="interrupted">Interrupted</option>
+          <option value="failed">Failed</option>
+        </select>
+        <select id="pdfHistorySubjectFilter" onchange="renderPdfHistoryList()">
+          <option value="">All subjects</option>
+          <option value="Biology">Biology</option>
+          <option value="Physics">Physics</option>
+          <option value="Chemistry">Chemistry</option>
+        </select>
+      </div>
+      <div id="pdfHistoryList" class="pdf-history-list">Loading...</div>
     </div>
   </div>
 
@@ -1821,37 +1872,123 @@
     }
   }
 
-  const PDF_STATUS_COLORS = { completed: '#4caf50', failed: '#e05555', processing: '#e0a030', pending: '#888' };
+  const PDF_STATUS_META = {
+    completed: { label: 'Completed', color: '#4caf50' },
+    processing: { label: 'Processing', color: '#4f8ef7' },
+    interrupted: { label: 'Interrupted', color: '#e0a030' },
+    failed: { label: 'Failed', color: '#e05555' },
+  };
+
+  let pdfHistoryData = null; // last /admin/processed-pdfs response: {pdfs, gap_summary, can_remove, updated_at}
 
   async function openPdfHistory() {
     document.getElementById('pdfHistoryOverlay').style.display = 'flex';
+    await loadPdfHistory(false);
+  }
+
+  function closePdfHistory() {
+    document.getElementById('pdfHistoryOverlay').style.display = 'none';
+  }
+
+  async function refreshPdfHistory() {
+    await loadPdfHistory(true);
+  }
+
+  async function loadPdfHistory(force) {
     const listEl = document.getElementById('pdfHistoryList');
     listEl.textContent = 'Loading...';
     try {
-      const res = await fetch(`${API_BASE}/admin/processed-pdfs`, { headers: authHeaders() });
+      const res = await fetch(`${API_BASE}/admin/processed-pdfs${force ? '?force=true' : ''}`, { headers: authHeaders() });
       if (res.status === 401) return logout();
+      if (!res.ok) { listEl.textContent = 'Could not load history: ' + await describeHttpError(res); return; }
       const data = await res.json();
       if (data.error) { listEl.textContent = 'Could not load history: ' + data.error; return; }
-      const pdfs = data.pdfs || [];
-      if (pdfs.length === 0) { listEl.textContent = 'No PDFs processed through this pipeline yet.'; return; }
-      listEl.innerHTML = pdfs.map(p => `
-        <div style="padding:10px 0;border-bottom:1px solid #1e1e1e;">
-          <div style="color:#ececec;font-weight:600;display:flex;align-items:center;gap:8px;">
-            ${escapeHtml(p.filename)}
-            <span style="color:${PDF_STATUS_COLORS[p.status] || '#888'};font-size:10px;font-weight:700;text-transform:uppercase;border:1px solid currentColor;border-radius:4px;padding:1px 5px;">${escapeHtml(p.status)}</span>
-          </div>
-          <div style="color:#666;font-size:11px;margin-top:3px;">
-            ${escapeHtml(p.subject || '')} · ${p.questions_extracted} question${p.questions_extracted === 1 ? '' : 's'} · ${new Date(p.upload_date).toLocaleDateString()}
-            ${p.status === 'failed' && p.error_message ? `<br><span style="color:#e05555;">${escapeHtml(p.error_message)}</span>` : ''}
-          </div>
-        </div>`).join('');
+      pdfHistoryData = data;
+      renderPdfHistoryGaps();
+      renderPdfHistoryList();
+      const upd = document.getElementById('pdfHistoryUpdatedAt');
+      if (upd) {
+        upd.textContent = data.updated_at
+          ? 'Updated at ' + new Date(data.updated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          : '';
+      }
     } catch (e) {
       listEl.textContent = 'Could not reach server.';
     }
   }
 
-  function closePdfHistory() {
-    document.getElementById('pdfHistoryOverlay').style.display = 'none';
+  function renderPdfHistoryGaps() {
+    const el = document.getElementById('pdfHistoryGaps');
+    if (!el) return;
+    if (!pdfHistoryData || !pdfHistoryData.gap_summary) { el.innerHTML = ''; return; }
+    const subjects = Object.keys(pdfHistoryData.gap_summary).sort();
+    if (!subjects.length) { el.innerHTML = ''; return; }
+    el.innerHTML = subjects.map(subject => {
+      const g = pdfHistoryData.gap_summary[subject];
+      const bits = [`Chapters found: ${escapeHtml(g.found || '—')}`, g.missing ? `Missing: ${escapeHtml(g.missing)}` : 'Missing: none'];
+      if (g.unnumbered && g.unnumbered.length) bits.push(`Unnumbered: ${g.unnumbered.map(escapeHtml).join(', ')}`);
+      return `<div class="pdf-gap-row"><b>${escapeHtml(subject)}</b> — ${bits.join(' · ')} <span class="pdf-gap-note">(based on file names)</span></div>`;
+    }).join('');
+  }
+
+  function pdfHistoryFilteredRows() {
+    if (!pdfHistoryData) return [];
+    const search = (document.getElementById('pdfHistorySearch').value || '').trim().toLowerCase();
+    const status = document.getElementById('pdfHistoryStatusFilter').value;
+    const subject = document.getElementById('pdfHistorySubjectFilter').value;
+    return pdfHistoryData.pdfs
+      .filter(p => !search || (p.filename || '').toLowerCase().includes(search))
+      .filter(p => !status || p.status === status)
+      .filter(p => !subject || p.subject === subject)
+      .slice()
+      .sort((a, b) => new Date(b.upload_date) - new Date(a.upload_date));
+  }
+
+  function renderPdfHistoryList() {
+    const listEl = document.getElementById('pdfHistoryList');
+    if (!pdfHistoryData) return;
+    const rows = pdfHistoryFilteredRows();
+    if (rows.length === 0) { listEl.innerHTML = '<div class="pdf-history-empty">No PDFs match.</div>'; return; }
+    listEl.innerHTML = rows.map(pdfHistoryRowHtml).join('');
+  }
+
+  // Shared by admin-pdf-review.html, contractor-pdf-review.html and admin-pyq-preview.html --
+  // identical in all three. canClickThrough is admin-pyq-preview.html's own extension point
+  // (pdfHistoryRowClick, defined only there) for the Contractor Queue's "tap a PDF to filter"
+  // behavior -- the other two pages simply never define that function, so rows render inert.
+  function pdfHistoryRowHtml(p) {
+    const meta = PDF_STATUS_META[p.status] || { label: p.status, color: '#888' };
+    const c = p.counts || {};
+    const deletedText = c.deleted == null ? 'unknown' : c.deleted;
+    const uploader = p.uploader_name || 'Earlier upload';
+    const reason = p.interrupted_reason || (p.status === 'failed' ? p.error_message : null);
+    const canClickThrough = typeof pdfHistoryRowClick === 'function';
+    const canRemove = pdfHistoryData.can_remove && (p.status === 'interrupted' || p.status === 'failed');
+    return `
+      <div class="pdf-history-row${canClickThrough ? ' clickable' : ''}" ${canClickThrough ? `onclick="pdfHistoryRowClick(${JSON.stringify(p.filename)})"` : ''}>
+        <div class="pdf-history-row-top">
+          <span class="pdf-history-filename">${escapeHtml(p.filename)}</span>
+          <span class="pdf-history-badge" style="color:${meta.color};border-color:${meta.color};">${escapeHtml(meta.label)}</span>
+        </div>
+        <div class="pdf-history-row-meta">${escapeHtml(p.subject || '—')} · ${new Date(p.upload_date).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })} · ${escapeHtml(uploader)}</div>
+        <div class="pdf-history-row-counts">Total ${c.total ?? 0} · Approved ${c.approved ?? 0} · Pending ${c.pending ?? 0} · Needs fix ${c.needs_fix ?? 0} · With diagram ${c.with_diagram ?? 0} · Without diagram ${c.without_diagram ?? 0} · Deleted ${escapeHtml(String(deletedText))}${c.deleted == null && p.deleted_reason ? ` <span title="${escapeHtml(p.deleted_reason)}">ⓘ</span>` : ''}</div>
+        ${reason ? `<div class="pdf-history-row-reason">${escapeHtml(reason)}</div>` : ''}
+        ${canRemove ? `<button type="button" class="action-btn danger pdf-history-remove-btn" onclick="event.stopPropagation(); removeProcessedPdf(${p.id})">Remove record</button>` : ''}
+      </div>`;
+  }
+
+  async function removeProcessedPdf(id) {
+    const ok = await showConfirmModal('Remove this processed-PDF tracking record? This never deletes any question -- only the record of this scan.', { confirmLabel: 'Remove', danger: true });
+    if (!ok) return;
+    try {
+      const res = await fetch(`${API_BASE}/admin/processed-pdfs/${id}`, { method: 'DELETE', headers: authHeaders() });
+      if (res.status === 401) return logout();
+      const data = await res.json();
+      if (data.error) { alert(data.error); return; }
+      await loadPdfHistory(true);
+    } catch (e) {
+      alert('Could not reach server.');
+    }
   }
 
   function updateSummaryBar() {

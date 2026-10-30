@@ -1218,3 +1218,12 @@ def get_ocr_job(job_id):
         if job["status"] == "error":
             out["error"] = job["error"]
         return out
+
+
+def ocr_job_is_live(job_id):
+    """True while this job is still queued or running -- used by the Processed PDFs list
+    (server.py) to tell a genuinely stuck "processing" row apart from one whose free-OCR job is
+    still actually going."""
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        return bool(job and job["status"] in ("queued", "running"))
