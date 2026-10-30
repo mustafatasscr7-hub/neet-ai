@@ -130,6 +130,19 @@
       #setupScreen .lang-toggle svg { width: 14px !important; height: 14px !important; }
     }
 
+    /* Below ~340px even the shrunk single-row layout above runs out of room: the title ("NEET-AI
+       Personalised Test") no longer fits beside the back button once the globe button's space is
+       reserved, so the row-level nowrap above just forces both pieces' text to break mid-word
+       instead ("NEET-\nAI") rather than actually fitting. Letting the back-button+title group
+       wrap as whole, unbreakable units (flex-basis:100% forces the title onto its own line
+       unconditionally, rather than only when it happens not to fit) drops the title cleanly under
+       the back button, with the globe button still pinned top-right on the first line. */
+    @media (max-width: 340px) {
+      #setupScreen .header > div:first-child { flex-wrap: wrap; row-gap: 2px; }
+      #setupScreen .header > div:first-child > button { white-space: nowrap; }
+      #setupScreen .header-title { white-space: nowrap; flex-basis: 100%; }
+    }
+
     /* ===== TEST SCREEN (adapted from mocktest.html) ===== */
     #testScreen { display: none; height: 100vh; height: 100dvh; flex-direction: column; overflow: hidden; }
     .header { padding: 14px 24px; border-bottom: 1px solid #1a1a1a; display: flex; align-items: center; justify-content: space-between; background: #0d0d0d; flex-shrink: 0; }
