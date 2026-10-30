@@ -1361,6 +1361,8 @@
     .input-area { padding: 16px 24px 24px; background: #0d0d0d; }
     .input-wrapper { max-width: 820px; margin: 0 auto; background: #111111; border: 1px solid #2a2a2a; border-radius: 14px; display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; transition: border-color 0.2s; }
     .input-row { display: flex; align-items: flex-end; gap: 8px; width: 100%; }
+    @keyframes inputShake { 10%, 90% { transform: translateX(-1px); } 20%, 80% { transform: translateX(2px); } 30%, 50%, 70% { transform: translateX(-4px); } 40%, 60% { transform: translateX(4px); } }
+    .input-shake { animation: inputShake 0.4s cubic-bezier(.36,.07,.19,.97); border-color: #4f8ef7 !important; }
     /* min-width:0 matters because this box is a flex item (its parent, .message-content.user, is
        display:flex) -- without it, a flex item defaults to min-width:auto, which refuses to
        shrink narrower than its content's own minimum, and that minimum is normally the width of
@@ -1991,7 +1993,7 @@
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
           </button>
         </div>
-        <textarea id="userInput" placeholder="Ask your NEET doubt..." rows="1" maxlength="1000" autocomplete="off" data-i18n-placeholder="chat.askPlaceholder"></textarea>
+        <textarea id="userInput" placeholder="Ask your NEET doubt..." rows="1" autocomplete="off" data-i18n-placeholder="chat.askPlaceholder"></textarea>
         <button id="voiceBtn" class="voice-btn" onclick="toggleVoice()" style="background:transparent;border:none;color:#666;cursor:pointer;padding:6px;display:flex;align-items:center;flex-shrink:0;border-radius:8px;" title="Voice input" data-i18n-title="chat.voiceInput">
           <svg class="voice-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
         </button>
@@ -7721,12 +7723,23 @@ function plainTextFromMarkdown(text) {
       }
     }
 
+ // Lets the student know a send tap registered even when there's nothing to send --
+ // otherwise an empty/whitespace-only Enter or send-click no-ops with zero feedback.
+ function flashEmptySendCue() {
+      const target = document.querySelector('#welcome .welcome-search') || document.querySelector('.input-wrapper');
+      if (!target) return;
+      target.classList.remove('input-shake');
+      void target.offsetWidth;
+      target.classList.add('input-shake');
+      setTimeout(() => target.classList.remove('input-shake'), 400);
+ }
+
  async function sendMessage() {
       if (isStreaming) return;
       let text = input.value.trim();
       const activeQuotes = quotedContexts.slice();
       if (!text && activeQuotes.length > 0) text = 'Please explain this.';
-      if (!text && selectedImages.length === 0 && !selectedPDF) return;
+      if (!text && selectedImages.length === 0 && !selectedPDF) { flashEmptySendCue(); return; }
 
       // Slash commands -- recognized here regardless of whether they arrived via the dropdown
       // menu (selectSlashCommand) or the student just typed the whole thing and hit Enter.
