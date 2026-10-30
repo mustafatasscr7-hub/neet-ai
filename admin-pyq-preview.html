@@ -252,6 +252,19 @@
     .dup-dismiss-btn:hover { border-color: #4ade80; color: #4ade80; }
     .dup-delete-both-btn { background: #ef44441c; border: none; color: #ef4444; padding: 5px 12px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
     .dup-delete-both-btn:hover { filter: brightness(1.15); }
+    .dup-select-all-but-one-btn { background: transparent; border: none; color: #4f8ef7; font-size: 11px; cursor: pointer; text-decoration: underline; padding: 0; font-family: 'Inter', sans-serif; }
+    .dup-select-all-but-one-btn:hover { color: #6fa3ff; }
+
+    /* Sticky bottom bar for dupSelectedIds -- built once on demand (same pattern as #undoToast
+       below), shown whenever 1+ card is ticked in a duplicate-group view. resultsArea gets
+       extra bottom padding while it's visible so it never covers a card's own Delete button. */
+    .dup-select-bar { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); display: none; align-items: center; gap: 12px; background: #111; border: 1px solid #4f8ef7; border-radius: 10px; padding: 10px 16px; z-index: 1500; box-shadow: 0 4px 20px rgba(0,0,0,0.5); font-family: 'Inter', sans-serif; max-width: calc(100vw - 32px); }
+    .dup-select-bar .dup-select-count { font-size: 12px; color: #4f8ef7; font-weight: 600; white-space: nowrap; }
+    .dup-select-delete-btn { background: #ef4444; border: none; color: #fff; padding: 7px 14px; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600; font-family: 'Inter', sans-serif; white-space: nowrap; }
+    .dup-select-delete-btn:hover { filter: brightness(1.1); }
+    .dup-select-delete-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+    .dup-select-clear-btn { background: transparent; border: 1px solid #2a2a2a; color: #999; padding: 7px 14px; border-radius: 6px; cursor: pointer; font-size: 12px; font-family: 'Inter', sans-serif; white-space: nowrap; }
+    .dup-select-clear-btn:hover { border-color: #4a4a4a; color: #ccc; }
     .dup-columns { display: flex; gap: 12px; flex-wrap: wrap; }
     .dup-columns .question-card { flex: 1; min-width: 280px; margin-bottom: 0; }
 
@@ -425,6 +438,13 @@
     let totalRows = 0;
     let currentRows = [];
     let selectedIds = new Set();
+    // Tick-box multi-select for duplicate-group cards (Find Duplicates + Contractor Queue
+    // Duplicates) -- kept separate from selectedIds/bulkActionBar above so switching between
+    // the plain list and a duplicates view never mixes selections. dupGroupsCache is whichever
+    // group list is currently on screen (set by renderDuplicatePairs or
+    // renderContractorDuplicatesList), used to detect "every copy in a group is ticked".
+    let dupSelectedIds = new Set();
+    let dupGroupsCache = [];
     // Ctrl+Z undo stack -- each entry is { rows: [fullRowAsDeleted, ...] } for one delete action
     // (single delete, "Delete both", or a bulk Delete Selected all count as one undo step).
     let undoStack = [];
@@ -1759,6 +1779,11 @@
       // Its own Delete button (reusing deleteQuestion, rendered just below this card by
       // renderContractorDuplicatesList) and Keep are the only actions wanted on these cards.
       const minimalActions = !!(opts_ && opts_.minimalActions);
+      // dupSelect: the duplicate-group tick box (Find Duplicates + Contractor Queue
+      // Duplicates) -- rendered instead of the plain-list checkbox even when minimalActions
+      // also suppresses Edit/Delete, so contractor duplicate cards (minimalActions: true) can
+      // still be ticked for the bulk delete bar.
+      const dupSelect = !!(opts_ && opts_.dupSelect);
       const correctLetter = (q.correct_answer || '').toLowerCase().trim();
       const opts = ['a', 'b', 'c', 'd'].map(opt => {
         // Some questions have diagram-only options (no text at all) -- skipping whenever
@@ -1774,9 +1799,12 @@
       // Review actions only in the plain list -- Duplicates/Reported keep their own row maps.
       const reviewActions = !duplicatesMode && !reportsMode && !minimalActions;
       const waiting = reviewActions && awaitingReview(q);
+      const selectCheckboxHtml = dupSelect
+        ? `<label class="q-select-corner"><input type="checkbox" class="q-select-checkbox" data-qid="${escapeHtml(q.id)}" ${dupSelectedIds.has(q.id) ? 'checked' : ''} onchange="toggleDupSelect('${q.id}', this.checked)"/></label>`
+        : (minimalActions ? '' : `<label class="q-select-corner"><input type="checkbox" class="q-select-checkbox" ${selectedIds.has(q.id) ? 'checked' : ''} onchange="toggleQuestionSelect('${q.id}', this.checked)"/></label>`);
       return `
         <div class="question-card">
-          ${minimalActions ? '' : `<label class="q-select-corner"><input type="checkbox" class="q-select-checkbox" ${selectedIds.has(q.id) ? 'checked' : ''} onchange="toggleQuestionSelect('${q.id}', this.checked)"/></label>`}
+          ${selectCheckboxHtml}
           <div class="q-meta">
             <div class="q-meta-primary">
               <span class="q-year">${q.year || ''}</span>
@@ -1830,6 +1858,8 @@
     function resetModeToggleUi() {
       selectedIds.clear();
       updateBulkBar();
+      dupSelectedIds.clear();
+      updateDupSelectBar();
       document.getElementById('dupToggleBtn').classList.remove('active');
       document.getElementById('reviewToggleBtn').classList.remove('active');
       document.getElementById('reportsToggleBtn').classList.remove('active');
@@ -2058,6 +2088,8 @@
         return;
       }
       contractorDupFilterOn = !contractorDupFilterOn;
+      dupSelectedIds.clear();
+      updateDupSelectBar();
       document.getElementById('paginationBar').style.display = contractorDupFilterOn ? 'none' : 'flex';
       document.getElementById('filterChapter').disabled = contractorDupFilterOn;
       document.getElementById('filterSearch').disabled = contractorDupFilterOn;
@@ -2099,6 +2131,11 @@
         seenSignatures.add(signature);
         groups.push({
           ids: memberIds,
+          // The backend already knows which copy is the original (earliest-uploaded/approved --
+          // see test_pyq_contractor_duplicates.py) even though no card shows it visually; used
+          // as the "keep" id for Select-all-but-one so it defaults to the one worth keeping
+          // instead of just the first id on screen.
+          originalId: info.original_id,
           flaggedIds: memberIds.filter(mid => contractorDupData.flagged[mid] && !kept.has(mid)),
           maxOverlap: Math.max(...matches.map(m => m.overlap)),
           allExact: matches.every(m => m.exact),
@@ -2124,8 +2161,11 @@
       const rowsMap = (contractorDupData && contractorDupData.rows) || {};
       const groups = contractorDupGroups();
       document.getElementById('resultCount').textContent = `${groups.length} duplicate group${groups.length === 1 ? '' : 's'} found`;
+      dupGroupsCache = groups;
+      pruneDupSelection();
       if (groups.length === 0) {
         area.innerHTML = '<div class="empty-text">No flagged duplicates right now.</div>';
+        updateDupSelectBar();
         return;
       }
       area.innerHTML = groups.map(g => {
@@ -2133,6 +2173,8 @@
         const badgeClass = g.allExact ? 'exact' : (g.maxOverlap >= 0.75 ? 'high' : 'moderate');
         const label = g.allExact ? `${pct}% match — likely exact duplicate` : `${pct}% match`;
         const countBadge = g.ids.length > 2 ? `<span class="dup-badge moderate">${g.ids.length} questions in this group</span>` : '';
+        const keepId = g.originalId && g.ids.includes(g.originalId) ? g.originalId : g.ids[0];
+        const selectAllButOneBtn = `<button type="button" class="dup-select-all-but-one-btn" onclick="selectAllButOne('${g.ids.join(',')}', '${keepId}')">Select all but one</button>`;
         const keepBtn = g.flaggedIds.length
           ? `<button type="button" class="dup-keep-btn" onclick="keepFlaggedDuplicateGroup('${g.flaggedIds.join(',')}')">Keep</button>`
           : '';
@@ -2149,17 +2191,18 @@
               <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
                 <span class="dup-badge ${badgeClass}">${label}</span>
                 ${countBadge}
+                ${selectAllButOneBtn}
               </div>
               <div style="display:flex;gap:8px;flex-wrap:wrap;">
                 ${keepBtn}
               </div>
             </div>
-            ${g.ids.length > 2 ? `<div class="result-note" style="margin-bottom:10px;">Use each card's own 🗑 Delete button below to keep whichever one(s) you want and remove the rest.</div>` : ''}
+            ${g.ids.length > 2 ? `<div class="result-note" style="margin-bottom:10px;">Use each card's own 🗑 Delete button below to keep whichever one(s) you want and remove the rest, or tick cards and use Select all but one.</div>` : ''}
             ${capNote}
             <div class="dup-columns">
               ${g.ids.map(id => `
                 <div style="flex:1;min-width:280px;">
-                  ${questionCardHtml(rowsMap[id], { minimalActions: true })}
+                  ${questionCardHtml(rowsMap[id], { minimalActions: true, dupSelect: true })}
                   ${noteFor(id)}
                   <div class="dup-card-actions">
                     <button type="button" class="q-delete-btn" onclick="deleteQuestion('${id}', this)">🗑 Delete</button>
@@ -2169,6 +2212,7 @@
           </div>`;
       }).join('');
       area.querySelectorAll('.q-edit-field textarea').forEach(autoResizeTextarea);
+      updateDupSelectBar();
     }
 
     // Hides every still-flagged member of this group from the Duplicates filter from now on
@@ -2753,6 +2797,8 @@
       const area = document.getElementById('resultsArea');
       area.innerHTML = '<div class="loading-text">Scanning the whole active question bank for duplicates... this takes several seconds.</div>';
       document.getElementById('resultCount').textContent = '';
+      dupSelectedIds.clear();
+      updateDupSelectBar();
       try {
         const res = await fetch(`${API_BASE}/admin/pyq-duplicates?threshold=0.5`, { headers: authHeaders() });
         if (res.status === 401) return logout();
@@ -2819,8 +2865,11 @@
       }
       const groups = groupDuplicatePairs(pairs).filter(g => g.ids.every(id => duplicateRowsMap[id]));
       document.getElementById('resultCount').textContent = `${groups.length} duplicate group${groups.length === 1 ? '' : 's'} found (50%+ match)`;
+      dupGroupsCache = groups;
+      pruneDupSelection();
       if (groups.length === 0) {
         area.innerHTML = '<div class="empty-text">No duplicate pairs found.</div>';
+        updateDupSelectBar();
         return;
       }
       area.innerHTML = groups.map(g => {
@@ -2836,25 +2885,150 @@
         const bulkDeleteBtn = g.ids.length === 2
           ? `<button type="button" class="dup-delete-both-btn" onclick="deleteBothInPair('${g.ids[0]}', '${g.ids[1]}', this)">🗑 Delete both</button>`
           : '';
+        const selectAllButOneBtn = `<button type="button" class="dup-select-all-but-one-btn" onclick="selectAllButOne('${idsCsv}', '${g.ids[0]}')">Select all but one</button>`;
         return `
           <div class="dup-pair">
             <div class="dup-pair-header">
               <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
                 <span class="dup-badge ${badgeClass}">${label}</span>
                 ${countBadge}
+                ${selectAllButOneBtn}
               </div>
               <div style="display:flex;gap:8px;flex-wrap:wrap;">
                 <button type="button" class="dup-dismiss-btn" onclick="dismissDuplicateGroup('${idsCsv}', this)">Not a duplicate — don't show again</button>
                 ${bulkDeleteBtn}
               </div>
             </div>
-            ${g.ids.length > 2 ? `<div class="result-note" style="margin-bottom:10px;">Use each card's own 🗑 Delete button below to keep whichever one(s) you want and remove the rest.</div>` : ''}
+            ${g.ids.length > 2 ? `<div class="result-note" style="margin-bottom:10px;">Use each card's own 🗑 Delete button below to keep whichever one(s) you want and remove the rest, or tick cards and use Select all but one.</div>` : ''}
             <div class="dup-columns">
-              ${g.ids.map(id => questionCardHtml(duplicateRowsMap[id])).join('')}
+              ${g.ids.map(id => questionCardHtml(duplicateRowsMap[id], { dupSelect: true })).join('')}
             </div>
           </div>`;
       }).join('');
       area.querySelectorAll('.q-edit-field textarea').forEach(autoResizeTextarea);
+      updateDupSelectBar();
+    }
+
+    // ---------------- Tick-box multi-select for duplicate groups ----------------
+    // Shared by both duplicate-group views (global Find Duplicates and the Contractor Queue's
+    // "Duplicates" button) -- their cards both go through questionCardHtml({ dupSelect: true }),
+    // which ties the corner checkbox to dupSelectedIds/toggleDupSelect instead of the plain
+    // list's selectedIds/toggleQuestionSelect.
+    //
+    // In the Contractor Queue view the same question id can appear in two different groups at
+    // once (A matches B, A also matches C, but B/C don't match each other -- see
+    // contractorDupGroups), so every checkbox for a given id is kept in sync by data-qid rather
+    // than relying on there being only one on screen.
+    function syncDupCheckboxes(id, checked) {
+      document.querySelectorAll(`input.q-select-checkbox[data-qid="${CSS.escape(id)}"]`).forEach(cb => { cb.checked = checked; });
+    }
+
+    function toggleDupSelect(id, checked) {
+      if (checked) dupSelectedIds.add(id); else dupSelectedIds.delete(id);
+      syncDupCheckboxes(id, checked);
+      updateDupSelectBar();
+    }
+
+    // Ticks every card in this group except keepId -- callers pass the contractor queue's real
+    // original_id when one exists, else just the group's first id (no card shows which one is
+    // the "original" visually). Only ticks; never deletes on its own.
+    function selectAllButOne(idsCsv, keepId) {
+      idsCsv.split(',').forEach(id => {
+        if (id === keepId) return;
+        dupSelectedIds.add(id);
+        syncDupCheckboxes(id, true);
+      });
+      updateDupSelectBar();
+    }
+
+    function clearDupSelection() {
+      dupSelectedIds.forEach(id => syncDupCheckboxes(id, false));
+      dupSelectedIds.clear();
+      updateDupSelectBar();
+    }
+
+    // Drops any ticked id that's no longer part of the group list currently on screen (dismissed,
+    // deleted, or the view was switched/rescanned) -- called at the top of both render functions.
+    function pruneDupSelection() {
+      const onScreen = new Set(dupGroupsCache.flatMap(g => g.ids));
+      Array.from(dupSelectedIds).forEach(id => { if (!onScreen.has(id)) dupSelectedIds.delete(id); });
+    }
+
+    function updateDupSelectBar() {
+      const count = dupSelectedIds.size;
+      const area = document.getElementById('resultsArea');
+      let bar = document.getElementById('dupSelectBar');
+      if (count === 0) {
+        if (bar) bar.style.display = 'none';
+        area.style.paddingBottom = '';
+        return;
+      }
+      if (!bar) {
+        bar = document.createElement('div');
+        bar.id = 'dupSelectBar';
+        bar.className = 'dup-select-bar';
+        bar.innerHTML = `
+          <span class="dup-select-count" id="dupSelectCount"></span>
+          <button type="button" class="dup-select-delete-btn" id="dupSelectDeleteBtn">Delete selected</button>
+          <button type="button" class="dup-select-clear-btn" id="dupSelectClearBtn">Clear</button>`;
+        document.body.appendChild(bar);
+        document.getElementById('dupSelectDeleteBtn').onclick = bulkDeleteDupSelected;
+        document.getElementById('dupSelectClearBtn').onclick = clearDupSelection;
+      }
+      document.getElementById('dupSelectCount').textContent = `${count} selected`;
+      bar.style.display = 'flex';
+      // Leaves room so the bar never sits on top of a card's own Delete button, at any width.
+      area.style.paddingBottom = '76px';
+    }
+
+    // Deletes every ticked question, one at a time (not in parallel) so the undo stack, the
+    // delete log and the contractor "Deleted" count all see them as the same sequence of single
+    // deletes they already handle -- same deleteOneQuietly() single-row flow as the per-card
+    // Delete button, just looped with a progress label on the button.
+    async function bulkDeleteDupSelected() {
+      const ids = Array.from(dupSelectedIds);
+      if (ids.length === 0) return;
+      const wipesGroup = dupGroupsCache.some(g => g.ids.length > 0 && g.ids.every(id => dupSelectedIds.has(id)));
+      if (wipesGroup) {
+        if (!(await showConfirmModal('This removes every copy of this question.', { confirmLabel: 'Continue', danger: true }))) return;
+      }
+      const countMsg = `Delete ${ids.length} question${ids.length === 1 ? '' : 's'}? (Ctrl+Z to undo right after)`;
+      if (!(await showConfirmModal(countMsg, { confirmLabel: 'Delete', danger: true }))) return;
+
+      const deleteBtn = document.getElementById('dupSelectDeleteBtn');
+      const clearBtn = document.getElementById('dupSelectClearBtn');
+      if (clearBtn) clearBtn.disabled = true;
+      const scrollY = window.scrollY;
+      const deletedRows = [];
+      const failures = [];
+      for (let i = 0; i < ids.length; i++) {
+        const id = ids[i];
+        if (deleteBtn) { deleteBtn.disabled = true; deleteBtn.textContent = `Deleting ${i + 1}/${ids.length}...`; }
+        const result = await deleteOneQuietly(id);
+        if (result.error === 'unauthorized') return logout();
+        if (result.error) { failures.push(`${id}: ${result.error}`); continue; }
+        dupSelectedIds.delete(id);
+        if (contractorMode && contractorDupFilterOn) {
+          deletedRows.push(result.row || (contractorDupData && contractorDupData.rows && contractorDupData.rows[id]));
+          purgeContractorDupId(id);
+        } else if (duplicatesMode) {
+          deletedRows.push(result.row || duplicateRowsMap[id]);
+          delete duplicateRowsMap[id];
+          duplicatePairs = duplicatePairs.filter(p => p.a !== id && p.b !== id);
+        }
+      }
+      if (duplicatesMode) {
+        renderDuplicatePairs(document.getElementById('filterSubject').value);
+      } else if (contractorMode && contractorDupFilterOn) {
+        loadContractorCounts();
+        renderContractorPanel(contractorCountsCache);
+        renderContractorDuplicatesList();
+      }
+      window.scrollTo(0, scrollY);
+      pushUndoEntry(deletedRows.filter(Boolean));
+      if (failures.length) {
+        alert(`${failures.length} of ${ids.length} delete(s) failed: ${failures.slice(0, 3).join(' / ')}${failures.length > 3 ? '...' : ''}. They remain selected -- try again.`);
+      }
     }
 
     async function dismissPairQuietly(idA, idB) {
@@ -3030,7 +3204,9 @@
         if (btnEl) { btnEl.disabled = false; btnEl.textContent = originalLabel; }
       }
       pushUndoEntry(deletedRows);
+      const scrollY = window.scrollY;
       renderDuplicatePairs(document.getElementById('filterSubject').value);
+      window.scrollTo(0, scrollY);
     }
 
     async function deleteQuestion(id, btnEl) {
@@ -3050,12 +3226,16 @@
         selectedIds.delete(id);
         loadContractorCounts();
         renderContractorPanel(contractorCountsCache);
+        const scrollY = window.scrollY;
         renderContractorDuplicatesList();
+        window.scrollTo(0, scrollY);
       } else if (duplicatesMode) {
         pushUndoEntry([result.row || duplicateRowsMap[id]]);
         delete duplicateRowsMap[id];
         duplicatePairs = duplicatePairs.filter(p => p.a !== id && p.b !== id);
+        const scrollY = window.scrollY;
         renderDuplicatePairs(document.getElementById('filterSubject').value);
+        window.scrollTo(0, scrollY);
       } else if (reportsMode) {
         pushUndoEntry([result.row || reportedRowsMap[id]]);
         delete reportedRowsMap[id];
