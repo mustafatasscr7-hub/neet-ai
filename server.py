@@ -11702,10 +11702,23 @@ async def admin_pyq_contractor_duplicates(_: None = Depends(verify_admin)):
                 if original_id:
                     flagged[qid]["original_id"] = original_id
                     flagged[qid]["original_in_queue"] = _is_contractor_queue_row(meta_by_id.get(original_id) or {})
-            return flagged
 
-        flagged = await asyncio.to_thread(scan)
-        return {"flagged": flagged, "checked": len(to_check), "flagged_count": len(flagged),
+            # Full rows for every id the frontend's shared duplicate-cluster renderer (the same
+            # one /admin/pyq-duplicates' "rows" field feeds) needs to draw a real question-card
+            # for -- every flagged row, every match, and every group's chosen original -- not
+            # just the lightweight preview/year/chapter already in `matches`. Already sitting in
+            # meta_by_id from the corpus read above, so this is a passthrough, not a new fetch.
+            needed_ids = set(flagged.keys())
+            for info in flagged.values():
+                for m in info["matches"]:
+                    needed_ids.add(m["id"])
+                if info.get("original_id"):
+                    needed_ids.add(info["original_id"])
+            rows_by_id = {rid: meta_by_id[rid] for rid in needed_ids if rid in meta_by_id}
+            return flagged, rows_by_id
+
+        flagged, rows_by_id = await asyncio.to_thread(scan)
+        return {"flagged": flagged, "rows": rows_by_id, "checked": len(to_check), "flagged_count": len(flagged),
                 "threshold": CONTRACTOR_DUP_THRESHOLD}
     except Exception as e:
         return {"error": str(e)}

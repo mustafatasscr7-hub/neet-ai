@@ -184,34 +184,15 @@
     .contractor-count-row.dup-btn.active .contractor-count-num { color: #fff; }
     .contractor-count-row.dup-btn.has-error { border-color: #ef444460; }
 
-    /* "Possible duplicate of N questions" box under a flagged card in the Duplicates filter */
-    .dup-match-box { margin-top: 14px; padding-top: 14px; border-top: 1px dashed #2a2a2a; }
-    .dup-match-box-title { font-size: 12px; font-weight: 600; color: #ccc; margin-bottom: 8px; }
-    .dup-match-row { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; padding: 7px 0; border-bottom: 1px solid #1a1a1a; font-size: 12px; }
-    .dup-match-row:last-child { border-bottom: none; }
-    .dup-match-pct { font-weight: 700; color: #f59e0b; flex: 0 0 auto; }
-    .dup-match-pct.exact { color: #ef4444; }
-    .dup-match-meta { color: #777; flex: 0 0 auto; white-space: nowrap; }
-    .dup-match-tag { font-size: 10px; padding: 2px 7px; border-radius: 20px; font-weight: 600; flex: 0 0 auto; white-space: nowrap; }
-    .dup-match-tag.status-approved { background: #4ade8020; color: #4ade80; }
-    .dup-match-tag.status-pending { background: #f59e0b20; color: #f59e0b; }
-    .dup-match-tag.status-needs_fix { background: #f9731620; color: #fb923c; }
-    .dup-match-tag.loc { background: #2a2a2a; color: #999; }
-    .dup-match-tag.duplicate-flag { background: #ef444420; color: #ef4444; }
-    .dup-match-tag.also-asked { background: #4f8ef720; color: #4f8ef7; }
-    .dup-match-tag.year-unknown { background: #66666625; color: #999; }
-    .dup-match-preview { color: #888; flex: 1 1 260px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .dup-match-more-btn { background: transparent; border: 1px solid #2a2a2a; color: #888; padding: 5px 12px; border-radius: 6px; font-size: 11px; cursor: pointer; font-family: 'Inter', sans-serif; margin-top: 8px; }
-    .dup-match-more-btn:hover { border-color: #4f8ef7; color: #4f8ef7; }
+    /* Shared by both the global Find Duplicates clusters and the Contractor Queue's own
+       Duplicates filter (which renders through the exact same renderDuplicatePairs-style
+       template) -- a plain-text note under a card (year relation, "capped at 50") and the
+       Contractor-only "Keep" action beside a cluster's badge. */
     .dup-match-cap-note { font-size: 11px; color: #666; margin-top: 6px; }
     .dup-original-note { font-size: 11px; color: #666; margin-top: 8px; font-style: italic; }
     .dup-card-actions { display: flex; gap: 8px; margin-top: 10px; }
     .dup-keep-btn { background: transparent; border: 1px solid #2a2a2a; color: #888; padding: 5px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; font-family: 'Inter', sans-serif; }
     .dup-keep-btn:hover { border-color: #4ade80; color: #4ade80; }
-    @media (max-width: 480px) {
-      .dup-match-row { flex-direction: column; align-items: flex-start; gap: 3px; }
-      .dup-match-preview { white-space: normal; }
-    }
     .q-review-note { margin-top: 12px; padding: 10px 12px; border-radius: 8px; background: #f9731612; border: 1px solid #f9731640; color: #fdba74; font-size: 12px; line-height: 1.5; white-space: pre-wrap; }
     .q-review-note b { color: #fb923c; }
     .q-fix-btn { background: transparent; border: 1px solid #f9731660; color: #fb923c; padding: 5px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
@@ -465,7 +446,6 @@
     let contractorDupFilterOn = false;
     let contractorDupLoading = false;
     let contractorDupError = null;
-    let dupMatchExpanded = new Set(); // flagged question ids whose "Show all" is expanded
     const DUP_KEPT_STORAGE_KEY = 'admin_pyq_dup_kept_ids';
     let allDiagrams = [];
     let diagramEditingIds = new Set();
@@ -1774,10 +1754,10 @@
     function questionCardHtml(q, opts_) {
       if (editingIds.has(q.id)) return editFormHtml(q);
       // minimalActions: used only by the Contractor Queue's Duplicates filter -- that view's
-      // flagged question isn't tracked in currentRows (it comes from the duplicate-check
-      // response instead), so Edit/Approve/Needs-fix/bulk-select here would silently go stale
-      // after use. "Delete this one" and "Keep" (rendered by duplicateMatchBoxHtml below this
-      // card instead) are the only actions the spec wants on these cards anyway.
+      // cards aren't tracked in currentRows (they come from the duplicate-check response
+      // instead), so Edit/Approve/Needs-fix/bulk-select here would silently go stale after use.
+      // Its own Delete button (reusing deleteQuestion, rendered just below this card by
+      // renderContractorDuplicatesList) and Keep are the only actions wanted on these cards.
       const minimalActions = !!(opts_ && opts_.minimalActions);
       const correctLetter = (q.correct_answer || '').toLowerCase().trim();
       const opts = ['a', 'b', 'c', 'd'].map(opt => {
@@ -1924,7 +1904,6 @@
       contractorDupFilterOn = false;
       contractorDupLoading = false;
       contractorDupError = null;
-      dupMatchExpanded = new Set();
       resetModeToggleUi();
       document.getElementById('contractorToggleBtn').classList.toggle('active', contractorMode);
       document.getElementById('contractorPanel').classList.toggle('cq-visible', contractorMode);
@@ -2087,69 +2066,15 @@
       renderResults();
     }
 
-    function dupStatusLabel(status) {
-      return status === 'approved' ? 'Approved' : status === 'needs_fix' ? 'Needs fix' : status === 'pending' ? 'Pending review' : (status || '');
-    }
-
-    function dupMatchRowHtml(m) {
-      const pct = Math.round(m.overlap * 100);
-      let yearTag;
-      if (m.year_relation === 'same') {
-        yearTag = `<span class="dup-match-tag duplicate-flag">Duplicate</span>`;
-      } else if (m.year_relation === 'different') {
-        yearTag = `<span class="dup-match-tag also-asked">Also asked in ${escapeHtml(String(m.year))}</span>`;
-      } else {
-        yearTag = `<span class="dup-match-tag year-unknown">Year unknown</span>`;
-      }
-      const statusTag = `<span class="dup-match-tag status-${escapeHtml(m.review_status)}">${escapeHtml(dupStatusLabel(m.review_status))}</span>`;
-      const locTag = `<span class="dup-match-tag loc">${m.location === 'queue' ? 'This queue' : 'Question bank'}</span>`;
-      return `
-        <div class="dup-match-row">
-          <span class="dup-match-pct${m.exact ? ' exact' : ''}">${pct}%</span>
-          <span class="dup-match-meta">${m.year || '—'} · ${escapeHtml(m.chapter || 'No chapter')}</span>
-          ${yearTag}
-          ${statusTag}
-          ${locTag}
-          <span class="dup-match-preview" title="${escapeHtml(m.preview || '')}">${escapeHtml(m.preview || '')}</span>
-        </div>`;
-    }
-
-    // "Show all N" / "Show fewer" below the first 5 rows -- never silently drops a match, just
-    // collapses the long tail by default.
-    function duplicateMatchBoxHtml(id, info) {
-      const matches = info.matches || [];
-      const expanded = dupMatchExpanded.has(id);
-      const visible = expanded ? matches : matches.slice(0, 5);
-      const remaining = matches.length - visible.length;
-      const capNote = info.capped
-        ? `<div class="dup-match-cap-note">and ${Math.max(0, (info.total_matches || 0) - matches.length)} more (capped at 50)</div>`
-        : '';
-      const originalNote = info.original_id
-        ? `<div class="dup-original-note">Keeping question ${escapeHtml(String(info.original_id).slice(0, 8))} as the original${info.original_in_queue ? ' (also in this queue)' : ''} -- not flagged.</div>`
-        : '';
-      return `
-        <div class="dup-match-box">
-          <div class="dup-match-box-title">Possible duplicate of ${matches.length} question${matches.length === 1 ? '' : 's'}</div>
-          ${visible.map(dupMatchRowHtml).join('')}
-          ${remaining > 0 ? `<button type="button" class="dup-match-more-btn" onclick="toggleDupMatchExpand('${id}')">Show all ${matches.length}</button>` : ''}
-          ${expanded && matches.length > 5 ? `<button type="button" class="dup-match-more-btn" onclick="toggleDupMatchExpand('${id}')">Show fewer</button>` : ''}
-          ${capNote}
-          ${originalNote}
-          <div class="dup-card-actions">
-            <button type="button" class="q-delete-btn" onclick="deleteFlaggedDuplicate('${id}', this)">🗑 Delete this one</button>
-            <button type="button" class="dup-keep-btn" onclick="keepFlaggedDuplicate('${id}')">Keep</button>
-          </div>
-        </div>`;
-    }
-
-    function toggleDupMatchExpand(id) {
-      if (dupMatchExpanded.has(id)) dupMatchExpanded.delete(id); else dupMatchExpanded.add(id);
-      renderResults();
-    }
-
-    function renderContractorDuplicatesList() {
-      const area = document.getElementById('resultsArea');
+    // Builds the same { ids, maxOverlap, allExact } group shape renderDuplicatePairs's groups
+    // already have, straight off each flagged question's own matches (every match >= threshold,
+    // same-year or not) -- deduped by identical member sets so three-or-more mutual copies
+    // (each separately flagged against the others) render as one cluster, not several
+    // overlapping ones. Non-same-year matches (informational only, never a confirmed duplicate
+    // on their own) are kept out of the badge/pct and surfaced as a plain note per card instead.
+    function contractorDupGroups() {
       const kept = getKeptDupIds();
+      const rowsMap = (contractorDupData && contractorDupData.rows) || {};
       const subjectFilter = document.getElementById('filterSubject').value;
       let ids = Object.keys(contractorDupData.flagged).filter(id => !kept.has(id));
       if (subjectFilter) {
@@ -2160,50 +2085,114 @@
         const mb = (contractorDupData.flagged[b].matches[0] || {}).overlap || 0;
         return mb - ma;
       });
-      document.getElementById('resultCount').textContent = `${ids.length} flagged question${ids.length === 1 ? '' : 's'}`;
-      if (ids.length === 0) {
+
+      const seenSignatures = new Set();
+      const groups = [];
+      ids.forEach(id => {
+        const info = contractorDupData.flagged[id];
+        const matches = (info.matches || []).filter(m => !kept.has(m.id));
+        if (matches.length === 0) return;
+        const memberIds = [id, ...matches.map(m => m.id)];
+        if (!memberIds.every(mid => rowsMap[mid])) return; // a referenced row vanished since
+        const signature = memberIds.slice().sort().join(',');
+        if (seenSignatures.has(signature)) return;
+        seenSignatures.add(signature);
+        groups.push({
+          ids: memberIds,
+          flaggedIds: memberIds.filter(mid => contractorDupData.flagged[mid] && !kept.has(mid)),
+          maxOverlap: Math.max(...matches.map(m => m.overlap)),
+          allExact: matches.every(m => m.exact),
+          capped: info.capped,
+          totalMatches: info.total_matches,
+          matchCount: matches.length,
+          notes: matches.filter(m => m.year_relation !== 'same').map(m => ({
+            id: m.id,
+            text: m.year_relation === 'different' ? `Also asked in ${m.year}` : 'Year unknown'
+          }))
+        });
+      });
+      return groups;
+    }
+
+    // Same .dup-pair / .dup-badge / .dup-columns markup and CSS as the global Find Duplicates
+    // view's renderDuplicatePairs above -- each card is the shared questionCardHtml, each
+    // group's own plain-text note (year relation, 50-cap) reuses that view's existing note
+    // styles. Only Keep and Delete are offered here (no "Not a duplicate"/"Delete both" -- those
+    // are the global scan's own dismissed-pairs table, not part of this queue-scoped check).
+    function renderContractorDuplicatesList() {
+      const area = document.getElementById('resultsArea');
+      const rowsMap = (contractorDupData && contractorDupData.rows) || {};
+      const groups = contractorDupGroups();
+      document.getElementById('resultCount').textContent = `${groups.length} duplicate group${groups.length === 1 ? '' : 's'} found`;
+      if (groups.length === 0) {
         area.innerHTML = '<div class="empty-text">No flagged duplicates right now.</div>';
         return;
       }
-      area.innerHTML = ids.map(id => {
-        const info = contractorDupData.flagged[id];
-        return questionCardHtml(info.row, { minimalActions: true }) + duplicateMatchBoxHtml(id, info);
+      area.innerHTML = groups.map(g => {
+        const pct = Math.round(g.maxOverlap * 100);
+        const badgeClass = g.allExact ? 'exact' : (g.maxOverlap >= 0.75 ? 'high' : 'moderate');
+        const label = g.allExact ? `${pct}% match — likely exact duplicate` : `${pct}% match`;
+        const countBadge = g.ids.length > 2 ? `<span class="dup-badge moderate">${g.ids.length} questions in this group</span>` : '';
+        const keepBtn = g.flaggedIds.length
+          ? `<button type="button" class="dup-keep-btn" onclick="keepFlaggedDuplicateGroup('${g.flaggedIds.join(',')}')">Keep</button>`
+          : '';
+        const capNote = g.capped
+          ? `<div class="dup-match-cap-note">and ${Math.max(0, (g.totalMatches || 0) - g.matchCount)} more (capped at 50)</div>`
+          : '';
+        const noteFor = id => {
+          const n = g.notes.find(note => note.id === id);
+          return n ? `<div class="dup-original-note">${escapeHtml(n.text)}</div>` : '';
+        };
+        return `
+          <div class="dup-pair">
+            <div class="dup-pair-header">
+              <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                <span class="dup-badge ${badgeClass}">${label}</span>
+                ${countBadge}
+              </div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                ${keepBtn}
+              </div>
+            </div>
+            ${g.ids.length > 2 ? `<div class="result-note" style="margin-bottom:10px;">Use each card's own 🗑 Delete button below to keep whichever one(s) you want and remove the rest.</div>` : ''}
+            ${capNote}
+            <div class="dup-columns">
+              ${g.ids.map(id => `
+                <div style="flex:1;min-width:280px;">
+                  ${questionCardHtml(rowsMap[id], { minimalActions: true })}
+                  ${noteFor(id)}
+                  <div class="dup-card-actions">
+                    <button type="button" class="q-delete-btn" onclick="deleteQuestion('${id}', this)">🗑 Delete</button>
+                  </div>
+                </div>`).join('')}
+            </div>
+          </div>`;
       }).join('');
       area.querySelectorAll('.q-edit-field textarea').forEach(autoResizeTextarea);
     }
 
-    // Reuses the same delete flow (confirm + DELETE /admin/pyq-delete/{id} + Ctrl+Z undo + the
-    // delete log that feeds the Contractor Queue's Deleted count) as the card's own 🗑 Delete
-    // button -- this one also removes the flagged entry and updates the Duplicates count
-    // without a full reload.
-    async function deleteFlaggedDuplicate(id, btnEl) {
-      if (!(await showConfirmModal('Permanently delete this question from Supabase? (Ctrl+Z to undo right after)', { confirmLabel: 'Delete', danger: true }))) return;
-      const originalLabel = btnEl ? btnEl.textContent : null;
-      if (btnEl) { btnEl.disabled = true; btnEl.textContent = 'Deleting...'; }
-      const result = await deleteOneQuietly(id);
-      if (result.error === 'unauthorized') return logout();
-      if (result.error) {
-        alert('Delete failed: ' + result.error);
-        if (btnEl) { btnEl.disabled = false; btnEl.textContent = originalLabel; }
-        return;
-      }
-      const flaggedRow = (contractorDupData && contractorDupData.flagged[id] && contractorDupData.flagged[id].row) || null;
-      pushUndoEntry([result.row || flaggedRow]);
-      if (contractorDupData && contractorDupData.flagged) delete contractorDupData.flagged[id];
-      selectedIds.delete(id);
-      currentRows = currentRows.filter(r => r.id !== id);
-      totalRows = Math.max(0, totalRows - 1);
-      loadContractorCounts();
+    // Hides every still-flagged member of this group from the Duplicates filter from now on
+    // (kept in localStorage, so it stays hidden after a refresh) -- applied to the whole cluster
+    // at once, since its members are all the same underlying duplicate claim. Doesn't touch the
+    // questions themselves.
+    function keepFlaggedDuplicateGroup(idsCsv) {
+      idsCsv.split(',').filter(Boolean).forEach(addKeptDupId);
       renderContractorPanel(contractorCountsCache);
-      renderResults();
+      renderContractorDuplicatesList();
     }
 
-    // Display-only: hides this one flagged card from the Duplicates filter from now on (kept in
-    // localStorage, so it stays hidden after a refresh). Doesn't touch the question itself.
-    function keepFlaggedDuplicate(id) {
-      addKeptDupId(id);
-      renderContractorPanel(contractorCountsCache);
-      renderResults();
+    // Removes `id` everywhere it appears in the current duplicate-check result -- as a flagged
+    // question, as a match on some other flagged question, or as a group's chosen original --
+    // called after a real delete so the cluster view and the Duplicates count on the bar never
+    // keep pointing at a row that's gone, without a full rescan.
+    function purgeContractorDupId(id) {
+      if (!contractorDupData) return;
+      delete contractorDupData.flagged[id];
+      if (contractorDupData.rows) delete contractorDupData.rows[id];
+      Object.values(contractorDupData.flagged).forEach(info => {
+        info.matches = (info.matches || []).filter(m => m.id !== id);
+        if (info.original_id === id) { delete info.original_id; delete info.original_in_queue; }
+      });
     }
 
     async function toggleReportsView() {
@@ -3055,7 +3044,14 @@
         if (btnEl) { btnEl.disabled = false; btnEl.textContent = originalLabel; }
         return;
       }
-      if (duplicatesMode) {
+      if (contractorMode && contractorDupFilterOn) {
+        pushUndoEntry([result.row || (contractorDupData && contractorDupData.rows && contractorDupData.rows[id])]);
+        purgeContractorDupId(id);
+        selectedIds.delete(id);
+        loadContractorCounts();
+        renderContractorPanel(contractorCountsCache);
+        renderContractorDuplicatesList();
+      } else if (duplicatesMode) {
         pushUndoEntry([result.row || duplicateRowsMap[id]]);
         delete duplicateRowsMap[id];
         duplicatePairs = duplicatePairs.filter(p => p.a !== id && p.b !== id);
