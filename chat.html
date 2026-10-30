@@ -444,6 +444,20 @@
       .usage-updated-group { display: contents; }
       .usage-updated-text { grid-area: updated; text-align: right; }
       .usage-refresh-btn { grid-area: refresh; justify-self: end; }
+
+      /* Fluid sizing for the mobile Settings list/sub-screen views -- same clamp() approach as
+         the rest of the page (e.g. .welcome h2, .header padding above), scaled down for this
+         denser UI so nothing is oversized at 320px or cramped at 428px+. */
+      .settings-mobile-list-title { font-size: clamp(10px, 2.8vw, 11px); }
+      .settings-mobile-row { font-size: clamp(13px, 3.4vw, 14px); padding: clamp(11px, 3vw, 13px) clamp(12px, 3.5vw, 14px); }
+      .settings-mobile-row-left { gap: clamp(10px, 3vw, 12px); }
+      .settings-mobile-row-left svg { width: clamp(15px, 4.5vw, 17px); height: clamp(15px, 4.5vw, 17px); flex-shrink: 0; }
+      .settings-mobile-row-chevron { width: clamp(14px, 4vw, 16px) !important; height: clamp(14px, 4vw, 16px) !important; }
+      .settings-modal-close { width: clamp(32px, 8.5vw, 36px) !important; height: clamp(32px, 8.5vw, 36px) !important; top: clamp(12px, 3.5vw, 16px) !important; right: clamp(12px, 3.5vw, 16px) !important; font-size: clamp(17px, 4.7vw, 20px) !important; }
+      .settings-mobile-back-header { padding: clamp(12px, 3.3vw, 14px) clamp(44px, 13vw, 52px) clamp(10px, 2.8vw, 12px) clamp(5px, 1.5vw, 6px); }
+      .settings-mobile-back-btn { width: clamp(32px, 8.5vw, 36px); height: clamp(32px, 8.5vw, 36px); }
+      .settings-mobile-back-btn svg { width: clamp(18px, 5vw, 20px); height: clamp(18px, 5vw, 20px); }
+      .settings-mobile-back-title { font-size: clamp(14px, 3.9vw, 15px); }
     }
 
     /* Study To-do top-bar button: icon-only, same 30px height and blue-tinted pill language as
