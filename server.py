@@ -3502,7 +3502,42 @@ async def fetch_student_mistake_rows(user_id: str) -> list:
     except Exception:
         return []
 
-def build_student_context(mistake_rows: list, subjects: set) -> str:
+async def fetch_mock_wrong_rows(user_id: str) -> list:
+    """Chapters from questions answered wrongly in mock tests in the last 60 days, as
+    {subject, chapter} rows -- same shape as fetch_student_mistake_rows so build_student_context
+    can combine both into one weak-chapter signal. mock_results has no per-question columns to
+    filter on server-side (question_details is a jsonb array), so this reads the student's recent
+    result rows and unpacks each one's wrong entries in Python; capped at 20 rows (~2000
+    questions) since that's already far more than 60 days of real usage would ever produce."""
+    if not user_id:
+        return []
+    headers = {"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"}
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=60)).isoformat()
+    try:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/mock_results",
+            headers=headers,
+            params={
+                "user_id": f"eq.{user_id}",
+                "created_at": f"gte.{cutoff}",
+                "select": "question_details",
+                "order": "created_at.desc",
+                "limit": 20,
+            }
+        )
+        rows = resp.json()
+        if not isinstance(rows, list):
+            return []
+        out = []
+        for r in rows:
+            for q in (r.get("question_details") or []):
+                if q.get("status") == "wrong" and q.get("chapter"):
+                    out.append({"subject": q.get("subject"), "chapter": q.get("chapter")})
+        return out
+    except Exception:
+        return []
+
+def build_student_context(mistake_rows: list, mock_wrong_rows: list, subjects: set) -> str:
     """Weak-chapter context for ONE answer, restricted to chapters in the same subject(s) as the
     NCERT content actually retrieved for this doubt. Previously the top-3 chapters were taken
     across ALL subjects (the subject column was fetched and then ignored) under an instruction to
@@ -3511,28 +3546,32 @@ def build_student_context(mistake_rows: list, subjects: set) -> str:
     Movement and Excretory Products...") in 3/8 runs with a real student's context. No retrieval
     (subject unknown) means no weak-chapter context at all, rather than guessing.
 
+    Combines two event sources -- saved_questions (mistake_rows) and wrong mock-test answers from
+    the last 60 days (mock_wrong_rows, see fetch_mock_wrong_rows) -- each occurrence counting as
+    one event for its chapter. A chapter needs at least 2 events before it's trusted as a real
+    weak spot (a single saved question or one wrong mock answer is too thin a signal to act on).
+
     The mock-test average line that used to sit here was removed on purpose: a whole-paper score
     says nothing about a single doubt, and a real "2/720" average (abandoned tests) produced
     invented praise ("You've done well in your mock tests") in live testing."""
-    if not mistake_rows or not subjects:
+    if not subjects:
         return ""
     wanted = {s.strip().lower() for s in subjects if s}
     chapter_counts = {}
-    for m in mistake_rows:
+    for m in (mistake_rows or []) + (mock_wrong_rows or []):
         ch = (m.get("chapter") or "").strip()
         if ch and (m.get("subject") or "").strip().lower() in wanted:
             chapter_counts[ch] = chapter_counts.get(ch, 0) + 1
-    if not chapter_counts:
+    qualifying = {ch: c for ch, c in chapter_counts.items() if c >= 2}
+    if not qualifying:
         return ""
-    weak = sorted(chapter_counts.items(), key=lambda x: -x[1])[:3]
-    weak_str = ", ".join(f"{ch} ({count} missed questions)" for ch, count in weak)
+    weak = sorted(qualifying.items(), key=lambda x: -x[1])[:3]
+    weak_str = ", ".join(ch for ch, _count in weak)
     return (
-        "\n\nSTUDENT CONTEXT (background only): in this same subject, this student has recently "
-        f"missed questions from: {weak_str}. If this doubt is directly about one of those "
-        "chapters, explain the steps students usually get wrong there with extra care. Otherwise "
-        "ignore this entirely. Never mention these chapters, the student's weak areas, or their "
-        "past mistakes/scores in the answer unless the doubt is directly about one of those "
-        "chapters -- and never list them."
+        f"\n\nThe student has often struggled with these chapters: {weak_str}. Use this only to "
+        "choose examples and the depth of explanation when it genuinely helps. Do not mention "
+        "that you know their weaknesses, do not repeat the list, and do not change the answer's "
+        "facts."
     )
 
 async def _empty_list():
@@ -5882,12 +5921,15 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
         # No retrieval means no known subject, and build_student_context only ever uses weak
         # chapters from the retrieved subject -- so there's nothing to fetch here at all.
         results = retrieved = []
-        mistake_rows = []
+        mistake_rows = mock_wrong_rows = []
         diagram_exists = False
     else:
         mistake_rows_coro = fetch_student_mistake_rows(user_id) if (personalize and user_id) else _empty_list()
+        mock_wrong_rows_coro = fetch_mock_wrong_rows(user_id) if (personalize and user_id) else _empty_list()
         search_stats = {}
-        retrieved, mistake_rows, diagram_exists = await asyncio.gather(search_ncert(text, stats=search_stats), mistake_rows_coro, diagram_exists_coro)
+        retrieved, mistake_rows, mock_wrong_rows, diagram_exists = await asyncio.gather(
+            search_ncert(text, stats=search_stats), mistake_rows_coro, mock_wrong_rows_coro, diagram_exists_coro
+        )
         # One-time spelling-fix retry (see _ncert_spelling_rewrite): only for a genuine miss on a
         # short, text-only doubt -- never for an image/PDF doubt (nothing here to misspell) and
         # never more than once, so a query that still finds nothing just behaves as it always has.
@@ -5903,7 +5945,7 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
         # retrieved" check (citation stripping included) treats an all-unrelated set as no retrieval.
         results = _relevant_ncert_chunks(text, retrieved)
         asyncio.create_task(_log_ncert_retrieval(search_stats.get("language") or _detect_query_language(text), _question_subject(text), search_stats.get("top_raw_score"), retrieved, results))
-    student_context = build_student_context(mistake_rows, {r.get('subject') for r in results})
+    student_context = build_student_context(mistake_rows, mock_wrong_rows, {r.get('subject') for r in results})
 
     if results:
         context = "\n\n".join([

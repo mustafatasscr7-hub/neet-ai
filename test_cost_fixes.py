@@ -287,7 +287,7 @@ def test_cache_flow():
         ("answer cut off at its cap", dict(deepseek_outputs=[GOOD], deepseek_flags={"output_capped": True}), {}, "capped"),
         ("verifier-corrected answer", dict(deepseek_outputs=[GOOD], deepseek_flags={"corrected": True}), {}, "corrected"),
         ("weak-chapter context used", dict(deepseek_outputs=[GOOD], ncert=[{"subject": "Biology", "class": 11, "chapter_name": "Transport in Plants", "content": "osmosis"}],
-                                           mistakes=[{"subject": "Biology", "chapter": "Transport in Plants"}]), dict(user_id="u1"), "personalised"),
+                                           mistakes=[{"subject": "Biology", "chapter": "Transport in Plants"}] * 2), dict(user_id="u1"), "personalised"),
     ]
     for label, harness_kw, chat_kw, reason in cases:
         with Harness(**harness_kw) as h:

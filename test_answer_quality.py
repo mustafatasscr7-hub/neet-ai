@@ -63,10 +63,11 @@ class FakeClient:
 
 class Harness:
     """Monkeypatches server's model stream, HTTP client and lookups; restores on exit."""
-    def __init__(self, model_outputs, ncert_results=None, mistake_rows=None):
+    def __init__(self, model_outputs, ncert_results=None, mistake_rows=None, mock_wrong_rows=None):
         self.model_outputs = list(model_outputs)
         self.ncert_results = ncert_results or []
         self.mistake_rows = mistake_rows or []
+        self.mock_wrong_rows = mock_wrong_rows or []
         self.systems = []
         self.spawned = []
         self.client = FakeClient()
@@ -75,7 +76,7 @@ class Harness:
         h = self
         self._saved = {n: getattr(server, n) for n in (
             "async_client", "_stream_with_peak_fallback", "check_max_usage_tier", "_spawn_background",
-            "search_ncert", "_diagram_exists_for", "fetch_student_mistake_rows")}
+            "search_ncert", "_diagram_exists_for", "fetch_student_mistake_rows", "fetch_mock_wrong_rows")}
 
         async def fake_stream(system, messages, user_id, ip, endpoint, billing_context=None, force_qwen=False, max_tokens=None):
             h.systems.append(system)
@@ -96,6 +97,9 @@ class Harness:
         async def fake_mistakes(user_id):
             return h.mistake_rows
 
+        async def fake_mock_wrong(user_id):
+            return h.mock_wrong_rows
+
         server.async_client = self.client
         server._stream_with_peak_fallback = fake_stream
         server.check_max_usage_tier = fake_tier
@@ -103,6 +107,7 @@ class Harness:
         server.search_ncert = fake_search
         server._diagram_exists_for = fake_diagram
         server.fetch_student_mistake_rows = fake_mistakes
+        server.fetch_mock_wrong_rows = fake_mock_wrong
         return self
 
     def __exit__(self, *exc):
@@ -239,29 +244,38 @@ def test_inert_pair_scoping():
 
 # ---------- 3. subject-scoped personalisation ----------
 
-BIO_MISTAKES = [{"subject": "Biology", "chapter": "Locomotion and Movement"},
-                {"subject": "Biology", "chapter": "Excretory Products and their Elimination"}]
-PHY_MISTAKE = [{"subject": "Physics", "chapter": "Laws of Motion"}]
+# Each qualifying chapter needs >=2 events (saved_questions + wrong mock answers combined) --
+# single-occurrence chapters below are deliberately below that bar unless paired with a mock miss.
+BIO_MISTAKES = [{"subject": "Biology", "chapter": "Locomotion and Movement"}] * 2 + \
+               [{"subject": "Biology", "chapter": "Excretory Products and their Elimination"}] * 2
+PHY_MISTAKE = [{"subject": "Physics", "chapter": "Laws of Motion"}] * 2
+PHY_MOCK_WRONG = [{"subject": "Physics", "chapter": "Laws of Motion"}]  # 1 event alone; combines with a saved mistake below
 PHYSICS_NCERT = [{"subject": "Physics", "class": 12, "chapter_name": "Current Electricity", "content": "V = IR", "similarity": 0.6}]
 
 
 def test_personalisation():
     print("\n[3] subject-scoped personalisation")
-    check("Biology chapters dropped for a Physics doubt", server.build_student_context(BIO_MISTAKES, {"Physics"}) == "")
-    ctx = server.build_student_context(BIO_MISTAKES + PHY_MISTAKE, {"Physics"})
+    check("Biology chapters dropped for a Physics doubt", server.build_student_context(BIO_MISTAKES, [], {"Physics"}) == "")
+    ctx = server.build_student_context(BIO_MISTAKES + PHY_MISTAKE, [], {"Physics"})
     check("same-subject chapter kept", "Laws of Motion" in ctx and "Locomotion" not in ctx, ctx)
-    check("no retrieval -> no weak-chapter context", server.build_student_context(BIO_MISTAKES + PHY_MISTAKE, set()) == "")
-    check("context forbids naming chapters off-topic", "Never mention these chapters" in ctx)
+    check("no retrieval -> no weak-chapter context", server.build_student_context(BIO_MISTAKES + PHY_MISTAKE, [], set()) == "")
+    check("context forbids naming chapters off-topic", "Do not mention" in ctx)
+    check("single event alone doesn't qualify", server.build_student_context([{"subject": "Physics", "chapter": "Laws of Motion"}], [], {"Physics"}) == "")
+    ctx2 = server.build_student_context([{"subject": "Physics", "chapter": "Laws of Motion"}], PHY_MOCK_WRONG, {"Physics"})
+    check("1 saved + 1 wrong mock answer in the same chapter together qualify", "Laws of Motion" in ctx2, ctx2)
 
     with Harness([GOOD_CHAT], ncert_results=PHYSICS_NCERT, mistake_rows=BIO_MISTAKES) as h:
         asyncio.run(drain(server.stream_response("Ohms law", user_id="u1", personalize=True)))
         system = h.systems[0]
         check("Physics doubt prompt has no Biology chapters", "Locomotion" not in system and "Excretory" not in system)
         check("no mock-test average in prompt", "mock test" not in system.lower())
-        check("no STUDENT CONTEXT block at all", "STUDENT CONTEXT" not in system)
+        check("no weak-chapter hint at all", "often struggled with these chapters" not in system)
     with Harness([GOOD_CHAT], ncert_results=PHYSICS_NCERT, mistake_rows=BIO_MISTAKES + PHY_MISTAKE) as h:
         asyncio.run(drain(server.stream_response("Ohms law", user_id="u1", personalize=True)))
         check("Physics weak chapter still reaches a Physics doubt", "Laws of Motion" in h.systems[0])
+    with Harness([GOOD_CHAT], ncert_results=PHYSICS_NCERT, mistake_rows=[{"subject": "Physics", "chapter": "Laws of Motion"}], mock_wrong_rows=PHY_MOCK_WRONG) as h:
+        asyncio.run(drain(server.stream_response("Ohms law", user_id="u1", personalize=True)))
+        check("wrong mock answers combine with saved mistakes to qualify a chapter", "Laws of Motion" in h.systems[0])
 
 
 if __name__ == "__main__":
