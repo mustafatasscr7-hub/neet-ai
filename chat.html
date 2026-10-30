@@ -239,6 +239,12 @@
       --upgrade-ring: rgba(0,0,0,0.5);
     }
     @media (max-width: 620px) { .upgrade-btn { padding: 0 13px; } }
+    /* Compact "185d left" form of the countdown pill (#countdownSuffixCompact) only ever
+       replaces the full "NEET 2027 — 185 days left" text on narrow screens for Free-plan users
+       (see .countdown-compact-capable toggle in applyProUIState) -- hidden by default here so
+       desktop and Pro/Max mobile both keep rendering the full #countdownPrefix + #countdownSuffixFull
+       text untouched. */
+    #countdownSuffixCompact { display: none; }
     @media (prefers-reduced-motion: reduce) {
       .upgrade-btn, .upgrade-btn:active { transform: none; }
     }
@@ -1726,6 +1732,15 @@
 
       #countdownWrapper > div { padding: 4px 9px !important; }
 
+      /* Free plan's header row also carries #headerUpgradeBtn, which crowds this breakpoint --
+         swap the countdown pill to its compact "185d left" form (dropping the "NEET 2027 —"
+         prefix and shortening "days left") so the whole row still fits on one line. Pro/Max users
+         never get .countdown-compact-capable (set in applyProUIState), so their pill keeps the
+         full text unchanged at every width. */
+      .countdown-compact-capable #countdownPrefix,
+      .countdown-compact-capable #countdownSuffixFull { display: none; }
+      .countdown-compact-capable #countdownSuffixCompact { display: inline; }
+
       /* #countdownTooltip is anchored right:0 off the pill in the markup, which runs it past
          the right edge of a 375px screen. At phone width, center it under the pill instead and
          cap its width so it always stays fully on-screen regardless of where the pill lands. */
@@ -1890,7 +1905,7 @@
           <svg id="todoLockIcon" class="todo-btn-lock" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:none;"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
         </button>
 <div style="position:relative;" id="countdownWrapper">
-          <div style="box-sizing:border-box;min-height:30px;display:flex;align-items:center;font-size:12px;font-weight:600;color:#4f8ef7;background:#4f8ef710;border:1px solid #4f8ef730;padding:4px 12px;border-radius:15px;cursor:default;"><span>NEET <span data-i18n-num>2027</span> — <span id="countdownDays">--</span> <span data-i18n="chat.daysLeft">days left</span></span></div>
+          <div style="box-sizing:border-box;min-height:30px;display:flex;align-items:center;font-size:12px;font-weight:600;color:#4f8ef7;background:#4f8ef710;border:1px solid #4f8ef730;padding:4px 12px;border-radius:15px;cursor:default;"><span><span id="countdownPrefix">NEET <span data-i18n-num>2027</span> — </span><span id="countdownDays">--</span><span id="countdownSuffixFull" data-i18n="chat.daysLeft"> days left</span><span id="countdownSuffixCompact" data-i18n="chat.daysLeftShort">d left</span></span></div>
           <div id="countdownTooltip" style="display:none;position:absolute;top:36px;right:0;background:#111;border:1px solid #4f8ef730;border-radius:10px;padding:16px 20px;min-width:200px;z-index:999;box-shadow:0 8px 24px rgba(0,0,0,0.6);">
             <div style="font-size:10px;color:#4f8ef7;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:10px;" data-i18n="chat.timeUntilNeet">Time until NEET 2027</div>
             <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;text-align:center;">
@@ -7610,6 +7625,11 @@ function plainTextFromMarkdown(text) {
       const pro = isPro();
       const headerBtn = document.getElementById('headerUpgradeBtn');
       if (headerBtn) headerBtn.style.display = pro ? 'none' : '';
+      // Only Free plan carries #headerUpgradeBtn alongside the countdown pill -- this class is
+      // what lets the mobile breakpoint swap that pill to its compact "185d left" form (see its
+      // @media rule) without touching Pro/Max, who never get the class.
+      const countdownWrapper = document.getElementById('countdownWrapper');
+      if (countdownWrapper) countdownWrapper.classList.toggle('countdown-compact-capable', !pro);
       const todoLockIcon = document.getElementById('todoLockIcon');
       if (todoLockIcon) todoLockIcon.style.display = pro ? 'none' : '';
       const planLabelEl = document.querySelector('.profile-plan');
