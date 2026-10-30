@@ -3537,6 +3537,40 @@ async def fetch_mock_wrong_rows(user_id: str) -> list:
     except Exception:
         return []
 
+def compute_weak_chapters(mistake_rows: list, mock_wrong_rows: list) -> list:
+    """The single source of truth for which chapters count as a weak spot -- combines
+    saved_questions rows (mistake_rows) and wrong mock-test-answer rows from the last 60 days
+    (mock_wrong_rows, see fetch_mock_wrong_rows), each occurrence counting as one event for its
+    (subject, chapter). A chapter needs at least 2 combined events before it qualifies (a single
+    saved question or one wrong mock answer is too thin a signal to act on). Shared by
+    build_student_context (which further restricts the result to the subject(s) retrieved for one
+    answer) and GET /me/personalisation (which shows the student everything that would ever be
+    used, across all subjects) so the two can never disagree on what counts.
+    Returns qualifying {subject, chapter, saved_count, mock_wrong_count, total} dicts, sorted by
+    total events descending."""
+    counts = {}
+    for m in (mistake_rows or []):
+        chapter = (m.get("chapter") or "").strip()
+        subject = (m.get("subject") or "").strip()
+        if not chapter or not subject:
+            continue
+        entry = counts.setdefault((subject.lower(), chapter), {"subject": subject, "chapter": chapter, "saved_count": 0, "mock_wrong_count": 0})
+        entry["saved_count"] += 1
+    for m in (mock_wrong_rows or []):
+        chapter = (m.get("chapter") or "").strip()
+        subject = (m.get("subject") or "").strip()
+        if not chapter or not subject:
+            continue
+        entry = counts.setdefault((subject.lower(), chapter), {"subject": subject, "chapter": chapter, "saved_count": 0, "mock_wrong_count": 0})
+        entry["mock_wrong_count"] += 1
+    qualifying = [
+        {**entry, "total": entry["saved_count"] + entry["mock_wrong_count"]}
+        for entry in counts.values()
+        if entry["saved_count"] + entry["mock_wrong_count"] >= 2
+    ]
+    qualifying.sort(key=lambda x: -x["total"])
+    return qualifying
+
 def build_student_context(mistake_rows: list, mock_wrong_rows: list, subjects: set) -> str:
     """Weak-chapter context for ONE answer, restricted to chapters in the same subject(s) as the
     NCERT content actually retrieved for this doubt. Previously the top-3 chapters were taken
@@ -3546,33 +3580,51 @@ def build_student_context(mistake_rows: list, mock_wrong_rows: list, subjects: s
     Movement and Excretory Products...") in 3/8 runs with a real student's context. No retrieval
     (subject unknown) means no weak-chapter context at all, rather than guessing.
 
-    Combines two event sources -- saved_questions (mistake_rows) and wrong mock-test answers from
-    the last 60 days (mock_wrong_rows, see fetch_mock_wrong_rows) -- each occurrence counting as
-    one event for its chapter. A chapter needs at least 2 events before it's trusted as a real
-    weak spot (a single saved question or one wrong mock answer is too thin a signal to act on).
-
     The mock-test average line that used to sit here was removed on purpose: a whole-paper score
     says nothing about a single doubt, and a real "2/720" average (abandoned tests) produced
     invented praise ("You've done well in your mock tests") in live testing."""
     if not subjects:
         return ""
     wanted = {s.strip().lower() for s in subjects if s}
-    chapter_counts = {}
-    for m in (mistake_rows or []) + (mock_wrong_rows or []):
-        ch = (m.get("chapter") or "").strip()
-        if ch and (m.get("subject") or "").strip().lower() in wanted:
-            chapter_counts[ch] = chapter_counts.get(ch, 0) + 1
-    qualifying = {ch: c for ch, c in chapter_counts.items() if c >= 2}
-    if not qualifying:
+    weak = [c for c in compute_weak_chapters(mistake_rows, mock_wrong_rows) if c["subject"].lower() in wanted][:3]
+    if not weak:
         return ""
-    weak = sorted(qualifying.items(), key=lambda x: -x[1])[:3]
-    weak_str = ", ".join(ch for ch, _count in weak)
+    weak_str = ", ".join(c["chapter"] for c in weak)
     return (
         f"\n\nThe student has often struggled with these chapters: {weak_str}. Use this only to "
         "choose examples and the depth of explanation when it genuinely helps. Do not mention "
         "that you know their weaknesses, do not repeat the list, and do not change the answer's "
         "facts."
     )
+
+@app.get("/me/personalisation")
+async def get_personalisation(_: None = Depends(rate_limit(30, 60, by="account")), verified_user_id: str = Depends(_get_verified_user_id)):
+    """Read-only view of exactly what build_student_context would use for this student right now
+    (via the shared compute_weak_chapters helper), so the Settings panel can never show something
+    different from what the AI actually gets. No model call, no writes, no cache -- answers are
+    cheap to recompute and this is explicitly a "what would be used" view, not a performance path.
+    Returns only subject/chapter names and event counts: no question text, answer text, or names."""
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    mistake_rows, mock_wrong_rows = await asyncio.gather(
+        fetch_student_mistake_rows(verified_user_id),
+        fetch_mock_wrong_rows(verified_user_id),
+    )
+    by_subject = {}
+    for c in compute_weak_chapters(mistake_rows, mock_wrong_rows):
+        by_subject.setdefault(c["subject"], []).append(c)
+    return {
+        "subjects": [
+            {
+                "subject": subject,
+                "chapters": [
+                    {"chapter": c["chapter"], "saved_count": c["saved_count"], "mock_wrong_count": c["mock_wrong_count"], "total": c["total"]}
+                    for c in chapters[:3]
+                ],
+            }
+            for subject, chapters in sorted(by_subject.items())
+        ]
+    }
 
 async def _empty_list():
     return []

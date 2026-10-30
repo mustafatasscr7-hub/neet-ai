@@ -157,6 +157,14 @@ async function showSettingsSection(section, clickedEl) {
             <span class="toggle-track"><span class="toggle-thumb"></span></span>
           </label>
         </div>
+        <div style="border-bottom:1px solid #1e1e1e;">
+          <button type="button" id="personalisationViewBtn" aria-expanded="false" aria-controls="personalisationViewPanel" onclick="togglePersonalisationView(this)"
+            style="display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;background:transparent;border:none;color:#888;cursor:pointer;padding:12px 0;font-family:Inter,sans-serif;font-size:12px;font-weight:600;text-align:left;">
+            <span data-i18n="chat.personalisationViewTitle">What your AI tutor uses</span>
+            <svg class="personalisation-view-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="transition:transform 0.15s;flex-shrink:0;"><polyline points="6 9 12 15 18 9"/></svg>
+          </button>
+          <div id="personalisationViewPanel" style="display:none;padding-bottom:16px;font-size:13px;color:#ccc;line-height:1.5;"></div>
+        </div>
         ` : ''}
       </div>
 
@@ -337,6 +345,85 @@ function setAnswerStyle(style) {
 
 function setPersonalize(enabled) {
   localStorage.setItem('personalize', enabled ? 'true' : 'false');
+}
+
+// ---------- "What your AI tutor uses" (read-only view of GET /me/personalisation) ----------
+function togglePersonalisationView(btn) {
+  const panel = document.getElementById('personalisationViewPanel');
+  if (!panel) return;
+  const next = btn.getAttribute('aria-expanded') !== 'true';
+  btn.setAttribute('aria-expanded', String(next));
+  panel.style.display = next ? 'block' : 'none';
+  const chevron = btn.querySelector('.personalisation-view-chevron');
+  if (chevron) chevron.style.transform = next ? 'rotate(180deg)' : 'rotate(0deg)';
+  if (next && !panel.dataset.loaded) {
+    panel.dataset.loaded = '1';
+    renderPersonalisationView(panel);
+  }
+}
+
+function personalisationLinksHtml() {
+  return `
+    <div style="margin-top:12px;display:flex;flex-wrap:wrap;gap:8px 16px;">
+      <a href="./savedquestions.html" style="color:#4f8ef7;font-size:12px;text-decoration:none;" data-i18n="chat.personalisationManageSaved">Manage saved questions</a>
+      <a href="./scoreboard.html" style="color:#4f8ef7;font-size:12px;text-decoration:none;" data-i18n="chat.personalisationMockResults">Mock test results</a>
+    </div>
+    <div style="margin-top:12px;color:#555;font-size:12px;" data-i18n="chat.personalisationToggleHint">Turn this off anytime using the toggle above.</div>
+  `;
+}
+
+function personalisationCountsLabel(c) {
+  const saved = t('chat', 'personalisationSavedCount').replace('{n}', localizeNum(c.saved_count));
+  const mockWrong = t('chat', 'personalisationMockWrongCount').replace('{n}', localizeNum(c.mock_wrong_count));
+  return `${saved}, ${mockWrong}`;
+}
+
+async function renderPersonalisationView(panel) {
+  if (localStorage.getItem('personalize') === 'false') {
+    panel.innerHTML = `<div data-i18n="chat.personalisationOff">Personalisation is off. Nothing is used.</div>`;
+    applyTranslations();
+    return;
+  }
+  panel.innerHTML = `<div style="color:#555;" data-i18n="chat.personalisationLoading">Loading…</div>`;
+  applyTranslations();
+  try {
+    const { data: { session } } = await client.auth.getSession();
+    if (!session) throw new Error('not logged in');
+    const res = await fetch(`${API_BASE}/me/personalisation`, {
+      headers: { 'Authorization': `Bearer ${session.access_token}` }
+    });
+    if (!res.ok) throw new Error('personalisation fetch failed');
+    const data = await res.json();
+    if (document.getElementById('personalisationViewPanel') !== panel) return; // settings tab changed mid-fetch
+    const subjects = (data.subjects || []).filter(s => (s.chapters || []).length > 0);
+    if (subjects.length === 0) {
+      panel.innerHTML = `
+        <div style="margin-bottom:12px;" data-i18n="chat.personalisationIntro">Your AI tutor uses the chapters you have saved or got wrong most often, so it can explain them more carefully. It never tells you it knows.</div>
+        <div style="color:#555;" data-i18n="chat.personalisationEmpty">Nothing yet. A chapter appears after you save 2 questions or get 2 answers wrong in mock tests.</div>
+        ${personalisationLinksHtml()}
+      `;
+    } else {
+      panel.innerHTML = `
+        <div style="margin-bottom:12px;" data-i18n="chat.personalisationIntro">Your AI tutor uses the chapters you have saved or got wrong most often, so it can explain them more carefully. It never tells you it knows.</div>
+        ${subjects.map(s => `
+          <div style="margin-bottom:10px;">
+            <div style="font-size:12px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px;">${escapeHtml(s.subject)}</div>
+            ${s.chapters.map(c => `
+              <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding:4px 0;">
+                <span style="color:#ececec;">${escapeHtml(c.chapter)}</span>
+                <span style="font-size:12px;color:#555;flex-shrink:0;">${personalisationCountsLabel(c)}</span>
+              </div>
+            `).join('')}
+          </div>
+        `).join('')}
+        ${personalisationLinksHtml()}
+      `;
+    }
+    applyTranslations();
+  } catch (e) {
+    panel.innerHTML = `<div style="color:#555;" data-i18n="chat.personalisationError">Couldn't load this right now.</div>`;
+    applyTranslations();
+  }
 }
 
 function setFontSize(size) {
