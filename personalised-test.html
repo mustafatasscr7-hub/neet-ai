@@ -289,6 +289,12 @@
     @media (max-width: 640px) {
       .subject-grid { grid-template-columns: 1fr; }
       .custom-panel { padding: clamp(16px, 6vw, 24px); }
+      .tab-btn { padding: clamp(11px, 3vw, 13px) 20px; }
+      .subject-pill { padding: clamp(11px, 3vw, 13px) 16px; }
+      /* "Back to NEET-AI": inline-styled padding:0 in the markup needs !important to override.
+         Stays visually the same small text, just a comfortably tappable hit area around it. */
+      #setupScreen .header button[data-i18n="personalisedTest.backToNeetAi"],
+      #resultsScreen .header button[data-i18n="common.backToNeetAi"] { padding: 10px 0 !important; }
     }
 
     @media (max-width: 768px) {

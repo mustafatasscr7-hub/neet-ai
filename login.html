@@ -7,6 +7,7 @@
   <link rel="icon" href="assets/favicon.ico" sizes="any" />
   <link rel="icon" type="image/svg+xml" href="assets/logo.svg" />
   <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
   <link rel="stylesheet" href="./scrollbar.css"/>
   <style>
@@ -236,6 +237,7 @@
     @keyframes pageFadeIn { from { opacity: 0; } to { opacity: 1; } }
 
     @media (max-width: 480px) {
+      .lang-toggle { min-height: 40px !important; padding: 10px 14px !important; }
       body { padding: clamp(12px, 4vw, 16px); height: auto; min-height: 100vh; }
       .login-box { padding: clamp(24px, 8vw, 32px) clamp(16px, 5vw, 24px); gap: clamp(14px, 4vw, 18px); }
       .google-btn, .phone-btn, .submit-btn { padding: clamp(12px, 3.5vw, 14px) clamp(16px, 5vw, 20px); font-size: clamp(14px, 3.8vw, 15px); }
