@@ -26,6 +26,9 @@ const settingsBootstrapPromise = (async () => {
     if (session) {
       const { data: planRow } = await client.from('user_plan').select('plan').eq('user_id', session.user.id).single();
       userPlan = (planRow && planRow.plan) || 'free';
+      // Fire-and-forget: openSettings() awaits settingsBootstrapPromise itself and must not wait
+      // on a network round trip just to open the modal with its already-correct local values.
+      syncSettingsFromServer(session);
     }
   } catch (e) { /* leave isLoggedIn/userPlan at their guest defaults */ }
 })();
@@ -341,10 +344,78 @@ function setTheme(theme) {
 
 function setAnswerStyle(style) {
   localStorage.setItem('answerStyle', style);
+  pushSettingToServer('answerStyle', style);
 }
 
 function setPersonalize(enabled) {
   localStorage.setItem('personalize', enabled ? 'true' : 'false');
+  pushSettingToServer('personalize', enabled);
+}
+
+// ---------- Settings cross-device sync (GET/PUT /me/settings) ----------
+// localStorage stays the fast local copy and the only source of truth whenever the server is
+// unreachable or not yet migrated (available:false) -- this block only ever upgrades it, never
+// blocks on it, and never shows an error for a failed sync. See user_settings.sql.
+const SETTINGS_SYNC_KEYS = { personalize: 'personalize', answerStyle: 'answer_style' };
+const _settingsSyncTimers = {};
+
+function _applySyncedSetting(localKey, value) {
+  if (localKey === 'personalize') {
+    localStorage.setItem('personalize', value ? 'true' : 'false');
+    const toggle = document.getElementById('personalizeToggle');
+    if (toggle) toggle.checked = value;
+  } else if (localKey === 'answerStyle') {
+    localStorage.setItem('answerStyle', value);
+    refreshSettingsDropdown('answerStyle');
+  }
+}
+
+async function syncSettingsFromServer(session) {
+  if (!session) return;
+  try {
+    const res = await fetch(`${API_BASE}/me/settings`, {
+      headers: { 'Authorization': `Bearer ${session.access_token}` }
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data.available === false) return;
+    if (data.personalize !== null && data.personalize !== undefined) {
+      _applySyncedSetting('personalize', data.personalize);
+    } else if (localStorage.getItem('personalize') !== null) {
+      _putSettingsOnce({ personalize: localStorage.getItem('personalize') !== 'false' });
+    }
+    if (data.answer_style !== null && data.answer_style !== undefined) {
+      _applySyncedSetting('answerStyle', data.answer_style);
+    } else if (localStorage.getItem('answerStyle')) {
+      _putSettingsOnce({ answer_style: localStorage.getItem('answerStyle') });
+    }
+  } catch (e) { /* stay on the local copy, exactly like today */ }
+}
+
+async function _putSettingsOnce(body) {
+  try {
+    const { data: { session } } = await client.auth.getSession();
+    if (!session) return false;
+    const res = await fetch(`${API_BASE}/me/settings`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
+      body: JSON.stringify(body)
+    });
+    return res.ok;
+  } catch (e) {
+    return false;
+  }
+}
+
+function pushSettingToServer(localKey, value) {
+  if (!isLoggedIn) return;
+  const serverKey = SETTINGS_SYNC_KEYS[localKey];
+  clearTimeout(_settingsSyncTimers[localKey]);
+  _settingsSyncTimers[localKey] = setTimeout(() => {
+    _putSettingsOnce({ [serverKey]: value }).then(ok => {
+      if (!ok) setTimeout(() => { _putSettingsOnce({ [serverKey]: value }); }, 5000);
+    });
+  }, 500);
 }
 
 // ---------- "What your AI tutor uses" (read-only view of GET /me/personalisation) ----------

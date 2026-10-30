@@ -3626,6 +3626,70 @@ async def get_personalisation(_: None = Depends(rate_limit(30, 60, by="account")
         ]
     }
 
+class MeSettingsUpdateRequest(BaseModel):
+    personalize: Optional[bool] = None
+    answer_style: Optional[str] = None
+
+@app.get("/me/settings")
+async def get_me_settings(_: None = Depends(rate_limit(30, 60, by="account")), verified_user_id: str = Depends(_get_verified_user_id)):
+    """Cross-device copy of the Personalize toggle and Answer Style, read by settings.js/
+    chat.html's sync code on page load. {"available": false} (never a 500) before
+    user_settings.sql is applied, or on any other failure -- same convention as the admin
+    dashboard's *_available flags. Never logs the actual values."""
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/user_settings", headers=ADMIN_HEADERS,
+            params={"user_id": f"eq.{verified_user_id}", "select": "personalize,answer_style", "limit": 1}
+        )
+        if resp.status_code >= 400:
+            return {"available": False}
+        rows = resp.json()
+        row = rows[0] if rows else {}
+        return {"personalize": row.get("personalize"), "answer_style": row.get("answer_style")}
+    except Exception as e:
+        print(f"ME SETTINGS GET ERROR (user_id={verified_user_id}): {type(e).__name__}", flush=True)
+        return {"available": False}
+
+@app.put("/me/settings")
+async def update_me_settings(body: MeSettingsUpdateRequest, _: None = Depends(rate_limit(30, 60, by="account")), verified_user_id: str = Depends(_get_verified_user_id)):
+    """Partial upsert of the same two settings -- only the fields actually sent are validated and
+    written (model_fields_set, same distinction todos_update makes). answer_style is checked
+    against the same _VALID_ANSWER_STYLES the rest of the backend normalises against, and anything
+    else is a 400, not a silent fallback to "detailed". {"available": false} on a missing table or
+    any other failure, never a 500."""
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    update_fields = {}
+    if "personalize" in body.model_fields_set:
+        if body.personalize is None:
+            raise HTTPException(status_code=400, detail="personalize must be a boolean")
+        update_fields["personalize"] = bool(body.personalize)
+    if "answer_style" in body.model_fields_set:
+        if body.answer_style not in _VALID_ANSWER_STYLES:
+            raise HTTPException(status_code=400, detail="answer_style must be concise, medium or detailed")
+        update_fields["answer_style"] = body.answer_style
+    if not update_fields:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    try:
+        resp = await async_client.post(
+            f"{SUPABASE_URL}/rest/v1/user_settings",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation"},
+            params={"on_conflict": "user_id"},
+            json={"user_id": verified_user_id, **update_fields, "updated_at": datetime.now(timezone.utc).isoformat()}
+        )
+        if resp.status_code >= 400:
+            return {"available": False}
+        saved = resp.json()
+        row = saved[0] if saved else {}
+        return {"personalize": row.get("personalize"), "answer_style": row.get("answer_style")}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"ME SETTINGS PUT ERROR (user_id={verified_user_id}): {type(e).__name__}", flush=True)
+        return {"available": False}
+
 async def _empty_list():
     return []
 
@@ -10499,7 +10563,7 @@ class AccountDeleteRequest(BaseModel):
 ACCOUNT_DELETE_TABLES = [
     "chats", "saved_questions", "mock_results", "user_streaks", "response_feedback",
     "active_sessions", "media_doubt_log", "usage_log", "max_usage_alerts", "bonus_tokens",
-    "user_plan", "user_referral_codes", "todo_tasks",
+    "user_plan", "user_referral_codes", "todo_tasks", "user_settings",
 ]
 # Kept with the student's id nulled out: content reports (quality signal for questions/diagrams),
 # cost telemetry, and both sides of a referral -- so the OTHER student's referral history and the

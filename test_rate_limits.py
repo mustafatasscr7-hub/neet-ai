@@ -166,6 +166,7 @@ def test_route_table():
         ("POST", "/admin/scan-pdf/estimate"): (20, 300, "ip"), ("POST", "/admin/mock-test-scan"): (5, 300, "ip"),
         ("POST", "/chat-alternate-method"): (20, 60, "account"),
         ("GET", "/guest-usage-status"): (30, 60, "device"),
+        ("GET", "/me/settings"): (30, 60, "account"), ("PUT", "/me/settings"): (30, 60, "account"),
     }
     found = {}
     for route in server.app.routes:
