@@ -1416,6 +1416,17 @@
     /* Stands in for a sent image whose file can't be loaded any more (setChatUploadImage). */
     .chat-img-unavailable { width: 160px; height: 110px; box-sizing: border-box; display: flex; align-items: center; justify-content: center; text-align: center; padding: 8px; border: 1px solid #2a2a3a; border-radius: 12px; color: #999; font-size: 12px; }
     body.light-mode .chat-img-unavailable { border-color: #e2e2e8 !important; color: #777 !important; }
+    /* Stands in for a user message sent with a PDF attachment -- addMessageRow only ever
+       appended the images/quote UI for a user turn, never anything for msgObj.pdf, so a
+       caption-less PDF send rendered as an empty gap (see addMessageRow's user branch). Mirrors
+       .chat-img-unavailable's box language rather than the pre-send compose-bar chip
+       (renderAttachmentPreview), which uses emoji + inline hex and isn't meant to persist in
+       history. */
+    .chat-pdf-chip { display: inline-flex; align-items: center; gap: 8px; width: fit-content; max-width: 220px; border: 1px solid #2a2a3a; border-radius: 12px; padding: 8px 12px; margin-bottom: 6px; color: #ccc; font-size: 12px; }
+    .chat-pdf-chip svg { width: 16px; height: 16px; flex-shrink: 0; color: #999; }
+    .chat-pdf-chip .chat-pdf-chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    body.light-mode .chat-pdf-chip { border-color: #e2e2e8 !important; color: #444 !important; }
+    body.light-mode .chat-pdf-chip svg { color: #777 !important; }
     .quoted-context-box { position: relative; width: fit-content; max-width: 220px; max-height: 92px; overflow: hidden; background: rgba(255,255,255,0.06); border-left: 2px solid #8a8a8a; border-radius: 10px; padding: 8px 22px 8px 10px; font-size: 12px; line-height: 1.45; color: #999; margin-bottom: 6px; min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
     .quoted-context-box .quote-text { white-space: normal; }
     .quoted-context-box .quote-dismiss { position: absolute; top: 4px; right: 5px; background: transparent; border: none; color: #666; cursor: pointer; font-size: 12px; line-height: 1; padding: 2px; opacity: 0.7; }
@@ -2172,6 +2183,13 @@
     });
 
     let isStreaming = false;
+    // Set the instant sendMessage() is entered for a real send (text/image/PDF), BEFORE any of
+    // its image/PDF upload awaits -- isStreaming alone doesn't start covering a double
+    // click/Enter until streamAIResponse actually begins, which left the whole upload window in
+    // between with no guard at all (a second send landed as a real second /chat call + duplicate
+    // user message). Reset in sendMessage's own finally, so it always clears even if an upload
+    // throws or a slash command returns early.
+    let sendInProgress = false;
     let streamController = null;
     let userScrolled = false;
     let conversations = [];
@@ -3129,12 +3147,26 @@ let selectedImages = [];
     // an inline pill. Escapes first so any literal HTML in the surrounding text stays safe, then
     // substitutes the (now-escaped) $...$ segments with real KaTeX.
     function renderInlineMathText(text) {
-      let html = escapeHtml(text);
-      html = html.replace(/\$([^$\n]+)\$/g, function(_, math) {
+      // Splits math out BEFORE escaping, same as parseWithMath/parseUserMathText below --
+      // escaping the whole string first (as this used to) turns a literal "<", ">" or "&" inside
+      // a $...$ pair into "&lt;"/"&gt;"/"&amp;" by the time it reaches KaTeX, which KaTeX then
+      // can't parse as TeX at all (a red katex-error, e.g. "$\lambda > 500$"). Only the
+      // surrounding plain-text segments get escaped; math goes to KaTeX raw.
+      const raw = text == null ? '' : String(text);
+      const segRe = /\$([^$\n]+)\$/g;
+      let html = '';
+      let lastIndex = 0;
+      let m;
+      while ((m = segRe.exec(raw)) !== null) {
+        if (m.index > lastIndex) html += escapeHtml(raw.slice(lastIndex, m.index));
         try {
-          return katex.renderToString(addFracSpacing(math.trim()), { displayMode: false, throwOnError: false });
-        } catch(e) { return _; }
-      });
+          html += katex.renderToString(addFracSpacing(m[1].trim()), { displayMode: false, throwOnError: false });
+        } catch (e) {
+          html += escapeHtml(m[0]);
+        }
+        lastIndex = m.index + m[0].length;
+      }
+      if (lastIndex < raw.length) html += escapeHtml(raw.slice(lastIndex));
       return html;
     }
 
@@ -5426,6 +5458,22 @@ let selectedImages = [];
           });
           contentWrapper.appendChild(imgWrap);
         }
+        // PDF attachment chip -- msgObj.pdfName is set synchronously at send time (before the
+        // real Storage upload resolves, same idea as the images.data seeding above) so a fresh
+        // PDF-only send shows this immediately; msgObj.pdf (the persisted ref) is what survives a
+        // reload, falling back to a generic label since the original filename was never stored
+        // server-side for an attachment sent before this fix existed.
+        if (msgObj && (msgObj.pdf || msgObj.pdfName)) {
+          const chip = document.createElement('div');
+          chip.className = 'chat-pdf-chip';
+          chip.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></svg>';
+          const nameSpan = document.createElement('span');
+          nameSpan.className = 'chat-pdf-chip-name';
+          nameSpan.textContent = msgObj.pdfName || t('chat', 'pdfAttachment');
+          if (!msgObj.pdfName) nameSpan.setAttribute('data-i18n', 'chat.pdfAttachment');
+          chip.appendChild(nameSpan);
+          contentWrapper.appendChild(chip);
+        }
         // A quoted "Ask about this" selection used to vanish the moment the message sent --
         // it only ever lived in the pre-send preview box (clearQuotedContext() wipes it right
         // after streamAIResponse fires), so the permanent chat history showed just the
@@ -5476,7 +5524,11 @@ function plainTextFromMarkdown(text) {
       const row = btn.closest('.message-row');
       const msgIndex = parseInt(row.dataset.msgIndex, 10);
       const msg = !isNaN(msgIndex) ? currentConversation[msgIndex] : undefined;
-      const rawText = plainTextFromMarkdown(msg ? msg.text : btn.closest('.message-content').querySelector('.message-bubble').innerText);
+      // A PDF/image-only message with no caption has no .message-bubble in the DOM at all (see
+      // addMessageRow) -- the old fallback's unguarded querySelector(...).innerText would throw
+      // if this ever ran without a matching currentConversation entry, instead of just copying
+      // nothing.
+      const rawText = plainTextFromMarkdown(msg ? (msg.text || '') : (btn.closest('.message-content').querySelector('.message-bubble')?.innerText || ''));
       navigator.clipboard.writeText(rawText).then(() => {
         const orig = btn.innerHTML;
         btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="#4ade80" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>';
@@ -5490,9 +5542,14 @@ function plainTextFromMarkdown(text) {
       const msg = !isNaN(msgIndex) ? currentConversation[msgIndex] : undefined;
       const text = plainTextFromMarkdown(msg ? msg.text : btn.closest('.message-content').querySelector('.message-bubble').innerText);
       if (navigator.share) {
-        navigator.share({ title: 'NEET-AI Answer', text: text });
+        // navigator.share() rejects (AbortError) when the student just cancels the native share
+        // sheet -- that's not an error, so it's swallowed silently; anything else is logged but
+        // still doesn't surface to the student (no toast/alert for a share they didn't finish).
+        navigator.share({ title: 'NEET-AI Answer', text: text }).catch(e => {
+          if (e && e.name !== 'AbortError') console.error('Share failed', e);
+        });
       } else {
-        navigator.clipboard.writeText(text).then(() => alert('Answer copied to clipboard!'));
+        navigator.clipboard.writeText(text).then(() => alert(t('chat', 'answerCopied')));
       }
     }
 
@@ -6077,6 +6134,9 @@ function plainTextFromMarkdown(text) {
         }
         if (originalUserMsg && originalUserMsg.pdf) {
           newMsgObj.pdf = originalUserMsg.pdf;
+        }
+        if (originalUserMsg && originalUserMsg.pdfName) {
+          newMsgObj.pdfName = originalUserMsg.pdfName;
         }
         if (images.length > 0 || pdf) {
           rawAttachmentCache.set(newMsgObj, { images, pdf });
@@ -6835,18 +6895,34 @@ function plainTextFromMarkdown(text) {
     }
 
     async function _performDeleteConversation(id) {
-      document.getElementById('conv-' + id)?.remove();
-      document.getElementById('menu-' + id)?.remove();
-      conversations = conversations.filter(c => c.id !== id);
+      // Resolve the real database id and delete it FIRST, before touching the UI or
+      // `conversations` -- the old order filtered `id` out of `conversations` up front, so this
+      // same lookup below always found nothing and fell back to `id` itself (a client timestamp
+      // for an unsynced chat, not the chats-table uuid), silently deleting zero rows and leaving
+      // the chat to reappear on refresh. The row/array are now only removed once the delete has
+      // actually succeeded (or there's nothing to delete, e.g. a guest chat).
+      const conv = conversations.find(c => c.id === id || c.supabaseId === id);
+      const supabaseId = conv ? (conv.supabaseId || conv.id) : id;
       const { data: { session } } = await client.auth.getSession();
-      if (session) {
-        const conv = conversations.find(c => c.id === id || c.supabaseId === id);
-        const supabaseId = conv ? conv.supabaseId : id;
-        if (supabaseId) {
-          await client.from('chats').delete().eq('id', supabaseId).eq('user_id', session.user.id);
+      if (session && supabaseId) {
+        const { error } = await client.from('chats').delete().eq('id', supabaseId).eq('user_id', session.user.id);
+        if (error) {
+          console.error('Failed to delete chat', error);
+          alert(t('chat', 'deleteChatFailed'));
+          return;
         }
       }
-      showWelcome();
+      document.getElementById('conv-' + id)?.remove();
+      document.getElementById('menu-' + id)?.remove();
+      conversations = conversations.filter(c => c !== conv);
+      // Only reset/navigate away when the deleted chat is the one actually open -- deleting a
+      // different sidebar chat shouldn't blow away whatever the student is currently looking at.
+      const wasOpenChat = conv ? (currentId === conv.id || currentId === conv.supabaseId) : (currentId === id);
+      if (wasOpenChat) {
+        currentConversation = [];
+        currentId = null;
+        showWelcome();
+      }
     }
 
     // Updates the hover-to-pin icon's visual state on an existing .history-item -- called both
@@ -7790,12 +7866,15 @@ function plainTextFromMarkdown(text) {
  }
 
  async function sendMessage() {
-      if (isStreaming) return;
+      if (isStreaming || sendInProgress) return;
       let text = input.value.trim();
       const activeQuotes = quotedContexts.slice();
       if (!text && activeQuotes.length > 0) text = 'Please explain this.';
       if (!text && selectedImages.length === 0 && !selectedPDF) { flashEmptySendCue(); return; }
 
+      sendInProgress = true;
+      sendBtn.disabled = true;
+      try {
       // Slash commands -- recognized here regardless of whether they arrived via the dropdown
       // menu (selectSlashCommand) or the student just typed the whole thing and hit Enter.
       if (/^\/mocktest\s*$/i.test(text)) {
@@ -7854,6 +7933,12 @@ function plainTextFromMarkdown(text) {
       // (for persistence) doesn't change what's already on screen.
       if (selectedImages.length > 0) {
         userMsgObj.images = selectedImages.map(img => img.data);
+      }
+      // Same immediate-render idea as images.data above, for the PDF chip (see addMessageRow) --
+      // the real Storage ref isn't resolved yet at this point, but the filename is already known
+      // and persists verbatim into chats.messages, so it also survives a reload.
+      if (selectedPDF) {
+        userMsgObj.pdfName = selectedPDFName || undefined;
       }
       addMessageRow('user', text, undefined, userIndex, undefined, userMsgObj);
       input.value = '';
@@ -7928,6 +8013,10 @@ function plainTextFromMarkdown(text) {
         streamOptions.pyqSearchText = text;
       }
       await streamAIResponse(questionForModel, streamOptions);
+      } finally {
+        sendInProgress = false;
+        sendBtn.disabled = false;
+      }
     }
 
     // Multiple Solution Methods: fired after the primary answer finishes streaming, never
@@ -8051,6 +8140,10 @@ function plainTextFromMarkdown(text) {
       // !response.ok branch needs it -- see the addMessageRow(..., aiIndex) comment down there.
       const aiIndex = retryTarget ? retryTarget.aiIndex : currentConversation.length;
       isStreaming = true;
+      // sendMessage() disables sendBtn for its own pre-stream upload window (see sendInProgress)
+      // -- once real streaming actually starts, the button becomes the Stop control and must be
+      // clickable again, regardless of which caller (send/retry/edit) got here.
+      sendBtn.disabled = false;
       sfbSync(); // the session feedback strip never stays up while an answer streams
       let replyReceived = false;
       document.getElementById('sendIcon').style.display = 'none';
