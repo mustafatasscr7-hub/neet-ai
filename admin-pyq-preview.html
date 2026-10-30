@@ -66,6 +66,7 @@
     .question-card { position: relative; background: #111; border: 1px solid #1e1e1e; border-radius: 12px; padding: 20px 48px 20px 20px; margin-bottom: 12px; }
     .q-select-corner { position: absolute; top: 16px; right: 16px; cursor: pointer; }
     .q-select-corner input[type="checkbox"] { width: 18px; height: 18px; cursor: pointer; accent-color: #4f8ef7; }
+    .dup-delete-error { background: #2a1414; border: 1px solid #5c2626; color: #ff8080; font-size: 11px; padding: 4px 8px; border-radius: 6px; margin: 0 36px 8px 0; }
     .q-meta { font-size: 11px; color: #555; margin-bottom: 10px; display: flex; flex-direction: column; gap: 4px; }
     .q-meta-primary { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
     .q-meta-secondary { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 10px; color: #555; }
@@ -445,6 +446,11 @@
     // renderContractorDuplicatesList), used to detect "every copy in a group is ticked".
     let dupSelectedIds = new Set();
     let dupGroupsCache = [];
+    // Per-id error message from the last failed bulkDeleteDupSelected() attempt on that question --
+    // keyed state (not a DOM side-channel) because renderDuplicatePairs/renderContractorDuplicatesList
+    // fully replace resultsArea.innerHTML after every bulk delete, which would otherwise wipe any
+    // error text written directly onto a card's elements. Cleared on retry, success, or untick.
+    let dupDeleteErrors = {};
     // Ctrl+Z undo stack -- each entry is { rows: [fullRowAsDeleted, ...] } for one delete action
     // (single delete, "Delete both", or a bulk Delete Selected all count as one undo step).
     let undoStack = [];
@@ -1802,9 +1808,13 @@
       const selectCheckboxHtml = dupSelect
         ? `<label class="q-select-corner"><input type="checkbox" class="q-select-checkbox" data-qid="${escapeHtml(q.id)}" ${dupSelectedIds.has(q.id) ? 'checked' : ''} onchange="toggleDupSelect('${q.id}', this.checked)"/></label>`
         : (minimalActions ? '' : `<label class="q-select-corner"><input type="checkbox" class="q-select-checkbox" ${selectedIds.has(q.id) ? 'checked' : ''} onchange="toggleQuestionSelect('${q.id}', this.checked)"/></label>`);
+      const dupDeleteErrorHtml = (dupSelect && dupDeleteErrors[q.id])
+        ? `<div class="dup-delete-error">Delete failed: ${escapeHtml(dupDeleteErrors[q.id])}</div>`
+        : '';
       return `
         <div class="question-card">
           ${selectCheckboxHtml}
+          ${dupDeleteErrorHtml}
           <div class="q-meta">
             <div class="q-meta-primary">
               <span class="q-year">${q.year || ''}</span>
@@ -2923,8 +2933,36 @@
       document.querySelectorAll(`input.q-select-checkbox[data-qid="${CSS.escape(id)}"]`).forEach(cb => { cb.checked = checked; });
     }
 
+    // Writes/clears a per-card "Delete failed: ..." line directly in the DOM (not just state),
+    // since a failed bulk delete doesn't trigger a full re-render of the duplicate-group view --
+    // state (dupDeleteErrors) is still kept so the line survives the next real re-render too.
+    function showDupDeleteError(id, message) {
+      dupDeleteErrors[id] = message;
+      document.querySelectorAll(`input.q-select-checkbox[data-qid="${CSS.escape(id)}"]`).forEach(cb => {
+        const card = cb.closest('.question-card');
+        if (!card) return;
+        let err = card.querySelector('.dup-delete-error');
+        if (!err) {
+          err = document.createElement('div');
+          err.className = 'dup-delete-error';
+          const corner = cb.closest('.q-select-corner');
+          if (corner) corner.insertAdjacentElement('afterend', err); else card.prepend(err);
+        }
+        err.textContent = `Delete failed: ${message}`;
+      });
+    }
+
+    function clearDupDeleteError(id) {
+      delete dupDeleteErrors[id];
+      document.querySelectorAll(`input.q-select-checkbox[data-qid="${CSS.escape(id)}"]`).forEach(cb => {
+        const card = cb.closest('.question-card');
+        const err = card && card.querySelector('.dup-delete-error');
+        if (err) err.remove();
+      });
+    }
+
     function toggleDupSelect(id, checked) {
-      if (checked) dupSelectedIds.add(id); else dupSelectedIds.delete(id);
+      if (checked) dupSelectedIds.add(id); else { dupSelectedIds.delete(id); clearDupDeleteError(id); }
       syncDupCheckboxes(id, checked);
       updateDupSelectBar();
     }
@@ -2942,7 +2980,7 @@
     }
 
     function clearDupSelection() {
-      dupSelectedIds.forEach(id => syncDupCheckboxes(id, false));
+      dupSelectedIds.forEach(id => { syncDupCheckboxes(id, false); clearDupDeleteError(id); });
       dupSelectedIds.clear();
       updateDupSelectBar();
     }
@@ -2952,6 +2990,7 @@
     function pruneDupSelection() {
       const onScreen = new Set(dupGroupsCache.flatMap(g => g.ids));
       Array.from(dupSelectedIds).forEach(id => { if (!onScreen.has(id)) dupSelectedIds.delete(id); });
+      Object.keys(dupDeleteErrors).forEach(id => { if (!onScreen.has(id)) delete dupDeleteErrors[id]; });
     }
 
     function updateDupSelectBar() {
@@ -2986,6 +3025,9 @@
     // deletes they already handle -- same deleteOneQuietly() single-row flow as the per-card
     // Delete button, just looped with a progress label on the button.
     async function bulkDeleteDupSelected() {
+      // Snapshotted once -- this exact list is both the delete loop's work queue and the "N/total"
+      // progress denominator, so the two can never disagree (that was the root cause of the stuck
+      // "Deleting 2/2..." bug: see the finally block below).
       const ids = Array.from(dupSelectedIds);
       if (ids.length === 0) return;
       const wipesGroup = dupGroupsCache.some(g => g.ids.length > 0 && g.ids.every(id => dupSelectedIds.has(id)));
@@ -3000,34 +3042,46 @@
       if (clearBtn) clearBtn.disabled = true;
       const scrollY = window.scrollY;
       const deletedRows = [];
-      const failures = [];
-      for (let i = 0; i < ids.length; i++) {
-        const id = ids[i];
-        if (deleteBtn) { deleteBtn.disabled = true; deleteBtn.textContent = `Deleting ${i + 1}/${ids.length}...`; }
-        const result = await deleteOneQuietly(id);
-        if (result.error === 'unauthorized') return logout();
-        if (result.error) { failures.push(`${id}: ${result.error}`); continue; }
-        dupSelectedIds.delete(id);
-        if (contractorMode && contractorDupFilterOn) {
-          deletedRows.push(result.row || (contractorDupData && contractorDupData.rows && contractorDupData.rows[id]));
-          purgeContractorDupId(id);
-        } else if (duplicatesMode) {
-          deletedRows.push(result.row || duplicateRowsMap[id]);
-          delete duplicateRowsMap[id];
-          duplicatePairs = duplicatePairs.filter(p => p.a !== id && p.b !== id);
+      try {
+        for (let i = 0; i < ids.length; i++) {
+          const id = ids[i];
+          clearDupDeleteError(id); // this is a retry of a previously-failed id -- drop its old error line
+          if (deleteBtn) { deleteBtn.disabled = true; deleteBtn.textContent = `Deleting ${i + 1}/${ids.length}...`; }
+          // deleteOneQuietly already aborts at ~20s, so this can never hang the loop forever.
+          const result = await deleteOneQuietly(id);
+          if (result.error === 'unauthorized') { logout(); return; }
+          if (result.error) {
+            showDupDeleteError(id, result.error); // stays ticked; error shown right on its card
+            continue;
+          }
+          dupSelectedIds.delete(id);
+          if (contractorMode && contractorDupFilterOn) {
+            deletedRows.push(result.row || (contractorDupData && contractorDupData.rows && contractorDupData.rows[id]));
+            purgeContractorDupId(id);
+          } else if (duplicatesMode) {
+            deletedRows.push(result.row || duplicateRowsMap[id]);
+            delete duplicateRowsMap[id];
+            duplicatePairs = duplicatePairs.filter(p => p.a !== id && p.b !== id);
+          }
         }
-      }
-      if (duplicatesMode) {
-        renderDuplicatePairs(document.getElementById('filterSubject').value);
-      } else if (contractorMode && contractorDupFilterOn) {
-        loadContractorCounts();
-        renderContractorPanel(contractorCountsCache);
-        renderContractorDuplicatesList();
-      }
-      window.scrollTo(0, scrollY);
-      pushUndoEntry(deletedRows.filter(Boolean));
-      if (failures.length) {
-        alert(`${failures.length} of ${ids.length} delete(s) failed: ${failures.slice(0, 3).join(' / ')}${failures.length > 3 ? '...' : ''}. They remain selected -- try again.`);
+        if (duplicatesMode) {
+          renderDuplicatePairs(document.getElementById('filterSubject').value);
+        } else if (contractorMode && contractorDupFilterOn) {
+          loadContractorCounts();
+          renderContractorPanel(contractorCountsCache);
+          renderContractorDuplicatesList();
+        }
+        window.scrollTo(0, scrollY);
+        pushUndoEntry(deletedRows.filter(Boolean));
+      } finally {
+        // Always runs -- on a clean finish, on a failure, on an early "unauthorized" return, or if
+        // something above throws. Without this, the bar's buttons are only re-enabled by
+        // updateDupSelectBar() re-creating them from scratch, which it never does once the bar
+        // DOM node already exists (it's only hidden/shown, not recreated) -- that's what left
+        // "Delete selected" permanently stuck disabled on its "Deleting N/N..." label after the
+        // very first bulk delete of a session.
+        if (deleteBtn) { deleteBtn.disabled = false; deleteBtn.textContent = 'Delete selected'; }
+        if (clearBtn) clearBtn.disabled = false;
       }
     }
 
