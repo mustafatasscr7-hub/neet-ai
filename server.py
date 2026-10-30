@@ -12327,6 +12327,127 @@ async def admin_session_feedback_list(
         "counts": {"good": good, "fine": fine, "bad": bad, "bad_with_comment": bad_with_comment},
     }
 
+# ---------- Admin dashboard: Usage & Cost tab ----------
+# Every number here is read from provider_usage_log/usage_log/user_plan/auth.users via the
+# read-only SECURITY DEFINER functions in admin_dashboard_stats.sql (that file must be run in the
+# Supabase SQL editor once; until then these endpoints still return everything else and flag the
+# missing piece as *_available: false instead of a 500). No endpoint here writes anything, changes
+# a rate/cap constant, or returns a full phone/email/name -- admin_top_users_by_cost already masks
+# the phone in SQL.
+ADMIN_DASHBOARD_CACHE_TTL = 60
+_admin_dashboard_cache: dict = {}  # cache key -> (expires_at monotonic seconds, payload)
+
+def _admin_dashboard_cache_get(key: str):
+    hit = _admin_dashboard_cache.get(key)
+    if hit and hit[0] > time.monotonic():
+        return hit[1]
+    return None
+
+def _admin_dashboard_cache_set(key: str, payload):
+    _admin_dashboard_cache[key] = (time.monotonic() + ADMIN_DASHBOARD_CACHE_TTL, payload)
+
+ADMIN_DASHBOARD_RANGES = {"today", "7d", "30d"}
+
+def _admin_dashboard_since_iso(range_key: str) -> str:
+    """UTC instant for the start of the IST day the range begins on -- 'today' is just today's IST
+    midnight; '7d'/'30d' step back 6/29 more days so the window is inclusive of today, same
+    convention as the SQL functions' own v_ist_today - N."""
+    days_back = {"today": 0, "7d": 6, "30d": 29}[range_key]
+    start_date = date.fromisoformat(_ist_today()) - timedelta(days=days_back)
+    return datetime.combine(start_date, datetime.min.time(), tzinfo=IST).astimezone(timezone.utc).isoformat()
+
+async def _call_admin_rpc(fn_name: str, payload: dict):
+    """POSTs to /rest/v1/rpc/<fn_name> with the service-role key. Returns (ok, data). ok=False
+    (data=None) both when the function hasn't been created yet (admin_dashboard_stats.sql not run
+    -- PostgREST answers 404/PGRST202) and on any other failure, so a caller never needs to tell
+    those apart: either way the right response is "this section is unavailable", never a 500."""
+    try:
+        resp = await async_client.post(
+            f"{SUPABASE_URL}/rest/v1/rpc/{fn_name}", headers={**ADMIN_HEADERS, "Content-Type": "application/json"},
+            json=payload,
+        )
+        if resp.status_code >= 400:
+            print(f"ADMIN DASHBOARD RPC {fn_name} FAILED: status={resp.status_code} body={resp.text[:200]}", flush=True)
+            return False, None
+        return True, resp.json()
+    except Exception as e:
+        print(f"ADMIN DASHBOARD RPC {fn_name} ERROR: {type(e).__name__}", flush=True)
+        return False, None
+
+@app.get("/admin/dashboard/spend")
+async def admin_dashboard_spend(_: None = Depends(verify_admin)):
+    cached = _admin_dashboard_cache_get("spend")
+    if cached is not None:
+        return cached
+    ok, data = await _call_admin_rpc("admin_spend_summary", {})
+    payload = {"available": ok, **(data if ok and isinstance(data, dict) else {})}
+    _admin_dashboard_cache_set("spend", payload)
+    return payload
+
+@app.get("/admin/dashboard/by-provider")
+async def admin_dashboard_by_provider(range: str = "30d", _: None = Depends(verify_admin)):
+    if range not in ADMIN_DASHBOARD_RANGES:
+        raise HTTPException(status_code=400, detail="range must be today, 7d or 30d")
+    cache_key = f"by-provider:{range}"
+    cached = _admin_dashboard_cache_get(cache_key)
+    if cached is not None:
+        return cached
+    ok, data = await _call_admin_rpc("admin_spend_by_provider", {"p_since": _admin_dashboard_since_iso(range)})
+    payload = {"available": ok, "rows": data if ok and isinstance(data, list) else []}
+    _admin_dashboard_cache_set(cache_key, payload)
+    return payload
+
+@app.get("/admin/dashboard/by-endpoint")
+async def admin_dashboard_by_endpoint(range: str = "30d", _: None = Depends(verify_admin)):
+    if range not in ADMIN_DASHBOARD_RANGES:
+        raise HTTPException(status_code=400, detail="range must be today, 7d or 30d")
+    cache_key = f"by-endpoint:{range}"
+    cached = _admin_dashboard_cache_get(cache_key)
+    if cached is not None:
+        return cached
+    ok, data = await _call_admin_rpc("admin_spend_by_endpoint", {"p_since": _admin_dashboard_since_iso(range)})
+    payload = {"available": ok, "rows": data if ok and isinstance(data, list) else []}
+    _admin_dashboard_cache_set(cache_key, payload)
+    return payload
+
+@app.get("/admin/dashboard/users")
+async def admin_dashboard_users(_: None = Depends(verify_admin)):
+    cached = _admin_dashboard_cache_get("users")
+    if cached is not None:
+        return cached
+    (user_ok, user_data), (active_ok, active_data), (cap_ok, cap_data) = await asyncio.gather(
+        _call_admin_rpc("admin_user_stats", {}),
+        _call_admin_rpc("admin_active_user_counts", {}),
+        _call_admin_rpc("admin_near_cap_counts", {
+            "p_daily_free": 0.8 * DAILY_TOKEN_BUDGET_FREE, "p_daily_pro": 0.8 * DAILY_TOKEN_LIMIT_PRO,
+            "p_daily_max": 0.8 * MAX_DAILY_TOKEN_CAP, "p_weekly_free": 0.8 * WEEKLY_TOKEN_LIMIT_FREE,
+            "p_weekly_pro": 0.8 * WEEKLY_TOKEN_LIMIT_PRO, "p_weekly_max": 0.8 * WEEKLY_TOKEN_LIMIT_MAX,
+        }),
+    )
+    payload = {
+        "available": user_ok,
+        **(user_data if user_ok and isinstance(user_data, dict) else {}),
+        "active": active_data if active_ok and isinstance(active_data, dict) else None,
+        "active_available": active_ok,
+        "near_cap": cap_data if cap_ok and isinstance(cap_data, dict) else None,
+        "near_cap_available": cap_ok,
+    }
+    _admin_dashboard_cache_set("users", payload)
+    return payload
+
+@app.get("/admin/dashboard/top-users")
+async def admin_dashboard_top_users(range: str = "30d", _: None = Depends(verify_admin)):
+    if range not in ADMIN_DASHBOARD_RANGES:
+        raise HTTPException(status_code=400, detail="range must be today, 7d or 30d")
+    cache_key = f"top-users:{range}"
+    cached = _admin_dashboard_cache_get(cache_key)
+    if cached is not None:
+        return cached
+    ok, data = await _call_admin_rpc("admin_top_users_by_cost", {"p_since": _admin_dashboard_since_iso(range), "p_limit": 10})
+    payload = {"available": ok, "rows": data if ok and isinstance(data, list) else []}
+    _admin_dashboard_cache_set(cache_key, payload)
+    return payload
+
 if __name__ == "__main__":
     import uvicorn
     import os

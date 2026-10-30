@@ -297,7 +297,57 @@
       .fb-detail { position: static; max-height: none; }
       .sfa-stats { grid-template-columns: repeat(2, 1fr); }
     }
-  
+
+    /* ---------- Usage & Cost view ---------- */
+    #usageView { color: var(--fb-text); }
+    .uc-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; background: var(--fb-surface); border: 1px solid var(--fb-border); border-radius: 10px; padding: 10px 12px; margin-bottom: 16px; }
+    .uc-rupee { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fb-muted); }
+    .uc-rupee input { width: 64px; background: var(--fb-surface-2); border: 1px solid var(--fb-border-strong); border-radius: 7px; padding: 5px 8px; color: var(--fb-text); font: 12px 'Inter', sans-serif; }
+    .uc-refresh { background: var(--fb-accent); color: var(--fb-on-accent); border: none; border-radius: 7px; padding: 7px 14px; font: 600 12px 'Inter', sans-serif; cursor: pointer; }
+    .uc-refresh:hover { filter: brightness(1.08); }
+    .uc-updated { font-size: 12px; color: var(--fb-muted); margin-left: auto; white-space: nowrap; }
+    .uc-note { font-size: 11px; color: var(--fb-muted); margin: -8px 0 16px; }
+
+    .uc-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 8px; }
+    .uc-card { background: var(--fb-surface); border: 1px solid var(--fb-border); border-radius: 10px; padding: 14px 16px; }
+    .uc-card .num { font-size: 22px; font-weight: 700; color: var(--fb-text); line-height: 1.15; }
+    .uc-card .sub { font-size: 11px; color: var(--fb-muted); margin-top: 3px; }
+    .uc-card .label { font-size: 11px; color: var(--fb-muted); margin-top: 6px; text-transform: uppercase; letter-spacing: 0.04em; }
+    .uc-card.warn .num { color: var(--fb-warn); }
+
+    .uc-section { background: var(--fb-surface); border: 1px solid var(--fb-border); border-radius: 10px; padding: 16px; margin-bottom: 16px; min-width: 0; }
+    .uc-section h3 { font-size: 13px; font-weight: 600; color: var(--fb-text-2); margin-bottom: 12px; }
+    .uc-chart-wrap { overflow-x: auto; }
+    .uc-chart-wrap svg { display: block; min-width: 560px; }
+    .uc-bar { fill: var(--fb-accent); }
+    .uc-bar:hover { fill: var(--fb-accent-text); }
+    .uc-axis-label { font-size: 9px; fill: var(--fb-muted); }
+
+    .uc-table-wrap { background: var(--fb-surface); border: 1px solid var(--fb-border); border-radius: 10px; overflow-x: auto; }
+    .uc-table-wrap table { width: 100%; border-collapse: collapse; font-size: 13px; white-space: nowrap; }
+    .uc-table-wrap th { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--fb-border); color: var(--fb-muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+    .uc-table-wrap td { padding: 9px 12px; border-bottom: 1px solid var(--fb-border); color: var(--fb-text-2); }
+    .uc-table-wrap tr:last-child td { border-bottom: none; }
+    .uc-table-wrap code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; color: var(--fb-text-2); }
+    .uc-rupee-note { color: var(--fb-muted); font-size: 11px; }
+    .uc-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .uc-plan-split { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 14px; }
+    .uc-plan-chip { background: var(--fb-surface-2); border: 1px solid var(--fb-border-strong); border-radius: 8px; padding: 8px 14px; font-size: 12px; color: var(--fb-text-2); }
+    .uc-plan-chip b { color: var(--fb-text); font-size: 15px; display: block; }
+    .uc-empty { padding: 30px 0; text-align: center; color: var(--fb-muted); font-size: 13px; }
+    .uc-error { padding: 16px; font-size: 13px; color: var(--fb-down); }
+    .uc-unavailable { font-size: 11px; color: var(--fb-warn); margin-top: 6px; }
+
+    @media (max-width: 900px) {
+      .uc-cards { grid-template-columns: repeat(2, 1fr); }
+      .uc-grid-2 { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 480px) {
+      .uc-cards { grid-template-columns: 1fr 1fr; }
+      .uc-toolbar { flex-direction: column; align-items: stretch; }
+      .uc-updated { margin-left: 0; }
+    }
+
     /* Smooth fade-in on page load */
     body { animation: pageFadeIn 0.22s ease; }
     @keyframes pageFadeIn { from { opacity: 0; } to { opacity: 1; } }
@@ -323,6 +373,7 @@
           <button type="button" id="tabAllQuestions" class="view-tab active" onclick="switchView('questions')">All Questions</button>
           <button type="button" id="tabReports" class="view-tab" onclick="switchView('reports')">Reported Questions<span id="reportsBadge" class="reports-badge" style="display:none;"></span></button>
           <button type="button" id="tabFeedback" class="view-tab" onclick="switchView('feedback')">Feedback<span id="feedbackBadge" class="reports-badge" style="display:none;"></span></button>
+          <button type="button" id="tabUsage" class="view-tab" onclick="switchView('usage')">Usage &amp; Cost</button>
         </div>
         <button type="button" class="logout-btn theme-toggle" onclick="toggleTheme()" aria-label="Switch light or dark theme" title="Switch theme">
           <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
@@ -452,6 +503,60 @@
         <div class="fb-list" id="fbList"><div class="fb-empty">Loading...</div></div>
         <div class="fb-detail" id="fbDetail"><div class="fb-detail-empty">Select a rating to see the full exchange.</div></div>
       </div>
+      </div>
+    </div>
+
+    <div id="usageView" style="display:none;">
+      <div class="uc-toolbar">
+        <div class="fb-seg" id="ucRangeSeg" role="group" aria-label="Date range">
+          <button type="button" data-range="today" aria-pressed="false">Today</button>
+          <button type="button" data-range="7d" aria-pressed="false">7 days</button>
+          <button type="button" data-range="30d" aria-pressed="true">30 days</button>
+        </div>
+        <label class="uc-rupee">₹ per $<input type="number" id="ucRupeeRate" min="1" step="0.5" value="88"/> (estimate)</label>
+        <button type="button" class="uc-refresh" id="ucRefreshBtn">Refresh</button>
+        <span class="uc-updated" id="ucUpdated"></span>
+      </div>
+      <div id="ucError"></div>
+
+      <div class="uc-cards" id="ucSpendCards">
+        <div class="uc-card"><div class="num">–</div><div class="label">Spend today</div></div>
+        <div class="uc-card"><div class="num">–</div><div class="label">Spend, 7 days</div></div>
+        <div class="uc-card"><div class="num">–</div><div class="label">Spend, 30 days</div></div>
+        <div class="uc-card"><div class="num">–</div><div class="label">Spend, this month</div></div>
+      </div>
+      <div class="uc-cards">
+        <div class="uc-card"><div class="num" id="ucTokensCard">–</div><div class="label">Tokens, 30 days</div></div>
+        <div class="uc-card"><div class="num" id="ucUsersCard">–</div><div class="label">Total users</div></div>
+        <div class="uc-card"><div class="num" id="ucActiveCard">–</div><div class="label">Active, 24 hours</div></div>
+        <div class="uc-card warn"><div class="num" id="ucNearCapCard">–</div><div class="label">Near-cap users today</div></div>
+      </div>
+      <div class="uc-note">Based on the cost log only.</div>
+
+      <div class="uc-section">
+        <h3>Daily spend, last 30 days</h3>
+        <div class="uc-chart-wrap" id="ucChartWrap"><div class="uc-empty">Loading...</div></div>
+      </div>
+
+      <div class="uc-grid-2">
+        <div class="uc-section">
+          <h3>By provider / model</h3>
+          <div class="uc-table-wrap" id="ucProviderTable"><div class="uc-empty">Loading...</div></div>
+        </div>
+        <div class="uc-section">
+          <h3>By endpoint</h3>
+          <div class="uc-table-wrap" id="ucEndpointTable"><div class="uc-empty">Loading...</div></div>
+        </div>
+      </div>
+
+      <div class="uc-section">
+        <h3>Users</h3>
+        <div id="ucUsersPanel"><div class="uc-empty">Loading...</div></div>
+      </div>
+
+      <div class="uc-section">
+        <h3>Top 10 users by cost</h3>
+        <div class="uc-table-wrap" id="ucTopUsersTable"><div class="uc-empty">Loading...</div></div>
       </div>
     </div>
   </div>
@@ -813,8 +918,11 @@
       document.getElementById('reportsView').style.display = view === 'reports' ? 'block' : 'none';
       document.getElementById('tabFeedback').classList.toggle('active', view === 'feedback');
       document.getElementById('feedbackView').style.display = view === 'feedback' ? 'block' : 'none';
+      document.getElementById('tabUsage').classList.toggle('active', view === 'usage');
+      document.getElementById('usageView').style.display = view === 'usage' ? 'block' : 'none';
       if (view === 'reports') loadReports();
       if (view === 'feedback') (fbSubView === 'session' ? loadSessionFeedback : loadFeedback)();
+      if (view === 'usage') loadUsageCost();
     }
 
     async function refreshReportsBadge() {
@@ -1252,6 +1360,214 @@
     document.getElementById('sfaClearDates').addEventListener('click', () => {
       document.getElementById('sfaFrom').value = ''; document.getElementById('sfaTo').value = '';
       sfaState.from = ''; sfaState.to = ''; sfaState.page = 1; loadSessionFeedback();
+    });
+
+    // ---------- Usage & Cost tab ----------
+    // Every number here comes from /admin/dashboard/* (read-only aggregates computed in the
+    // database by admin_dashboard_stats.sql's functions). If that SQL hasn't been run yet, the
+    // affected panel shows "not available yet" instead of breaking the rest of the tab.
+    const ucState = {
+      range: '30d',
+      lastSpend: null, lastProvider: null, lastEndpoint: null, lastUsers: null, lastTopUsers: null,
+    };
+
+    function ucLoadRupeeRate() {
+      try {
+        const saved = localStorage.getItem('uc_rupee_rate');
+        if (saved) document.getElementById('ucRupeeRate').value = saved;
+      } catch (e) {}
+    }
+    ucLoadRupeeRate();
+
+    function ucRupeeRate() {
+      const v = parseFloat(document.getElementById('ucRupeeRate').value);
+      return (v && v > 0) ? v : 88;
+    }
+
+    function formatUsd(n) {
+      if (n === null || n === undefined) return '–';
+      const v = Number(n);
+      return '$' + (Math.abs(v) < 0.01 ? v.toFixed(4) : v.toFixed(2));
+    }
+
+    function formatInr(usdValue) {
+      if (usdValue === null || usdValue === undefined) return '';
+      const inr = Number(usdValue) * ucRupeeRate();
+      return '≈₹' + (Math.abs(inr) < 1 ? inr.toFixed(2) : inr.toFixed(0));
+    }
+
+    function formatCost(n) {
+      return `${formatUsd(n)} <span class="uc-rupee-note">${formatInr(n)}</span>`;
+    }
+
+    function formatTokens(n) {
+      if (n === null || n === undefined) return '–';
+      n = Number(n);
+      if (Math.abs(n) >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+      if (Math.abs(n) >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+      return String(n);
+    }
+
+    async function ucFetch(path) {
+      try {
+        const res = await fetch(`${API_BASE}${path}`, { headers: authHeaders() });
+        if (res.status === 401) { logout(); return null; }
+        if (!res.ok) return null;
+        return await res.json();
+      } catch (e) {
+        return null;
+      }
+    }
+
+    async function loadUsageCost() {
+      document.getElementById('ucError').innerHTML = '';
+      const range = ucState.range;
+      const [spend, byProvider, byEndpoint, users, topUsers] = await Promise.all([
+        ucFetch('/admin/dashboard/spend'),
+        ucFetch(`/admin/dashboard/by-provider?range=${range}`),
+        ucFetch(`/admin/dashboard/by-endpoint?range=${range}`),
+        ucFetch('/admin/dashboard/users'),
+        ucFetch(`/admin/dashboard/top-users?range=${range}`),
+      ]);
+      if (!spend && !byProvider && !byEndpoint && !users && !topUsers) {
+        document.getElementById('ucError').innerHTML = '<div class="uc-error">Could not reach server.</div>';
+        return;
+      }
+      ucState.lastSpend = spend;
+      ucState.lastProvider = byProvider;
+      ucState.lastEndpoint = byEndpoint;
+      ucState.lastUsers = users;
+      ucState.lastTopUsers = topUsers;
+      ucRenderAll();
+      document.getElementById('ucUpdated').textContent =
+        'Updated at ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+
+    function ucRenderAll() {
+      ucRenderSpendCards(ucState.lastSpend);
+      ucRenderChart(ucState.lastSpend);
+      ucRenderProviderTable(ucState.lastProvider);
+      ucRenderEndpointTable(ucState.lastEndpoint);
+      ucRenderUsersPanel(ucState.lastUsers);
+      ucRenderTopUsersTable(ucState.lastTopUsers);
+    }
+
+    function ucRenderSpendCards(spend) {
+      const cardsEl = document.getElementById('ucSpendCards');
+      if (!spend || spend.available === false) {
+        cardsEl.innerHTML = '<div class="uc-empty" style="grid-column:1/-1;">Cost log not available yet — run admin_dashboard_stats.sql.</div>';
+        document.getElementById('ucTokensCard').textContent = '–';
+        return;
+      }
+      const windows = [['today', 'Spend today'], ['last_7d', 'Spend, 7 days'], ['last_30d', 'Spend, 30 days'], ['month', 'Spend, this month']];
+      cardsEl.innerHTML = windows.map(([key, label]) => {
+        const w = spend[key] || {};
+        const usd = w.cost || 0;
+        return `<div class="uc-card"><div class="num">${formatUsd(usd)}</div><div class="sub">${formatInr(usd)}</div><div class="label">${label}</div></div>`;
+      }).join('');
+      const t30 = spend.last_30d || {};
+      document.getElementById('ucTokensCard').textContent = formatTokens((t30.input_tokens || 0) + (t30.output_tokens || 0)) + ' in+out';
+    }
+
+    function ucRenderChart(spend) {
+      const wrap = document.getElementById('ucChartWrap');
+      if (!spend || spend.available === false || !Array.isArray(spend.daily) || spend.daily.length === 0) {
+        wrap.innerHTML = '<div class="uc-empty">No cost data yet.</div>';
+        return;
+      }
+      const days = spend.daily;
+      const maxCost = Math.max(...days.map(d => d.cost || 0), 0.000001);
+      const w = Math.max(560, days.length * 18);
+      const h = 140;
+      const slot = (w - 20) / days.length;
+      const barW = Math.max(2, slot - 3);
+      const bars = days.map((d, i) => {
+        const barH = Math.max(1, (d.cost / maxCost) * (h - 30));
+        const x = 10 + i * slot;
+        const y = h - 20 - barH;
+        const label = (d.date || '').slice(5);
+        const title = `${d.date}: ${formatUsd(d.cost)}, ${d.calls} call${d.calls === 1 ? '' : 's'}`;
+        const axisLabel = i % 5 === 0 ? `<text class="uc-axis-label" x="${x.toFixed(1)}" y="${h - 5}">${escapeHtml(label)}</text>` : '';
+        return `<rect class="uc-bar" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${barH.toFixed(1)}"><title>${escapeHtml(title)}</title></rect>${axisLabel}`;
+      }).join('');
+      wrap.innerHTML = `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" role="img" aria-label="Daily spend, last 30 days">${bars}</svg>`;
+    }
+
+    function ucRenderProviderTable(data) {
+      const el = document.getElementById('ucProviderTable');
+      if (!data || data.available === false) { el.innerHTML = '<div class="uc-empty">Not available yet — run admin_dashboard_stats.sql.</div>'; return; }
+      const rows = data.rows || [];
+      if (!rows.length) { el.innerHTML = '<div class="uc-empty">No calls in this range.</div>'; return; }
+      el.innerHTML = `<table><thead><tr><th>Provider / model</th><th>Calls</th><th>In</th><th>Out</th><th>Cached</th><th>Cost</th><th>Fallback</th><th>Capped</th></tr></thead><tbody>${
+        rows.map(r => {
+          const fallbackPct = r.calls ? ((r.peak_count || 0) / r.calls * 100) : 0;
+          const cappedPct = r.calls ? ((r.output_capped_count || 0) / r.calls * 100) : 0;
+          return `<tr><td>${escapeHtml(r.provider)}</td><td>${r.calls}</td><td>${formatTokens(r.input_tokens)}</td><td>${formatTokens(r.output_tokens)}</td><td>${formatTokens(r.cache_hit_tokens)}</td><td>${formatCost(r.cost)}</td><td>${fallbackPct.toFixed(0)}%</td><td>${cappedPct.toFixed(0)}%</td></tr>`;
+        }).join('')
+      }</tbody></table>`;
+    }
+
+    function ucRenderEndpointTable(data) {
+      const el = document.getElementById('ucEndpointTable');
+      if (!data || data.available === false) { el.innerHTML = '<div class="uc-empty">Not available yet — run admin_dashboard_stats.sql.</div>'; return; }
+      const rows = data.rows || [];
+      if (!rows.length) { el.innerHTML = '<div class="uc-empty">No calls in this range.</div>'; return; }
+      el.innerHTML = `<table><thead><tr><th>Endpoint</th><th>Calls</th><th>In</th><th>Out</th><th>Cost</th></tr></thead><tbody>${
+        rows.map(r => `<tr><td>${escapeHtml(r.endpoint)}</td><td>${r.calls}</td><td>${formatTokens(r.input_tokens)}</td><td>${formatTokens(r.output_tokens)}</td><td>${formatCost(r.cost)}</td></tr>`).join('')
+      }</tbody></table>`;
+    }
+
+    function ucRenderUsersPanel(users) {
+      const el = document.getElementById('ucUsersPanel');
+      document.getElementById('ucUsersCard').textContent = (users && users.available !== false && users.total_users != null) ? users.total_users : '–';
+      document.getElementById('ucActiveCard').textContent = (users && users.active) ? (users.active.last_24h ?? '–') : '–';
+      const nearCap = users && users.near_cap ? users.near_cap : null;
+      const nearCapTotal = nearCap ? (nearCap.daily.free + nearCap.daily.pro + nearCap.daily.max) : null;
+      document.getElementById('ucNearCapCard').textContent = nearCapTotal != null ? nearCapTotal : '–';
+
+      if (!users || users.available === false) {
+        el.innerHTML = '<div class="uc-empty">User stats not available yet — run admin_dashboard_stats.sql.</div>';
+        return;
+      }
+      let html = `<div class="uc-plan-split">
+          <div class="uc-plan-chip"><b>${users.plan_free ?? '–'}</b>Free</div>
+          <div class="uc-plan-chip"><b>${users.plan_pro ?? '–'}</b>Pro</div>
+          <div class="uc-plan-chip"><b>${users.plan_max ?? '–'}</b>Max</div>
+          <div class="uc-plan-chip"><b>${users.new_today ?? '–'}</b>New today</div>
+          <div class="uc-plan-chip"><b>${users.new_7d ?? '–'}</b>New, 7 days</div>
+        </div>`;
+      if (users.active_available === false) {
+        html += '<div class="uc-unavailable">Active-user counts not available yet — run admin_dashboard_stats.sql.</div>';
+      } else if (users.active) {
+        html += `<div class="uc-rupee-note">Active: ${users.active.last_24h} in the last 24 hours, ${users.active.last_7d} in the last 7 days.</div>`;
+      }
+      if (users.near_cap_available === false) {
+        html += '<div class="uc-unavailable">Near-cap counts not available yet — run admin_dashboard_stats.sql.</div>';
+      } else if (nearCap) {
+        html += `<div class="uc-rupee-note">At or above 80% of their cap today — Free: ${nearCap.daily.free}, Pro: ${nearCap.daily.pro}, Max: ${nearCap.daily.max}. This week — Free: ${nearCap.weekly.free}, Pro: ${nearCap.weekly.pro}, Max: ${nearCap.weekly.max}.</div>`;
+      }
+      el.innerHTML = html;
+    }
+
+    function ucRenderTopUsersTable(data) {
+      const el = document.getElementById('ucTopUsersTable');
+      if (!data || data.available === false) { el.innerHTML = '<div class="uc-empty">Not available yet — run admin_dashboard_stats.sql.</div>'; return; }
+      const rows = data.rows || [];
+      if (!rows.length) { el.innerHTML = '<div class="uc-empty">No spend in this range.</div>'; return; }
+      el.innerHTML = `<table><thead><tr><th>User</th><th>Plan</th><th>Phone</th><th>Calls</th><th>Cost</th></tr></thead><tbody>${
+        rows.map(r => `<tr><td><code title="${escapeHtml(r.user_id || '')}">${escapeHtml((r.user_id || '').slice(0, 8))}</code></td><td>${escapeHtml(r.plan || 'free')}</td><td>${escapeHtml(r.masked_phone || '—')}</td><td>${r.calls}</td><td>${formatCost(r.cost)}</td></tr>`).join('')
+      }</tbody></table>`;
+    }
+
+    document.querySelectorAll('#ucRangeSeg button').forEach(btn => btn.addEventListener('click', () => {
+      ucState.range = btn.dataset.range;
+      document.querySelectorAll('#ucRangeSeg button').forEach(b => b.setAttribute('aria-pressed', String(b === btn)));
+      loadUsageCost();
+    }));
+    document.getElementById('ucRefreshBtn').addEventListener('click', () => loadUsageCost());
+    document.getElementById('ucRupeeRate').addEventListener('input', () => {
+      try { localStorage.setItem('uc_rupee_rate', String(ucRupeeRate())); } catch (e) {}
+      ucRenderAll();
     });
 
     if (adminKey) {
