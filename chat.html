@@ -370,17 +370,30 @@
     .settings-content-area { flex: 1; padding: 32px; overflow-y: auto; }
     #displayNameInput { width: 200px; }
 
-    /* Settings modal on mobile: sidebar collapses from a vertical side panel into a horizontal
-       scrollable tab strip (same 620px breakpoint as the Active Sessions table above, and the
-       same "becomes a strip of scrollable pills" idea already used for other icon+label rows in
-       this file), the panel itself goes edge-to-edge instead of a fixed desktop box, and content
-       padding shrinks to fit. Every settings row across all 4 tabs already lays out as
-       label-left/control-right via one repeated inline justify-content:space-between -- wrapping
-       those generically (rather than rewriting ~15 rows into a new class) is what actually stops
-       things like the Display Name input from being squeezed into a sliver next to its label;
-       matches this file's existing precedent of overriding inline styles via attribute selectors
-       (see the body.light-mode rules further up) rather than a markup rewrite. The input itself
-       also goes fluid so it has real room to use once its row wraps onto two lines. */
+    /* Mobile-only ChatGPT-style settings navigation (main list -> full-screen section). Hidden
+       unconditionally here so desktop never renders them regardless of the .is-active class JS
+       toggles; the @media block below is what actually un-hides them under 620px, matching
+       .settings-sidebar's own display:none there. See openSettings()/openSettingsSectionMobile()/
+       showSettingsMobileList() in the script below for the state machine. */
+    .settings-mobile-list { display: none; flex-direction: column; overflow-y: auto; padding: 8px; }
+    /* Title's bottom edge must clear the close button's hit box (top:16 + 36 tall = 52px) --
+       otherwise the first row's own right-aligned chevron (full-width row, same x-range as the
+       button) would land partly under it, the same dead-zone bug the removed tab strip had. */
+    .settings-mobile-list-title { font-size: 11px; color: #444; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; padding: 28px 14px 14px; }
+    .settings-mobile-row { display: flex; align-items: center; justify-content: space-between; padding: 13px 14px; border-radius: 10px; cursor: pointer; color: #ececec; font-size: 14px; -webkit-tap-highlight-color: transparent; }
+    .settings-mobile-row:active { background: #242424; }
+    .settings-mobile-row-left { display: flex; align-items: center; gap: 12px; }
+    .settings-mobile-row-chevron { color: #555; flex-shrink: 0; }
+    .settings-mobile-back-header { display: none; align-items: center; gap: 4px; padding: 14px 52px 12px 6px; flex-shrink: 0; border-bottom: 1px solid #1e1e1e; }
+    .settings-mobile-back-btn { background: transparent; border: none; color: #ececec; cursor: pointer; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; -webkit-tap-highlight-color: transparent; }
+    .settings-mobile-back-title { font-size: 15px; font-weight: 700; color: #fff; }
+    body.light-mode .settings-mobile-row { color: #16161d !important; }
+    body.light-mode .settings-mobile-row:active { background: #ececf0 !important; }
+    body.light-mode .settings-mobile-row-chevron { color: #8a8a94 !important; }
+    body.light-mode .settings-mobile-back-header { border-bottom-color: rgba(0,0,0,0.08) !important; }
+    body.light-mode .settings-mobile-back-btn { color: #16161d !important; }
+    body.light-mode .settings-mobile-back-title { color: #0d0d0d !important; }
+
     /* Usage tab header: title+badge on the left, "Last updated" text + refresh icon grouped on
        the right, same line -- but the close X is position:absolute over this same top-right
        corner (top:16/right:16, 36x36 hit box), so the row needs its own right-side reserve
@@ -393,32 +406,34 @@
 
     @media (max-width: 620px) {
       .settings-modal-panel { width: 100vw; height: 100vh; max-width: 100vw; max-height: 100vh; border-radius: 0; flex-direction: column; }
-      /* width: calc(100% - 52px), not 100% + right padding -- padding only reserves scrollable
-         space at the FAR end of the strip, so it only kept the last tab (Privacy) clear once
-         scrolled all the way over. At rest (scrollLeft 0) the viewport itself still ran the full
-         100% width, so whichever tab happened to land under the close button's 36px-wide,
-         16px-inset hit box (Usage, at both 375px and 412px) silently ate taps meant for it --
-         closing the modal instead of switching tabs -- while Privacy sat off-screen with no
-         visible hint it needed a scroll. Shrinking the viewport itself by the button's full
-         footprint (16 inset + 36 wide = 52) carves out a dead zone the strip can never render
-         into, at ANY scroll position, so every tab stays fully clear of the button. */
-      .settings-sidebar { width: calc(100% - 52px); flex-direction: row; overflow-x: auto; -webkit-overflow-scrolling: touch; border-right: none; border-bottom: 1px solid #1e1e1e; padding: 8px; gap: 6px; }
-      .settings-sidebar-title { display: none; }
-      .settings-sidebar .settings-nav-item { flex-shrink: 0; white-space: nowrap; }
+
+      /* No horizontal tab strip on mobile anymore -- replaced by .settings-mobile-list /
+         .settings-mobile-back-header (ChatGPT-style list -> full-screen section), toggled via
+         their .is-active class in openSettings()/openSettingsSectionMobile()/
+         showSettingsMobileList(). Desktop's sidebar (and the close button over it) is untouched. */
+      .settings-sidebar { display: none; }
+      .settings-mobile-list.is-active { display: flex; }
+      .settings-mobile-back-header.is-active { display: flex; }
+      .settings-content-area.is-hidden { display: none; }
       .settings-content-area { padding: clamp(16px, 5vw, 20px); }
 
-      /* The close X is position:absolute over the tab strip's top-right corner (see the
-         comment above .usage-header-row). The strip's own dead zone (above) now keeps every tab
-         clear of it, but the X still sits right at the strip's trailing edge, so a solid chip
-         here (same idea as .diagram-modal-close's header backdrop) keeps it legible against
-         whatever's immediately behind it, without changing desktop, where no tab ever reaches
-         that corner. */
-      .settings-modal-close { background: #1a1a1a !important; border: 1px solid #2a2a2a !important; border-radius: 50%; }
-      body.light-mode .settings-modal-close { background: #ffffff !important; border-color: #d5d5dd !important; }
-
+      /* Every settings row across all sections already lays out as label-left/control-right via
+         one repeated inline justify-content:space-between -- wrapping those generically (rather
+         than rewriting ~15 rows into a new class) is what stops things like the Display Name
+         input from being squeezed into a sliver next to its label; matches this file's existing
+         precedent of overriding inline styles via attribute selectors (see the body.light-mode
+         rules further up) rather than a markup rewrite. The input itself also goes fluid so it
+         has real room to use once its row wraps onto two lines. */
       #settingsContent [style*="justify-content:space-between"] { flex-wrap: wrap; row-gap: 10px; }
       #displayNameInputGroup { width: 100%; }
       #displayNameInput { flex: 1; min-width: 0; width: auto; }
+
+      /* Each section's own <h2> title is now redundant with .settings-mobile-back-title above it.
+         Usage's title isn't a direct child (it's nested in .usage-header-row alongside the plan
+         badge, "Last updated" text and refresh button), so only its "Usage" text is hidden there
+         -- the plan badge stays, since that's real info the back header doesn't carry. */
+      #settingsContent > h2:first-child { display: none; }
+      #settingsContent .usage-title [data-i18n="chat.settingsUsage"] { display: none; }
 
       /* Usage header at phone width: title+badge stays on row 1 with the refresh icon (clear of
          the close X via the bigger right-reserve below); "Last updated" text drops to its own
@@ -10569,31 +10584,81 @@ function openSettings() {
           <!-- Close button -->
           <button class="settings-modal-close" onclick="closeSettingsModal()" style="position:absolute;top:16px;right:16px;width:36px;height:36px;display:flex;align-items:center;justify-content:center;background:transparent;border:none;color:#666;cursor:pointer;font-size:20px;z-index:10;">✕</button>
 
-          <!-- Left sidebar (becomes a horizontal scrollable tab strip on mobile, see .settings-sidebar's @media rule) -->
+          <!-- Left sidebar: desktop only now (mobile uses .settings-mobile-list/.settings-mobile-back-header below instead) -->
           <div class="settings-sidebar">
             <div class="settings-sidebar-title" data-i18n="chat.settingsTitle">Settings</div>
-           <div class="settings-nav-item active" onclick="showSettingsSection('general', this)" style="padding:9px 14px;border-radius:8px;cursor:pointer;font-size:13px;color:#ececec;background:#2a2a2a;display:flex;align-items:center;gap:10px;">
+           <div class="settings-nav-item active" data-section="general" onclick="showSettingsSection('general', this)" style="padding:9px 14px;border-radius:8px;cursor:pointer;font-size:13px;color:#ececec;background:#2a2a2a;display:flex;align-items:center;gap:10px;">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
               <span data-i18n="chat.settingsGeneral">General</span>
             </div>
             ${isLoggedIn ? `
-            <div class="settings-nav-item" onclick="showSettingsSection('account', this)" style="padding:9px 14px;border-radius:8px;cursor:pointer;font-size:13px;color:#666;display:flex;align-items:center;gap:10px;">
+            <div class="settings-nav-item" data-section="account" onclick="showSettingsSection('account', this)" style="padding:9px 14px;border-radius:8px;cursor:pointer;font-size:13px;color:#666;display:flex;align-items:center;gap:10px;">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
               <span data-i18n="chat.settingsAccount">Account</span>
             </div>
-            <div class="settings-nav-item" onclick="showSettingsSection('plan', this)" style="padding:9px 14px;border-radius:8px;cursor:pointer;font-size:13px;color:#666;display:flex;align-items:center;gap:10px;">
+            <div class="settings-nav-item" data-section="plan" onclick="showSettingsSection('plan', this)" style="padding:9px 14px;border-radius:8px;cursor:pointer;font-size:13px;color:#666;display:flex;align-items:center;gap:10px;">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
               <span data-i18n="chat.settingsPlan">Plan</span>
             </div>
-            <div class="settings-nav-item" onclick="showSettingsSection('usage', this)" style="padding:9px 14px;border-radius:8px;cursor:pointer;font-size:13px;color:#666;display:flex;align-items:center;gap:10px;">
+            <div class="settings-nav-item" data-section="usage" onclick="showSettingsSection('usage', this)" style="padding:9px 14px;border-radius:8px;cursor:pointer;font-size:13px;color:#666;display:flex;align-items:center;gap:10px;">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
               <span data-i18n="chat.settingsUsage">Usage</span>
             </div>
-            <div class="settings-nav-item" onclick="showSettingsSection('privacy', this)" style="padding:9px 14px;border-radius:8px;cursor:pointer;font-size:13px;color:#666;display:flex;align-items:center;gap:10px;">
+            <div class="settings-nav-item" data-section="privacy" onclick="showSettingsSection('privacy', this)" style="padding:9px 14px;border-radius:8px;cursor:pointer;font-size:13px;color:#666;display:flex;align-items:center;gap:10px;">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
               <span data-i18n="chat.settingsPrivacy">Privacy</span>
             </div>
             ` : ''}
+          </div>
+
+          <!-- Mobile-only main list (see .settings-mobile-list's @media rule + openSettingsSectionMobile()) -->
+          <div class="settings-mobile-list" id="settingsMobileList">
+            <div class="settings-mobile-list-title" data-i18n="chat.settingsTitle">Settings</div>
+            <div class="settings-mobile-row" onclick="openSettingsSectionMobile('general')">
+              <div class="settings-mobile-row-left">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#888" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                <span data-i18n="chat.settingsGeneral">General</span>
+              </div>
+              <svg class="settings-mobile-row-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+            </div>
+            ${isLoggedIn ? `
+            <div class="settings-mobile-row" onclick="openSettingsSectionMobile('account')">
+              <div class="settings-mobile-row-left">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#888" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                <span data-i18n="chat.settingsAccount">Account</span>
+              </div>
+              <svg class="settings-mobile-row-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+            </div>
+            <div class="settings-mobile-row" onclick="openSettingsSectionMobile('plan')">
+              <div class="settings-mobile-row-left">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#888" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+                <span data-i18n="chat.settingsPlan">Plan</span>
+              </div>
+              <svg class="settings-mobile-row-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+            </div>
+            <div class="settings-mobile-row" onclick="openSettingsSectionMobile('usage')">
+              <div class="settings-mobile-row-left">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#888" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+                <span data-i18n="chat.settingsUsage">Usage</span>
+              </div>
+              <svg class="settings-mobile-row-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+            </div>
+            <div class="settings-mobile-row" onclick="openSettingsSectionMobile('privacy')">
+              <div class="settings-mobile-row-left">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#888" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                <span data-i18n="chat.settingsPrivacy">Privacy</span>
+              </div>
+              <svg class="settings-mobile-row-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+            </div>
+            ` : ''}
+          </div>
+
+          <!-- Mobile-only back header for the full-screen section view -->
+          <div class="settings-mobile-back-header" id="settingsMobileBackHeader">
+            <button class="settings-mobile-back-btn" onclick="showSettingsMobileList()" aria-label="Back">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+            </button>
+            <span class="settings-mobile-back-title" id="settingsMobileBackTitle"></span>
           </div>
 
           <!-- Right content -->
@@ -10605,7 +10670,42 @@ function openSettings() {
       document.body.appendChild(modal);
       modal.addEventListener('click', function(e) { if (e.target === modal) closeSettingsModal(); });
       document.addEventListener('keydown', _settingsModalEscHandler);
-      showSettingsSection('general', document.querySelector('.settings-nav-item.active'));
+      if (window.matchMedia('(max-width: 620px)').matches) {
+        showSettingsMobileList();
+      } else {
+        showSettingsSection('general', document.querySelector('.settings-nav-item.active'));
+      }
+    }
+
+    // Mobile-only: shows the main Settings list, hiding the section content/back-header. No-op
+    // on desktop since .settings-mobile-list only gets display treatment under the 620px
+    // breakpoint (see its @media rule) -- the .is-active class itself is harmless there.
+    function showSettingsMobileList() {
+      const list = document.getElementById('settingsMobileList');
+      const header = document.getElementById('settingsMobileBackHeader');
+      const content = document.getElementById('settingsContent');
+      if (list) list.classList.add('is-active');
+      if (header) header.classList.remove('is-active');
+      if (content) content.classList.add('is-hidden');
+    }
+
+    // Mobile-only: renders `section` into the existing content area (same showSettingsSection()
+    // used by desktop) then swaps the mobile list out for the full-screen section + back header.
+    async function openSettingsSectionMobile(section) {
+      const navItem = document.querySelector(`.settings-nav-item[data-section="${section}"]`);
+      await showSettingsSection(section, navItem);
+      const list = document.getElementById('settingsMobileList');
+      const header = document.getElementById('settingsMobileBackHeader');
+      const content = document.getElementById('settingsContent');
+      const titleEl = document.getElementById('settingsMobileBackTitle');
+      const sourceLabel = navItem ? navItem.querySelector('[data-i18n]') : null;
+      if (titleEl && sourceLabel) {
+        titleEl.textContent = sourceLabel.textContent;
+        titleEl.setAttribute('data-i18n', sourceLabel.getAttribute('data-i18n'));
+      }
+      if (list) list.classList.remove('is-active');
+      if (header) header.classList.add('is-active');
+      if (content) { content.classList.remove('is-hidden'); content.scrollTop = 0; }
     }
 
     function _settingsModalEscHandler(e) {
