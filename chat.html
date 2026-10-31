@@ -1474,6 +1474,12 @@
     .quoted-context-box.quoted-context-pyq { border-left-color: #4f8ef7; }
     .quoted-context-box.quoted-context-pyq .quote-mode-label { color: #4f8ef7; }
     body.light-mode .quoted-context-box.quoted-context-pyq .quote-mode-label { color: #2563eb !important; }
+    /* Whole-question handoff from pyqbank.html's "Ask NEET-AI" button -- same blue accent as
+       the chip above, but a title + 2-line-clamped stem instead of a selected line. */
+    .quoted-context-box .quote-pyq-question-title { font-weight: 600; color: #ddd; margin-bottom: 2px; }
+    body.light-mode .quoted-context-box .quote-pyq-question-title { color: #333 !important; }
+    .quoted-context-box .quote-pyq-question-stem { white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; text-overflow: ellipsis; }
+    .quoted-context-box .quote-pyq-question-source { display: block; margin-top: 2px; }
     /* Small preview of the question's figure, fetched and attached alongside the doubt -- see
        the embed-mode postMessage listener above. Switches the box to a row layout just for this
        one quote instead of the default stacked text block. */
@@ -2179,10 +2185,57 @@
       // an array (same one the AI-message selection toolbar's multi-quote support pushes onto),
       // so picking a second bit of text while the panel is already open adds a second card
       // instead of replacing the first.
+      // Fetches the handed-off question's figure (if any) and attaches it exactly like a
+      // student's own image upload (same addImageFiles path: compression, maxImages room,
+      // upload-for-persistence), so Gemini sees it alongside the doubt. Best-effort only: a
+      // fetch failure (CORS, a dead URL, offline) just leaves the doubt as text-only, same as
+      // if there'd been no figure. Shared by both postMessage handoff shapes below.
+      function attachHandoffFigure(quoteEntry, figureUrl) {
+        if (!figureUrl) return;
+        fetch(figureUrl).then(function(res) {
+          if (!res.ok) throw new Error('figure fetch failed: ' + res.status);
+          return res.blob();
+        }).then(function(blob) {
+          const file = new File([blob], 'figure.jpg', { type: blob.type || 'image/jpeg' });
+          return addImageFiles([file]);
+        }).then(function() {
+          if (selectedImages.length) {
+            quoteEntry.figureThumb = selectedImages[selectedImages.length - 1].data;
+            renderQuotedContextPreview();
+          }
+        }).catch(function() {});
+      }
+
       window.addEventListener('message', function(event) {
         if (event.origin !== window.location.origin) return;
         const data = event.data;
-        if (!data || data.type !== 'neet-ai-ask-doubt' || !data.selected) return;
+        if (!data || data.type !== 'neet-ai-ask-doubt') return;
+
+        // Whole-question handoff from pyqbank.html's "Ask NEET-AI" button on the question card
+        // itself (as opposed to the text-selection chip's payload below) -- seeds a quote card
+        // for the whole question (stem + options) instead of a selected line. Same
+        // no-auto-send behavior: the student still types and sends their own doubt.
+        if (data.mode === 'pyq_question') {
+          if (!data.stem) return;
+          const welcomeNow = document.getElementById('welcome');
+          if (welcomeNow) welcomeNow.remove();
+          inputArea.style.display = 'block';
+          const quoteEntry = {
+            id: ++quotedContextIdCounter,
+            text: String(data.stem).slice(0, 400),
+            mode: 'pyq_question',
+            options: data.options || {},
+            correct: data.correct || '',
+            questionNumber: data.questionNumber || null
+          };
+          quotedContexts.push(quoteEntry);
+          renderQuotedContextPreview();
+          input.focus();
+          attachHandoffFigure(quoteEntry, data.figureUrl);
+          return;
+        }
+
+        if (!data.selected) return;
         const welcomeNow = document.getElementById('welcome');
         if (welcomeNow) welcomeNow.remove();
         inputArea.style.display = 'block';
@@ -2196,25 +2249,7 @@
         quotedContexts.push(quoteEntry);
         renderQuotedContextPreview();
         input.focus();
-
-        // Question has a figure -- fetch it and attach it exactly like a student's own image
-        // upload (same addImageFiles path: compression, maxImages room, upload-for-persistence),
-        // so Gemini sees it alongside the doubt. Best-effort only: a fetch failure (CORS, a dead
-        // URL, offline) just leaves the doubt as text-only, same as if there'd been no figure.
-        if (data.figureUrl) {
-          fetch(data.figureUrl).then(function(res) {
-            if (!res.ok) throw new Error('figure fetch failed: ' + res.status);
-            return res.blob();
-          }).then(function(blob) {
-            const file = new File([blob], 'figure.jpg', { type: blob.type || 'image/jpeg' });
-            return addImageFiles([file]);
-          }).then(function() {
-            if (selectedImages.length) {
-              quoteEntry.figureThumb = selectedImages[selectedImages.length - 1].data;
-              renderQuotedContextPreview();
-            }
-          }).catch(function() {});
-        }
+        attachHandoffFigure(quoteEntry, data.figureUrl);
       });
     }
 
@@ -6232,7 +6267,7 @@ function plainTextFromMarkdown(text) {
         currentConversation = currentConversation.slice(0, userIndex);
 
         const newIndex = currentConversation.length;
-        const newMsgObj = originalQuotes.length ? { role: 'user', text: newText, time: new Date().toISOString(), quotedTexts: originalQuotes.map(function(q) { return { text: q.text, mode: q.mode }; }) } : { role: 'user', text: newText, time: new Date().toISOString() };
+        const newMsgObj = originalQuotes.length ? { role: 'user', text: newText, time: new Date().toISOString(), quotedTexts: originalQuotes.map(function(q) { return { text: q.text, mode: q.mode, questionNumber: q.questionNumber }; }) } : { role: 'user', text: newText, time: new Date().toISOString() };
         // Carries the ORIGINAL turn's attachment(s) forward onto the edited one -- a persisted
         // Storage URL (if the original image/PDF upload succeeded) so the edited turn still shows
         // its thumbnail and survives a later reload the same way a fresh send does, and the raw
@@ -6352,6 +6387,16 @@ function plainTextFromMarkdown(text) {
           parts.push('Selected line: "' + q.text + '"');
           return parts.join(' ');
         }
+        if (q.mode === 'pyq_question') {
+          const parts = [];
+          if (q.text) parts.push('Question: ' + q.text + '.');
+          if (q.options) {
+            const optParts = ['a', 'b', 'c', 'd'].filter(function(l) { return q.options[l]; }).map(function(l) { return l.toUpperCase() + ') ' + q.options[l]; });
+            if (optParts.length) parts.push('Options: ' + optParts.join(' ') + '.');
+          }
+          if (q.correct) parts.push('Correct answer: ' + q.correct + '.');
+          return parts.join(' ');
+        }
         return q.mode === 'explain'
           ? 'Please explain this part in simple, easy-to-understand terms: "' + q.text + '"'
           : 'Regarding this part: "' + q.text + '"';
@@ -6367,13 +6412,43 @@ function plainTextFromMarkdown(text) {
     // with or without the "remove" button.
     function buildQuoteBoxEl(quote, dismissible) {
       const wrap = document.createElement('div');
-      wrap.className = 'quoted-context-box' + (dismissible ? '' : ' quoted-context-sent') + (quote.mode === 'explain' ? ' quoted-context-explain' : '') + (quote.mode === 'pyq_doubt' ? ' quoted-context-pyq' : '') + (quote.figureThumb ? ' has-figure' : '');
+      wrap.className = 'quoted-context-box' + (dismissible ? '' : ' quoted-context-sent') + (quote.mode === 'explain' ? ' quoted-context-explain' : '') + (quote.mode === 'pyq_doubt' || quote.mode === 'pyq_question' ? ' quoted-context-pyq' : '') + (quote.figureThumb ? ' has-figure' : '');
       if (quote.figureThumb) {
         const thumb = document.createElement('img');
         thumb.className = 'quote-figure-thumb';
         thumb.src = quote.figureThumb;
         thumb.alt = '';
         wrap.appendChild(thumb);
+      }
+      // Whole-question handoff (the "Ask NEET-AI" button on the question card itself) shows a
+      // "Question <n>" title + 2-line-clamped stem instead of a selected line -- there's no
+      // specific selected text to quote here, just the question as a whole.
+      if (quote.mode === 'pyq_question') {
+        const textEl = document.createElement('div');
+        textEl.className = 'quote-pyq-question-text';
+        const titleEl = document.createElement('div');
+        titleEl.className = 'quote-pyq-question-title';
+        titleEl.textContent = quote.questionNumber ? t('chat', 'pyqQuestionLabel').replace('{n}', quote.questionNumber) : t('pyqbank', 'pageTitle');
+        textEl.appendChild(titleEl);
+        const stemEl = document.createElement('div');
+        stemEl.className = 'quote-pyq-question-stem';
+        stemEl.textContent = quote.text;
+        textEl.appendChild(stemEl);
+        const label = document.createElement('span');
+        label.className = 'quote-mode-label quote-pyq-question-source';
+        label.textContent = t('chat', 'fromQuestionBankLabel');
+        textEl.appendChild(label);
+        wrap.appendChild(textEl);
+        if (dismissible) {
+          const dismiss = document.createElement('button');
+          dismiss.type = 'button';
+          dismiss.className = 'quote-dismiss';
+          dismiss.title = 'Remove quote';
+          dismiss.textContent = '✕';
+          dismiss.onclick = function() { removeQuotedContext(quote.id); };
+          wrap.appendChild(dismiss);
+        }
+        return wrap;
       }
       const textEl = document.createElement('div');
       textEl.className = 'quote-text';
@@ -8281,9 +8356,10 @@ function plainTextFromMarkdown(text) {
       let text = input.value.trim();
       const activeQuotes = quotedContexts.slice();
       // Only the AI-message quote-and-ask flow (mode 'ask'/'explain') gets this "assume they
-      // mean explain it" fallback -- a Question Bank doubt (mode 'pyq_doubt') with nothing typed
-      // should do nothing on send, same as a completely empty compose box, per that feature's spec.
-      if (!text && activeQuotes.length > 0 && activeQuotes.some(function(q) { return q.mode !== 'pyq_doubt'; })) text = 'Please explain this.';
+      // mean explain it" fallback -- a Question Bank doubt (mode 'pyq_doubt' or 'pyq_question')
+      // with nothing typed should do nothing on send, same as a completely empty compose box,
+      // per that feature's spec.
+      if (!text && activeQuotes.length > 0 && activeQuotes.some(function(q) { return q.mode !== 'pyq_doubt' && q.mode !== 'pyq_question'; })) text = 'Please explain this.';
       if (!text && selectedImages.length === 0 && !selectedPDF) { flashEmptySendCue(); return; }
 
       sendInProgress = true;
@@ -8343,7 +8419,7 @@ function plainTextFromMarkdown(text) {
       inputArea.style.display = 'block';
 
       const userIndex = currentConversation.length;
-      const userMsgObj = activeQuotes.length ? { role: 'user', text: text, time: new Date().toISOString(), quotedTexts: activeQuotes.map(function(q) { return { text: q.text, mode: q.mode }; }) } : { role: 'user', text: text, time: new Date().toISOString() };
+      const userMsgObj = activeQuotes.length ? { role: 'user', text: text, time: new Date().toISOString(), quotedTexts: activeQuotes.map(function(q) { return { text: q.text, mode: q.mode, questionNumber: q.questionNumber }; }) } : { role: 'user', text: text, time: new Date().toISOString() };
       // Renders through the SAME addMessageRow path a reload already uses (rather than a
       // separate hand-rolled row), so a freshly-sent image message gets the normal Copy/Edit
       // actions live too, not just after a reload -- previously this had NO action buttons at

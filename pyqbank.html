@@ -1403,6 +1403,7 @@ ${q.diagram_url ? `<img class="q-diagram-img q-img" src="${q.diagram_url}">` : '
           <div class="q-actions">
             <button class="sol-btn btn-tint-blue" id="solBtn-${q.id}" onclick="toggleSolution(this, '${q.id}', ${JSON.stringify(q).replace(/"/g, '&quot;')})">${t('pyqbank','showSolution')}</button>
             <button class="sol-btn sol-btn-orange" onclick="saveQuestion(${JSON.stringify(q).replace(/"/g, '&quot;')}, 'PYQ Bank', this)">${t('pyqbank','save')}</button>
+            <button class="sol-btn btn-tint-blue" onclick="sendPyqQuestionAsDoubt()">${t('pyqbank','askNeetAi')}</button>
           </div>
           <div class="sol-div" id="sol-${q.id}"></div>
           <div style="display:flex;justify-content:space-between;margin-top:20px;">
@@ -1946,6 +1947,43 @@ ${q.diagram_url ? `<img class="q-diagram-img q-img" src="${q.diagram_url}">` : '
     sendPyqDoubtTopicSignal(selectedSubject, selectedChapter, selectedClass);
   }
   document.getElementById('pyqAskAiBtn').addEventListener('click', sendPyqSelectionAsDoubt);
+
+  // ---------------- "Ask NEET-AI" button on the question card itself (as opposed to the
+  // selection chip above) -- hands over the WHOLE question (stem + all four options in plain
+  // LaTeX source, not the rendered DOM) instead of just a selected line. Correct answer is only
+  // included when the solution panel is actually visible on screen right now -- q.correct_answer
+  // can already be resolved in-memory (e.g. a previous Show Solution click, or another student
+  // having triggered the resolve) without the solution currently being shown, and the student
+  // hasn't seen the answer in that case so it shouldn't leak into the doubt.
+  function sendPyqQuestionAsDoubt() {
+    const q = currentChapterQuestions[currentQuestionIndex];
+    if (!q) return;
+    const stem = q.question ? String(q.question).slice(0, 400) : '';
+    const options = {};
+    ['a', 'b', 'c', 'd'].forEach(opt => {
+      if (q['option_' + opt]) options[opt] = String(q['option_' + opt]).slice(0, 700);
+    });
+    const solDiv = document.getElementById('sol-' + q.id);
+    const solutionShown = !!(solDiv && solDiv.style.display === 'block' && solDiv.innerHTML && !solDiv.querySelector('.thinking-indicator'));
+    let correct = '';
+    if (solutionShown && q.correct_answer) {
+      const letter = String(q.correct_answer).toLowerCase().trim();
+      const optText = q['option_' + letter];
+      correct = optText ? `${letter.toUpperCase()}) ${optText}` : letter.toUpperCase();
+    }
+    sendPyqDoubtToPanel({
+      type: 'neet-ai-ask-doubt',
+      mode: 'pyq_question',
+      questionNumber: currentQuestionIndex + 1,
+      stem,
+      options,
+      correct,
+      qid: q.id,
+      figureUrl: q.diagram_url || undefined,
+      ts: Date.now()
+    });
+    sendPyqDoubtTopicSignal(selectedSubject, selectedChapter, selectedClass);
+  }
 
   // Driven by selectionchange (debounced) plus an immediate pointerup/touchend check -- selectionchange
   // fires for every input method (mouse drag, touch long-press + drag-handles, keyboard

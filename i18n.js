@@ -714,6 +714,8 @@ const TRANSLATIONS = {
       sfbSkip: 'Skip',
       sfbThanks: 'Thanks for your feedback',
       sfbSendFailed: 'Couldn’t send feedback. Please try again later.',
+      pyqQuestionLabel: 'Question {n}',
+      fromQuestionBankLabel: 'From Question Bank',
       todo: 'Planner',
       todoTitle: 'Planner',
       todoAddPlaceholder: 'Add a task...',
@@ -963,6 +965,8 @@ const TRANSLATIONS = {
       sfbSkip: 'छोड़ें',
       sfbThanks: 'आपकी प्रतिक्रिया के लिए धन्यवाद',
       sfbSendFailed: 'प्रतिक्रिया नहीं भेजी जा सकी। कृपया बाद में पुनः प्रयास करें।',
+      pyqQuestionLabel: 'प्रश्न {n}',
+      fromQuestionBankLabel: 'प्रश्न बैंक से',
       todo: 'प्लानर',
       todoTitle: 'प्लानर',
       todoAddPlaceholder: 'एक कार्य जोड़ें...',
@@ -1522,7 +1526,8 @@ const TRANSLATIONS = {
       failedSaveQuestion: 'Failed to save question.',
       questionSaved: 'Question saved! ✅',
       selectionExplain: 'Explain',
-      selectionAskPlaceholder: 'Ask about this...'
+      selectionAskPlaceholder: 'Ask about this...',
+      askNeetAi: 'Ask NEET-AI'
     },
     hi: {
       headerTitle: 'प्रश्न बैंक',
@@ -1553,7 +1558,8 @@ const TRANSLATIONS = {
       failedSaveQuestion: 'प्रश्न सहेजने में विफल।',
       questionSaved: 'प्रश्न सहेजा गया! ✅',
       selectionExplain: 'समझाएँ',
-      selectionAskPlaceholder: 'इसके बारे में पूछें...'
+      selectionAskPlaceholder: 'इसके बारे में पूछें...',
+      askNeetAi: 'NEET-AI से पूछें'
     }
   },
 
