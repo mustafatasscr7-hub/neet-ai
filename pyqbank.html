@@ -285,6 +285,27 @@
     body.light-mode .pyq-ask-ai-btn { background: #ffffff !important; border-color: #e0e0e5 !important; color: #16161d !important; box-shadow: 0 8px 24px rgba(0,0,0,0.12) !important; }
     body.light-mode .pyq-ask-ai-btn:hover { border-color: #4f8ef7 !important; }
 
+    /* Ask AI slide-in panel -- opened by the chip above instead of navigating to chat.html, so
+       the question on screen (and its position/answers) never changes. Always dark with the
+       site's blue accent regardless of pyqbank's own light/dark toggle, same fixed chrome
+       treatment as the chip itself. The iframe is created once and never torn down on close --
+       only the panel's visibility toggles -- so the conversation inside survives a close/reopen. */
+    .pyq-ask-ai-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 9499; display: none; }
+    .pyq-ask-ai-overlay.visible { display: block; }
+    .pyq-ask-ai-panel { position: fixed; top: 0; right: 0; bottom: 0; width: 420px; max-width: 100vw; background: #0d0d0d; border-left: 1px solid #1e1e1e; box-shadow: -8px 0 32px rgba(0,0,0,0.5); z-index: 9500; display: none; flex-direction: column; transform: translateX(100%); transition: transform 0.22s ease; }
+    .pyq-ask-ai-panel.visible { display: flex; transform: translateX(0); }
+    .pyq-ask-ai-panel-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid #1a1a1a; flex-shrink: 0; }
+    .pyq-ask-ai-panel-title { font-size: 14px; font-weight: 700; color: #ececec; font-family: 'Inter', sans-serif; }
+    .pyq-ask-ai-panel-title span { color: #4f8ef7; }
+    .pyq-ask-ai-panel-close { background: transparent; border: none; color: #888; cursor: pointer; padding: 6px; border-radius: 8px; display: flex; align-items: center; transition: background 0.15s, color 0.15s; }
+    .pyq-ask-ai-panel-close:hover { background: #1e1e1e; color: #ececec; }
+    .pyq-ask-ai-panel-frame { flex: 1; border: none; width: 100%; height: 100%; background: #0d0d0d; }
+
+    @media (max-width: 700px) {
+      .pyq-ask-ai-panel { top: auto; left: 0; right: 0; width: 100%; height: 85vh; border-left: none; border-top: 1px solid #1e1e1e; border-radius: 16px 16px 0 0; transform: translateY(100%); }
+      .pyq-ask-ai-panel.visible { transform: translateY(0); }
+    }
+
     @media (max-width: 768px) {
       .header { flex-wrap: wrap; row-gap: 8px; padding-left: clamp(12px, 4vw, 16px); padding-right: clamp(12px, 4vw, 16px); }
       .container { padding-left: clamp(12px, 4vw, 16px); padding-right: clamp(12px, 4vw, 16px); }
@@ -1742,14 +1763,13 @@ ${q.diagram_url ? `<img class="q-diagram-img q-img" src="${q.diagram_url}">` : '
 }
 
   // ---------------- Text-selection "Ask AI" chip: send a doubt about the stem, an option, or ----
-  // ---------------- the revealed solution over to chat.html -------------------------------------
+  // ---------------- the revealed solution over to a chat.html embedded in a slide-in panel ------
   // Not a reuse of chat.html's .selection-toolbar quote-on-select feature -- that mechanism is
   // tied to chat.html's own DOM (only fires inside .message-bubble.ai) and, more fundamentally,
-  // lives in a completely different document/JS context (a separate HTML page). There's no chat
-  // input in THIS document to fill directly, so instead of filling an input this hands off to
-  // chat.html via a one-shot sessionStorage key ("askDoubt") + a real navigation; chat.html reads
-  // it on load, shows a dismissible quote card, and lets the student type their own doubt there --
-  // see chat.html's own handling right after its auth/session check resolves.
+  // lives in a completely different document/JS context (a separate HTML page). The chip never
+  // navigates this page away -- it opens the panel below (an iframe of chat.html?embed=1) and
+  // hands the doubt over with postMessage; chat.html's embed mode listens for it, shows a
+  // dismissible quote card, and lets the student type their own doubt there.
   //
   // KaTeX renders both a visible .katex-html span and a hidden .katex-mathml span per formula --
   // a raw DOM selection walks both and doubles every formula's text. Same fix chat.html's own
@@ -1759,6 +1779,63 @@ ${q.diagram_url ? `<img class="q-diagram-img q-img" src="${q.diagram_url}">` : '
     const frag = range.cloneContents();
     frag.querySelectorAll('.katex-mathml').forEach(el => el.remove());
     return frag.textContent.trim();
+  }
+
+  // ---------------- Ask AI panel: hosts chat.html in an iframe instead of navigating away -------
+  // The iframe is created lazily on the first chip click and never torn down on close -- only the
+  // panel's own visibility toggles -- so the conversation inside survives a close/reopen. Handoff
+  // payloads go through postMessage with targetOrigin pinned to this page's own origin (the
+  // browser itself refuses delivery if the iframe ever ends up on a different origin), and are
+  // queued until the iframe's `load` event fires so a doubt sent on the very first click -- before
+  // chat.html has even started loading -- isn't lost.
+  const pyqAskAiPanel = document.createElement('div');
+  pyqAskAiPanel.className = 'pyq-ask-ai-panel';
+  pyqAskAiPanel.innerHTML = `
+    <div class="pyq-ask-ai-panel-header">
+      <span class="pyq-ask-ai-panel-title">NEET<span>-AI</span></span>
+      <button class="pyq-ask-ai-panel-close" id="pyqAskAiPanelClose" type="button" aria-label="Close">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+  `;
+  document.body.appendChild(pyqAskAiPanel);
+
+  let pyqAskAiFrame = null;
+  let pyqAskAiFrameLoaded = false;
+  let pyqAskAiQueue = [];
+
+  function flushPyqAskAiQueue() {
+    if (!pyqAskAiFrameLoaded || !pyqAskAiFrame) return;
+    while (pyqAskAiQueue.length) {
+      pyqAskAiFrame.contentWindow.postMessage(pyqAskAiQueue.shift(), window.location.origin);
+    }
+  }
+
+  function ensurePyqAskAiFrame() {
+    if (pyqAskAiFrame) return;
+    pyqAskAiFrame = document.createElement('iframe');
+    pyqAskAiFrame.className = 'pyq-ask-ai-panel-frame';
+    pyqAskAiFrame.src = './chat.html?embed=1';
+    pyqAskAiFrame.addEventListener('load', function() {
+      pyqAskAiFrameLoaded = true;
+      flushPyqAskAiQueue();
+    });
+    pyqAskAiPanel.appendChild(pyqAskAiFrame);
+  }
+
+  function openPyqAskAiPanel() {
+    ensurePyqAskAiFrame();
+    pyqAskAiPanel.classList.add('visible');
+  }
+  function closePyqAskAiPanel() {
+    pyqAskAiPanel.classList.remove('visible');
+  }
+  document.getElementById('pyqAskAiPanelClose').addEventListener('click', closePyqAskAiPanel);
+
+  function sendPyqDoubtToPanel(payload) {
+    pyqAskAiQueue.push(payload);
+    openPyqAskAiPanel();
+    flushPyqAskAiQueue();
   }
 
   const pyqAskAiChip = document.createElement('div');
@@ -1791,7 +1868,7 @@ ${q.diagram_url ? `<img class="q-diagram-img q-img" src="${q.diagram_url}">` : '
     pyqAskAiChip.style.top = top + 'px';
   }
 
-  // Builds the compact handoff payload chat.html expects under sessionStorage key "askDoubt".
+  // Builds the compact handoff payload chat.html's embed mode expects via postMessage.
   // stem/correct come from the question currently on screen -- q.correct_answer is already
   // resolved in-memory by the time a solution is visible (toggleSolution awaits
   // ensureCorrectAnswer before rendering it), so this can read it synchronously with no extra
@@ -1809,18 +1886,14 @@ ${q.diagram_url ? `<img class="q-diagram-img q-img" src="${q.diagram_url}">` : '
     }
     window.getSelection().removeAllRanges();
     hidePyqAskAiChip();
-    try {
-      sessionStorage.setItem('askDoubt', JSON.stringify({
-        selected: selected.slice(0, 600),
-        stem,
-        correct,
-        qid: q ? q.id : undefined,
-        ts: Date.now()
-      }));
-    } catch (e) {
-      console.error('askDoubt sessionStorage write failed', e);
-    }
-    window.location.href = './chat.html';
+    sendPyqDoubtToPanel({
+      type: 'neet-ai-ask-doubt',
+      selected: selected.slice(0, 600),
+      stem,
+      correct,
+      qid: q ? q.id : undefined,
+      ts: Date.now()
+    });
   }
   document.getElementById('pyqAskAiBtn').addEventListener('click', sendPyqSelectionAsDoubt);
 

@@ -1223,6 +1223,12 @@
     .main { position: relative; flex: 1; display: flex; flex-direction: column; background: #0d0d0d; overflow: hidden; }
     .header { padding: 14px 24px; border-bottom: 1px solid #1a1a1a; display: flex; align-items: center; justify-content: space-between; background: #0d0d0d; }
 
+    /* Embed mode (?embed=1, used by pyqbank.html's Ask AI panel): just the conversation, no
+       chrome that assumes a full browser tab -- the sidebar, the header (logo/title/todo/upgrade/
+       countdown), and the welcome screen are all hidden; .main naturally fills the whole iframe
+       once .sidebar is display:none'd out of the body's flex row. */
+    body.embed-mode .sidebar, body.embed-mode .sidebar-backdrop, body.embed-mode .header { display: none !important; }
+
     .chat-window { flex: 1; overflow-y: auto; padding: 32px 0; display: flex; flex-direction: column; scroll-behavior: smooth; }
 
     /* A sibling of .chat-window (not a child of it) anchored to .main instead -- a child of a
@@ -2146,6 +2152,46 @@
     const chatWindow = document.getElementById('chatWindow');
     const sendBtn = document.getElementById('sendBtn');
     const inputArea = document.getElementById('inputArea');
+
+    // ---------------- Embed mode (?embed=1): hosts just the conversation inside pyqbank.html's
+    // Ask AI slide-in panel. Chrome that assumes a full tab (sidebar/header/welcome) is hidden via
+    // the body.embed-mode CSS above; this shows the input area immediately instead of waiting for
+    // a first message, since there's no welcome screen to click through in a narrow panel. A
+    // normal chat.html load (no query param) never sets this class and is unaffected below.
+    const isEmbedMode = new URLSearchParams(window.location.search).get('embed') === '1';
+    if (isEmbedMode) {
+      document.body.classList.add('embed-mode');
+      const embedWelcome = document.getElementById('welcome');
+      if (embedWelcome) embedWelcome.remove();
+      inputArea.style.display = 'block';
+
+      // Handoff from pyqbank.html's Ask AI chip, delivered via postMessage into this iframe
+      // instead of the old sessionStorage+navigation handoff (see pyqbank.html's
+      // sendPyqSelectionAsDoubt) -- this embed IS the iframe, so the doubt can be handed straight
+      // to the already-running page instead of round-tripped through storage plus a reload. Does
+      // NOT auto-send -- same as that old handoff, this only seeds a dismissible quote card and
+      // focuses the input; the student still types and sends their own doubt. quotedContexts is
+      // an array (same one the AI-message selection toolbar's multi-quote support pushes onto),
+      // so picking a second bit of text while the panel is already open adds a second card
+      // instead of replacing the first.
+      window.addEventListener('message', function(event) {
+        if (event.origin !== window.location.origin) return;
+        const data = event.data;
+        if (!data || data.type !== 'neet-ai-ask-doubt' || !data.selected) return;
+        const welcomeNow = document.getElementById('welcome');
+        if (welcomeNow) welcomeNow.remove();
+        inputArea.style.display = 'block';
+        quotedContexts.push({
+          id: ++quotedContextIdCounter,
+          text: String(data.selected).slice(0, 600),
+          mode: 'pyq_doubt',
+          stem: data.stem ? String(data.stem).slice(0, 400) : '',
+          correct: data.correct || ''
+        });
+        renderQuotedContextPreview();
+        input.focus();
+      });
+    }
 
     // Keeps exactly one .message-row tagged .is-latest -- the CSS above uses that to keep its
     // action row permanently visible (Claude.ai's own pattern), while every older message falls
@@ -11247,19 +11293,23 @@ function plainTextFromMarkdown(text) {
       updateCharCounter(this);
     });
 
-    document.getElementById('welcomeInput').addEventListener('keydown', function(e) {
+    // Optional chaining here (not needed before embed mode existed) -- in embed mode #welcome is
+    // removed synchronously as soon as the page's own script starts running (see isEmbedMode
+    // above), so #welcomeInput/#welcomeSend no longer exist by the time this top-level wiring
+    // runs.
+    document.getElementById('welcomeInput')?.addEventListener('keydown', function(e) {
       if (handleSlashMenuKeydown(e, this)) return;
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); input.value = this.value; sendMessage(); }
     });
-    document.getElementById('welcomeInput').addEventListener('input', function() {
+    document.getElementById('welcomeInput')?.addEventListener('input', function() {
       this.style.height = 'auto';
       const cap = parseFloat(getComputedStyle(this).maxHeight) || 134;
       this.style.height = Math.min(this.scrollHeight, cap) + 'px';
       updateSlashMenuForInput(this);
     });
-    document.getElementById('welcomeInput').addEventListener('paste', handleWelcomePaste);
+    document.getElementById('welcomeInput')?.addEventListener('paste', handleWelcomePaste);
 
-    document.getElementById('welcomeSend').addEventListener('click', function() {
+    document.getElementById('welcomeSend')?.addEventListener('click', function() {
       input.value = document.getElementById('welcomeInput').value;
       sendMessage();
     });
