@@ -3751,6 +3751,150 @@ async def save_doubt_topic(body: DoubtTopicRequest, _: None = Depends(rate_limit
         print(f"DOUBT TOPIC ERROR (user_id={verified_user_id}): {type(e).__name__}", flush=True)
     return Response(status_code=204)
 
+# ---------- Suggested chapters (personalised test setup) ----------
+SUGGESTED_CHAPTERS_MAX = 5
+DOUBT_SUGGESTION_LOOKBACK_DAYS = 14
+DOUBT_SUGGESTION_MIN_COUNT = 2
+# A single doubt's nudge stays well under the 1.0 weight compute_weak_chapters gives one wrong
+# answer or saved question -- doubts can only reorder the list a little, never dominate it.
+DOUBT_SUGGESTION_WEIGHT_MIN = 0.1
+DOUBT_SUGGESTION_WEIGHT_MAX = 0.3
+
+async def fetch_recent_doubt_rows(user_id: str) -> list:
+    """The student's doubt_topics rows (chip taps from pyqbank.html's Ask NEET-AI flow) from the
+    last DOUBT_SUGGESTION_LOOKBACK_DAYS days, as {subject, chapter, created_at} rows. Raw data
+    only -- compute_doubt_scores turns this into per-chapter counts/scores."""
+    if not user_id:
+        return []
+    headers = {"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"}
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=DOUBT_SUGGESTION_LOOKBACK_DAYS)).isoformat()
+    try:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/doubt_topics",
+            headers=headers,
+            params={
+                "user_id": f"eq.{user_id}",
+                "created_at": f"gte.{cutoff}",
+                "select": "subject,chapter,created_at",
+                "order": "created_at.desc",
+                "limit": 200,
+            }
+        )
+        rows = resp.json()
+        return rows if isinstance(rows, list) else []
+    except Exception:
+        return []
+
+def compute_doubt_scores(doubt_rows: list, now: datetime = None) -> dict:
+    """Aggregates recent doubt_topics rows into a {(subject_lower, chapter): {subject, chapter,
+    count, score}} dict. Each doubt's contribution decays linearly over
+    DOUBT_SUGGESTION_LOOKBACK_DAYS, from DOUBT_SUGGESTION_WEIGHT_MAX (raised today) down to
+    DOUBT_SUGGESTION_WEIGHT_MIN (raised at the edge of the window), so a fresher doubt counts for
+    more -- but every doubt stays below the per-event weight compute_weak_chapters uses, so doubts
+    only ever nudge the ranking. A chapter's count is the raw (unweighted) number of doubts, which
+    is what the DOUBT_SUGGESTION_MIN_COUNT gate checks -- a single doubt is too thin a signal to
+    act on, same reasoning compute_weak_chapters uses for mistakes/saved questions. Rows older than
+    DOUBT_SUGGESTION_LOOKBACK_DAYS are skipped outright (fetch_recent_doubt_rows already filters
+    these out server-side; this is just a second guard so the function is correct standalone)."""
+    now = now or datetime.now(timezone.utc)
+    agg = {}
+    for d in (doubt_rows or []):
+        chapter = (d.get("chapter") or "").strip()
+        subject = (d.get("subject") or "").strip()
+        created_at = d.get("created_at")
+        if not chapter or not subject or not created_at:
+            continue
+        try:
+            created = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        age_days = (now - created).total_seconds() / 86400
+        if age_days > DOUBT_SUGGESTION_LOOKBACK_DAYS:
+            continue
+        recency = max(0.0, 1 - age_days / DOUBT_SUGGESTION_LOOKBACK_DAYS)
+        weight = DOUBT_SUGGESTION_WEIGHT_MIN + (DOUBT_SUGGESTION_WEIGHT_MAX - DOUBT_SUGGESTION_WEIGHT_MIN) * recency
+        key = (subject.lower(), chapter)
+        entry = agg.setdefault(key, {"subject": subject, "chapter": chapter, "count": 0, "score": 0.0})
+        entry["count"] += 1
+        entry["score"] += weight
+    return agg
+
+def _class_for_suggested_chapter(subject: str, chapter: str):
+    """Best-effort NCERT class (11/12) for a chapter name, via the same reverse syllabus index
+    _ncert_chapter_citation's callers build (_SYLLABUS_CHAPTER_INDEX) -- informational only, never
+    filtered on, so a miss just means the chip omits a class label."""
+    matches = _SYLLABUS_CHAPTER_INDEX.get(_norm_chapter(chapter), [])
+    if not matches:
+        return None
+    same_subject = next((cls for s, cls in matches if s.lower() == (subject or "").lower()), None)
+    return same_subject if same_subject is not None else matches[0][1]
+
+def rank_suggested_chapters(weak: list, doubt_scores: dict, limit: int = SUGGESTED_CHAPTERS_MAX) -> list:
+    """Merges compute_weak_chapters' qualifying chapters with compute_doubt_scores' per-chapter
+    doubt aggregates into one ranked list, each entry {subject, chapter, reason, score}. A chapter
+    that already qualifies via mistakes/saved keeps that as its reason (whichever count is larger)
+    and just gets its score nudged up by any doubts on the same chapter; a chapter with no
+    mistake/saved qualification only appears if it has DOUBT_SUGGESTION_MIN_COUNT+ doubts, with
+    reason "doubts". Pure function (no I/O) so it can be unit-tested directly."""
+    ranked = {}
+    for c in (weak or []):
+        key = (c["subject"].lower(), c["chapter"])
+        reason = "mistakes" if c["mock_wrong_count"] >= c["saved_count"] else "saved"
+        score = c["total"] + doubt_scores.get(key, {}).get("score", 0.0)
+        ranked[key] = {"subject": c["subject"], "chapter": c["chapter"], "reason": reason, "score": score}
+    for key, d in (doubt_scores or {}).items():
+        if d["count"] < DOUBT_SUGGESTION_MIN_COUNT or key in ranked:
+            continue
+        ranked[key] = {"subject": d["subject"], "chapter": d["chapter"], "reason": "doubts", "score": d["score"]}
+    return sorted(ranked.values(), key=lambda x: -x["score"])[:limit]
+
+@app.get("/me/suggested-chapters")
+async def get_suggested_chapters(_: None = Depends(rate_limit(30, 60, by="account")), verified_user_id: str = Depends(_get_verified_user_id)):
+    """Up to SUGGESTED_CHAPTERS_MAX chapters to nudge a student toward on the personalised test's
+    Custom tab -- built from the same compute_weak_chapters signal /me/personalisation shows
+    (wrong mock answers + saved questions), plus a light nudge from recent doubt_topics chips (see
+    compute_doubt_scores). No model call, no writes. Honours the Personalize toggle the same way
+    save_doubt_topic does (missing table/row/setting treated as on, only an explicit False turns it
+    off). Always returns {"chapters": []} rather than a 401/500 -- logged out, new student, toggle
+    off, or any internal failure all look the same to the frontend, which just hides the row."""
+    if not verified_user_id:
+        return {"chapters": []}
+    try:
+        settings_resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/user_settings", headers=ADMIN_HEADERS,
+            params={"user_id": f"eq.{verified_user_id}", "select": "personalize", "limit": 1}
+        )
+        if settings_resp.status_code < 400:
+            rows = settings_resp.json()
+            if rows and rows[0].get("personalize") is False:
+                return {"chapters": []}
+    except Exception:
+        pass
+
+    try:
+        mistake_rows, mock_wrong_rows, doubt_rows = await asyncio.gather(
+            fetch_student_mistake_rows(verified_user_id),
+            fetch_mock_wrong_rows(verified_user_id),
+            fetch_recent_doubt_rows(verified_user_id),
+        )
+        weak = compute_weak_chapters(mistake_rows, mock_wrong_rows)
+        doubt_scores = compute_doubt_scores(doubt_rows)
+        top = rank_suggested_chapters(weak, doubt_scores)
+        return {
+            "chapters": [
+                {
+                    "subject": c["subject"],
+                    "chapter": c["chapter"],
+                    "class": _class_for_suggested_chapter(c["subject"], c["chapter"]),
+                    "reason": c["reason"],
+                }
+                for c in top
+            ]
+        }
+    except Exception as e:
+        print(f"SUGGESTED CHAPTERS ERROR (user_id={verified_user_id}): {type(e).__name__}", flush=True)
+        return {"chapters": []}
+
 async def _empty_list():
     return []
 

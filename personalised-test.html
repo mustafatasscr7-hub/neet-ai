@@ -98,6 +98,12 @@
     .chip-remove:hover { color: #fff; background: #ffffff15; }
     .chip-count { font-size: 11px; color: #666; margin-left: 4px; }
 
+    .chip-suggested { cursor: pointer; font-family: 'Inter', sans-serif; transition: border-color 0.15s, background 0.15s; }
+    .chip-suggested:hover { border-color: #4f8ef770; }
+    .chip-suggested.selected { background: #4f8ef718; border-color: #4f8ef7; }
+    .chip-reason { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: #666; }
+    .chip-suggested.selected .chip-reason { color: #4f8ef7; }
+
     .count-grid { display: flex; gap: 10px; flex-wrap: wrap; }
     .count-btn { background: #0d0d12; border: 1px solid #2a2a35; border-radius: 10px; padding: 12px 20px; color: #888; font-size: 14px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; transition: all 0.2s; }
     .count-btn:hover { border-color: #4f8ef750; color: #ccc; }
@@ -363,6 +369,9 @@
     body.light-mode .chip { background: #f5f5f7 !important; border-color: #d5d5dd !important; color: #333338 !important; }
     body.light-mode .chip-remove { color: #9a9aa5 !important; }
     body.light-mode .chip-remove:hover { color: #0d0d0d !important; background: #00000010 !important; }
+    body.light-mode .chip-suggested.selected { background: #4f8ef715 !important; border-color: #4f8ef7 !important; }
+    body.light-mode .chip-reason { color: #9a9aa5 !important; }
+    body.light-mode .chip-suggested.selected .chip-reason { color: #4f8ef7 !important; }
     body.light-mode .chip-count { color: #7a7a85 !important; }
 
     body.light-mode .count-btn { background: #f5f5f7 !important; border-color: #d5d5dd !important; color: #55555f !important; }
@@ -576,6 +585,13 @@
             <div class="chip-tray" id="chipTray"></div>
           </div>
 
+          <div class="setup-step" id="suggestedChaptersStep" style="display:none;">
+            <div class="setup-step-label">
+              <span data-i18n="personalisedTest.suggestedForYou">Suggested for you</span>
+            </div>
+            <div class="chip-tray" id="suggestedChaptersTray"></div>
+          </div>
+
           <div class="setup-step">
             <div class="setup-step-label">
               <span><span data-i18n="personalisedTest.chaptersLabel">Chapters</span> <span class="hint" data-i18n="personalisedTest.chaptersHint">(optional — leave empty for all)</span></span>
@@ -722,6 +738,10 @@
     let activeSubjects = new Set();
     let selectedChaptersBySubject = { Biology: new Set(), Physics: new Set(), Chemistry: new Set() };
     let chapterFetchToken = { Biology: 0, Physics: 0, Chemistry: 0 };
+
+    // "Suggested for you" chips (Custom tab) -- populated once from /me/suggested-chapters;
+    // stays empty (and the row hidden) for guests, new students, Personalize-off, or any failure.
+    let suggestedChapters = [];
 
     const SUBJECT_META = {
       Biology:   { color: '#4ade80' },
@@ -1021,6 +1041,68 @@
       return bodyHtml;
     }
 
+    // Fetches up to 5 "Suggested for you" chapter chips and renders them above the chapter
+    // picker. Fire-and-forget: called once alongside the page's other initial loads, never
+    // awaited by anything else, so a slow or failing request never delays the page.
+    async function loadSuggestedChapters() {
+      try {
+        const { data: { session } } = await client.auth.getSession();
+        if (!session) return;
+        const res = await fetch(`${API_BASE}/me/suggested-chapters`, {
+          headers: { 'Authorization': `Bearer ${session.access_token}` }
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        const chapters = Array.isArray(data.chapters) ? data.chapters : [];
+        if (!chapters.length) return;
+        suggestedChapters = chapters;
+        renderSuggestedChapters();
+      } catch (e) {
+        // Silent -- the row just stays hidden.
+      }
+    }
+
+    function renderSuggestedChapters() {
+      const step = document.getElementById('suggestedChaptersStep');
+      const tray = document.getElementById('suggestedChaptersTray');
+      if (!suggestedChapters.length) {
+        step.style.display = 'none';
+        return;
+      }
+      step.style.display = 'block';
+      const reasonKey = { mistakes: 'reasonMistakes', saved: 'reasonSaved', doubts: 'reasonDoubts' };
+      tray.innerHTML = suggestedChapters.map(c => {
+        const color = (SUBJECT_META[c.subject] || {}).color || '#4f8ef7';
+        const selected = selectedChaptersBySubject[c.subject] && selectedChaptersBySubject[c.subject].has(c.chapter);
+        const reasonLabel = t('personalisedTest', reasonKey[c.reason] || 'reasonMistakes');
+        return `
+          <button type="button" class="chip chip-suggested${selected ? ' selected' : ''}" style="border-color:${color}40;" onclick="selectSuggestedChapter('${escapeHtml(c.subject)}','${escapeHtml(c.chapter)}')">
+            <span class="chip-dot" style="background:${color};"></span>${escapeHtml(chapterName(c.chapter))}
+            <span class="chip-reason">${escapeHtml(reasonLabel)}</span>
+          </button>
+        `;
+      }).join('');
+    }
+
+    // Adds a suggested chapter to the existing Custom-tab selection, reusing the same
+    // activeSubjects/selectedChaptersBySubject state and toggleSubjectCard flow a manual click
+    // on the Subject/Chapters pickers would use, so the generated test is built exactly the same
+    // way either path is taken.
+    async function selectSuggestedChapter(subject, chapter) {
+      if (selectedChaptersBySubject[subject] && selectedChaptersBySubject[subject].has(chapter)) return;
+      selectedChaptersBySubject[subject].add(chapter);
+      if (activeSubjects.has(subject)) {
+        const section = document.getElementById('chapterGroup-' + subject);
+        const cb = section && section.querySelector(`input[value="${CSS.escape(chapter)}"]`);
+        if (cb) cb.checked = true;
+        renderSelectedChips();
+        updateGenerateBtnState();
+      } else {
+        const btn = document.querySelector(`.subject-card[data-subject="${subject}"]`);
+        if (btn) await toggleSubjectCard(subject, btn);
+      }
+    }
+
     async function toggleSubjectCard(subject, btn) {
       const chapterList = document.getElementById('chapterList');
       const isNowActive = !activeSubjects.has(subject);
@@ -1086,6 +1168,8 @@
     }
 
     function renderSelectedChips() {
+      renderSuggestedChapters();
+
       const step = document.getElementById('selectionSummaryStep');
       const tray = document.getElementById('chipTray');
       if (activeSubjects.size === 0) {
@@ -1271,6 +1355,7 @@
     }
 
     loadSubjectCatalog(subjectTabSubject);
+    loadSuggestedChapters();
 
     // ---------- Test-taking state (adapted from mocktest.html) ----------
     let questions = [];
