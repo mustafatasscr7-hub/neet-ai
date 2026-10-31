@@ -285,25 +285,31 @@
     body.light-mode .pyq-ask-ai-btn { background: #ffffff !important; border-color: #e0e0e5 !important; color: #16161d !important; box-shadow: 0 8px 24px rgba(0,0,0,0.12) !important; }
     body.light-mode .pyq-ask-ai-btn:hover { border-color: #4f8ef7 !important; }
 
-    /* Ask AI slide-in panel -- opened by the chip above instead of navigating to chat.html, so
-       the question on screen (and its position/answers) never changes. Always dark with the
-       site's blue accent regardless of pyqbank's own light/dark toggle, same fixed chrome
-       treatment as the chip itself. The iframe is created once and never torn down on close --
-       only the panel's visibility toggles -- so the conversation inside survives a close/reopen. */
-    .pyq-ask-ai-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 9499; display: none; }
-    .pyq-ask-ai-overlay.visible { display: block; }
-    .pyq-ask-ai-panel { position: fixed; top: 0; right: 0; bottom: 0; width: 420px; max-width: 100vw; background: #0d0d0d; border-left: 1px solid #1e1e1e; box-shadow: -8px 0 32px rgba(0,0,0,0.5); z-index: 9500; display: none; flex-direction: column; transform: translateX(100%); transition: transform 0.22s ease; }
-    .pyq-ask-ai-panel.visible { display: flex; transform: translateX(0); }
+    /* Ask AI floating popup -- opened by the chip above instead of navigating to chat.html, so
+       the question on screen (and its position/answers) never changes and stays fully visible
+       and clickable behind the popup (it's a small fixed box, not a full overlay). Always dark
+       with the site's blue accent regardless of pyqbank's own light/dark toggle, same fixed
+       chrome treatment as the chip itself. The iframe is created once and never torn down on
+       close -- only the popup's visibility toggles -- so the conversation inside survives a
+       close/reopen. Minimising doesn't touch the iframe either, so the conversation survives that
+       too; it just collapses the box down to a small round reopen button. */
+    .pyq-ask-ai-panel { position: fixed; right: 20px; bottom: 20px; width: 380px; height: 540px; max-width: calc(100vw - 32px); max-height: calc(100vh - 32px); background: #0d0d0d; border: 1px solid #1e1e1e; border-radius: 16px; box-shadow: 0 16px 48px rgba(0,0,0,0.5); z-index: 9500; display: none; flex-direction: column; overflow: hidden; }
+    .pyq-ask-ai-panel.visible { display: flex; }
+    .pyq-ask-ai-panel.minimized { display: none; }
     .pyq-ask-ai-panel-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid #1a1a1a; flex-shrink: 0; }
     .pyq-ask-ai-panel-title { font-size: 14px; font-weight: 700; color: #ececec; font-family: 'Inter', sans-serif; }
     .pyq-ask-ai-panel-title span { color: #4f8ef7; }
-    .pyq-ask-ai-panel-close { background: transparent; border: none; color: #888; cursor: pointer; padding: 6px; border-radius: 8px; display: flex; align-items: center; transition: background 0.15s, color 0.15s; }
-    .pyq-ask-ai-panel-close:hover { background: #1e1e1e; color: #ececec; }
+    .pyq-ask-ai-panel-header-btns { display: flex; align-items: center; gap: 4px; }
+    .pyq-ask-ai-panel-min, .pyq-ask-ai-panel-close { background: transparent; border: none; color: #888; cursor: pointer; padding: 6px; border-radius: 8px; display: flex; align-items: center; transition: background 0.15s, color 0.15s; }
+    .pyq-ask-ai-panel-min:hover, .pyq-ask-ai-panel-close:hover { background: #1e1e1e; color: #ececec; }
     .pyq-ask-ai-panel-frame { flex: 1; border: none; width: 100%; height: 100%; background: #0d0d0d; }
 
+    .pyq-ask-ai-reopen { position: fixed; right: 20px; bottom: 20px; width: 52px; height: 52px; border-radius: 50%; background: #121212; border: 1px solid #262626; color: #4f8ef7; box-shadow: 0 8px 24px rgba(0,0,0,0.5); z-index: 9500; display: none; align-items: center; justify-content: center; cursor: pointer; }
+    .pyq-ask-ai-reopen.visible { display: flex; }
+    .pyq-ask-ai-reopen:hover { border-color: #4f8ef7; }
+
     @media (max-width: 700px) {
-      .pyq-ask-ai-panel { top: auto; left: 0; right: 0; width: 100%; height: 85vh; border-left: none; border-top: 1px solid #1e1e1e; border-radius: 16px 16px 0 0; transform: translateY(100%); }
-      .pyq-ask-ai-panel.visible { transform: translateY(0); }
+      .pyq-ask-ai-panel { right: 0; bottom: 0; left: 0; top: auto; width: 100%; height: 85vh; max-width: 100vw; border-left: none; border-right: none; border-bottom: none; border-radius: 16px 16px 0 0; }
     }
 
     @media (max-width: 768px) {
@@ -1781,24 +1787,36 @@ ${q.diagram_url ? `<img class="q-diagram-img q-img" src="${q.diagram_url}">` : '
     return frag.textContent.trim();
   }
 
-  // ---------------- Ask AI panel: hosts chat.html in an iframe instead of navigating away -------
-  // The iframe is created lazily on the first chip click and never torn down on close -- only the
-  // panel's own visibility toggles -- so the conversation inside survives a close/reopen. Handoff
-  // payloads go through postMessage with targetOrigin pinned to this page's own origin (the
-  // browser itself refuses delivery if the iframe ever ends up on a different origin), and are
-  // queued until the iframe's `load` event fires so a doubt sent on the very first click -- before
-  // chat.html has even started loading -- isn't lost.
+  // ---------------- Ask AI popup: hosts chat.html in an iframe instead of navigating away -------
+  // The iframe is created lazily on the first chip click and never torn down on close or minimise
+  // -- only the popup's own visibility toggles -- so the conversation inside survives a
+  // close/reopen or minimise/reopen. Handoff payloads go through postMessage with targetOrigin
+  // pinned to this page's own origin (the browser itself refuses delivery if the iframe ever ends
+  // up on a different origin), and are queued until the iframe's `load` event fires so a doubt
+  // sent on the very first click -- before chat.html has even started loading -- isn't lost.
   const pyqAskAiPanel = document.createElement('div');
   pyqAskAiPanel.className = 'pyq-ask-ai-panel';
   pyqAskAiPanel.innerHTML = `
     <div class="pyq-ask-ai-panel-header">
       <span class="pyq-ask-ai-panel-title">NEET<span>-AI</span></span>
-      <button class="pyq-ask-ai-panel-close" id="pyqAskAiPanelClose" type="button" aria-label="Close">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-      </button>
+      <div class="pyq-ask-ai-panel-header-btns">
+        <button class="pyq-ask-ai-panel-min" id="pyqAskAiPanelMin" type="button" aria-label="Minimise">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        </button>
+        <button class="pyq-ask-ai-panel-close" id="pyqAskAiPanelClose" type="button" aria-label="Close">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
     </div>
   `;
   document.body.appendChild(pyqAskAiPanel);
+
+  const pyqAskAiReopen = document.createElement('button');
+  pyqAskAiReopen.type = 'button';
+  pyqAskAiReopen.className = 'pyq-ask-ai-reopen';
+  pyqAskAiReopen.setAttribute('aria-label', 'Reopen NEET-AI chat');
+  pyqAskAiReopen.innerHTML = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>';
+  document.body.appendChild(pyqAskAiReopen);
 
   let pyqAskAiFrame = null;
   let pyqAskAiFrameLoaded = false;
@@ -1825,12 +1843,22 @@ ${q.diagram_url ? `<img class="q-diagram-img q-img" src="${q.diagram_url}">` : '
 
   function openPyqAskAiPanel() {
     ensurePyqAskAiFrame();
+    pyqAskAiPanel.classList.remove('minimized');
     pyqAskAiPanel.classList.add('visible');
+    pyqAskAiReopen.classList.remove('visible');
   }
   function closePyqAskAiPanel() {
+    pyqAskAiPanel.classList.remove('visible', 'minimized');
+    pyqAskAiReopen.classList.remove('visible');
+  }
+  function minimizePyqAskAiPanel() {
     pyqAskAiPanel.classList.remove('visible');
+    pyqAskAiPanel.classList.add('minimized');
+    pyqAskAiReopen.classList.add('visible');
   }
   document.getElementById('pyqAskAiPanelClose').addEventListener('click', closePyqAskAiPanel);
+  document.getElementById('pyqAskAiPanelMin').addEventListener('click', minimizePyqAskAiPanel);
+  pyqAskAiReopen.addEventListener('click', openPyqAskAiPanel);
 
   function sendPyqDoubtToPanel(payload) {
     pyqAskAiQueue.push(payload);
