@@ -1474,6 +1474,11 @@
     .quoted-context-box.quoted-context-pyq { border-left-color: #4f8ef7; }
     .quoted-context-box.quoted-context-pyq .quote-mode-label { color: #4f8ef7; }
     body.light-mode .quoted-context-box.quoted-context-pyq .quote-mode-label { color: #2563eb !important; }
+    /* Small preview of the question's figure, fetched and attached alongside the doubt -- see
+       the embed-mode postMessage listener above. Switches the box to a row layout just for this
+       one quote instead of the default stacked text block. */
+    .quoted-context-box.has-figure { display: flex; align-items: flex-start; gap: 8px; }
+    .quoted-context-box .quote-figure-thumb { width: 32px; height: 32px; border-radius: 6px; object-fit: cover; flex-shrink: 0; }
     /* #quotedContextPreview now holds a stack of independent quote boxes (previously exactly
        one) -- wrap so a lot of short quotes flow onto new lines instead of forcing the compose
        box wider than the input itself. */
@@ -2181,15 +2186,35 @@
         const welcomeNow = document.getElementById('welcome');
         if (welcomeNow) welcomeNow.remove();
         inputArea.style.display = 'block';
-        quotedContexts.push({
+        const quoteEntry = {
           id: ++quotedContextIdCounter,
           text: String(data.selected).slice(0, 600),
           mode: 'pyq_doubt',
           stem: data.stem ? String(data.stem).slice(0, 400) : '',
           correct: data.correct || ''
-        });
+        };
+        quotedContexts.push(quoteEntry);
         renderQuotedContextPreview();
         input.focus();
+
+        // Question has a figure -- fetch it and attach it exactly like a student's own image
+        // upload (same addImageFiles path: compression, maxImages room, upload-for-persistence),
+        // so Gemini sees it alongside the doubt. Best-effort only: a fetch failure (CORS, a dead
+        // URL, offline) just leaves the doubt as text-only, same as if there'd been no figure.
+        if (data.figureUrl) {
+          fetch(data.figureUrl).then(function(res) {
+            if (!res.ok) throw new Error('figure fetch failed: ' + res.status);
+            return res.blob();
+          }).then(function(blob) {
+            const file = new File([blob], 'figure.jpg', { type: blob.type || 'image/jpeg' });
+            return addImageFiles([file]);
+          }).then(function() {
+            if (selectedImages.length) {
+              quoteEntry.figureThumb = selectedImages[selectedImages.length - 1].data;
+              renderQuotedContextPreview();
+            }
+          }).catch(function() {});
+        }
       });
     }
 
@@ -6342,7 +6367,14 @@ function plainTextFromMarkdown(text) {
     // with or without the "remove" button.
     function buildQuoteBoxEl(quote, dismissible) {
       const wrap = document.createElement('div');
-      wrap.className = 'quoted-context-box' + (dismissible ? '' : ' quoted-context-sent') + (quote.mode === 'explain' ? ' quoted-context-explain' : '') + (quote.mode === 'pyq_doubt' ? ' quoted-context-pyq' : '');
+      wrap.className = 'quoted-context-box' + (dismissible ? '' : ' quoted-context-sent') + (quote.mode === 'explain' ? ' quoted-context-explain' : '') + (quote.mode === 'pyq_doubt' ? ' quoted-context-pyq' : '') + (quote.figureThumb ? ' has-figure' : '');
+      if (quote.figureThumb) {
+        const thumb = document.createElement('img');
+        thumb.className = 'quote-figure-thumb';
+        thumb.src = quote.figureThumb;
+        thumb.alt = '';
+        wrap.appendChild(thumb);
+      }
       const textEl = document.createElement('div');
       textEl.className = 'quote-text';
       if (quote.mode === 'explain') {

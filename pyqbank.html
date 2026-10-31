@@ -1920,6 +1920,9 @@ ${q.diagram_url ? `<img class="q-diagram-img q-img" src="${q.diagram_url}">` : '
       stem,
       correct,
       qid: q ? q.id : undefined,
+      // Only the stem's own figure -- an option-diagram isn't "the" figure for the doubt as a
+      // whole, and most questions have none at all, so this is undefined far more often than set.
+      figureUrl: q && q.diagram_url ? q.diagram_url : undefined,
       ts: Date.now()
     });
   }
