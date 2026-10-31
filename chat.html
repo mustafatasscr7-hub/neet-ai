@@ -1454,7 +1454,7 @@
     body.light-mode .chat-pdf-chip { border-color: #e2e2e8 !important; color: #444 !important; }
     body.light-mode .chat-pdf-chip svg { color: #777 !important; }
     .quoted-context-box { position: relative; width: fit-content; max-width: 220px; max-height: 92px; overflow: hidden; background: rgba(255,255,255,0.06); border-left: 2px solid #8a8a8a; border-radius: 10px; padding: 8px 22px 8px 10px; font-size: 12px; line-height: 1.45; color: #999; margin-bottom: 6px; min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
-    .quoted-context-box .quote-text { white-space: normal; }
+    .quoted-context-box .quote-text { white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; text-overflow: ellipsis; }
     .quoted-context-box .quote-dismiss { position: absolute; top: 4px; right: 5px; background: transparent; border: none; color: #666; cursor: pointer; font-size: 12px; line-height: 1; padding: 2px; opacity: 0.7; }
     .quoted-context-box .quote-dismiss:hover { opacity: 1; color: #ccc; }
     body.light-mode .quoted-context-box { background: rgba(0,0,0,0.04) !important; color: #777 !important; }
@@ -1463,6 +1463,11 @@
     .quoted-context-box.quoted-context-explain { border-left-color: #a78bfa; }
     .quoted-context-box .quote-mode-label { color: #a78bfa; font-weight: 600; }
     body.light-mode .quoted-context-box .quote-mode-label { color: #7c3aed !important; }
+    /* Cross-page handoff from pyqbank.html's "Ask AI" chip -- blue site accent, not purple, to
+       stay visually distinct from the "Explain simply" mode above. */
+    .quoted-context-box.quoted-context-pyq { border-left-color: #4f8ef7; }
+    .quoted-context-box.quoted-context-pyq .quote-mode-label { color: #4f8ef7; }
+    body.light-mode .quoted-context-box.quoted-context-pyq .quote-mode-label { color: #2563eb !important; }
     /* #quotedContextPreview now holds a stack of independent quote boxes (previously exactly
        one) -- wrap so a lot of short quotes flow onto new lines instead of forcing the compose
        box wider than the input itself. */
@@ -6269,6 +6274,13 @@ function plainTextFromMarkdown(text) {
     // an instruction to simplify; 'ask' quotes keep the original neutral framing.
     function buildQuotedPreamble(quotes) {
       return quotes.map(function(q) {
+        if (q.mode === 'pyq_doubt') {
+          const parts = [];
+          if (q.stem) parts.push('Question: ' + q.stem + '.');
+          if (q.correct) parts.push('Correct answer: ' + q.correct + '.');
+          parts.push('Selected line: "' + q.text + '"');
+          return parts.join(' ');
+        }
         return q.mode === 'explain'
           ? 'Please explain this part in simple, easy-to-understand terms: "' + q.text + '"'
           : 'Regarding this part: "' + q.text + '"';
@@ -6284,13 +6296,19 @@ function plainTextFromMarkdown(text) {
     // with or without the "remove" button.
     function buildQuoteBoxEl(quote, dismissible) {
       const wrap = document.createElement('div');
-      wrap.className = 'quoted-context-box' + (dismissible ? '' : ' quoted-context-sent') + (quote.mode === 'explain' ? ' quoted-context-explain' : '');
+      wrap.className = 'quoted-context-box' + (dismissible ? '' : ' quoted-context-sent') + (quote.mode === 'explain' ? ' quoted-context-explain' : '') + (quote.mode === 'pyq_doubt' ? ' quoted-context-pyq' : '');
       const textEl = document.createElement('div');
       textEl.className = 'quote-text';
       if (quote.mode === 'explain') {
         const label = document.createElement('span');
         label.className = 'quote-mode-label';
         label.textContent = 'Explain simply — ';
+        textEl.appendChild(label);
+      }
+      if (quote.mode === 'pyq_doubt') {
+        const label = document.createElement('span');
+        label.className = 'quote-mode-label';
+        label.textContent = 'From Question Bank — ';
         textEl.appendChild(label);
       }
       textEl.appendChild(document.createTextNode(quote.text));
@@ -8184,7 +8202,10 @@ function plainTextFromMarkdown(text) {
       if (isStreaming || sendInProgress) return;
       let text = input.value.trim();
       const activeQuotes = quotedContexts.slice();
-      if (!text && activeQuotes.length > 0) text = 'Please explain this.';
+      // Only the AI-message quote-and-ask flow (mode 'ask'/'explain') gets this "assume they
+      // mean explain it" fallback -- a Question Bank doubt (mode 'pyq_doubt') with nothing typed
+      // should do nothing on send, same as a completely empty compose box, per that feature's spec.
+      if (!text && activeQuotes.length > 0 && activeQuotes.some(function(q) { return q.mode !== 'pyq_doubt'; })) text = 'Please explain this.';
       if (!text && selectedImages.length === 0 && !selectedPDF) { flashEmptySendCue(); return; }
 
       sendInProgress = true;
@@ -11164,19 +11185,34 @@ function plainTextFromMarkdown(text) {
       // only ever have picked from generic/countdown variants.
       renderWelcomeGreeting();
 
-      // Cross-page handoff from pyqbank.html's text-selection popup (Explain / custom question
-      // about a selected question or option) -- see pyqbank.html's sendSelectionToChat for the
-      // writing side. sessionStorage rather than localStorage: this is a one-shot "did the
-      // student just arrive here from that popup" signal, not something that should persist or
-      // replay on a future visit -- cleared immediately after reading so a page refresh doesn't
-      // resend the same message. Placed after this same auth/session check resolves (both the
-      // logged-in and guest branches above already ran) so sendMessage() sees accurate
-      // login/budget state, exactly as if the student had typed and sent it themselves.
-      const pendingChatMessage = sessionStorage.getItem('pendingChatMessage');
-      if (pendingChatMessage) {
-        sessionStorage.removeItem('pendingChatMessage');
-        input.value = pendingChatMessage;
-        sendMessage();
+      // Cross-page handoff from pyqbank.html's "Ask AI" selection chip -- see pyqbank.html's
+      // sendPyqSelectionAsDoubt for the writing side. sessionStorage rather than localStorage:
+      // this is a one-shot "did the student just arrive here from that chip" signal, not
+      // something that should persist or replay on a future visit -- read and removed immediately
+      // so a page refresh doesn't resurface it. Unlike the old pendingChatMessage handoff this
+      // does NOT auto-send: it only seeds a dismissible quote card and focuses the input, so the
+      // student still types and sends their own doubt (same path as the AI-message selection
+      // toolbar's quotedContexts), which also means a logged-out student hitting their guest
+      // budget still sees the normal 402 login prompt without this card having been lost.
+      try {
+        const raw = sessionStorage.getItem('askDoubt');
+        if (raw) {
+          sessionStorage.removeItem('askDoubt');
+          const doubt = JSON.parse(raw);
+          if (doubt && doubt.selected && (Date.now() - (doubt.ts || 0)) < 10 * 60 * 1000) {
+            quotedContexts.push({
+              id: ++quotedContextIdCounter,
+              text: String(doubt.selected).slice(0, 600),
+              mode: 'pyq_doubt',
+              stem: doubt.stem ? String(doubt.stem).slice(0, 400) : '',
+              correct: doubt.correct || ''
+            });
+            renderQuotedContextPreview();
+            input.focus();
+          }
+        }
+      } catch (e) {
+        console.error('askDoubt handoff failed', e);
       }
     });
 
