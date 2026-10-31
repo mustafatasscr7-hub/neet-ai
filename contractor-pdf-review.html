@@ -264,6 +264,12 @@
     .pdf-history-row-counts { color:#888; font-size:11px; margin-top:4px; word-break:break-word; }
     .pdf-history-row-reason { color:#e0a030; font-size:11px; margin-top:4px; word-break:break-word; }
     .pdf-history-remove-btn { margin-top:6px; font-size:11px; padding:4px 10px; }
+    @keyframes pdfHistorySkeletonShimmer { 0% { background-position:-120px 0; } 100% { background-position:120px 0; } }
+    .pdf-skeleton-bar { display:inline-block; border-radius:4px; background:linear-gradient(90deg,#1a1a1a 25%,#232323 37%,#1a1a1a 63%); background-size:240px 100%; animation:pdfHistorySkeletonShimmer 1.4s ease-in-out infinite; }
+    .pdf-history-counts-unavailable { color:#e0a030; }
+    .pdf-history-counts-note { font-size:11px; color:#e0a030; padding:6px 2px; border-bottom:1px solid #1e1e1e; margin-bottom:4px; }
+    .pdf-history-counts-note a { color:#4f8ef7; text-decoration:none; }
+    .pdf-history-show-more { margin-top:8px; width:100%; font-size:12px; }
   </style>
   <div id="pdfHistoryOverlay" style="display:none;">
     <div class="pdf-history-box">
@@ -591,6 +597,7 @@
     checkForDraftAndShowBanner();
     loadFixList();
     updateScanButton();
+    preloadPdfHistory();
   }
 
   if (adminKey) enterDashboard();
@@ -1934,11 +1941,58 @@
     failed: { label: 'Failed', color: '#e05555' },
   };
 
-  let pdfHistoryData = null; // last /admin/processed-pdfs response: {pdfs, gap_summary, can_remove, updated_at}
+  const PDF_HISTORY_PAGE_SIZE = 25;
+  const PDF_HISTORY_CACHE_KEY = 'pdfHistoryCacheV1';
+
+  let pdfHistoryData = null; // last /admin/processed-pdfs response: {pdfs, total, offset, limit, has_more, counts_unavailable, gap_summary, can_remove, updated_at}
+  let pdfHistoryCacheSavedAt = 0; // ms epoch pdfHistoryData was actually fetched (not just read from localStorage)
+  let pdfHistoryInflight = null; // in-flight loadPdfHistory() promise -- so preload and a manual open never both fire
+
+  function readPdfHistoryCache() {
+    try {
+      const raw = localStorage.getItem(PDF_HISTORY_CACHE_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      return (parsed && parsed.data && parsed.savedAt) ? parsed : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function writePdfHistoryCache(data, savedAt) {
+    try {
+      localStorage.setItem(PDF_HISTORY_CACHE_KEY, JSON.stringify({ data, savedAt }));
+    } catch (e) {}
+  }
+
+  // Quietly warms both the server's 5-minute cache and this page's own localStorage copy as soon
+  // as someone's logged in, so the popup can usually render from a cache that's already fresh by
+  // the time it's actually opened.
+  function preloadPdfHistory() {
+    if (!pdfHistoryData) {
+      const cached = readPdfHistoryCache();
+      if (cached) { pdfHistoryData = cached.data; pdfHistoryCacheSavedAt = cached.savedAt; }
+    }
+    loadPdfHistory(false, { silent: true });
+  }
 
   async function openPdfHistory() {
     document.getElementById('pdfHistoryOverlay').style.display = 'flex';
-    await loadPdfHistory(false);
+    if (!pdfHistoryData) {
+      const cached = readPdfHistoryCache();
+      if (cached) { pdfHistoryData = cached.data; pdfHistoryCacheSavedAt = cached.savedAt; }
+    }
+    if (pdfHistoryData) {
+      // Instant render from whatever we already have (preloaded or cached), then a silent
+      // background refresh -- never a loading flicker over an already-good view.
+      renderPdfHistoryGaps();
+      renderPdfHistoryList();
+      renderPdfHistoryUpdatedAt();
+      loadPdfHistory(false, { silent: true });
+    } else {
+      renderPdfHistorySkeleton();
+      await loadPdfHistory(false, {});
+    }
   }
 
   function closePdfHistory() {
@@ -1946,29 +2000,92 @@
   }
 
   async function refreshPdfHistory() {
-    await loadPdfHistory(true);
+    await loadPdfHistory(true, {});
   }
 
-  async function loadPdfHistory(force) {
+  function renderPdfHistorySkeleton() {
     const listEl = document.getElementById('pdfHistoryList');
-    listEl.textContent = 'Loading...';
-    try {
-      const res = await fetch(`${API_BASE}/admin/processed-pdfs${force ? '?force=true' : ''}`, { headers: authHeaders() });
-      if (res.status === 401) return logout();
-      if (!res.ok) { listEl.textContent = 'Could not load history: ' + await describeHttpError(res); return; }
-      const data = await res.json();
-      if (data.error) { listEl.textContent = 'Could not load history: ' + data.error; return; }
-      pdfHistoryData = data;
-      renderPdfHistoryGaps();
-      renderPdfHistoryList();
-      const upd = document.getElementById('pdfHistoryUpdatedAt');
-      if (upd) {
-        upd.textContent = data.updated_at
-          ? 'Updated at ' + new Date(data.updated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-          : '';
+    if (!listEl) return;
+    listEl.innerHTML = Array.from({ length: 6 }).map(() => (
+      '<div class="pdf-history-row pdf-history-skeleton">' +
+        '<div class="pdf-history-row-top">' +
+          '<span class="pdf-skeleton-bar" style="width:50%;height:12px;"></span>' +
+          '<span class="pdf-skeleton-bar" style="width:56px;height:14px;"></span>' +
+        '</div>' +
+        '<span class="pdf-skeleton-bar" style="width:65%;height:11px;margin-top:6px;display:block;"></span>' +
+        '<span class="pdf-skeleton-bar" style="width:85%;height:11px;margin-top:6px;display:block;"></span>' +
+      '</div>'
+    )).join('');
+  }
+
+  function formatPdfHistoryUpdatedAt() {
+    if (!pdfHistoryCacheSavedAt) return '';
+    const mins = Math.max(0, Math.round((Date.now() - pdfHistoryCacheSavedAt) / 60000));
+    if (mins < 1) return 'Updated just now';
+    if (mins < 60) return `Updated ${mins} min ago`;
+    const hours = Math.round(mins / 60);
+    return `Updated ${hours} hour${hours === 1 ? '' : 's'} ago`;
+  }
+
+  function renderPdfHistoryUpdatedAt() {
+    const upd = document.getElementById('pdfHistoryUpdatedAt');
+    if (upd) upd.textContent = formatPdfHistoryUpdatedAt();
+  }
+
+  // force=true (Refresh button, or after an edit) bypasses the server's own 5-minute cache too.
+  // opts.silent suppresses every loading/error UI change -- used for the background refresh
+  // behind an instantly-rendered cached view and for the logged-in preload, neither of which
+  // should ever flicker or surface an error the user didn't ask to see.
+  async function loadPdfHistory(force, opts) {
+    opts = opts || {};
+    if (pdfHistoryInflight) return pdfHistoryInflight;
+    const listEl = document.getElementById('pdfHistoryList');
+    const run = (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/admin/processed-pdfs?limit=${PDF_HISTORY_PAGE_SIZE}${force ? '&force=true' : ''}`, { headers: authHeaders() });
+        if (res.status === 401) return logout();
+        if (!res.ok) {
+          if (!opts.silent) listEl.textContent = 'Could not load history: ' + await describeHttpError(res);
+          return;
+        }
+        const data = await res.json();
+        if (data.error) {
+          if (!opts.silent) listEl.textContent = 'Could not load history: ' + data.error;
+          return;
+        }
+        pdfHistoryData = data;
+        pdfHistoryCacheSavedAt = Date.now();
+        writePdfHistoryCache(data, pdfHistoryCacheSavedAt);
+        renderPdfHistoryGaps();
+        renderPdfHistoryList();
+        renderPdfHistoryUpdatedAt();
+      } catch (e) {
+        if (!opts.silent && !pdfHistoryData) listEl.textContent = 'Could not reach server.';
       }
+    })();
+    pdfHistoryInflight = run;
+    try { await run; } finally { pdfHistoryInflight = null; }
+  }
+
+  async function loadMorePdfHistory() {
+    if (!pdfHistoryData || !pdfHistoryData.has_more) return;
+    const btn = document.getElementById('pdfHistoryShowMoreBtn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Loading...'; }
+    try {
+      const nextOffset = pdfHistoryData.pdfs.length;
+      const res = await fetch(`${API_BASE}/admin/processed-pdfs?offset=${nextOffset}&limit=${PDF_HISTORY_PAGE_SIZE}`, { headers: authHeaders() });
+      if (res.status === 401) return logout();
+      if (!res.ok) { alert('Could not load more: ' + await describeHttpError(res)); return; }
+      const data = await res.json();
+      if (data.error) { alert(data.error); return; }
+      pdfHistoryData.pdfs = pdfHistoryData.pdfs.concat(data.pdfs);
+      pdfHistoryData.has_more = data.has_more;
+      pdfHistoryData.counts_unavailable = pdfHistoryData.counts_unavailable || data.counts_unavailable;
+      renderPdfHistoryList();
     } catch (e) {
-      listEl.textContent = 'Could not reach server.';
+      alert('Could not reach server.');
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = 'Show more'; }
     }
   }
 
@@ -2003,8 +2120,14 @@
     const listEl = document.getElementById('pdfHistoryList');
     if (!pdfHistoryData) return;
     const rows = pdfHistoryFilteredRows();
-    if (rows.length === 0) { listEl.innerHTML = '<div class="pdf-history-empty">No PDFs match.</div>'; return; }
-    listEl.innerHTML = rows.map(pdfHistoryRowHtml).join('');
+    const unavailableNote = pdfHistoryData.counts_unavailable
+      ? '<div class="pdf-history-counts-note">Counts unavailable right now. <a href="#" onclick="refreshPdfHistory(); return false;">Refresh</a></div>'
+      : '';
+    if (rows.length === 0) { listEl.innerHTML = unavailableNote + '<div class="pdf-history-empty">No PDFs match.</div>'; return; }
+    const showMoreHtml = pdfHistoryData.has_more
+      ? '<button type="button" id="pdfHistoryShowMoreBtn" class="action-btn pdf-history-show-more" onclick="loadMorePdfHistory()">Show more</button>'
+      : '';
+    listEl.innerHTML = unavailableNote + rows.map(pdfHistoryRowHtml).join('') + showMoreHtml;
   }
 
   // Shared by admin-pdf-review.html, contractor-pdf-review.html and admin-pyq-preview.html --
@@ -2013,12 +2136,18 @@
   // behavior -- the other two pages simply never define that function, so rows render inert.
   function pdfHistoryRowHtml(p) {
     const meta = PDF_STATUS_META[p.status] || { label: p.status, color: '#888' };
-    const c = p.counts || {};
-    const deletedText = c.deleted == null ? 'unknown' : c.deleted;
+    const c = p.counts;
     const uploader = p.uploader_name || 'Earlier upload';
     const reason = p.interrupted_reason || (p.status === 'failed' ? p.error_message : null);
     const canClickThrough = typeof pdfHistoryRowClick === 'function';
     const canRemove = pdfHistoryData.can_remove && (p.status === 'interrupted' || p.status === 'failed');
+    let countsHtml;
+    if (c) {
+      const deletedText = c.deleted == null ? 'unknown' : c.deleted;
+      countsHtml = `<div class="pdf-history-row-counts">Total ${c.total ?? 0} · Approved ${c.approved ?? 0} · Pending ${c.pending ?? 0} · Needs fix ${c.needs_fix ?? 0} · With diagram ${c.with_diagram ?? 0} · Without diagram ${c.without_diagram ?? 0} · Deleted ${escapeHtml(String(deletedText))}${c.deleted == null && p.deleted_reason ? ` <span title="${escapeHtml(p.deleted_reason)}">ⓘ</span>` : ''}</div>`;
+    } else {
+      countsHtml = '<div class="pdf-history-row-counts pdf-history-counts-unavailable">Counts unavailable</div>';
+    }
     return `
       <div class="pdf-history-row${canClickThrough ? ' clickable' : ''}" ${canClickThrough ? `onclick="pdfHistoryRowClick(${JSON.stringify(p.filename)})"` : ''}>
         <div class="pdf-history-row-top">
@@ -2026,7 +2155,7 @@
           <span class="pdf-history-badge" style="color:${meta.color};border-color:${meta.color};">${escapeHtml(meta.label)}</span>
         </div>
         <div class="pdf-history-row-meta">${escapeHtml(p.subject || '—')} · ${new Date(p.upload_date).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })} · ${escapeHtml(uploader)}</div>
-        <div class="pdf-history-row-counts">Total ${c.total ?? 0} · Approved ${c.approved ?? 0} · Pending ${c.pending ?? 0} · Needs fix ${c.needs_fix ?? 0} · With diagram ${c.with_diagram ?? 0} · Without diagram ${c.without_diagram ?? 0} · Deleted ${escapeHtml(String(deletedText))}${c.deleted == null && p.deleted_reason ? ` <span title="${escapeHtml(p.deleted_reason)}">ⓘ</span>` : ''}</div>
+        ${countsHtml}
         ${reason ? `<div class="pdf-history-row-reason">${escapeHtml(reason)}</div>` : ''}
         ${canRemove ? `<button type="button" class="action-btn danger pdf-history-remove-btn" onclick="event.stopPropagation(); removeProcessedPdf(${p.id})">Remove record</button>` : ''}
       </div>`;
@@ -2040,7 +2169,7 @@
       if (res.status === 401) return logout();
       const data = await res.json();
       if (data.error) { alert(data.error); return; }
-      await loadPdfHistory(true);
+      await loadPdfHistory(true, {});
     } catch (e) {
       alert('Could not reach server.');
     }

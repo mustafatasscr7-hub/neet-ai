@@ -9118,6 +9118,7 @@ async def admin_pyq_review(body: PyqReviewRequest, _: None = Depends(verify_admi
         )
         if resp.status_code >= 400:
             return {"error": resp.text}
+        _invalidate_processed_pdfs_cache()  # review_status changed -- affects every Processed PDFs count
         return {"updated": resp.json()}
     except Exception as e:
         return {"error": str(e)}
@@ -9198,6 +9199,7 @@ async def contractor_pyq_fix(pyq_id: str, body: ContractorPyqFix, _: None = Depe
         if not updated:
             return {"error": "This question is no longer waiting for a fix"}
         row = updated[0]
+        _invalidate_processed_pdfs_cache()  # review_status -> pending, plus the fields just edited
         if sent & {"question", "chapter", "option_a", "option_b", "option_c", "option_d"}:
             asyncio.create_task(_embed_pyq_row_background(
                 row["id"], row.get("question"), row.get("chapter"),
@@ -9265,6 +9267,7 @@ async def admin_pyq_update(pyq_id: str, body: AdminPyqUpdate, _: None = Depends(
         updated = response.json()
         if not updated:
             return {"error": "Row not found"}
+        _invalidate_processed_pdfs_cache()  # an edit can change is_active/subject/diagram urls etc.
         return {"updated": updated[0]}
     except Exception as e:
         return {"error": str(e)}
@@ -9290,6 +9293,7 @@ async def admin_pyq_bulk_update(body: AdminPyqBulkUpdate, _: None = Depends(veri
         )
         if response.status_code >= 400:
             return {"error": response.text}
+        _invalidate_processed_pdfs_cache()  # chapter/is_active changes can affect per-PDF counts
         return {"updated_count": len(response.json())}
     except Exception as e:
         return {"error": str(e)}
@@ -9345,6 +9349,7 @@ async def admin_pyq_delete(pyq_id: str, _: None = Depends(verify_admin)):
         # a group whose "original" was just deleted could keep pointing at it a little longer.
         if deleted[0].get("subject"):
             _pyq_dup_corpus_cache.pop(deleted[0]["subject"], None)
+        _invalidate_processed_pdfs_cache()  # a deleted row can no longer count toward any PDF's totals
         # Returning the deleted row (not just success:true) is what lets the admin tool's
         # Ctrl+Z undo restore it -- this is a hard DELETE, so this response is the only place
         # that data still exists once the request completes.
@@ -10017,6 +10022,7 @@ async def _repair_stuck_processed_pdfs():
                   "error_message": "Interrupted: the server restarted while this PDF was still processing.",
                   "processed_at": datetime.now(timezone.utc).isoformat()}
         )
+        _invalidate_processed_pdfs_cache()
         print(f"Startup repair: marked {len(ids)} stuck processed_pdfs row(s) as failed/interrupted.", flush=True)
     except Exception as e:
         print(f"Startup repair for processed_pdfs failed: {e}", flush=True)
@@ -10053,6 +10059,7 @@ def _update_processed_pdf_row(row_id, status: str, questions_extracted=None, err
             params={"id": f"eq.{row_id}"},
             json=body
         )
+        _invalidate_processed_pdfs_cache()  # a scan finishing (completed/failed) changes this row's status
     except Exception:
         pass
 
@@ -11442,14 +11449,65 @@ _PYQ_HAS_DIAGRAM_OR = ("(diagram_url.neq.,option_a_diagram_url.neq.,"
                        "option_b_diagram_url.neq.,option_c_diagram_url.neq.,"
                        "option_d_diagram_url.neq.)")
 
-# One admin tool, opened occasionally -- a 30s in-memory cache (single Railway replica, same
-# assumption the scan job stores already make) is what keeps a burst of per-PDF count queries
-# (below) from re-running on every click of the Processed PDFs button in the same half-minute.
-_PROCESSED_PDFS_CACHE = {"at": 0.0, "pdfs": None, "gaps": None}
-_PROCESSED_PDFS_CACHE_TTL_SECONDS = 30
-# Caps how many of those count queries run at once -- up to ~6 per PDF row, and the list can hold
-# up to 500 rows, so this is what keeps a cold cache fill from firing thousands of simultaneous
-# requests at Supabase.
+# One admin tool, opened occasionally -- a 5-minute in-memory cache (single Railway replica,
+# same assumption the scan job stores already make) is what keeps a burst of popup opens from
+# re-running the list read + stats query on every click. base_rows/gaps/stats_map are always
+# refreshed together (see _processed_pdfs_base_rows_and_gaps and _pdf_list_stats_via_rpc below);
+# "Interrupted" status is deliberately NOT cached here -- it's recomputed from base_rows on every
+# request (see _enrich_page/_bare_pdf_row), so it's never more than this process's own clock skew
+# stale, well under the 1-minute bound the popup promises.
+_PROCESSED_PDFS_CACHE = {"at": 0.0, "base_rows": None, "gaps": None, "stats_map": None}
+_PROCESSED_PDFS_CACHE_TTL_SECONDS = 300
+_PROCESSED_PDFS_PAGE_SIZE = 25
+
+def _invalidate_processed_pdfs_cache():
+    """Called from every place that can change a processed-PDF's live counts or status: approve/
+    send-back (/admin/pyq-review), contractor fix-and-resubmit, single/bulk edit, delete, a scan
+    actually finishing (_update_processed_pdf_row), removing a tracking record, and the startup
+    repair of stuck rows. Clearing just base_rows is enough -- the next read (cache miss) refetches
+    base_rows, gaps AND stats_map together."""
+    _PROCESSED_PDFS_CACHE["base_rows"] = None
+
+async def _pdf_list_stats_via_rpc() -> Optional[dict]:
+    """One Supabase RPC call (see pdf_list_stats.sql) replacing the old ~6-queries-per-PDF count
+    fan-out below with a single grouped aggregate covering every source_pdf_filename at once.
+    Returns {filename: {total, approved, pending, needs_fix, with_diagram, without_diagram,
+    uploader_name}}, or None if the function hasn't been created yet (migration not run) or the
+    call fails for any other reason -- the caller falls back to _processed_pdf_counts per PDF in
+    that case, never surfacing an error for a missing migration."""
+    try:
+        resp = await async_client.post(
+            f"{SUPABASE_URL}/rest/v1/rpc/pdf_list_stats",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json"},
+            json={}
+        )
+        if resp.status_code >= 400:
+            return None
+        rows = resp.json()
+    except Exception:
+        return None
+    out = {}
+    for r in rows:
+        filename = r.get("source_pdf_filename")
+        if not filename:
+            continue
+        total = r.get("total") or 0
+        with_diagram = r.get("with_diagram") or 0
+        without_diagram = r.get("without_diagram")
+        out[filename] = {
+            "total": total,
+            "approved": r.get("approved") or 0,
+            "pending": r.get("pending") or 0,
+            "needs_fix": r.get("needs_fix") or 0,
+            "with_diagram": with_diagram,
+            "without_diagram": without_diagram if without_diagram is not None else max(0, total - with_diagram),
+            "uploader_name": r.get("uploader_name"),
+        }
+    return out
+
+# Caps how many of those count queries run at once -- up to ~6 per PDF row, and a page is at most
+# _PROCESSED_PDFS_PAGE_SIZE rows, so this is what keeps a cold cache fill (when pdf_list_stats()
+# isn't available yet) from firing too many simultaneous requests at Supabase.
 _PROCESSED_PDFS_COUNT_CONCURRENCY = 15
 
 async def _processed_pdf_counts(filename: str) -> dict:
@@ -11490,7 +11548,14 @@ async def _processed_pdf_counts(filename: str) -> dict:
     }
 _processed_pdf_counts.semaphore = asyncio.Semaphore(_PROCESSED_PDFS_COUNT_CONCURRENCY)
 
-async def _processed_pdfs_detail_rows() -> list:
+_PROCESSED_PDFS_DELETED_REASON = ("pyq_delete_log only records a deleted question's id and uploader, "
+                                   "not which PDF or batch it came from, so a per-PDF deleted count "
+                                   "can't be computed.")
+
+async def _processed_pdfs_base_rows_and_gaps() -> tuple:
+    """The one cheap, unavoidable read: just the processed_pdfs rows themselves, no per-PDF
+    counts. Also doubles as the full population the gap summary is computed over (every
+    completed PDF's filename, not just whatever page is currently being viewed)."""
     resp = await async_client.get(
         f"{SUPABASE_URL}/rest/v1/processed_pdfs", headers=ADMIN_HEADERS,
         params={"select": "id,filename,subject,status,questions_extracted,error_message,upload_date,processed_at",
@@ -11499,42 +11564,88 @@ async def _processed_pdfs_detail_rows() -> list:
     if resp.status_code >= 400:
         raise RuntimeError(resp.text)
     rows = resp.json()
+    return rows, _processed_pdfs_gap_summary(rows)
 
-    async def enrich(row):
+def _pdf_row_interrupted_reason(row: dict, effective_status: str) -> Optional[str]:
+    if effective_status != "interrupted":
+        return None
+    return "No activity for over 30 minutes." if row["status"] == "processing" else row.get("error_message")
+
+def _bare_pdf_row(row: dict) -> dict:
+    """Used only when even the fallback per-PDF count queries raise -- still shows every row
+    (filename/status/subject), just with counts genuinely unknown rather than wrong."""
+    effective_status = _effective_pdf_status(row)
+    return {
+        **row,
+        "status": effective_status,
+        "interrupted_reason": _pdf_row_interrupted_reason(row, effective_status),
+        "counts": None,
+        "deleted_reason": None,
+        "uploader_name": None,
+    }
+
+async def _enrich_page(rows: list, stats_map: Optional[dict]) -> list:
+    """Attaches live counts to each row. When stats_map (from the pdf_list_stats() RPC) is
+    available, this is a pure dict lookup -- zero further Supabase calls, however many rows are
+    in the page. Otherwise falls back to the old per-PDF fan-out (_processed_pdf_counts), bounded
+    to just this page's rows."""
+    _ZERO_COUNTS = {"total": 0, "approved": 0, "pending": 0, "needs_fix": 0,
+                     "with_diagram": 0, "without_diagram": 0, "uploader_name": None}
+
+    async def enrich_one(row):
         effective_status = _effective_pdf_status(row)
-        counts = await _processed_pdf_counts(row["filename"])
+        if stats_map is not None:
+            counts = dict(stats_map.get(row["filename"]) or _ZERO_COUNTS)
+        else:
+            counts = await _processed_pdf_counts(row["filename"])
         uploader_name = counts.pop("uploader_name")
         return {
             **row,
             "status": effective_status,
-            "interrupted_reason": (
-                "No activity for over 30 minutes." if effective_status == "interrupted" and row["status"] == "processing"
-                else row.get("error_message") if effective_status == "interrupted"
-                else None
-            ),
+            "interrupted_reason": _pdf_row_interrupted_reason(row, effective_status),
             "counts": {**counts, "deleted": None},
-            "deleted_reason": ("pyq_delete_log only records a deleted question's id and uploader, "
-                                "not which PDF or batch it came from, so a per-PDF deleted count "
-                                "can't be computed."),
+            "deleted_reason": _PROCESSED_PDFS_DELETED_REASON,
             "uploader_name": uploader_name,
         }
 
-    return await asyncio.gather(*(enrich(r) for r in rows))
+    return await asyncio.gather(*(enrich_one(r) for r in rows))
 
 @app.get("/admin/processed-pdfs")
-async def admin_processed_pdfs(force: bool = False, role: str = Depends(verify_admin_or_contractor_pdf)):
+async def admin_processed_pdfs(force: bool = False, offset: int = 0, limit: int = _PROCESSED_PDFS_PAGE_SIZE,
+                                role: str = Depends(verify_admin_or_contractor_pdf)):
+    offset = max(0, offset)
+    limit = max(1, min(limit, 100))
     now = time.time()
-    fresh = _PROCESSED_PDFS_CACHE["pdfs"] is not None and now - _PROCESSED_PDFS_CACHE["at"] < _PROCESSED_PDFS_CACHE_TTL_SECONDS
+    fresh = _PROCESSED_PDFS_CACHE["base_rows"] is not None and now - _PROCESSED_PDFS_CACHE["at"] < _PROCESSED_PDFS_CACHE_TTL_SECONDS
     if force or not fresh:
         try:
-            pdfs = await _processed_pdfs_detail_rows()
+            # The one processed_pdfs read and the one stats RPC are independent of each other --
+            # run them concurrently instead of back-to-back, same reasoning as every other
+            # asyncio.gather fan-out in this file.
+            (base_rows, gaps), stats_map = await asyncio.gather(
+                _processed_pdfs_base_rows_and_gaps(), _pdf_list_stats_via_rpc()
+            )
         except Exception as e:
             return {"error": str(e)}
-        _PROCESSED_PDFS_CACHE["pdfs"] = pdfs
-        _PROCESSED_PDFS_CACHE["gaps"] = _processed_pdfs_gap_summary(pdfs)
+        _PROCESSED_PDFS_CACHE["base_rows"] = base_rows
+        _PROCESSED_PDFS_CACHE["gaps"] = gaps
+        _PROCESSED_PDFS_CACHE["stats_map"] = stats_map
         _PROCESSED_PDFS_CACHE["at"] = now
+    base_rows = _PROCESSED_PDFS_CACHE["base_rows"]
+    page = base_rows[offset:offset + limit]
+    try:
+        pdfs = await _enrich_page(page, _PROCESSED_PDFS_CACHE["stats_map"])
+        counts_unavailable = False
+    except Exception:
+        pdfs = [_bare_pdf_row(r) for r in page]
+        counts_unavailable = True
     return {
-        "pdfs": _PROCESSED_PDFS_CACHE["pdfs"],
+        "pdfs": pdfs,
+        "counts_unavailable": counts_unavailable,
+        "total": len(base_rows),
+        "offset": offset,
+        "limit": limit,
+        "has_more": offset + limit < len(base_rows),
         "gap_summary": _PROCESSED_PDFS_CACHE["gaps"],
         "can_remove": role == "admin",
         "updated_at": datetime.fromtimestamp(_PROCESSED_PDFS_CACHE["at"], tz=timezone.utc).isoformat(),
@@ -11567,7 +11678,7 @@ async def admin_remove_processed_pdf(pdf_id: int, role: str = Depends(verify_adm
         )
         if del_resp.status_code >= 400:
             return {"error": del_resp.text}
-        _PROCESSED_PDFS_CACHE["pdfs"] = None  # next list read re-fetches instead of showing a removed row
+        _invalidate_processed_pdfs_cache()  # next list read re-fetches instead of showing a removed row
         return {"success": True}
     except Exception as e:
         return {"error": str(e)}
