@@ -636,7 +636,10 @@
       document.getElementById('dashboard').style.display = 'block';
       const urlId = new URLSearchParams(window.location.search).get('id');
       loadReviewSummary();
-      preloadPdfHistory();
+      // Deferred to a fresh tick: on this page the `let`/`const` declarations further down the
+      // file happen to run before any returning-session call to enterDashboard() can reach them,
+      // but deferring here too matches the other two pages and removes any future ordering risk.
+      setTimeout(preloadPdfHistory, 0);
       if (urlId) {
         await loadSingleQuestionFromUrl(urlId);
       } else {

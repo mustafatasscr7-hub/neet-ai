@@ -543,7 +543,12 @@
     document.getElementById('gateOverlay').style.display = 'none';
     document.getElementById('dashboard').style.display = 'block';
     checkForDraftAndShowBanner();
-    preloadPdfHistory();
+    // Deferred to a fresh tick: a returning session (adminKey already in sessionStorage) calls
+    // enterDashboard() synchronously from the bottom of this same top-level script, before the
+    // `let`/`const` declarations further down the file (pdfHistoryData etc.) have executed --
+    // calling preloadPdfHistory() directly here throws (temporal dead zone) and aborts the rest
+    // of the script. setTimeout(..., 0) runs it after the whole script has finished once.
+    setTimeout(preloadPdfHistory, 0);
   }
 
   if (adminKey) enterDashboard();
