@@ -5822,9 +5822,10 @@ async def _stream_empty_conversational_retry(override_system: str, messages: lis
 # check, 200-task cap and rate limit) only runs when the student taps Add on the confirm card
 # chat.html renders from the PLANNER_TASK/PLANNER_UPGRADE marker yielded below.
 _PLANNER_TRIGGER_RE = re.compile(
-    r'\b(add|schedule|remind(?:er)?s?|planner|to-?do|tasks?|plan\s+for)\b'
+    r'\b(add|schedule|put|remind(?:er)?s?|planner|to-?do|tasks?|plan\s+for|kal|parso)\b'
     r'|add\s*kar|yaad\s*dila|planner\s*(mein|me)|plan\s*kar'
-    r'|जोड़ो|जोड़ें|जोड़ना|प्लानर|याद\s*दिला|टास्क|कार्य\s*जोड़',
+    r'|\bdaal\s*(do|de|o|den|dena)\b|\bjod\s*(do|de|o|den|dena)\b'
+    r'|जोड़ो|जोड़ें|जोड़ना|\bजोड़\s*दो\b|प्लानर|याद\s*दिला|टास्क|कार्य\s*जोड़|\bकल\b|\bपरसों\b',
     re.IGNORECASE
 )
 
@@ -5864,34 +5865,48 @@ def _resolve_planner_due_date(due_raw, now_ist) -> Optional[str]:
 
 async def _extract_planner_task(text: str, user_id: str = "") -> Optional[dict]:
     """One cheap Qwen-Flash call (same cost-logged pattern as _ncert_spelling_rewrite) deciding
-    whether `text` is really a request to add a study task, as opposed to e.g. a subject question
-    that merely contains a trigger word ("add 3 and 5"). Returns None on is_task: false, an
-    empty/missing title, a malformed/non-JSON reply, or any failure/timeout -- meaning "fall back
-    to the normal chat flow", same fail-safe spirit as _ncert_spelling_rewrite. Never raises."""
+    whether `text` is really a request to add one or more study tasks, as opposed to e.g. a
+    subject question that merely contains a trigger word ("add 3 and 5"). Returns None on
+    is_task: false, an empty/all-invalid task list, a malformed/non-JSON reply, or any
+    failure/timeout -- meaning "fall back to the normal chat flow", same fail-safe spirit as
+    _ncert_spelling_rewrite. Never raises.
+
+    Returns up to 5 tasks (truncated=True if the student asked for more) plus `confident`,
+    which is only ever True when there's exactly one task and its title clearly names a real
+    subject/activity -- that's what lets stream_response's planner branch auto-add it instead of
+    showing the confirm card (see _planner_auto_add_response)."""
     now_ist = datetime.now(timezone.utc).astimezone(IST)
     try:
         response = await asyncio.wait_for(
             qwen_async_client.chat.completions.create(
                 model="qwen-flash",
-                max_tokens=60,
+                max_tokens=320,
                 temperature=0,
                 messages=[
                     {"role": "system", "content": (
                         f"Today is {now_ist.strftime('%A')}, {now_ist.strftime('%Y-%m-%d')} (India time). "
                         "A student sent a chat message to a NEET exam-prep app. Decide whether they are "
-                        "asking to add or schedule a study task to their Planner -- e.g. 'add 3Qs for "
-                        "biology tomorrow', 'physics ke 5 questions Sunday ko planner mein daalo'. This is "
-                        "NOT a task request if it's actually a subject question that merely contains a "
-                        "word like 'add' or 'task' (e.g. 'add 3 and 5', 'what is Ohm's law').\n\n"
+                        "asking to add or schedule one or more study tasks to their Planner -- e.g. 'add "
+                        "3Qs for biology tomorrow', 'physics ke 5 questions Sunday ko planner mein daalo', "
+                        "'biology 30 Qs aur chemistry revision kal daal do' (two tasks). This is NOT a task "
+                        "request if it's actually a subject question that merely contains a word like "
+                        "'add', 'task' or 'kal' (e.g. 'add 3 and 5', 'what is a task force', 'kal Newton ne "
+                        "kya kaha tha').\n\n"
                         "Return ONLY a JSON object, nothing else, in exactly this shape:\n"
-                        '{"is_task": true or false, "title": "...", "due": "...", "multiple": true or false}\n\n'
-                        "If is_task is false, title can be empty and due null. Otherwise:\n"
-                        "- title: a short, clear description of the task (under 100 characters), in the "
-                        "SAME language/script the student used.\n"
+                        '{"is_task": true or false, "tasks": [{"title": "...", "due": "..."}], '
+                        '"confident": true or false}\n\n'
+                        "If is_task is false, tasks can be an empty list. Otherwise, tasks has one entry "
+                        "per distinct study task the student asked for, in order, up to 5 (if they asked "
+                        "for more than 5, list only the first 5). For each task:\n"
+                        "- title: a short, clear description (under 100 characters), in the SAME language/"
+                        "script the student used.\n"
                         "- due: exactly one of 'today', 'tomorrow', a weekday name ('Monday'..'Sunday'), an "
-                        "explicit 'YYYY-MM-DD' date if one was given, or null if no date was mentioned.\n"
-                        "- multiple: true only if the student asked for more than one distinct task in this "
-                        "message (then title/due describe only the FIRST one).\n"
+                        "explicit 'YYYY-MM-DD' date if one was given, or null if no date was mentioned for "
+                        "that task.\n"
+                        "confident is true only when tasks has exactly one entry AND its title clearly "
+                        "names a specific subject/topic/activity (e.g. 'Biology - 30 MCQs', 'Revise "
+                        "optics') -- false for a vague title with no real subject (e.g. just 'study', "
+                        "'task', 'revision') or whenever there is more than one task.\n"
                         "Never answer the request, never explain -- output ONLY the JSON object."
                     )},
                     {"role": "user", "content": text},
@@ -5924,27 +5939,55 @@ async def _extract_planner_task(text: str, user_id: str = "") -> Optional[dict]:
         return None
     if not isinstance(parsed, dict) or not parsed.get("is_task"):
         return None
-    title = str(parsed.get("title") or "").strip().replace("\n", " ").replace("\r", " ")[:100]
-    if not title:
+    raw_tasks = parsed.get("tasks")
+    if not isinstance(raw_tasks, list) or not raw_tasks:
+        return None
+    truncated = len(raw_tasks) > 5
+    tasks = []
+    for item in raw_tasks[:5]:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "").strip().replace("\n", " ").replace("\r", " ").replace("|", "/")[:100]
+        if not title:
+            continue
+        tasks.append({"title": title, "due_date": _resolve_planner_due_date(item.get("due"), now_ist)})
+    if not tasks:
         return None
     return {
-        "title": title,
-        "due_date": _resolve_planner_due_date(parsed.get("due"), now_ist),
-        "multiple": bool(parsed.get("multiple")),
+        "tasks": tasks,
+        "confident": bool(parsed.get("confident")) and len(tasks) == 1,
+        "truncated": truncated,
+        "today_str": now_ist.strftime("%Y-%m-%d"),
     }
 
 _PLANNER_CONFIRM_REPLY_EN = "I can add that to your Planner. Please confirm:"
-_PLANNER_CONFIRM_REPLY_ONLY_FIRST_EN = "I can add that to your Planner — only the first task is shown below. Please confirm:"
 _PLANNER_CONFIRM_REPLY_HI = "मैं इसे आपके प्लानर में जोड़ सकता हूं। कृपया पुष्टि करें:"
-_PLANNER_CONFIRM_REPLY_ONLY_FIRST_HI = "मैं इसे आपके प्लानर में जोड़ सकता हूं — नीचे केवल पहला कार्य दिखाया गया है। कृपया पुष्टि करें:"
+_PLANNER_MULTI_CONFIRM_REPLY_EN = "I can add these to your Planner. Please confirm:"
+_PLANNER_MULTI_CONFIRM_REPLY_HI = "मैं इन्हें आपके प्लानर में जोड़ सकता हूं। कृपया पुष्टि करें:"
+_PLANNER_TRUNCATED_NOTE_EN = "Only the first 5 tasks are shown below."
+_PLANNER_TRUNCATED_NOTE_HI = "नीचे केवल पहले 5 कार्य दिखाए गए हैं।"
 _PLANNER_UPGRADE_REPLY_EN = "The Planner is available on Pro and Max. Upgrade to add study tasks from chat."
 _PLANNER_UPGRADE_REPLY_HI = "प्लानर Pro और Max पर उपलब्ध है। चैट से स्टडी टास्क जोड़ने के लिए अपग्रेड करें।"
 
-def _planner_task_card_response(extracted: dict, language: str) -> str:
-    reply = (_PLANNER_CONFIRM_REPLY_ONLY_FIRST_HI if extracted["multiple"] else _PLANNER_CONFIRM_REPLY_HI) \
-        if language == "hi" else \
-        (_PLANNER_CONFIRM_REPLY_ONLY_FIRST_EN if extracted["multiple"] else _PLANNER_CONFIRM_REPLY_EN)
-    return f"PLANNER_TASK: yes\nTITLE: {extracted['title']}\nDUE: {extracted['due_date'] or ''}\n\n{reply}"
+def _planner_task_card_response(task: dict, language: str) -> str:
+    reply = _PLANNER_CONFIRM_REPLY_HI if language == "hi" else _PLANNER_CONFIRM_REPLY_EN
+    return f"PLANNER_TASK: yes\nTITLE: {task['title']}\nDUE: {task['due_date'] or ''}\n\n{reply}"
+
+def _planner_auto_add_response(task: dict, today_str: str, language: str) -> str:
+    # The client (not this server) does the actual POST /todos -- see stream_response's own
+    # comment on why -- so no reply text is needed here; the client builds its own localized
+    # "Added to your Planner" line once that POST has actually succeeded.
+    due_date = task["due_date"] or today_str
+    return f"PLANNER_AUTO_ADD: yes\nTITLE: {task['title']}\nDUE: {due_date}\n\n"
+
+def _planner_multi_task_response(tasks: list, truncated: bool, language: str) -> str:
+    lines = ["PLANNER_MULTI: yes", f"TRUNCATED: {'yes' if truncated else 'no'}"]
+    for task in tasks:
+        lines.append(f"TASK: {task['title']}|{task['due_date'] or ''}")
+    reply = _PLANNER_MULTI_CONFIRM_REPLY_HI if language == "hi" else _PLANNER_MULTI_CONFIRM_REPLY_EN
+    if truncated:
+        reply = (_PLANNER_TRUNCATED_NOTE_HI if language == "hi" else _PLANNER_TRUNCATED_NOTE_EN) + "\n" + reply
+    return "\n".join(lines) + "\n\n" + reply
 
 def _planner_upgrade_response(language: str) -> str:
     reply = _PLANNER_UPGRADE_REPLY_HI if language == "hi" else _PLANNER_UPGRADE_REPLY_EN
@@ -6010,7 +6053,13 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
             if extracted is not None:
                 plan = await get_user_plan(user_id)
                 if plan in ("pro", "max"):
-                    yield _planner_task_card_response(extracted, language)
+                    tasks = extracted["tasks"]
+                    if len(tasks) == 1 and extracted["confident"]:
+                        yield _planner_auto_add_response(tasks[0], extracted["today_str"], language)
+                    elif len(tasks) == 1:
+                        yield _planner_task_card_response(tasks[0], language)
+                    else:
+                        yield _planner_multi_task_response(tasks, extracted["truncated"], language)
                 else:
                     yield _planner_upgrade_response(language)
                 return

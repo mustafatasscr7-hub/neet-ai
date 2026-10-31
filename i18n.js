@@ -747,7 +747,15 @@ const TRANSLATIONS = {
       plannerCardError: 'Could not add task. Please try again.',
       plannerCardAdded: 'Added to Planner',
       plannerCardCancelled: 'Not added',
-      plannerUpgradeBtn: 'Upgrade'
+      plannerUpgradeBtn: 'Upgrade',
+      plannerAutoAddedText: 'Added to your Planner: {title}, {date}',
+      plannerUndoBtn: 'Undo',
+      plannerUndone: 'Removed from Planner',
+      plannerMultiAddSelected: 'Add selected',
+      plannerMultiConfirmReply: 'I can add these to your Planner. Please confirm:',
+      slashTaskDesc: 'Add a task to your Planner',
+      slashTaskEmptyHint: 'Type what to add, e.g. /task biology 30 Qs tomorrow',
+      slashTaskTruncatedNote: 'Only the first 5 tasks are shown below.'
     },
     hi: {
       newChat: 'नई चैट',
@@ -988,7 +996,15 @@ const TRANSLATIONS = {
       plannerCardError: 'कार्य जोड़ा नहीं जा सका। कृपया पुनः प्रयास करें।',
       plannerCardAdded: 'प्लानर में जोड़ा गया',
       plannerCardCancelled: 'नहीं जोड़ा गया',
-      plannerUpgradeBtn: 'अपग्रेड करें'
+      plannerUpgradeBtn: 'अपग्रेड करें',
+      plannerAutoAddedText: 'आपके प्लानर में जोड़ा गया: {title}, {date}',
+      plannerUndoBtn: 'पूर्ववत करें',
+      plannerUndone: 'प्लानर से हटाया गया',
+      plannerMultiAddSelected: 'चुने हुए जोड़ें',
+      plannerMultiConfirmReply: 'मैं इन्हें आपके प्लानर में जोड़ सकता हूं। कृपया पुष्टि करें:',
+      slashTaskDesc: 'अपने प्लानर में एक टास्क जोड़ें',
+      slashTaskEmptyHint: 'क्या जोड़ना है लिखें, जैसे /task biology 30 Qs tomorrow',
+      slashTaskTruncatedNote: 'नीचे केवल पहले 5 कार्य दिखाए गए हैं।'
     }
   },
 

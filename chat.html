@@ -779,6 +779,32 @@
       .planner-card { max-width: 100%; }
     }
 
+    /* Chat quick-add's auto-add confirmation row (PLANNER_AUTO_ADD marker / /task single-task) --
+       just the "Added to your Planner: ..." line plus an Undo button, no card shell needed since
+       there's nothing left to confirm by the time this renders (the POST already happened). */
+    .planner-autoadd-row { margin-top: 10px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13px; color: #ececec; }
+    .planner-autoadd-undo-btn {
+      background: transparent; border: 1px solid #2a2a2a; color: #999; font-family: 'Inter', sans-serif;
+      font-size: 12.5px; font-weight: 600; padding: 6px 14px; border-radius: 8px; cursor: pointer;
+      transition: background-color 150ms ease, color 150ms ease; flex-shrink: 0;
+    }
+    .planner-autoadd-undo-btn:hover:not(:disabled) { color: #ccc; background: rgba(255,255,255,0.05); }
+    .planner-autoadd-undo-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* Several-tasks-at-once card (PLANNER_MULTI marker / multi-task /task) -- same .planner-card
+       shell as the single-task confirm card, with a plain tick-list of rows instead of a title
+       input + date chips. */
+    .planner-multi-card { display: flex; flex-direction: column; gap: 0; }
+    .planner-multi-row { display: flex; align-items: flex-start; gap: 10px; padding: 7px 2px; cursor: pointer; border-bottom: 1px solid #222; }
+    .planner-multi-row:last-of-type { border-bottom: none; }
+    .planner-multi-check { flex-shrink: 0; width: 16px; height: 16px; margin-top: 2px; accent-color: #4f8ef7; cursor: pointer; }
+    .planner-multi-row-text { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .planner-multi-row-title { font-size: 13px; color: #ececec; word-break: break-word; }
+    .planner-multi-row-date { font-size: 11px; color: #888; }
+    .planner-multi-row-status { font-size: 11px; color: #f87171; flex-shrink: 0; text-align: right; max-width: 110px; }
+    .planner-multi-row-done .planner-multi-row-title { color: #666; text-decoration: line-through; }
+    .planner-multi-row-done .planner-multi-row-status { color: #4f8ef7; }
+
     /* Usage tab (Settings > Usage) -- flat rows matching Claude's own usage page rather than
        boxed cards: each section is a label+stat row, a thin bar, then a muted sub-line, separated
        only by a hairline border-bottom (the same divider treatment every other Settings row in
@@ -5411,6 +5437,13 @@ let selectedImages = [];
           renderPlannerTaskCard(bubble, bubble.firstChild, msgIndex, msgObj.plannerCard.title, msgObj.plannerCard.due, msgObj.plannerCard.status);
         } else if (msgObj && msgObj.plannerUpgrade) {
           renderPlannerUpgradeCard(bubble, bubble.firstChild);
+        } else if (msgObj && msgObj.plannerMulti) {
+          // Per-row status (added/failed/pending) was persisted live (see
+          // _submitPlannerMultiCard) specifically so a reload can't re-POST an already-added
+          // task -- the auto-add row's own Undo button never gets restored here, same reasoning
+          // as the auto-add text-only restore just below: an 8s Undo window that's long since
+          // closed would be actively misleading on a reload.
+          renderPlannerMultiCard(bubble.firstChild, msgObj.plannerMulti.tasks, msgIndex);
         }
 
         // metaHtml (NEET Importance/Chapter) is only ever present on a real academic answer --
@@ -6525,6 +6558,7 @@ function plainTextFromMarkdown(text) {
     const SLASH_COMMANDS = [
       { cmd: '/mocktest', desc: 'Jump straight into a mock test' },
       { cmd: '/pyq', desc: 'Search Previous Year Questions by topic' },
+      { cmd: '/task', desc: t('chat', 'slashTaskDesc') },
       { cmd: '/explain simply', desc: 'Re-explain the last answer, simply' },
       { cmd: '/diagram', desc: 'Show the diagram for the current topic' },
       { cmd: '/formula', desc: 'Pull out just the formula from the last answer' },
@@ -6591,8 +6625,8 @@ function plainTextFromMarkdown(text) {
     // /pyq is the one exception: it still needs a topic, so it only fills the input and waits.
     function selectSlashCommand(command, el) {
       hideSlashMenu();
-      if (command.cmd === '/pyq') {
-        el.value = '/pyq ';
+      if (command.cmd === '/pyq' || command.cmd === '/task') {
+        el.value = command.cmd + ' ';
         el.focus();
         if (el.setSelectionRange) el.setSelectionRange(el.value.length, el.value.length);
         return;
@@ -6810,6 +6844,287 @@ function plainTextFromMarkdown(text) {
       } catch (e) {
         addMessageRow('ai', 'Could not search PYQs right now — please try again.');
       }
+    }
+
+    // ---------- /task slash command (plain client-side parser, no AI call) ----------
+    // "/task biology 30 Qs tomorrow" -- a date word/weekday/explicit date anywhere in the text
+    // becomes due_date, the rest (with that span removed) becomes the title. No date -> today.
+    const _TASK_WEEKDAYS = { sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6 };
+    const _TASK_MONTHS = {
+      jan: 0, january: 0, feb: 1, february: 1, mar: 2, march: 2, apr: 3, april: 3, may: 4,
+      jun: 5, june: 5, jul: 6, july: 6, aug: 7, august: 7, sep: 8, sept: 8, september: 8,
+      oct: 9, october: 9, nov: 10, november: 10, dec: 11, december: 11,
+    };
+
+    function _taskLocalDateStr(d) {
+      return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    }
+
+    // Returns { title, dueDate } (dueDate always set -- defaults to today per spec). Exported as
+    // a standalone function (not inlined into runTaskCommand) so each comma/semicolon/newline
+    // segment of a multi-task /task command gets its own independent date parse.
+    function parseTaskCommandText(raw) {
+      const text = (raw || '').trim();
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      let dueDate = null;
+      let matchedSpan = null;
+
+      let m = text.match(/\bnext\s+(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/i);
+      if (m) {
+        const target = _TASK_WEEKDAYS[m[1].toLowerCase()];
+        let delta = (target - today.getDay() + 7) % 7;
+        if (delta === 0) delta = 7; // "next <today's own weekday>" means next week, not today
+        const d = new Date(today); d.setDate(d.getDate() + delta);
+        dueDate = _taskLocalDateStr(d);
+        matchedSpan = m[0];
+      }
+      if (!dueDate) {
+        m = text.match(/\b(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/i);
+        if (m) {
+          const target = _TASK_WEEKDAYS[m[1].toLowerCase()];
+          const delta = (target - today.getDay() + 7) % 7; // 0 = today, matching _resolve_planner_due_date server-side
+          const d = new Date(today); d.setDate(d.getDate() + delta);
+          dueDate = _taskLocalDateStr(d);
+          matchedSpan = m[0];
+        }
+      }
+      if (!dueDate) {
+        m = text.match(/\btoday\b/i);
+        if (m) { dueDate = _taskLocalDateStr(today); matchedSpan = m[0]; }
+      }
+      if (!dueDate) {
+        m = text.match(/\btomorrow\b|\bkal\b/i);
+        if (m) { const d = new Date(today); d.setDate(d.getDate() + 1); dueDate = _taskLocalDateStr(d); matchedSpan = m[0]; }
+      }
+      if (!dueDate) {
+        m = text.match(/\bparso\b/i);
+        if (m) { const d = new Date(today); d.setDate(d.getDate() + 2); dueDate = _taskLocalDateStr(d); matchedSpan = m[0]; }
+      }
+      if (!dueDate) {
+        // "5 Nov" / "5 November" / "5 Nov 2026"
+        m = text.match(/\b(\d{1,2})\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b(?:\s+(\d{4}))?/i);
+        if (m) {
+          const day = parseInt(m[1], 10);
+          const month = _TASK_MONTHS[m[2].toLowerCase()];
+          const year = m[3] ? parseInt(m[3], 10) : today.getFullYear();
+          let d = new Date(year, month, day);
+          if (!m[3] && d < today) d = new Date(year + 1, month, day);
+          if (d.getDate() === day && d.getMonth() === month) {
+            dueDate = _taskLocalDateStr(d);
+            matchedSpan = m[0];
+          }
+        }
+      }
+      if (!dueDate) {
+        // "5/11" or "5/11/2026" -- DD/MM(/YYYY), the Indian convention this app otherwise uses.
+        m = text.match(/\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/);
+        if (m) {
+          const day = parseInt(m[1], 10);
+          const month = parseInt(m[2], 10) - 1;
+          let year = m[3] ? (m[3].length === 2 ? 2000 + parseInt(m[3], 10) : parseInt(m[3], 10)) : today.getFullYear();
+          let d = new Date(year, month, day);
+          if (!m[3] && d < today) d = new Date(year + 1, month, day);
+          if (month >= 0 && month <= 11 && d.getDate() === day && d.getMonth() === month) {
+            dueDate = _taskLocalDateStr(d);
+            matchedSpan = m[0];
+          }
+        }
+      }
+
+      let title = matchedSpan ? text.replace(matchedSpan, ' ') : text;
+      title = title.replace(/\s{2,}/g, ' ').trim().slice(0, 200);
+      return { title, dueDate: dueDate || _taskLocalDateStr(today) };
+    }
+
+    // Shared by the server-driven PLANNER_AUTO_ADD marker (streamAIResponse) and every /task
+    // path below -- the one place that actually calls POST /todos. Plan check, the 200-task cap
+    // and rate limiting all stay server-side (see /todos itself); this only interprets the result.
+    async function _postPlannerAutoAdd(title, due_date) {
+      try {
+        const { data: { session } } = await client.auth.getSession();
+        if (!session) return { ok: false, redirectLogin: true };
+        const res = await fetch(`${API_BASE}/todos`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
+          body: JSON.stringify({ title, due_date: due_date || null })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (_isTodoPlanRequired(res.status, data)) return { ok: false, planRequired: true };
+        if (!res.ok) return { ok: false, errorText: typeof data.detail === 'string' ? data.detail : null };
+        return { ok: true, taskId: data.task.id, due_date: data.task.due_date };
+      } catch (e) {
+        return { ok: false };
+      }
+    }
+
+    // Renders the "Added to your Planner: <title>, <date>" row with its Undo button (8s, then the
+    // button quietly disappears -- a reload always shows the final state, matching the existing
+    // single-task confirm card's own added/cancelled-is-final convention). msgIndex is only passed
+    // when this came from a real, persisted chat turn (the PLANNER_AUTO_ADD marker) -- /task's own
+    // calls below pass undefined, since those rows are ephemeral, same as /diagram, /formula and
+    // /summarize already are.
+    function renderPlannerAutoAddRow(container, labelText, taskId, msgIndex) {
+      const id = 'aa' + (++_plannerCardSeq);
+      container.insertAdjacentHTML('beforeend', `<div class="planner-autoadd-row" id="plannerAutoAdd-${id}">
+        <span id="plannerAutoAddLabel-${id}">${escapeHtml(labelText)}</span>
+        <button type="button" class="planner-autoadd-undo-btn" id="plannerAutoAddUndo-${id}">${escapeHtml(t('chat', 'plannerUndoBtn'))}</button>
+      </div>`);
+      const undoBtn = document.getElementById('plannerAutoAddUndo-' + id);
+      if (!undoBtn) return;
+      let settled = false;
+      const timer = setTimeout(() => { settled = true; undoBtn.remove(); }, 8000);
+      undoBtn.onclick = async () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        undoBtn.disabled = true;
+        try {
+          const { data: { session } } = await client.auth.getSession();
+          if (session) {
+            await fetch(`${API_BASE}/todos/${encodeURIComponent(taskId)}`, {
+              method: 'DELETE',
+              headers: { 'Authorization': `Bearer ${session.access_token}` }
+            });
+          }
+        } catch (e) {}
+        const label = document.getElementById('plannerAutoAddLabel-' + id);
+        if (label) label.textContent = t('chat', 'plannerUndone');
+        undoBtn.remove();
+        if (typeof msgIndex === 'number' && currentConversation[msgIndex]) {
+          currentConversation[msgIndex].text = t('chat', 'plannerUndone');
+          persistConversationSilently();
+        }
+      };
+    }
+
+    // Several-tasks-at-once card -- shared by the server-driven PLANNER_MULTI marker and /task's
+    // own comma/semicolon/newline-separated multi-task case. `tasks` is [{title, due, status?}];
+    // status (set once a row has actually been POSTed) survives a reload via msgObj.plannerMulti
+    // so re-opening the conversation can't re-add an already-added row.
+    const _plannerMultiState = {};
+    let _plannerMultiSeq = 0;
+
+    function _plannerMultiCardHtml(cardId, tasks) {
+      const rows = tasks.map((task, i) => {
+        const done = task.status === 'added';
+        const statusText = done ? t('chat', 'plannerCardAdded') : (task.status === 'failed' ? t('chat', 'plannerCardError') : '');
+        return `<label class="planner-multi-row${done ? ' planner-multi-row-done' : ''}" id="plannerMultiRow-${cardId}-${i}">
+          <input type="checkbox" class="planner-multi-check" id="plannerMultiCheck-${cardId}-${i}" checked ${done ? 'disabled' : ''} />
+          <span class="planner-multi-row-text">
+            <span class="planner-multi-row-title">${escapeHtml(task.title)}</span>
+            ${task.due ? `<span class="planner-multi-row-date">${escapeHtml(_todoDueDateLabel(task.due))}</span>` : ''}
+          </span>
+          <span class="planner-multi-row-status" id="plannerMultiStatus-${cardId}-${i}">${escapeHtml(statusText)}</span>
+        </label>`;
+      }).join('');
+      return `<div class="planner-card planner-multi-card" id="plannerMultiCard-${cardId}">
+        ${rows}
+        <div class="planner-card-actions">
+          <button type="button" class="planner-card-cancel-btn" id="plannerMultiCancel-${cardId}">${escapeHtml(t('chat', 'plannerCardCancel'))}</button>
+          <button type="button" class="planner-card-add-btn" id="plannerMultiAdd-${cardId}">${escapeHtml(t('chat', 'plannerMultiAddSelected'))}</button>
+        </div>
+      </div>`;
+    }
+
+    function renderPlannerMultiCard(textArea, tasks, msgIndex) {
+      const cardId = 'm' + (++_plannerMultiSeq);
+      textArea.insertAdjacentHTML('beforeend', _plannerMultiCardHtml(cardId, tasks));
+      _plannerMultiState[cardId] = { tasks, msgIndex, submitted: false };
+      const cancelBtn = document.getElementById('plannerMultiCancel-' + cardId);
+      const addBtn = document.getElementById('plannerMultiAdd-' + cardId);
+      if (cancelBtn) cancelBtn.onclick = () => { const root = document.getElementById('plannerMultiCard-' + cardId); if (root) root.remove(); delete _plannerMultiState[cardId]; };
+      if (addBtn) addBtn.onclick = () => _submitPlannerMultiCard(cardId);
+    }
+
+    async function _submitPlannerMultiCard(cardId) {
+      const state = _plannerMultiState[cardId];
+      if (!state || state.submitted) return; // guards a double-tap from posting the same tasks twice
+      state.submitted = true;
+      const addBtn = document.getElementById('plannerMultiAdd-' + cardId);
+      const cancelBtn = document.getElementById('plannerMultiCancel-' + cardId);
+      if (addBtn) addBtn.disabled = true;
+      if (cancelBtn) cancelBtn.disabled = true;
+      for (let i = 0; i < state.tasks.length; i++) {
+        const task = state.tasks[i];
+        if (task.status === 'added') continue;
+        const checkbox = document.getElementById(`plannerMultiCheck-${cardId}-${i}`);
+        if (!checkbox || !checkbox.checked) continue;
+        checkbox.disabled = true;
+        const rowEl = document.getElementById(`plannerMultiRow-${cardId}-${i}`);
+        const statusEl = document.getElementById(`plannerMultiStatus-${cardId}-${i}`);
+        const result = await _postPlannerAutoAdd(task.title, task.due);
+        if (result.redirectLogin) { window.location.href = './login.html'; return; }
+        if (result.planRequired) { window.location.href = './pricing.html'; return; }
+        if (result.ok) {
+          task.status = 'added';
+          if (rowEl) rowEl.classList.add('planner-multi-row-done');
+          if (statusEl) statusEl.textContent = t('chat', 'plannerCardAdded');
+        } else {
+          task.status = 'failed';
+          checkbox.disabled = false;
+          if (statusEl) statusEl.textContent = result.errorText || t('chat', 'plannerCardError');
+        }
+        if (typeof state.msgIndex === 'number' && currentConversation[state.msgIndex] && currentConversation[state.msgIndex].plannerMulti) {
+          currentConversation[state.msgIndex].plannerMulti.tasks[i].status = task.status;
+          persistConversationSilently();
+        }
+      }
+      if (addBtn) addBtn.disabled = false;
+      if (cancelBtn) cancelBtn.disabled = false;
+      state.submitted = false; // allows retrying any still-checked/failed rows
+    }
+
+    // /task's own entry point (see sendMessage's interception block) -- no model call at all, so
+    // this never touches isStreaming/sendInProgress and runs purely client-side.
+    async function runTaskCommand(argText) {
+      const welcome = document.getElementById('welcome');
+      if (welcome) welcome.remove();
+      inputArea.style.display = 'block';
+      if (!argText) {
+        addMessageRow('ai', t('chat', 'slashTaskEmptyHint'));
+        return;
+      }
+      const segments = argText.split(/[,;\n]+/).map(s => s.trim()).filter(Boolean);
+      const parsedTasks = segments.map(parseTaskCommandText).filter(p => p.title);
+      if (parsedTasks.length === 0) {
+        addMessageRow('ai', t('chat', 'slashTaskEmptyHint'));
+        return;
+      }
+      if (parsedTasks.length === 1) {
+        await runSingleTaskAutoAdd(parsedTasks[0].title, parsedTasks[0].dueDate);
+      } else {
+        const truncated = parsedTasks.length > 5;
+        const reply = truncated
+          ? (t('chat', 'slashTaskTruncatedNote') + '\n' + t('chat', 'plannerMultiConfirmReply'))
+          : t('chat', 'plannerMultiConfirmReply');
+        const bubble = addMessageRow('ai', reply);
+        const tasks = parsedTasks.slice(0, 5).map(p => ({ title: p.title, due: p.dueDate, status: 'pending' }));
+        renderPlannerMultiCard(bubble.firstChild, tasks, undefined);
+      }
+    }
+
+    async function runSingleTaskAutoAdd(title, due) {
+      const loadingRow = document.createElement('div');
+      loadingRow.className = 'typing-row';
+      loadingRow.innerHTML = '<div class="avatar ai"><img src="assets/logo.svg" alt="NEET-AI" width="32" height="32" /></div><div class="thinking-indicator"><span class="thinking-orb"></span></div>';
+      chatWindow.appendChild(loadingRow);
+      scrollBottom();
+      const result = await _postPlannerAutoAdd(title, due);
+      loadingRow.remove();
+      if (result.redirectLogin) { window.location.href = './login.html'; return; }
+      if (result.planRequired) {
+        const bubble = addMessageRow('ai', '');
+        renderPlannerUpgradeCard(bubble, bubble.firstChild);
+        return;
+      }
+      if (!result.ok) {
+        addMessageRow('ai', result.errorText || t('chat', 'plannerCardError'));
+        return;
+      }
+      const labelText = t('chat', 'plannerAutoAddedText').replace('{title}', title).replace('{date}', _todoDueDateLabel(result.due_date));
+      const bubble = addMessageRow('ai', '');
+      renderPlannerAutoAddRow(bubble.firstChild, labelText, result.taskId, undefined);
     }
 
     // Shared persistence step, used by both the header dropdown's prompt()-based rename below and
@@ -7898,6 +8213,13 @@ function plainTextFromMarkdown(text) {
         await runPyqSearchCommand(pyqTopicMatch[1].trim());
         return;
       }
+      const taskCmdMatch = text.match(/^\/task(?:\s+([\s\S]*))?$/i);
+      if (taskCmdMatch) {
+        input.value = '';
+        input.style.height = 'auto';
+        await runTaskCommand((taskCmdMatch[1] || '').trim());
+        return;
+      }
       if (/^\/diagram\s*$/i.test(text)) {
         input.value = '';
         input.style.height = 'auto';
@@ -8485,6 +8807,12 @@ function plainTextFromMarkdown(text) {
         // like AMBIGUOUS this is never handed to renderStreamingText either.
         let isPlannerTask = false;
         let isPlannerUpgrade = false;
+        // PLANNER_AUTO_ADD: yes / PLANNER_MULTI: yes are the same kind of marker, for the two
+        // other shapes stream_response's planner branch can now yield (see
+        // _planner_auto_add_response/_planner_multi_task_response) -- a single clear task that
+        // gets added immediately with an Undo, or several tasks at once in one tick-list card.
+        let isPlannerAutoAdd = false;
+        let isPlannerMulti = false;
 
         // Set inline, the moment VISUAL_INTENT: yes resolves below -- read after the loop to
         // decide the "Show Diagram" button (skipped if already auto-embedded). Declared here,
@@ -8529,6 +8857,8 @@ function plainTextFromMarkdown(text) {
                 // isPlannerUpgrade declarations above for what follows each.
                 const plannerTask = firstLine.match(/^\s*PLANNER_TASK:\s*(yes|no)\s*$/i);
                 const plannerUpgrade = firstLine.match(/^\s*PLANNER_UPGRADE:\s*(yes|no)\s*$/i);
+                const plannerAutoAdd = firstLine.match(/^\s*PLANNER_AUTO_ADD:\s*(yes|no)\s*$/i);
+                const plannerMulti = firstLine.match(/^\s*PLANNER_MULTI:\s*(yes|no)\s*$/i);
                 visualIntentResolved = true;
                 if (amb && amb[1].toLowerCase() === 'yes') {
                   isClarification = true;
@@ -8544,6 +8874,12 @@ function plainTextFromMarkdown(text) {
                 } else if (plannerUpgrade && plannerUpgrade[1].toLowerCase() === 'yes') {
                   isPlannerUpgrade = true;
                   appendToFullText(rest);
+                } else if (plannerAutoAdd && plannerAutoAdd[1].toLowerCase() === 'yes') {
+                  isPlannerAutoAdd = true;
+                  appendToFullText(rest); // TITLE:/DUE: lines -- parsed after the loop, POST /todos happens there
+                } else if (plannerMulti && plannerMulti[1].toLowerCase() === 'yes') {
+                  isPlannerMulti = true;
+                  appendToFullText(rest); // TRUNCATED:/TASK: lines + the one-line reply -- parsed after the loop
                 } else {
                   appendToFullText(visualIntentBuffer); // not our line -- flush unchanged, keep default 'no'
                 }
@@ -8578,7 +8914,7 @@ function plainTextFromMarkdown(text) {
               appendToFullText(chunk[i]);
             }
             const now = Date.now();
-            if (!isClarification && !isPlannerTask && !isPlannerUpgrade && now - lastRenderTime >= RENDER_THROTTLE_MS) {
+            if (!isClarification && !isPlannerTask && !isPlannerUpgrade && !isPlannerAutoAdd && !isPlannerMulti && now - lastRenderTime >= RENDER_THROTTLE_MS) {
               renderStreamingText(textArea, stripStreamErrorMarker(fullText).text);
               lastRenderTime = now;
               // Deliberately no scrollBottom() here -- the one scrollBottom() call made when the
@@ -8617,6 +8953,8 @@ function plainTextFromMarkdown(text) {
           const conv = trimmed.match(/^DOUBT_TYPE:\s*conversational$/i);
           const plannerTask = trimmed.match(/^PLANNER_TASK:\s*(yes|no)$/i);
           const plannerUpgrade = trimmed.match(/^PLANNER_UPGRADE:\s*(yes|no)$/i);
+          const plannerAutoAdd = trimmed.match(/^PLANNER_AUTO_ADD:\s*(yes|no)$/i);
+          const plannerMulti = trimmed.match(/^PLANNER_MULTI:\s*(yes|no)$/i);
           if (amb && amb[1].toLowerCase() === 'yes') {
             isClarification = true; // nothing follows it -- parseClarification below fails safe on an empty body
           } else if (m) {
@@ -8627,6 +8965,10 @@ function plainTextFromMarkdown(text) {
             isPlannerTask = true; // nothing follows it -- the title-parse fallback below fails safe
           } else if (plannerUpgrade && plannerUpgrade[1].toLowerCase() === 'yes') {
             isPlannerUpgrade = true;
+          } else if (plannerAutoAdd && plannerAutoAdd[1].toLowerCase() === 'yes') {
+            isPlannerAutoAdd = true; // nothing follows it -- the title-parse fallback below fails safe
+          } else if (plannerMulti && plannerMulti[1].toLowerCase() === 'yes') {
+            isPlannerMulti = true; // nothing follows it -- no TASK: lines means the card renders empty, same fail-safe shape
           } else {
             appendToFullText(visualIntentBuffer);
           }
@@ -8709,6 +9051,103 @@ function plainTextFromMarkdown(text) {
 
           if (hasCard) renderPlannerTaskCard(bubble, textArea, msgIndex, title, due, 'pending');
           else if (isPlannerUpgrade) renderPlannerUpgradeCard(bubble, textArea);
+
+          if (pendingSidebarSave) {
+            await pendingSidebarSave;
+            pendingSidebarSave = null;
+          }
+
+          const conv = conversations.find(c => c.id === currentId || c.supabaseId === currentId);
+          if (conv) conv.messages = currentConversation;
+
+          const { data: { session: sessionAfter } } = await client.auth.getSession();
+          if (sessionAfter && conv && conv.supabaseId) {
+            await client.from('chats').update({ messages: currentConversation }).eq('id', conv.supabaseId).eq('user_id', sessionAfter.user.id);
+          }
+          refreshUsageBanner();
+        } else if (isPlannerAutoAdd) {
+          // A single, clear task (see _extract_planner_task's own "confident" field) -- the
+          // server never writes to todo_tasks itself (see stream_response's own comment on why),
+          // so this is the one place that actually calls POST /todos for a message-typed task,
+          // then shows "Added to your Planner: ..." with an Undo button instead of the confirm
+          // card isPlannerTask shows for anything less clear-cut.
+          const titleMatch = fullText.match(/^\s*TITLE:\s*(.*)$/im);
+          const dueMatch = fullText.match(/^\s*DUE:\s*(.*)$/im);
+          const title = titleMatch ? titleMatch[1].trim() : '';
+          const due = dueMatch ? (dueMatch[1].trim() || null) : null;
+          const msgIndex = retryTarget ? aiIndex : currentConversation.length;
+          let aiMsg;
+          if (!title) {
+            const fallback = t('chat', 'emptyReplyFallback');
+            textArea.innerHTML = parseWithMath(fallback);
+            aiMsg = { role: 'ai', text: fallback, time: new Date().toISOString(), runningSummary: newRunningSummary || undefined };
+          } else {
+            textArea.innerHTML = '';
+            const result = await _postPlannerAutoAdd(title, due);
+            if (result.planRequired) {
+              renderPlannerUpgradeCard(bubble, textArea);
+              aiMsg = { role: 'ai', text: '', time: new Date().toISOString(), plannerUpgrade: true, runningSummary: newRunningSummary || undefined };
+            } else if (result.ok) {
+              const labelText = t('chat', 'plannerAutoAddedText').replace('{title}', title).replace('{date}', _todoDueDateLabel(result.due_date));
+              renderPlannerAutoAddRow(textArea, labelText, result.taskId, msgIndex);
+              aiMsg = { role: 'ai', text: labelText, time: new Date().toISOString(), runningSummary: newRunningSummary || undefined };
+            } else {
+              const errText = result.errorText || t('chat', 'plannerCardError');
+              textArea.innerHTML = parseWithMath(errText);
+              aiMsg = { role: 'ai', text: errText, time: new Date().toISOString(), runningSummary: newRunningSummary || undefined };
+            }
+          }
+          if (retryTarget) {
+            currentConversation[aiIndex] = aiMsg;
+            const oldActions = aiRow.querySelector('.message-actions');
+            if (oldActions) oldActions.remove();
+          } else {
+            currentConversation.push(aiMsg);
+          }
+
+          if (pendingSidebarSave) {
+            await pendingSidebarSave;
+            pendingSidebarSave = null;
+          }
+
+          const conv = conversations.find(c => c.id === currentId || c.supabaseId === currentId);
+          if (conv) conv.messages = currentConversation;
+
+          const { data: { session: sessionAfter } } = await client.auth.getSession();
+          if (sessionAfter && conv && conv.supabaseId) {
+            await client.from('chats').update({ messages: currentConversation }).eq('id', conv.supabaseId).eq('user_id', sessionAfter.user.id);
+          }
+          refreshUsageBanner();
+        } else if (isPlannerMulti) {
+          // Two to five tasks at once (see _extract_planner_task's own 5-task cap) -- one card,
+          // each task tick-boxed, nothing added until the student taps "Add selected" (see
+          // renderPlannerMultiCard/_submitPlannerMultiCard).
+          const truncatedMatch = fullText.match(/^\s*TRUNCATED:\s*(yes|no)\s*$/im);
+          const truncated = !!(truncatedMatch && truncatedMatch[1].toLowerCase() === 'yes');
+          const tasks = Array.from(fullText.matchAll(/^\s*TASK:\s*(.*)$/img)).map(m => {
+            const line = m[1];
+            const idx = line.indexOf('|');
+            const taskTitle = (idx === -1 ? line : line.slice(0, idx)).trim();
+            const taskDue = (idx === -1 ? '' : line.slice(idx + 1)).trim();
+            return { title: taskTitle, due: taskDue || null, status: 'pending' };
+          }).filter(task => task.title);
+          const blankIdx = fullText.search(/\n\s*\n/);
+          const reply = (blankIdx !== -1 ? fullText.slice(blankIdx) : '').trim() || t('chat', 'emptyReplyFallback');
+          textArea.innerHTML = parseWithMath(reply);
+
+          const hasCard = tasks.length > 0;
+          const msgIndex = retryTarget ? aiIndex : currentConversation.length;
+          const aiMsg = { role: 'ai', text: reply, time: new Date().toISOString(), runningSummary: newRunningSummary || undefined };
+          if (hasCard) aiMsg.plannerMulti = { tasks, truncated };
+          if (retryTarget) {
+            currentConversation[aiIndex] = aiMsg;
+            const oldActions = aiRow.querySelector('.message-actions');
+            if (oldActions) oldActions.remove();
+          } else {
+            currentConversation.push(aiMsg);
+          }
+
+          if (hasCard) renderPlannerMultiCard(textArea, tasks, msgIndex);
 
           if (pendingSidebarSave) {
             await pendingSidebarSave;
