@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Header, Depends, HTTPException, Request
+from fastapi import FastAPI, Header, Depends, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.datastructures import MutableHeaders
 from fastapi.responses import StreamingResponse
@@ -3695,6 +3695,61 @@ async def update_me_settings(body: MeSettingsUpdateRequest, _: None = Depends(ra
     except Exception as e:
         print(f"ME SETTINGS PUT ERROR (user_id={verified_user_id}): {type(e).__name__}", flush=True)
         return {"available": False}
+
+class DoubtTopicRequest(BaseModel):
+    subject: str
+    chapter: str
+    class_: Optional[str] = Field(None, alias="class")
+
+DOUBT_TOPIC_MAX_ROWS = 300
+
+@app.post("/me/doubt-topic", status_code=204)
+async def save_doubt_topic(body: DoubtTopicRequest, _: None = Depends(rate_limit(30, 60, by="account")), verified_user_id: str = Depends(_get_verified_user_id)):
+    """Fire-and-forget signal from pyqbank.html's Ask NEET-AI chip of which chapter a student raised
+    a doubt from, saved for the personalised test to use later (nothing reads this table yet). Only
+    subject/chapter/class is ever stored -- never the doubt text or the answer. Honours the same
+    Personalize toggle /me/settings reads, treating a missing table/row/setting as on, same as
+    build_student_context does elsewhere. Always 204, even on bad auth or any internal failure, so
+    this can never surface as an error on the page."""
+    if not verified_user_id:
+        return Response(status_code=204)
+    try:
+        subject = (body.subject or "").strip()[:80]
+        chapter = (body.chapter or "").strip()[:80]
+        class_name = (body.class_ or "").strip()[:80] or None
+        if not subject or not chapter:
+            return Response(status_code=204)
+        settings_resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/user_settings", headers=ADMIN_HEADERS,
+            params={"user_id": f"eq.{verified_user_id}", "select": "personalize", "limit": 1}
+        )
+        if settings_resp.status_code < 400:
+            rows = settings_resp.json()
+            if rows and rows[0].get("personalize") is False:
+                return Response(status_code=204)
+        await async_client.post(
+            f"{SUPABASE_URL}/rest/v1/doubt_topics",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json"},
+            json={"user_id": verified_user_id, "subject": subject, "chapter": chapter, "class": class_name}
+        )
+        # Keep at most DOUBT_TOPIC_MAX_ROWS per user: find the cutoff timestamp just past the cap
+        # (one cheap offset read) and delete everything older than it, instead of counting the
+        # whole table on every save.
+        cutoff_resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/doubt_topics", headers=ADMIN_HEADERS,
+            params={"user_id": f"eq.{verified_user_id}", "select": "created_at",
+                    "order": "created_at.desc", "offset": DOUBT_TOPIC_MAX_ROWS, "limit": 1}
+        )
+        if cutoff_resp.status_code < 400:
+            cutoff_rows = cutoff_resp.json()
+            if cutoff_rows:
+                await async_client.delete(
+                    f"{SUPABASE_URL}/rest/v1/doubt_topics", headers=ADMIN_HEADERS,
+                    params={"user_id": f"eq.{verified_user_id}", "created_at": f"lt.{cutoff_rows[0]['created_at']}"}
+                )
+    except Exception as e:
+        print(f"DOUBT TOPIC ERROR (user_id={verified_user_id}): {type(e).__name__}", flush=True)
+    return Response(status_code=204)
 
 async def _empty_list():
     return []
@@ -10736,7 +10791,7 @@ class AccountDeleteRequest(BaseModel):
 ACCOUNT_DELETE_TABLES = [
     "chats", "saved_questions", "mock_results", "user_streaks", "response_feedback",
     "active_sessions", "media_doubt_log", "usage_log", "max_usage_alerts", "bonus_tokens",
-    "user_plan", "user_referral_codes", "todo_tasks", "user_settings",
+    "user_plan", "user_referral_codes", "todo_tasks", "user_settings", "doubt_topics",
 ]
 # Kept with the student's id nulled out: content reports (quality signal for questions/diagrams),
 # cost telemetry, and both sides of a referral -- so the OTHER student's referral history and the

@@ -1866,6 +1866,24 @@ ${q.diagram_url ? `<img class="q-diagram-img q-img" src="${q.diagram_url}">` : '
     flushPyqAskAiQueue();
   }
 
+  // Fire-and-forget: tells the backend which chapter this doubt came from, for the personalised
+  // test to use later. Never awaited by the caller and every failure is swallowed here, so it can
+  // never delay or break opening the Ask NEET-AI popup. Logged-out students are skipped before any
+  // network call -- getSession() resolves instantly from local storage when there's no session.
+  function sendPyqDoubtTopicSignal(subject, chapter, classNum) {
+    (async () => {
+      try {
+        const { data: { session } } = await client.auth.getSession();
+        if (!session?.access_token) return;
+        await fetch(`${API_BASE}/me/doubt-topic`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
+          body: JSON.stringify({ subject: subject || '', chapter: chapter || '', class: classNum != null ? String(classNum) : '' })
+        });
+      } catch (e) {}
+    })();
+  }
+
   const pyqAskAiChip = document.createElement('div');
   pyqAskAiChip.className = 'pyq-ask-ai-chip';
   pyqAskAiChip.innerHTML = `<button class="pyq-ask-ai-btn" id="pyqAskAiBtn" type="button">Ask NEET-AI</button>`;
@@ -1925,6 +1943,7 @@ ${q.diagram_url ? `<img class="q-diagram-img q-img" src="${q.diagram_url}">` : '
       figureUrl: q && q.diagram_url ? q.diagram_url : undefined,
       ts: Date.now()
     });
+    sendPyqDoubtTopicSignal(selectedSubject, selectedChapter, selectedClass);
   }
   document.getElementById('pyqAskAiBtn').addEventListener('click', sendPyqSelectionAsDoubt);
 
