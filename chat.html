@@ -11200,6 +11200,13 @@ function plainTextFromMarkdown(text) {
           sessionStorage.removeItem('askDoubt');
           const doubt = JSON.parse(raw);
           if (doubt && doubt.selected && (Date.now() - (doubt.ts || 0)) < 10 * 60 * 1000) {
+            // #quotedContextPreview lives inside #inputArea, not the #welcome screen shown on a
+            // fresh chat.html load -- without this swap the card rendered into a display:none
+            // ancestor and input.focus() targeted a hidden textarea, so nothing visible happened.
+            // Same welcome-to-inputArea transition sendMessage() itself does on a first send.
+            const welcome = document.getElementById('welcome');
+            if (welcome) welcome.remove();
+            inputArea.style.display = 'block';
             quotedContexts.push({
               id: ++quotedContextIdCounter,
               text: String(doubt.selected).slice(0, 600),
