@@ -2,7 +2,14 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <!-- interactive-widget=resizes-content (additive -- ignored by browsers that don't support it,
+       falling back to the old behavior) makes 100vh-based layout actually shrink when the on-
+       screen keyboard opens, instead of staying pinned to the pre-keyboard viewport height. That
+       matters most for chat.html embedded as the Ask NEET-AI popup's iframe: the popup is a
+       position:fixed bottom sheet on a phone (see pyqbank.html's .pyq-ask-ai-panel), and without
+       this, focusing its input could leave #inputArea sitting behind the keyboard instead of
+       sliding up above it. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content"/>
   <title>NEET-AI</title>
   <link rel="icon" href="assets/favicon.ico" sizes="any" />
   <link rel="icon" type="image/svg+xml" href="assets/logo.svg" />
@@ -2149,8 +2156,8 @@
           <span id="limitBannerText" style="font-size:12px;color:#666;" data-i18n="chat.dailyLimitReached">⚡ Daily limit reached — resets at midnight</span>
           <button id="limitBannerBtn" onclick="window.location.href='./pricing.html'" style="background:linear-gradient(135deg,#4f8ef7,#7c3aed);border:none;color:white;padding:5px 14px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;font-family:Inter,sans-serif;white-space:nowrap;flex-shrink:0;" data-i18n="chat.upgradeToPro">Upgrade to Pro →</button>
         </div>
-        <div id="longChatNudge" style="display:none;align-items:center;justify-content:space-between;gap:10px;padding:8px 12px;margin-bottom:8px;border-radius:10px;background:#141c26;border:1px solid #1d3550;">
-          <span style="font-size:12px;color:#9cc3f0;" data-i18n="chat.longChatNudge">Long chat. A new chat gives faster answers.</span>
+        <div id="longChatNudge" style="display:none;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px 10px;padding:8px 12px;margin-bottom:8px;border-radius:10px;background:#141c26;border:1px solid #1d3550;">
+          <span style="font-size:12px;color:#9cc3f0;min-width:0;flex:1 1 auto;" data-i18n="chat.longChatNudge">Long chat. A new chat gives faster answers.</span>
           <div style="display:flex;align-items:center;gap:14px;flex-shrink:0;">
             <a href="#" id="longChatNudgeNewChat" style="font-size:12px;color:#4f8ef7;font-weight:600;text-decoration:none;" data-i18n="chat.longChatNudgeNewChat">New chat</a>
             <button type="button" id="longChatNudgeClose" title="Dismiss" data-i18n-title="chat.sfbClose" style="background:transparent;border:none;color:#5f7187;cursor:pointer;padding:2px;display:flex;align-items:center;">
