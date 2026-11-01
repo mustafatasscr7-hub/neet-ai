@@ -16,10 +16,17 @@
        after a message exists (never at parse time), so `defer` lets them download in the
        background in parallel with the rest of the page instead of blocking first paint --
        the composer/header/sidebar shell above needs none of them to become visible and
-       interactive. KaTeX's CSS uses the same preload+swap trick for the same reason: it only
-       affects content that itself doesn't exist until a render function runs. -->
-  <link rel="preload" as="style" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" onload="this.onload=null;this.rel='stylesheet'">
-  <noscript><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css"></noscript>
+       interactive. KaTeX's CSS used to load the same way via a preload+swap (onload sets
+       rel='stylesheet') instead of a plain <link rel=stylesheet> -- the one stylesheet on this
+       page not loaded that simple way. That onload callback is what actually swaps the
+       stylesheet in; inside the embed popup's iframe (chat.html?embed=1, loaded concurrently
+       with the host page's own resources) it was arriving late enough that a message could
+       finish streaming and render its KaTeX markup before katex.min.css had applied -- with no
+       font-family/sizing/layout rules in effect yet, formulas fell through to .katex's own
+       fallback font stack's tail ("Times New Roman", serif) and KaTeX's deeply nested
+       absolutely-positioned spans rendered with no layout CSS at all. Plain synchronous loading
+       removes that race outright. -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js" defer></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js" defer></script>
   <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js" defer></script>
@@ -69,6 +76,8 @@
     body.light-mode .message-bubble.ai strong { color: #0d0d0d !important; }
     body.light-mode .message-bubble.ai li { color: #333333 !important; }
     body.light-mode .message-bubble.ai code { background: #e8e8e8 !important; }
+    body.light-mode .message-bubble.ai pre { background: #e8e8e8 !important; }
+    body.light-mode .message-bubble.ai th, body.light-mode .message-bubble.ai td { border-color: #d5d5dd !important; }
     body.light-mode .message-time { color: rgba(0,0,0,0.35) !important; }
     body.light-mode .logo-brand { color: #0d0d0d !important; }
 
@@ -1308,6 +1317,13 @@
        gets the same sizing so a student's own \(...\)/$...$ matches the AI answer's scale. */
     .message-bubble.ai .chat-math-inline, .message-bubble.user .chat-math-inline { font-size: 1.15em; }
     .message-bubble.ai .chat-math-display, .message-bubble.user .chat-math-display { font-size: 1.3em; }
+    /* margin was previously duplicated inline at both parseWithMath()/parseUserMathText() call
+       sites alongside a stray text-align:center/overflow-x:auto that fought the shared
+       .katex-display rule above (nested overflow:auto containers -> a second, redundant
+       scrollbar). Centralized here; harmless no-op where this wraps a <span> instead of a <div>
+       (renderSolutionStepsHtml's non-final formulas) since vertical margin never applies to
+       inline elements. */
+    .chat-math-display { margin: 12px 0; }
     /* Unscoped (not .message-bubble.ai-prefixed like the two rules above) -- unlike those,
        this needs to render identically inside the PYQ-modal solve box too, a different
        container outside .message-bubble.ai entirely. max-width is required for margin:0 auto
@@ -1323,6 +1339,20 @@
     .message-bubble.ai li { margin: 4px 0; color: #c4c4c4; }
     .message-bubble.ai p { margin: 8px 0; }
     .message-bubble.ai code { background: #1a1a1a; padding: 2px 6px; border-radius: 4px; font-size: calc(var(--chat-font-size, 14px) - 1px); color: #4f8ef7; }
+    /* marked renders a fenced ```code``` block as <pre><code>...</code></pre> -- unstyled before
+       this, a long unwrapped line just pushed the bubble (and the page, at the embed popup's
+       ~380px width) wider instead of scrolling in place. min-width:0 matters for the same reason
+       it does on .message-bubble itself: pre's default intrinsic min-width is its longest line,
+       which overflow-x:auto alone doesn't override inside a flex/grid ancestor. */
+    .message-bubble.ai pre { min-width: 0; max-width: 100%; overflow-x: auto; background: #1a1a1a; padding: 10px 12px; border-radius: 8px; margin: 8px 0; }
+    .message-bubble.ai pre code { background: transparent; padding: 0; }
+    /* marked's default table markup has no styling of its own at all -- unbordered, unpadded,
+       and (worse) no overflow containment, so a wide table just widened the bubble/page the same
+       way an unstyled <pre> did. display:block + width:max-content is the standard responsive-
+       table pattern (lets the table keep its natural column widths and scroll horizontally
+       instead of every cell being force-squeezed to fit). */
+    .message-bubble.ai table { display: block; width: max-content; max-width: 100%; min-width: 0; overflow-x: auto; border-collapse: collapse; margin: 8px 0; }
+    .message-bubble.ai th, .message-bubble.ai td { border: 1px solid #2a2a2a; padding: 6px 10px; text-align: left; }
 
     /* Clickable (opens showMermaidModal at full natural size) -- cursor + hover border/expand-icon
        give the same "this opens bigger" affordance the diagram image preview already has.
@@ -1665,7 +1695,34 @@
     body.light-mode .version-nav-count { color: rgba(0,0,0,0.35) !important; }
     #pyq-modal ul, #pyq-modal ol { padding-left: 16px; margin: 4px 0; }
     #pyq-modal li { word-wrap: break-word; overflow-wrap: break-word; }
-    #pyq-modal .katex-display { overflow-x: auto; overflow-y: hidden; }
+    /* Shared by every KaTeX render path (chat bubbles, PYQ modal, solution steps, the embed
+       popup) -- not scoped to #pyq-modal any more. A display equation wider than its container
+       (common at the embed popup's ~380px width, or on a phone) used to overflow with its
+       inherited text-align:center, which clips the LEFT half unrecoverably: centering spreads
+       the overflow evenly on both sides, but overflow-x:auto's default scrollLeft is 0, so only
+       the right-side overflow is ever reachable by scrolling -- the left side is gone for good.
+       Left-aligning means all the overflow lands on the right, which scrolling right actually
+       reaches. overflow-y:hidden stops KaTeX's own strut/vlist layout (sub/superscripts,
+       fractions) from tripping the 1-2px vertical overflow that -- once overflow-x is anything
+       but visible -- the UA auto-promotes overflow-y to 'auto' for too, surfacing a vertical
+       scrollbar nothing here actually needs. */
+    .katex-display { overflow-x: auto; overflow-y: hidden; max-width: 100%; text-align: left; }
+    /* Inline KaTeX (.katex with no displayMode) is plain display:inline, white-space:normal --
+       it already wraps with the surrounding prose like any other inline content, so a long
+       inline formula just breaks across lines on its own and never needs a scrollbar (verified:
+       no page overflow, nothing clipped). This max-width/overflow-x is a no-op on that outer
+       inline box (overflow has no effect on a non-replaced inline element), kept only as a
+       defensive backstop for an inline construct (a fraction, say) that KaTeX renders via its
+       own inline-block internally and that genuinely could overflow a narrow bubble. Scoped to
+       .chat-math-inline (the wrapper every inline $...$ render gets, see parseWithMath/
+       parseUserMathText/renderSolutionStepsHtml) rather than a bare .katex -- a DISPLAY formula's
+       katex-display wrapper directly contains a .katex child too, and giving that inner .katex
+       its own independent overflow-x:auto nested inside the outer one made the inner box clip at
+       its own boundary before the outer box's scrollWidth ever saw the true (wider) content --
+       scrollWidth read back equal to clientWidth even though the formula was visibly cut off,
+       since the real overflow was silently absorbed one level too deep instead of surfacing
+       where the scrollbar actually lives. */
+    .chat-math-inline .katex { max-width: 100%; overflow-x: auto; overflow-y: hidden; }
     /* Match List-I/List-II columns -- color inherits from .pyq-q-text's own inline color. */
     .match-list-preamble { margin-bottom: 14px; }
     .match-list-cols { display: flex; gap: 16px; margin: 8px 0; flex-wrap: wrap; }
@@ -3639,7 +3696,7 @@ let selectedImages = [];
           // shared verbatim with pyqbank.html/savedquestions.html/admin-pyq-preview.html). The
           // visible glyphs come only from .katex-html, never from .katex-mathml, so dropping the
           // annotation via output:'html' is a no-op for what's actually on screen.
-          return '<div class="chat-math-display" style="text-align:center;margin:12px 0;overflow-x:auto;">' + katex.renderToString(addFracSpacing(math.trim()), { displayMode: true, throwOnError: false, output: 'html' }) + '</div>';
+          return '<div class="chat-math-display">' + katex.renderToString(addFracSpacing(math.trim()), { displayMode: true, throwOnError: false, output: 'html' }) + '</div>';
         } catch(e) { return _; }
       });
       html = html.replace(/\$([^$\n]+)\$/g, function(_, math) {
@@ -3707,7 +3764,7 @@ let selectedImages = [];
         try {
           const html = katex.renderToString(addFracSpacing(p.math), { displayMode: p.display, throwOnError: false, output: 'html' });
           return p.display
-            ? '<div class="chat-math-display" style="text-align:center;margin:12px 0;overflow-x:auto;">' + html + '</div>'
+            ? '<div class="chat-math-display">' + html + '</div>'
             : '<span class="chat-math-inline">' + html + '</span>';
         } catch (e) {
           return escapeHtml(p.raw);
