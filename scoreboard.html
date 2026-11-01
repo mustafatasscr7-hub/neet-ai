@@ -33,7 +33,7 @@
 
     .header { padding: 16px 28px; border-bottom: 1px solid #1a1a1e; display: flex; align-items: center; justify-content: space-between; background: rgba(8,8,12,0.9); backdrop-filter: blur(12px); position: sticky; top: 0; z-index: 10; }
     .header-title { font-size: 15px; font-weight: 700; color: #fff; position: relative; z-index: 1; }
-    .header-title .brand-accent { background: linear-gradient(135deg, #4f8ef7, #a78bfa); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+    .header-title .brand-accent { color: #4f8ef7; }
     .btn { padding: 9px 20px; border-radius: 10px; cursor: pointer; font-size: 13px; font-weight: 600; font-family: 'Inter', sans-serif; transition: all 0.2s; border: none; }
     .btn-primary { background: linear-gradient(135deg, #4f8ef7, #6f7bf7); color: white; box-shadow: 0 4px 16px rgba(79,142,247,0.3); }
     .btn-primary:hover { filter: brightness(1.08); transform: translateY(-1px); }
@@ -173,7 +173,7 @@
     .thinking-orb { position: relative; width: 18px; height: 18px; flex-shrink: 0; }
     .thinking-orb::before, .thinking-orb::after { content: ''; position: absolute; inset: 0; border-radius: 50%; border: 2px solid transparent; }
     .thinking-orb::before { border-top-color: #4f8ef7; border-right-color: #4f8ef7; animation: thinkingSpin 1.6s linear infinite; }
-    .thinking-orb::after { border-bottom-color: #7c3aed; border-left-color: #7c3aed; animation: thinkingSpin 2.2s linear infinite reverse; }
+    .thinking-orb::after { border-bottom-color: #38bdf8; border-left-color: #38bdf8; animation: thinkingSpin 2.2s linear infinite reverse; }
     @keyframes thinkingSpin { to { transform: rotate(360deg); } }
     @keyframes thinkingFade { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
 
@@ -258,7 +258,7 @@
     body.light-mode .diagram-skeleton { background: linear-gradient(100deg, #ececf0 30%, #f7f7fa 50%, #ececf0 70%) !important; background-size: 200% 100% !important; }
     body.light-mode .diagram-skeleton-label { color: #7a7a85 !important; }
     body.light-mode .diagram-modal-box { background: #ffffff !important; }
-    body.light-mode .diagram-modal-title { color: #7c3aed !important; }
+    body.light-mode .diagram-modal-title { color: #3b7de8 !important; }
     body.light-mode .diagram-modal-close { color: #7a7a85 !important; }
     body.light-mode .diagram-modal-imgframe { background: #f5f5f7 !important; }
     body.light-mode .diagram-modal-caption { color: #55555f !important; }
@@ -431,7 +431,7 @@
     <div class="summary-cards" id="summaryCards">
       <div class="summary-card" style="--accent:#4f8ef7;"><div class="summary-card-value" id="totalTests">-</div><div class="summary-card-label" data-i18n="scoreboard.testsTaken">Tests Taken</div></div>
       <div class="summary-card" style="--accent:#facc15;"><div class="summary-card-value" id="bestScore">-</div><div class="summary-card-sub" id="bestScoreSub"></div><div class="summary-card-label" data-i18n="scoreboard.bestScore">Best Score</div></div>
-      <div class="summary-card" style="--accent:#a78bfa;"><div class="summary-card-value" id="avgScore">-</div><div class="summary-card-sub" id="avgScoreSub"></div><div class="summary-card-label" data-i18n="scoreboard.avgScore">Average Score</div></div>
+      <div class="summary-card" style="--accent:#f97316;"><div class="summary-card-value" id="avgScore">-</div><div class="summary-card-sub" id="avgScoreSub"></div><div class="summary-card-label" data-i18n="scoreboard.avgScore">Average Score</div></div>
       <div class="summary-card" id="improvementCard" style="--accent:#4ade80;"><div class="summary-card-value" id="improvement">-</div><div class="summary-card-label" data-i18n="scoreboard.improvement">Improvement</div></div>
     </div>
 
@@ -919,7 +919,7 @@
       header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px;width:100%;';
       const title = document.createElement('h3');
       title.className = 'diagram-modal-title';
-      title.style.cssText = 'margin:0;color:#a78bfa;font-size:15px;';
+      title.style.cssText = 'margin:0;color:#4f8ef7;font-size:15px;';
       title.textContent = diagram.name || 'Diagram';
       header.appendChild(title);
       const closeBtn = document.createElement('button');
