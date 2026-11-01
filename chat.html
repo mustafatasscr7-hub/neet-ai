@@ -2411,15 +2411,23 @@
       target.focus();
     }
 
-    // The one place caret-hidden ever comes off. Delegated on document (not addEventListener'd
+    // The two places caret-hidden ever comes off. Delegated on document (not addEventListener'd
     // directly on #welcomeInput/#userInput) specifically because #welcomeInput is rebuilt from
     // scratch by showWelcome() every "New Chat" -- a listener bound to today's element would be
     // gone with it; this one keeps working regardless of how many times that happens.
-    document.addEventListener('keydown', function(e) {
+    // keydown covers typing into an already-focused input (e.g. right after page load, before
+    // any click). pointerdown covers a mouse/touch click landing on an input that's ALREADY
+    // focused from focusMessageInput()'s programmatic auto-focus: the browser fires no new focus
+    // event in that case (focus doesn't change), so without this a real click left the caret
+    // invisible even though the input had been focused the whole time -- exactly the "click does
+    // nothing" bug this exists to fix. One shared handler for both events.
+    function unhideCaretOnInteraction(e) {
       if (e.target && e.target.classList && e.target.classList.contains('caret-hidden')) {
         e.target.classList.remove('caret-hidden');
       }
-    });
+    }
+    document.addEventListener('keydown', unhideCaretOnInteraction);
+    document.addEventListener('pointerdown', unhideCaretOnInteraction);
 
     let isStreaming = false;
     // Set the instant sendMessage() is entered for a real send (text/image/PDF), BEFORE any of
