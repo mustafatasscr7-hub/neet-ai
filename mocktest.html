@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Mock Test — NEET-AI</title>
+  <title>Mock Test - NEET-AI</title>
   <link rel="icon" href="assets/favicon.ico" sizes="any" />
   <link rel="icon" type="image/svg+xml" href="assets/logo.svg" />
   <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
@@ -1079,7 +1079,7 @@ async function submitReport(pyqId, btnEl) {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok || data.error) {
-      errEl.textContent = data.detail || data.error || 'Could not submit -- try again.';
+      errEl.textContent = data.detail || data.error || 'Could not submit - try again.';
       btnEl.disabled = false; btnEl.textContent = 'Submit';
       return;
     }
@@ -1087,7 +1087,7 @@ async function submitReport(pyqId, btnEl) {
     setTimeout(closeReportPopup, 1600);
     markQuestionReportedInView();
   } catch (e) {
-    errEl.textContent = e.name === 'AbortError' ? 'Timed out -- try again.' : 'Could not reach server.';
+    errEl.textContent = e.name === 'AbortError' ? 'Timed out - try again.' : 'Could not reach server.';
     btnEl.disabled = false; btnEl.textContent = 'Submit';
   } finally {
     clearTimeout(timeoutId);
@@ -1435,7 +1435,7 @@ async function saveQuestionFromMock(index) {
         document.getElementById('startScreen').innerHTML = `
           <div style="text-align:center;">
             <div style="font-size:40px;margin-bottom:16px;">🎉</div>
-            <p style="color:#ccc;font-size:14px;margin-bottom:24px;" data-i18n="mocktest.allOfficialTestsDone">You've completed all official mock tests — starting a practice set instead.</p>
+            <p style="color:#ccc;font-size:14px;margin-bottom:24px;" data-i18n="mocktest.allOfficialTestsDone">You've completed all official mock tests - starting a practice set instead.</p>
           </div>
         `;
         applyTranslations();

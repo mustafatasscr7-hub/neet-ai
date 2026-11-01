@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Personalised Test — NEET-AI</title>
+  <title>Personalised Test - NEET-AI</title>
   <link rel="icon" href="assets/favicon.ico" sizes="any" />
   <link rel="icon" type="image/svg+xml" href="assets/logo.svg" />
   <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
@@ -594,7 +594,7 @@
 
           <div class="setup-step">
             <div class="setup-step-label">
-              <span><span data-i18n="personalisedTest.chaptersLabel">Chapters</span> <span class="hint" data-i18n="personalisedTest.chaptersHint">(optional — leave empty for all)</span></span>
+              <span><span data-i18n="personalisedTest.chaptersLabel">Chapters</span> <span class="hint" data-i18n="personalisedTest.chaptersHint">(optional - leave empty for all)</span></span>
               <span class="chapter-list-actions">
                 <button type="button" onclick="selectAllChapters()" data-i18n="personalisedTest.selectAll">Select all</button>
                 <button type="button" onclick="clearAllChapters()" data-i18n="personalisedTest.clearAll">Clear</button>
@@ -817,7 +817,7 @@
         const data = await res.json();
         const tests = data.tests || [];
         if (tests.length === 0) {
-          grid.innerHTML = '<div class="chapter-empty">No practice tests available yet for this subject — try the Custom tab instead.</div>';
+          grid.innerHTML = '<div class="chapter-empty">No practice tests available yet for this subject - try the Custom tab instead.</div>';
           return;
         }
         const color = SUBJECT_META[subject].color;
@@ -1026,7 +1026,7 @@
 
     function renderChapterSectionBody(subject, chapters) {
       if (chapters.length === 0) {
-        return '<div class="chapter-empty">No chapter tags available for this subject yet — your test will draw from all active questions.</div>';
+        return '<div class="chapter-empty">No chapter tags available for this subject yet - your test will draw from all active questions.</div>';
       }
       let bodyHtml;
       if (SUBJECT_CATEGORIES[subject]) {
@@ -1341,7 +1341,7 @@
         await ensureDifficulties(questions, 'pyq');
 
         if (data.available < data.requested) {
-          showSetupNotice(`Only ${data.available} question${data.available === 1 ? '' : 's'} matched your filters — starting a ${data.available}-question test.`);
+          showSetupNotice(`Only ${data.available} question${data.available === 1 ? '' : 's'} matched your filters - starting a ${data.available}-question test.`);
           setTimeout(startTest, 1400);
         } else {
           hideSetupNotice();
@@ -1779,7 +1779,7 @@
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || data.error) {
-          errEl.textContent = data.detail || data.error || 'Could not submit -- try again.';
+          errEl.textContent = data.detail || data.error || 'Could not submit - try again.';
           btnEl.disabled = false; btnEl.textContent = 'Submit';
           return;
         }
@@ -1787,7 +1787,7 @@
         setTimeout(closeReportPopup, 1600);
         handleReportedQuestionInView();
       } catch (e) {
-        errEl.textContent = e.name === 'AbortError' ? 'Timed out -- try again.' : 'Could not reach server.';
+        errEl.textContent = e.name === 'AbortError' ? 'Timed out - try again.' : 'Could not reach server.';
         btnEl.disabled = false; btnEl.textContent = 'Submit';
       } finally {
         clearTimeout(timeoutId);

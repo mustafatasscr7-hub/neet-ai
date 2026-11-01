@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Results — NEET-AI</title>
+  <title>Results - NEET-AI</title>
   <link rel="icon" href="assets/favicon.ico" sizes="any" />
   <link rel="icon" type="image/svg+xml" href="assets/logo.svg" />
   <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
@@ -877,7 +877,7 @@ function generateScorecard() {
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || data.error) {
-          errEl.textContent = data.detail || data.error || 'Could not submit -- try again.';
+          errEl.textContent = data.detail || data.error || 'Could not submit - try again.';
           btnEl.disabled = false; btnEl.textContent = 'Submit';
           return;
         }
@@ -885,7 +885,7 @@ function generateScorecard() {
         setTimeout(closeReportPopup, 1600);
         removeReportedQuestionFromView();
       } catch (e) {
-        errEl.textContent = e.name === 'AbortError' ? 'Timed out -- try again.' : 'Could not reach server.';
+        errEl.textContent = e.name === 'AbortError' ? 'Timed out - try again.' : 'Could not reach server.';
         btnEl.disabled = false; btnEl.textContent = 'Submit';
       } finally {
         clearTimeout(timeoutId);

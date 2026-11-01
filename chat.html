@@ -2063,7 +2063,7 @@
           <svg id="todoLockIcon" class="todo-btn-lock" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:none;"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
         </button>
 <div style="position:relative;" id="countdownWrapper">
-          <div style="box-sizing:border-box;min-height:30px;display:flex;align-items:center;font-size:12px;font-weight:600;color:#4f8ef7;background:#4f8ef710;border:1px solid #4f8ef730;padding:4px 12px;border-radius:15px;cursor:default;"><span><span id="countdownPrefix">NEET <span data-i18n-num>2027</span> — </span><span id="countdownDays">--</span><span id="countdownSuffixFull" data-i18n="chat.daysLeft"> days left</span><span id="countdownSuffixCompact" data-i18n="chat.daysLeftShort">d left</span></span></div>
+          <div style="box-sizing:border-box;min-height:30px;display:flex;align-items:center;font-size:12px;font-weight:600;color:#4f8ef7;background:#4f8ef710;border:1px solid #4f8ef730;padding:4px 12px;border-radius:15px;cursor:default;"><span><span id="countdownPrefix">NEET <span data-i18n-num>2027</span> - </span><span id="countdownDays">--</span><span id="countdownSuffixFull" data-i18n="chat.daysLeft"> days left</span><span id="countdownSuffixCompact" data-i18n="chat.daysLeftShort">d left</span></span></div>
           <div id="countdownTooltip" style="display:none;position:absolute;top:36px;right:0;background:#111;border:1px solid #4f8ef730;border-radius:10px;padding:16px 20px;min-width:200px;z-index:999;box-shadow:0 8px 24px rgba(0,0,0,0.6);">
             <div style="font-size:10px;color:#4f8ef7;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:10px;" data-i18n="chat.timeUntilNeet">Time until NEET 2027</div>
             <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;text-align:center;">
@@ -2153,7 +2153,7 @@
           </div>
         </div>
        <div id="limitBanner" style="display:none;border-bottom:1px solid #1e1e1e;padding:10px 6px;margin-bottom:6px;align-items:center;justify-content:space-between;gap:12px;">
-          <span id="limitBannerText" style="font-size:12px;color:#666;" data-i18n="chat.dailyLimitReached">⚡ Daily limit reached — resets at midnight</span>
+          <span id="limitBannerText" style="font-size:12px;color:#666;" data-i18n="chat.dailyLimitReached">⚡ Daily limit reached - resets at midnight</span>
           <button id="limitBannerBtn" onclick="window.location.href='./pricing.html'" style="background:linear-gradient(135deg,#4f8ef7,#7c3aed);border:none;color:white;padding:5px 14px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;font-family:Inter,sans-serif;white-space:nowrap;flex-shrink:0;" data-i18n="chat.upgradeToPro">Upgrade to Pro →</button>
         </div>
         <div id="longChatNudge" style="display:none;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px 10px;padding:8px 12px;margin-bottom:8px;border-radius:10px;background:#141c26;border:1px solid #1d3550;">
@@ -2496,12 +2496,12 @@
       en: {
         generic: ["What's confusing you today?", "Where do you want to start?", "What's the doubt today?", "Ready when you are."],
         name: name => [`${name}, what's on your mind?`, `Hey ${name}, what are we studying today?`],
-        countdown: days => [`${days} days left — what are we tackling?`, `${days} days to go. Let's make today count.`]
+        countdown: days => [`${days} days left - what are we tackling?`, `${days} days to go. Let's make today count.`]
       },
       hi: {
         generic: ["आज क्या समझ नहीं आ रहा?", "कहाँ से शुरू करना चाहेंगे?", "आज का संदेह क्या है?", "जब आप तैयार हों।"],
         name: name => [`${name}, आपके मन में क्या है?`, `नमस्ते ${name}, आज क्या पढ़ेंगे?`],
-        countdown: days => [`${days} दिन बचे हैं — आज क्या करें?`, `${days} दिन बाकी हैं। आज को सार्थक बनाते हैं।`]
+        countdown: days => [`${days} दिन बचे हैं - आज क्या करें?`, `${days} दिन बाकी हैं। आज को सार्थक बनाते हैं।`]
       }
     };
 
@@ -3324,7 +3324,7 @@ let selectedImages = [];
       const activeBtn = onWelcome ? document.getElementById('welcomeVoiceBtn') : document.getElementById('voiceBtn');
 
       if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-        showVoiceMessage('Voice input needs Chrome or Edge — not supported in this browser.', activeBtn);
+        showVoiceMessage('Voice input needs Chrome or Edge - not supported in this browser.', activeBtn);
         return;
       }
 
@@ -4488,7 +4488,7 @@ let selectedImages = [];
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || data.error) {
-          errEl.textContent = data.detail || data.error || 'Could not submit -- try again.';
+          errEl.textContent = data.detail || data.error || 'Could not submit - try again.';
           btnEl.disabled = false; btnEl.textContent = 'Submit';
           return;
         }
@@ -4496,7 +4496,7 @@ let selectedImages = [];
         setTimeout(closeReportPopup, 1600);
         removeReportedQuestionFromView(pyqId);
       } catch (e) {
-        errEl.textContent = e.name === 'AbortError' ? 'Timed out -- try again.' : 'Could not reach server.';
+        errEl.textContent = e.name === 'AbortError' ? 'Timed out - try again.' : 'Could not reach server.';
         btnEl.disabled = false; btnEl.textContent = 'Submit';
       } finally {
         clearTimeout(timeoutId);
@@ -4611,14 +4611,14 @@ let selectedImages = [];
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || data.error) {
-          errEl.textContent = data.detail || data.error || 'Could not submit -- try again.';
+          errEl.textContent = data.detail || data.error || 'Could not submit - try again.';
           btnEl.disabled = false; btnEl.textContent = 'Submit';
           return;
         }
         popup.innerHTML = '<div class="report-popup-thanks">✓ Reported, thank you</div>';
         setTimeout(closeDiagramReportPopup, 1600);
       } catch (e) {
-        errEl.textContent = e.name === 'AbortError' ? 'Timed out -- try again.' : 'Could not reach server.';
+        errEl.textContent = e.name === 'AbortError' ? 'Timed out - try again.' : 'Could not reach server.';
         btnEl.disabled = false; btnEl.textContent = 'Submit';
       } finally {
         clearTimeout(timeoutId);
@@ -4689,12 +4689,12 @@ let selectedImages = [];
       if (matchType === 'related') {
         const subtitle = document.createElement('div');
         subtitle.style.cssText = 'font-size:12px;color:#888;';
-        subtitle.textContent = `No exact match for this doubt — here are related ${subjectName(dominantSubject) || dominantSubject} questions instead.`;
+        subtitle.textContent = `No exact match for this doubt - here are related ${subjectName(dominantSubject) || dominantSubject} questions instead.`;
         header.appendChild(subtitle);
       } else if (matchType === 'chapter') {
         const subtitle = document.createElement('div');
         subtitle.style.cssText = 'font-size:12px;color:#888;';
-        subtitle.textContent = `No closely related PYQs found for this doubt — here are other questions from the same chapter instead.`;
+        subtitle.textContent = `No closely related PYQs found for this doubt - here are other questions from the same chapter instead.`;
         header.appendChild(subtitle);
       }
 
@@ -6559,13 +6559,13 @@ function plainTextFromMarkdown(text) {
       if (quote.mode === 'explain') {
         const label = document.createElement('span');
         label.className = 'quote-mode-label';
-        label.textContent = 'Explain simply — ';
+        label.textContent = 'Explain simply - ';
         textEl.appendChild(label);
       }
       if (quote.mode === 'pyq_doubt') {
         const label = document.createElement('span');
         label.className = 'quote-mode-label';
-        label.textContent = 'From Question Bank — ';
+        label.textContent = 'From Question Bank - ';
         textEl.appendChild(label);
       }
       textEl.appendChild(document.createTextNode(quote.text));
@@ -6807,7 +6807,7 @@ function plainTextFromMarkdown(text) {
     function submitPyqModalSelectionAsk() {
       const question = document.getElementById('pyqModalSelectionAskInput').value.trim();
       if (!question || !pyqModalSelectedText) return;
-      sendPyqModalSelection(`${pyqModalSelectedText} — ${question}`);
+      sendPyqModalSelection(`${pyqModalSelectedText} - ${question}`);
     }
     document.getElementById('pyqModalSelectionAskSend').addEventListener('click', submitPyqModalSelectionAsk);
     document.getElementById('pyqModalSelectionAskInput').addEventListener('keydown', function(e) {
@@ -6991,7 +6991,7 @@ function plainTextFromMarkdown(text) {
       inputArea.style.display = 'block';
       const last = getLastAiTurn();
       if (!last) {
-        addMessageRow('ai', 'Ask a doubt first — then I can look up its diagram.');
+        addMessageRow('ai', 'Ask a doubt first - then I can look up its diagram.');
         return;
       }
       const loadingRow = document.createElement('div');
@@ -7049,7 +7049,7 @@ function plainTextFromMarkdown(text) {
       inputArea.style.display = 'block';
       const last = getLastAiTurn();
       if (!last) {
-        addMessageRow('ai', 'Ask a doubt first — then I can pull the formula out of the answer.');
+        addMessageRow('ai', 'Ask a doubt first - then I can pull the formula out of the answer.');
         return;
       }
       const formulas = extractFormulas(last.aiText);
@@ -7070,7 +7070,7 @@ function plainTextFromMarkdown(text) {
       inputArea.style.display = 'block';
       const last = getLastAiTurn();
       if (!last) {
-        addMessageRow('ai', 'Ask a doubt first — then I can summarize the answer for you.');
+        addMessageRow('ai', 'Ask a doubt first - then I can summarize the answer for you.');
         return;
       }
       const loadingRow = document.createElement('div');
@@ -7090,11 +7090,11 @@ function plainTextFromMarkdown(text) {
         if (data && data.summary) {
           addMessageRow('ai', data.summary);
         } else {
-          addMessageRow('ai', 'Could not generate a summary right now — please try again.');
+          addMessageRow('ai', 'Could not generate a summary right now - please try again.');
         }
       } catch (e) {
         loadingRow.remove();
-        addMessageRow('ai', 'Could not generate a summary right now — please try again.');
+        addMessageRow('ai', 'Could not generate a summary right now - please try again.');
       }
     }
 
@@ -7117,7 +7117,7 @@ function plainTextFromMarkdown(text) {
           addMessageRow('ai', `No matching PYQs found for "${topic}".`);
         }
       } catch (e) {
-        addMessageRow('ai', 'Could not search PYQs right now — please try again.');
+        addMessageRow('ai', 'Could not search PYQs right now - please try again.');
       }
     }
 
@@ -8304,7 +8304,7 @@ function plainTextFromMarkdown(text) {
       if (cooldownDeadlineMs !== null) {
         const remainingMs = Math.max(0, cooldownDeadlineMs - Date.now());
         const countdown = t('chat', 'resetsIn').replace('{time}', formatCountdown(remainingMs));
-        limitText.textContent = t('chat', tier === 'guest' ? 'guestLimitReached' : 'dailyLimitReached') + ' — ' + countdown;
+        limitText.textContent = t('chat', tier === 'guest' ? 'guestLimitReached' : 'dailyLimitReached') + ' - ' + countdown;
         // Max is the top tier -- there's nowhere to send an "Upgrade" click, so the CTA is hidden
         // entirely rather than showing a nonsense "Upgrade to Pro" (a downgrade) or relabeling it
         // to something that still has no real destination.
