@@ -1225,7 +1225,10 @@
         if (!u) return;
         Object.assign(q, u);
         if (q.review_status === 'approved') q.reviewed = true;
-        if ((filter && q.review_status !== filter) || (reviewMode && q.reviewed) ||
+        // With no explicit status filter ("Any status"), the view still excludes rejected --
+        // the Rejected tab (filter === 'rejected') is the only place a rejected row belongs.
+        if ((filter ? q.review_status !== filter : q.review_status === 'rejected') ||
+            (reviewMode && q.reviewed) ||
             (contractorMode && q.review_status !== 'pending')) removed.add(q.id);
       });
       currentRows = currentRows.filter(q => !removed.has(q.id));
@@ -2083,13 +2086,13 @@
             <span class="q-admin-id">${escapeHtml(q.id)}</span>
             ${flags.map(f => `<span class="q-flag">${escapeHtml(f)}</span>`).join('')}
             ${reviewWarningsHtml(q)}
-            ${minimalActions ? '' : `<button class="q-edit-btn" onclick="startEdit('${q.id}')">✏️ Edit</button>`}
+            ${minimalActions || q.review_status === 'rejected' ? '' : `<button class="q-edit-btn" onclick="startEdit('${q.id}')">✏️ Edit</button>`}
             ${waiting ? `<button class="q-approve-btn" onclick="reviewApprove('${q.id}', this)">✅ Approve for students</button>` : ''}
             ${reviewMode && !waiting ? `<button class="q-approve-btn" onclick="approveQuestion('${q.id}', this)">✅ Approve</button>` : ''}
             ${reviewActions && q.review_status === 'rejected' ? `<button class="q-approve-btn" onclick="restoreQuestion('${q.id}', this)">Restore</button>` : ''}
             ${reviewActions && q.review_status && q.review_status !== 'rejected' && !noteOpenIds.has(q.id) && !rejectOpenIds.has(q.id) ? `<button class="q-fix-btn" onclick="openNeedsFix('${q.id}')">🔧 Needs fix</button>` : ''}
             ${reviewActions && q.review_status !== 'rejected' && !noteOpenIds.has(q.id) && !rejectOpenIds.has(q.id) ? `<button class="q-reject-btn" onclick="openReject('${q.id}')">Reject (error)</button>` : ''}
-            ${minimalActions ? '' : `<button class="q-delete-btn" onclick="deleteQuestion('${q.id}', this)">🗑 Delete</button>`}
+            ${minimalActions || q.review_status === 'rejected' ? '' : `<button class="q-delete-btn" onclick="deleteQuestion('${q.id}', this)">🗑 Delete</button>`}
           </div>
           ${reviewActions ? needsFixBoxHtml(q) : ''}
           ${reviewActions ? rejectBoxHtml(q) : ''}

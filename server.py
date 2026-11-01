@@ -8992,6 +8992,7 @@ async def admin_pyq_search(
             params["reviewed"] = f"eq.{reviewed}"
         if review_status in PYQ_REVIEW_STATUSES:
             params["review_status"] = f"eq.{review_status}"
+        exclude_rejected = review_status not in PYQ_REVIEW_STATUSES
         if uploaded_by in PYQ_UPLOADERS:
             params["uploaded_by"] = f"eq.{uploaded_by}"
         # "__earlier__" is the admin preview's sentinel for "no name" (every row uploaded before
@@ -9011,6 +9012,13 @@ async def admin_pyq_search(
         # One India-time calendar day of uploads, as a plain and-group so it combines with the
         # or-groups below instead of overwriting them.
         and_parts = []
+        # No explicit review_status filter ("Any status") used to also surface rejected rows --
+        # those are kept only as reject-reason proof and should stay out of every normal view,
+        # same as /admin/pyq-duplicates already excludes them. review_status.is.null is needed
+        # alongside the neq: NULL <> 'rejected' is NULL (not true) under 3-valued logic, so a
+        # bare neq. would silently drop every pre-migration row that has no status at all.
+        if exclude_rejected:
+            and_parts.append("or(review_status.is.null,review_status.neq.rejected)")
         # The Review Queue (reviewed=false) now excludes the contractor's own uploads
         # unconditionally -- those live only in the admin preview's separate Contractor Queue,
         # which queries uploader_name+review_status directly instead of this reviewed param.
