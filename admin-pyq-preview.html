@@ -1188,6 +1188,10 @@
       if (duplicatesMode) return toggleDuplicatesView();
       if (reportsMode) return toggleReportsView();
       if (diagramMode) return toggleDiagramMode();
+      // Contractor Queue forces review_status=pending in loadResults() -- leaving it on would
+      // silently clobber the status we just set above, making the Rejected/Pending/Needs fix
+      // tiles look like they do nothing.
+      if (contractorMode) return toggleContractorMode();
       if (reviewMode) return toggleReviewMode();
       loadResults();
     }
