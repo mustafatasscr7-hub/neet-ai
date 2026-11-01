@@ -873,6 +873,7 @@ class Message(BaseModel):
     language: str = "en"
     user_id: str = ""
     personalize: bool = True
+    key_points: bool = True
     skip_cache: bool = False
     chapter: str = ""
     # Running-summary layer on top of the sliding-2 window (text doubts only) -- the client is
@@ -3635,36 +3636,53 @@ async def get_personalisation(_: None = Depends(rate_limit(30, 60, by="account")
 class MeSettingsUpdateRequest(BaseModel):
     personalize: Optional[bool] = None
     answer_style: Optional[str] = None
+    key_points: Optional[bool] = None
 
 @app.get("/me/settings")
 async def get_me_settings(_: None = Depends(rate_limit(30, 60, by="account")), verified_user_id: str = Depends(_get_verified_user_id)):
-    """Cross-device copy of the Personalize toggle and Answer Style, read by settings.js/
-    chat.html's sync code on page load. {"available": false} (never a 500) before
+    """Cross-device copy of the Personalize toggle, Answer Style and Show-key-points toggle, read
+    by settings.js/chat.html's sync code on page load. {"available": false} (never a 500) before
     user_settings.sql is applied, or on any other failure -- same convention as the admin
-    dashboard's *_available flags. Never logs the actual values."""
+    dashboard's *_available flags. Never logs the actual values.
+
+    key_points falls back to a second select without that column (then reports it as None, same
+    as an unset row) if user_settings_key_points.sql hasn't been run yet -- so personalize/
+    answer_style sync keeps working unaffected either way."""
     if not verified_user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
     try:
         resp = await async_client.get(
             f"{SUPABASE_URL}/rest/v1/user_settings", headers=ADMIN_HEADERS,
-            params={"user_id": f"eq.{verified_user_id}", "select": "personalize,answer_style", "limit": 1}
+            params={"user_id": f"eq.{verified_user_id}", "select": "personalize,answer_style,key_points", "limit": 1}
         )
         if resp.status_code >= 400:
-            return {"available": False}
+            resp = await async_client.get(
+                f"{SUPABASE_URL}/rest/v1/user_settings", headers=ADMIN_HEADERS,
+                params={"user_id": f"eq.{verified_user_id}", "select": "personalize,answer_style", "limit": 1}
+            )
+            if resp.status_code >= 400:
+                return {"available": False}
+            rows = resp.json()
+            row = rows[0] if rows else {}
+            return {"personalize": row.get("personalize"), "answer_style": row.get("answer_style"), "key_points": None}
         rows = resp.json()
         row = rows[0] if rows else {}
-        return {"personalize": row.get("personalize"), "answer_style": row.get("answer_style")}
+        return {"personalize": row.get("personalize"), "answer_style": row.get("answer_style"), "key_points": row.get("key_points")}
     except Exception as e:
         print(f"ME SETTINGS GET ERROR (user_id={verified_user_id}): {type(e).__name__}", flush=True)
         return {"available": False}
 
 @app.put("/me/settings")
 async def update_me_settings(body: MeSettingsUpdateRequest, _: None = Depends(rate_limit(30, 60, by="account")), verified_user_id: str = Depends(_get_verified_user_id)):
-    """Partial upsert of the same two settings -- only the fields actually sent are validated and
-    written (model_fields_set, same distinction todos_update makes). answer_style is checked
+    """Partial upsert of the same three settings -- only the fields actually sent are validated
+    and written (model_fields_set, same distinction todos_update makes). answer_style is checked
     against the same _VALID_ANSWER_STYLES the rest of the backend normalises against, and anything
     else is a 400, not a silent fallback to "detailed". {"available": false} on a missing table or
-    any other failure, never a 500."""
+    any other failure, never a 500.
+
+    If key_points was one of the fields sent and the upsert fails, it's dropped and the write is
+    retried once with whatever other fields were sent (in case user_settings_key_points.sql
+    hasn't been run yet) -- so a personalize/answer_style update in the same request still saves."""
     if not verified_user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
     update_fields = {}
@@ -3676,6 +3694,10 @@ async def update_me_settings(body: MeSettingsUpdateRequest, _: None = Depends(ra
         if body.answer_style not in _VALID_ANSWER_STYLES:
             raise HTTPException(status_code=400, detail="answer_style must be concise, medium or detailed")
         update_fields["answer_style"] = body.answer_style
+    if "key_points" in body.model_fields_set:
+        if body.key_points is None:
+            raise HTTPException(status_code=400, detail="key_points must be a boolean")
+        update_fields["key_points"] = bool(body.key_points)
     if not update_fields:
         raise HTTPException(status_code=400, detail="No fields to update")
     try:
@@ -3685,11 +3707,26 @@ async def update_me_settings(body: MeSettingsUpdateRequest, _: None = Depends(ra
             params={"on_conflict": "user_id"},
             json={"user_id": verified_user_id, **update_fields, "updated_at": datetime.now(timezone.utc).isoformat()}
         )
+        if resp.status_code >= 400 and "key_points" in update_fields:
+            retry_fields = {k: v for k, v in update_fields.items() if k != "key_points"}
+            if not retry_fields:
+                return {"available": False}
+            resp = await async_client.post(
+                f"{SUPABASE_URL}/rest/v1/user_settings",
+                headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation"},
+                params={"on_conflict": "user_id"},
+                json={"user_id": verified_user_id, **retry_fields, "updated_at": datetime.now(timezone.utc).isoformat()}
+            )
+            if resp.status_code >= 400:
+                return {"available": False}
+            saved = resp.json()
+            row = saved[0] if saved else {}
+            return {"personalize": row.get("personalize"), "answer_style": row.get("answer_style"), "key_points": None}
         if resp.status_code >= 400:
             return {"available": False}
         saved = resp.json()
         row = saved[0] if saved else {}
-        return {"personalize": row.get("personalize"), "answer_style": row.get("answer_style")}
+        return {"personalize": row.get("personalize"), "answer_style": row.get("answer_style"), "key_points": row.get("key_points")}
     except HTTPException:
         raise
     except Exception as e:
@@ -4792,6 +4829,12 @@ CONCISE_STYLE_CONTEXT = "\n\nIMPORTANT: The student has selected CONCISE mode. G
 # hash prefix for every cached answer_style (including detailed), invalidating the existing
 # cache. Medium is new, so it has no old cache to preserve.
 MEDIUM_STYLE_CONTEXT = "\n\nIMPORTANT: the student has selected MEDIUM mode. Give a balanced answer: the NEET importance line, the chapter line, a clear direct answer, then 2 to 3 key points. Keep every fact needed for a correct answer. Skip the memory trick, extra worked examples, and any repeated explanation. Aim for about half the length of a full detailed answer. Keep formulas, units and numbers exact."
+# Appended (never folded into the ANSWER_CACHE_PROMPT_VERSION hash below) only when the student's
+# key_points setting is off AND answer_style isn't concise -- Concise already has no Key Points
+# section of its own. Not folded into the hash because an answer generated with this appended is
+# never written to the shared cache in the first place (see stream_response/
+# _answer_cache_store_block), so there is no cached entry whose hash would need to change.
+KEY_POINTS_OFF_CONTEXT = "\n\nIMPORTANT: the student has turned OFF \"Key Points\". Omit the entire \"Key Points:\" section -- heading included -- from your answer: go straight from Answer: to the end (or to Quick Recall: if rule 9 would otherwise add one). Never write the \"Key Points:\" heading with nothing under it, and never fold its content into the Answer section instead."
 HINDI_LANG_CONTEXT = (
     f"\n\nIMPORTANT: {HINDI_ONLY_CORE} Proper nouns like NEET or NCERT also stay exactly "
     "as-is -- do not translate or romanize them. For the section headers specifically, use "
@@ -5445,6 +5488,31 @@ def _answer_cache_key(text: str, language: str, answer_style: str) -> str:
         f"{ANSWER_CACHE_PROMPT_VERSION}:{_answer_cache_language(language)}:{_answer_cache_style(answer_style)}:{normalized}".encode()
     ).hexdigest()
 
+# Only "Quick Recall:"/"त्वरित याद:" (rule 9) can ever follow "Key Points:"/"मुख्य बिंदु:" in the
+# format SYSTEM_PROMPT defines -- see the format template above. Used to strip Key Points back out
+# of an already-cached FULL answer when a student's key_points setting is off (the shared cache
+# only ever stores full answers -- see _answer_cache_store_block).
+_KEY_POINTS_HEADING_RE = re.compile(r'(?:Key Points|मुख्य बिंदु)\s*:')
+_QUICK_RECALL_HEADING_RE = re.compile(r'(?:Quick Recall|त्वरित याद)\s*:')
+
+def _strip_key_points_section(answer: str) -> str:
+    """Removes the Key Points section from a cached full answer. If a Quick Recall section
+    follows it, that section is kept; otherwise Key Points ran to the end and nothing is left
+    after it. Returns `answer` unchanged if no Key Points heading is found at all (e.g. a Concise
+    answer, which never has one) -- never guesses or mangles unrecognized text."""
+    if not answer:
+        return answer
+    heading = _KEY_POINTS_HEADING_RE.search(answer)
+    if not heading:
+        return answer
+    before = answer[:heading.start()].rstrip()
+    rest = answer[heading.end():]
+    quick_recall = _QUICK_RECALL_HEADING_RE.search(rest)
+    if quick_recall:
+        after = rest[quick_recall.start():]
+        return f"{before}\n\n{after}" if before else after
+    return before
+
 def _answer_cache_skip_reason(images, pdf, history, running_summary, skip_cache) -> Optional[str]:
     """Why this request may not use the shared cache at all, or None if it may."""
     if images or pdf:
@@ -5455,11 +5523,21 @@ def _answer_cache_skip_reason(images, pdf, history, running_summary, skip_cache)
         return "history"
     return None
 
-def _answer_cache_store_block(answer: str, language: str, student_name: str, used_student_context: bool, flags: dict = None) -> Optional[str]:
+def _answer_cache_store_block(answer: str, language: str, student_name: str, used_student_context: bool, flags: dict = None, key_points: bool = True, answer_style: str = "detailed") -> Optional[str]:
     """Why this answer must not be stored, or None if it may. "self_correction" is checked last on
-    purpose: it is the only reason a background regeneration can fix (see stream_response)."""
+    purpose: it is the only reason a background regeneration can fix (see stream_response).
+
+    key_points/answer_style default to the "normal full answer" case on purpose: the background
+    self-correction regeneration (_regenerate_and_cache_chat_answer) only ever runs for an answer
+    that already passed this exact check once with key_points=True, so it never needs to pass
+    these through again."""
     flags = flags or {}
     text = answer or ""
+    if not key_points and answer_style != "concise":
+        # This answer was generated with the Key Points section deliberately left out -- the
+        # shared cache has no concept of key_points (the cache key doesn't include it), so storing
+        # this would later serve a student with key_points ON a cached answer missing the section.
+        return "key_points_off"
     if not text.strip() or _is_bare_conversational_marker(text):
         return "empty"
     head = text.lstrip()[:300]
@@ -6192,7 +6270,7 @@ def _planner_upgrade_response(language: str) -> str:
     reply = _PLANNER_UPGRADE_REPLY_HI if language == "hi" else _PLANNER_UPGRADE_REPLY_EN
     return f"PLANNER_UPGRADE: yes\n\n{reply}"
 
-async def stream_response(text: str, history: list = [], images: list = [], pdf: str = None, answer_style: str = "detailed", student_name: str = "", language: str = "en", user_id: str = "", personalize: bool = True, skip_cache: bool = False, ip: str = "", running_summary: str = "", dropped_question: str = "", dropped_answer: str = ""):
+async def stream_response(text: str, history: list = [], images: list = [], pdf: str = None, answer_style: str = "detailed", student_name: str = "", language: str = "en", user_id: str = "", personalize: bool = True, key_points: bool = True, skip_cache: bool = False, ip: str = "", running_summary: str = "", dropped_question: str = "", dropped_answer: str = ""):
     answer_style = _normalize_answer_style(answer_style)
     images = (images or [])[:3]
 
@@ -6207,7 +6285,7 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
         except Exception:
             refetched = []
         if refetched:
-            async for chunk in stream_response(text, history, refetched, None, answer_style, student_name, language, user_id, personalize, skip_cache, ip):
+            async for chunk in stream_response(text, history, refetched, None, answer_style, student_name, language, user_id, personalize, key_points, skip_cache, ip):
                 yield chunk
             return
     # Fast path for exact-match greeting/smalltalk, before ANY of the expensive work below --
@@ -6274,7 +6352,10 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
         cached_row = await _answer_cache_lookup(cache_key)
         if cached_row:
             _cache_log("hit")
-            yield cached_row["answer"]
+            # The shared cache only ever stores full answers (see _answer_cache_store_block) --
+            # the key_points setting isn't part of cache_key, so a student with it OFF still gets
+            # a cache hit here; strip the section back out before it's ever sent to them.
+            yield cached_row["answer"] if key_points else _strip_key_points_section(cached_row["answer"])
             return
         _cache_log("miss")
     else:
@@ -6377,6 +6458,8 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
         usable_student_name = _usable_student_name(student_name)
         name_context = f"\n\nThe student name is {usable_student_name}. Use their name naturally and occasionally in responses to make it personal." if usable_student_name else ""
         style_context = CONCISE_STYLE_CONTEXT if answer_style == "concise" else (MEDIUM_STYLE_CONTEXT if answer_style == "medium" else "")
+        if not key_points and answer_style != "concise":
+            style_context += KEY_POINTS_OFF_CONTEXT
         answer_max_tokens = _answer_max_tokens(language)
         # Deliberately NOT folded into full_system below -- appended last, after
         # student_context/graph_context/conciseness_context/mcq_context and (in the text branch)
@@ -6821,7 +6904,7 @@ the question, ignore this instruction entirely and use the plain "Answer:" heade
             if cache_skip_reason is None:
                 # billing_context is the dict of whichever attempt produced full_answer (each
                 # override retry starts a fresh one), so its capped/corrected flags are this answer's.
-                cache_block = _answer_cache_store_block(full_answer, language, usable_student_name, bool(student_context), billing_context)
+                cache_block = _answer_cache_store_block(full_answer, language, usable_student_name, bool(student_context), billing_context, key_points, answer_style)
                 if cache_block is None:
                     stored = await _answer_cache_store(cache_key, full_answer, language, answer_style)
                     _cache_log("stored" if stored else "not_stored", None if stored else "write_failed")
@@ -7255,7 +7338,7 @@ async def chat(message: Message, request: Request, _: None = Depends(rate_limit(
     await enforce_daily_budget(message.user_id, ip)
     await validate_pdf_limits(message.pdf, message.user_id)
     return StreamingResponse(
-       stream_response(message.text, message.history, message.images, message.pdf, message.answer_style, message.student_name, message.language, message.user_id, message.personalize, message.skip_cache, ip, message.running_summary, message.dropped_question, message.dropped_answer),
+       stream_response(message.text, message.history, message.images, message.pdf, message.answer_style, message.student_name, message.language, message.user_id, message.personalize, message.key_points, message.skip_cache, ip, message.running_summary, message.dropped_question, message.dropped_answer),
         media_type="text/plain"
     )
 

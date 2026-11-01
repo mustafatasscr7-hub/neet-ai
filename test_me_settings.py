@@ -82,6 +82,43 @@ class MissingTableSupabase:
         return httpx.Response(200, json=[])
 
 
+class KeyPointsColumnMissingSupabase:
+    """user_settings exists with personalize/answer_style (like FakeSupabase), but key_points
+    hasn't been added yet (user_settings_key_points.sql not run) -- any select or write that
+    mentions key_points answers like PostgREST does for an unknown column (PGRST204/42703-style
+    400); everything else behaves normally."""
+    def __init__(self):
+        self.rows = {}
+
+    def _param(self, request, name):
+        raw = request.url.params.get(name)
+        return raw[3:] if raw and raw.startswith("eq.") else raw
+
+    def handle(self, request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/auth/v1/user":
+            uid = TOKENS.get(request.headers.get("authorization", "")[7:])
+            return httpx.Response(200, json={"id": uid}) if uid else httpx.Response(401, json={})
+        if path == "/rest/v1/user_settings":
+            user_id = self._param(request, "user_id")
+            if request.method == "GET":
+                select = request.url.params.get("select") or ""
+                if "key_points" in select:
+                    return httpx.Response(400, json={"code": "42703", "message": 'column "key_points" does not exist'})
+                row = self.rows.get(user_id)
+                return httpx.Response(200, json=[row] if row else [])
+            if request.method == "POST":
+                body = json.loads(request.content)
+                if "key_points" in body:
+                    return httpx.Response(400, json={"code": "42703", "message": 'column "key_points" does not exist'})
+                uid = body["user_id"]
+                existing = self.rows.get(uid, {})
+                existing.update(body)
+                self.rows[uid] = existing
+                return httpx.Response(201, json=[existing])
+        return httpx.Response(200, json=[])
+
+
 def auth(token):
     return {"Authorization": f"Bearer {token}", "X-Real-IP": "203.0.113.40"}
 
@@ -99,8 +136,8 @@ def test_get_no_saved_row(client):
     r = client.get("/me/settings", headers=auth("token-a"))
     check("200 OK", r.status_code == 200, r.text)
     data = r.json()
-    check("personalize is null, answer_style is null, no other keys",
-          data == {"personalize": None, "answer_style": None}, data)
+    check("personalize is null, answer_style is null, key_points is null, no other keys",
+          data == {"personalize": None, "answer_style": None, "key_points": None}, data)
 
 
 def test_invalid_answer_style(client):
@@ -108,23 +145,28 @@ def test_invalid_answer_style(client):
     r = client.put("/me/settings", json={"answer_style": "verbose"}, headers=auth("token-a"))
     check("bad answer_style -> 400", r.status_code == 400, r.text)
     r = client.get("/me/settings", headers=auth("token-a"))
-    check("row still untouched after the rejected PUT", r.json() == {"personalize": None, "answer_style": None}, r.text)
+    check("row still untouched after the rejected PUT", r.json() == {"personalize": None, "answer_style": None, "key_points": None}, r.text)
 
 
 def test_partial_put_only_touches_given_field(client):
     print("\n# partial PUT changes only the given field")
     r = client.put("/me/settings", json={"personalize": False}, headers=auth("token-a"))
     check("PUT personalize only -> 200", r.status_code == 200, r.text)
-    check("response reflects personalize=false, answer_style still null",
-          r.json() == {"personalize": False, "answer_style": None}, r.text)
+    check("response reflects personalize=false, answer_style/key_points still null",
+          r.json() == {"personalize": False, "answer_style": None, "key_points": None}, r.text)
 
     r = client.put("/me/settings", json={"answer_style": "concise"}, headers=auth("token-a"))
     check("PUT answer_style only -> 200", r.status_code == 200, r.text)
     check("answer_style now concise, personalize still false (untouched by this PUT)",
-          r.json() == {"personalize": False, "answer_style": "concise"}, r.text)
+          r.json() == {"personalize": False, "answer_style": "concise", "key_points": None}, r.text)
+
+    r = client.put("/me/settings", json={"key_points": False}, headers=auth("token-a"))
+    check("PUT key_points only -> 200", r.status_code == 200, r.text)
+    check("key_points now false, personalize/answer_style untouched by this PUT",
+          r.json() == {"personalize": False, "answer_style": "concise", "key_points": False}, r.text)
 
     r = client.get("/me/settings", headers=auth("token-a"))
-    check("GET reflects both saved fields", r.json() == {"personalize": False, "answer_style": "concise"}, r.text)
+    check("GET reflects all three saved fields", r.json() == {"personalize": False, "answer_style": "concise", "key_points": False}, r.text)
 
     r = client.put("/me/settings", json={"answer_style": "medium"}, headers=auth("token-a"))
     check("'medium' is a valid answer_style -> 200", r.status_code == 200 and r.json()["answer_style"] == "medium", r.text)
@@ -138,15 +180,15 @@ def test_empty_put_rejected(client):
 
 def test_cross_user_isolation(client):
     print("\n# one student cannot read or change another student's row")
-    client.put("/me/settings", json={"personalize": True, "answer_style": "detailed"}, headers=auth("token-a"))
-    r = client.put("/me/settings", json={"personalize": False, "answer_style": "concise"}, headers=auth("token-b"))
+    client.put("/me/settings", json={"personalize": True, "answer_style": "detailed", "key_points": True}, headers=auth("token-a"))
+    r = client.put("/me/settings", json={"personalize": False, "answer_style": "concise", "key_points": False}, headers=auth("token-b"))
     check("B's PUT -> 200", r.status_code == 200, r.text)
 
     r = client.get("/me/settings", headers=auth("token-a"))
-    check("A's row unaffected by B's PUT", r.json() == {"personalize": True, "answer_style": "detailed"}, r.text)
+    check("A's row unaffected by B's PUT", r.json() == {"personalize": True, "answer_style": "detailed", "key_points": True}, r.text)
 
     r = client.get("/me/settings", headers=auth("token-b"))
-    check("B sees only B's own values", r.json() == {"personalize": False, "answer_style": "concise"}, r.text)
+    check("B sees only B's own values", r.json() == {"personalize": False, "answer_style": "concise", "key_points": False}, r.text)
 
 
 def test_missing_table(client):
@@ -158,6 +200,24 @@ def test_missing_table(client):
     # Validation still happens before ever touching Supabase, table or not.
     r = client.put("/me/settings", json={"answer_style": "nonsense"}, headers=auth("token-a"))
     check("invalid answer_style still 400 even with a missing table", r.status_code == 400, r.text)
+
+
+def test_key_points_column_missing(client):
+    print("\n# key_points column not added yet -> personalize/answer_style sync still works")
+    r = client.get("/me/settings", headers=auth("token-a"))
+    check("GET falls back to the 2-column select -> 200, key_points reported as null",
+          r.status_code == 200 and r.json() == {"personalize": None, "answer_style": None, "key_points": None}, r.text)
+
+    r = client.put("/me/settings", json={"personalize": True, "key_points": False}, headers=auth("token-a"))
+    check("PUT with key_points alongside another field -> 200, other field still saved",
+          r.status_code == 200 and r.json() == {"personalize": True, "answer_style": None, "key_points": None}, r.text)
+
+    r = client.put("/me/settings", json={"key_points": False}, headers=auth("token-a"))
+    check("PUT with ONLY key_points (nothing left after dropping it) -> available:false, not 500",
+          r.status_code == 200 and r.json().get("available") is False, r.text)
+    # Validation still happens before ever touching Supabase, column or not.
+    r = client.put("/me/settings", json={"key_points": None}, headers=auth("token-a"))
+    check("key_points explicitly null is still a 400 (must be a real boolean)", r.status_code == 400, r.text)
 
 
 def test_delete_account_table_list():
@@ -181,6 +241,11 @@ if __name__ == "__main__":
     server.async_client = httpx.AsyncClient(transport=httpx.MockTransport(missing.handle))
     tc2 = TestClient(server.app)
     test_missing_table(tc2)
+
+    kp_missing = KeyPointsColumnMissingSupabase()
+    server.async_client = httpx.AsyncClient(transport=httpx.MockTransport(kp_missing.handle))
+    tc3 = TestClient(server.app)
+    test_key_points_column_missing(tc3)
 
     print(f"\nTOTAL: {len(_passed)} passed, {len(_failed)} failed")
     sys.exit(1 if _failed else 0)
