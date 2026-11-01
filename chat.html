@@ -1425,14 +1425,13 @@
     @keyframes bounce { 0%, 100% { transform: translateY(0); opacity: 0.6; } 50% { transform: translateY(-5px); opacity: 1; } }
 
     /* "Thinking" indicator -- shown from the moment a message is sent until the first real
-       token streams in. Two counter-rotating rings in NEET-AI's own brand pair (blue #4f8ef7 /
-       violet #7c3aed, the same gradient the Upgrade button already uses) rather than a generic
-       spinner or dot-ellipsis. */
+       token streams in. Two counter-rotating rings, both the site's blue accent (#4f8ef7,
+       same as the send button) rather than a generic spinner or dot-ellipsis. */
     .thinking-indicator { display: flex; align-items: center; gap: 10px; padding: 12px 4px; }
     .thinking-orb { position: relative; width: 18px; height: 18px; flex-shrink: 0; }
     .thinking-orb::before, .thinking-orb::after { content: ''; position: absolute; inset: 0; border-radius: 50%; border: 2px solid transparent; }
     .thinking-orb::before { border-top-color: #4f8ef7; border-right-color: #4f8ef7; animation: thinkingSpin 1.6s linear infinite; }
-    .thinking-orb::after { border-bottom-color: #7c3aed; border-left-color: #7c3aed; animation: thinkingSpin 2.2s linear infinite reverse; }
+    .thinking-orb::after { border-bottom-color: #4f8ef7; border-left-color: #4f8ef7; animation: thinkingSpin 2.2s linear infinite reverse; }
     @keyframes thinkingSpin { to { transform: rotate(360deg); } }
     .thinking-text { font-size: var(--chat-font-size, 14px); color: #888; animation: thinkingFade 2.2s ease-in-out infinite; }
     @keyframes thinkingFade { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
