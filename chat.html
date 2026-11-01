@@ -2236,6 +2236,26 @@
     const sendBtn = document.getElementById('sendBtn');
     const inputArea = document.getElementById('inputArea');
 
+    // Clicking/tapping anywhere inside the composer's rounded container (padding, empty space
+    // beside the placeholder) focuses the textarea and puts the caret at the end -- previously
+    // only a click exactly on the text line did anything. Buttons (plus/mic/send) and
+    // attachment/quote chips keep their own click behavior, so they're excluded; clicking the
+    // textarea itself is left alone so the native caret-at-click-position behavior still applies.
+    // Delegated on document rather than bound to .welcome-search directly, because showWelcome()
+    // tears down and rebuilds that container from scratch on every "New chat". Plain click (not
+    // pointerdown/mousedown) so a drag-to-scroll doesn't pop the mobile keyboard and so button
+    // clicks aren't pre-empted.
+    document.addEventListener('click', function(e) {
+      const container = e.target.closest('.input-wrapper, .welcome-search');
+      if (!container) return;
+      if (e.target.closest('button, a, input, textarea, select, #attachment-preview-inner, #welcome-attachment-preview-inner, #quotedContextPreview')) return;
+      const textarea = container.querySelector('textarea');
+      if (!textarea) return;
+      textarea.focus();
+      const len = textarea.value.length;
+      try { textarea.setSelectionRange(len, len); } catch (err) {}
+    });
+
     // ---------------- Embed mode (?embed=1): hosts just the conversation inside pyqbank.html's
     // Ask AI slide-in panel. Chrome that assumes a full tab (sidebar/header/welcome) is hidden via
     // the body.embed-mode CSS above; this shows the input area immediately instead of waiting for
