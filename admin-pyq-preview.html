@@ -132,6 +132,12 @@
     .q-edit-btn:hover { border-color: #4f8ef7; color: #4f8ef7; }
     .q-approve-btn { background: #4ade80; border: none; color: white; padding: 5px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
     .q-approve-btn:hover { background: #3ecf75; }
+    /* Reject (error) -- same red family as q-delete-btn/q-flag, but outlined like q-fix-btn
+       since it's a review action on a still-existing row, not a destructive one. */
+    .q-reject-btn { background: transparent; border: 1px solid #ef444460; color: #ef4444; padding: 5px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
+    .q-reject-btn:hover { background: #ef444414; }
+    .q-reject-note { background: #ef444412; border-color: #ef444440; color: #f87171; }
+    .q-reject-note b { color: #ef4444; }
 
     /* Contractor upload review -- status badges, rule-based warnings, the needs-fix note box,
        and the "today" bar. Same badge formula as q-flag above. */
@@ -143,6 +149,7 @@
     .q-status { font-size: 11px; padding: 3px 9px; border-radius: 20px; font-weight: 600; }
     .q-status.pending { background: #f59e0b20; color: #f59e0b; }
     .q-status.needs_fix { background: #f9731620; color: #fb923c; }
+    .q-status.rejected { background: #ef444420; color: #ef4444; }
     .q-upload-meta { color: #555; }
     .q-uploader-tag { color: #555; font-style: italic; }
     .q-warn { font-size: 11px; padding: 3px 9px; border-radius: 20px; font-weight: 600; background: #f59e0b1c; color: #f5b445; text-decoration: none; }
@@ -431,7 +438,13 @@
       <span id="reviewQueueCounts"></span>
       <button type="button" class="dup-toggle-btn" onclick="showReviewQueue('pending')">Pending</button>
       <button type="button" class="dup-toggle-btn" onclick="showReviewQueue('needs_fix')">Needs fix</button>
+      <button type="button" class="dup-toggle-btn" onclick="showReviewQueue('rejected')">Rejected</button>
       <button type="button" class="q-approve-btn" id="approveCleanBtn" onclick="approveCleanOnPage()" style="display:none">✅ Approve clean rows on this page</button>
+      <button type="button" class="dup-toggle-btn" onclick="toggleContractorTally()">Contractor tally</button>
+    </div>
+
+    <div id="contractorTallyPanel" style="display:none;background:#111;border:1px solid #1e1e1e;border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:12px;overflow-x:auto;">
+      <div id="contractorTallyBody">Loading...</div>
     </div>
 
     <div class="filter-bar">
@@ -452,6 +465,7 @@
           <option value="pending">Pending review</option>
           <option value="needs_fix">Needs fix</option>
           <option value="approved">Approved</option>
+          <option value="rejected">Rejected</option>
         </select>
         <select id="filterUploadedBy" onchange="onFilterChange()" title="Uploader name">
           <option value="">Anyone</option>
@@ -568,6 +582,9 @@
     let chapterCacheBySubject = {}; // subject -> [chapter names], for the edit form's chapter datalist
     let noteOpenIds = new Set(); // cards with the "Needs fix" note box open
     let noteDrafts = {}; // id -> unsent note text, kept across re-renders
+    let rejectOpenIds = new Set(); // cards with the Reject reason/note box open
+    let rejectDrafts = {}; // id -> { preset, note }, kept across re-renders
+    const PYQ_REJECT_REASONS = ['Unfixable formatting', 'Wrong or missing options', 'Garbled text', 'Other'];
 
     // Full canonical NCERT chapter list per subject (Class 11 + 12 combined, same source list
     // pyqbank.html's picker uses) -- merged into the edit form's dropdown below because the
@@ -1131,7 +1148,9 @@
     // never reach them. Approve here makes a row live; Needs fix sends it to the contractor's
     // own list with the note, and their correction comes back here as pending.
     function awaitingReview(q) {
-      return !!q.review_status && q.review_status !== 'approved';
+      // Rejected rows aren't "awaiting" anything -- they need Restore first, not a straight
+      // approve, so they don't get the Approve-for-students button or count toward "clean rows".
+      return !!q.review_status && q.review_status !== 'approved' && q.review_status !== 'rejected';
     }
 
     async function loadReviewSummary() {
@@ -1147,7 +1166,7 @@
         document.getElementById('reviewToday').innerHTML =
           `Today: <strong>${t.uploaded}</strong> uploaded (${t.uploaded_by_contractor} by contractor), <strong>${t.checked}</strong> checked`;
         document.getElementById('reviewQueueCounts').innerHTML =
-          `<strong>${data.pending}</strong> pending · <strong>${data.needs_fix}</strong> needs fix`;
+          `<strong>${data.pending}</strong> pending · <strong>${data.needs_fix}</strong> needs fix · <strong>${data.rejected || 0}</strong> rejected`;
         const sel = document.getElementById('filterBatch');
         const keep = sel.value;
         sel.innerHTML = '<option value="">All batches</option>' + (data.batches || []).map(b => {
@@ -1248,6 +1267,124 @@
       renderResults();
     }
 
+    // ---------------- Reject (error) ----------------
+    function openReject(id) {
+      rejectOpenIds.add(id);
+      renderResults();
+    }
+
+    function closeReject(id) {
+      rejectOpenIds.delete(id);
+      delete rejectDrafts[id];
+      renderResults();
+    }
+
+    async function postReject(id, reason) {
+      try {
+        const res = await fetch(`${API_BASE}/admin/pyq-reject`, {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ id, reason })
+        });
+        if (res.status === 401) return { error: 'unauthorized' };
+        if (!res.ok) return { error: await describeHttpError(res) };
+        const data = await res.json();
+        return data.error ? { error: data.error } : { updated: data.updated };
+      } catch (e) {
+        return { error: 'Could not reach server.' };
+      }
+    }
+
+    async function sendReject(id, btnEl) {
+      const preset = document.getElementById('reject-preset-' + id).value;
+      const note = (document.getElementById('reject-note-' + id).value || '').trim();
+      rejectDrafts[id] = { preset, note };
+      const reason = note ? `${preset}: ${note}` : preset;
+      btnEl.disabled = true;
+      btnEl.textContent = 'Rejecting...';
+      const result = await postReject(id, reason);
+      if (result.error === 'unauthorized') return logout();
+      if (result.error) {
+        alert('Reject failed: ' + result.error);
+        btnEl.disabled = false;
+        btnEl.textContent = 'Confirm';
+        return;
+      }
+      rejectOpenIds.delete(id);
+      delete rejectDrafts[id];
+      applyReviewResult([result.updated]);
+    }
+
+    async function restoreQuestion(id, btnEl) {
+      btnEl.disabled = true;
+      btnEl.textContent = 'Restoring...';
+      try {
+        const res = await fetch(`${API_BASE}/admin/pyq-unreject`, {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ id })
+        });
+        if (res.status === 401) return logout();
+        const data = await res.json();
+        if (!res.ok || data.error) {
+          alert('Restore failed: ' + (data.error || res.status));
+          btnEl.disabled = false;
+          btnEl.textContent = 'Restore';
+          return;
+        }
+        applyReviewResult([data.updated]);
+      } catch (e) {
+        alert('Could not reach server.');
+        btnEl.disabled = false;
+        btnEl.textContent = 'Restore';
+      }
+    }
+
+    let contractorTallyOpen = false;
+
+    function contractorTallyRowHtml(r) {
+      const warn = r.rejected > 0 ? ' style="color:#ef4444;"' : '';
+      return `<tr>
+        <td style="padding:4px 10px;">${escapeHtml(r.uploader_name || '—')}</td>
+        <td style="padding:4px 10px;">${r.uploaded}</td>
+        <td style="padding:4px 10px;">${r.approved}</td>
+        <td style="padding:4px 10px;">${r.pending}</td>
+        <td style="padding:4px 10px;">${r.needs_fix}</td>
+        <td style="padding:4px 10px;"${warn}>${r.rejected}</td>
+        <td style="padding:4px 10px;">${r.deleted}</td>
+        <td style="padding:4px 10px;"><strong>${r.payable}</strong> / ${r.target}</td>
+      </tr>`;
+    }
+
+    async function loadContractorTally() {
+      const body = document.getElementById('contractorTallyBody');
+      body.textContent = 'Loading...';
+      try {
+        const res = await fetch(`${API_BASE}/admin/contractor-tally`, { headers: authHeaders() });
+        if (res.status === 401) return logout();
+        const data = await res.json();
+        if (!res.ok || data.error) { body.textContent = 'Could not load: ' + (data.error || res.status); return; }
+        const rows = data.rows || [];
+        body.innerHTML = `<table style="border-collapse:collapse;width:100%;color:#ececec;">
+          <thead><tr style="color:#888;text-align:left;">
+            <th style="padding:4px 10px;">Uploader</th><th style="padding:4px 10px;">Uploaded</th>
+            <th style="padding:4px 10px;">Approved</th><th style="padding:4px 10px;">Pending</th>
+            <th style="padding:4px 10px;">Needs fix</th><th style="padding:4px 10px;">Rejected</th>
+            <th style="padding:4px 10px;">Deleted</th><th style="padding:4px 10px;">Payable / target</th>
+          </tr></thead>
+          <tbody>${rows.map(contractorTallyRowHtml).join('')}</tbody>
+        </table>`;
+      } catch (e) {
+        body.textContent = 'Could not reach server.';
+      }
+    }
+
+    function toggleContractorTally() {
+      contractorTallyOpen = !contractorTallyOpen;
+      document.getElementById('contractorTallyPanel').style.display = contractorTallyOpen ? 'block' : 'none';
+      if (contractorTallyOpen) loadContractorTally();
+    }
+
     // After an edit, the warnings shown are the ones from before it -- re-ask the server.
     async function refreshRowWarnings(id) {
       try {
@@ -1316,6 +1453,7 @@
     function reviewStatusHtml(q) {
       if (q.review_status === 'pending') return '<span class="q-status pending">Pending review</span>';
       if (q.review_status === 'needs_fix') return '<span class="q-status needs_fix">Needs fix</span>';
+      if (q.review_status === 'rejected') return '<span class="q-status rejected">Rejected</span>';
       return '';
     }
 
@@ -1330,9 +1468,31 @@
     }
 
     function reviewNoteHtml(q) {
+      if (q.review_status === 'rejected' && q.reject_reason) {
+        const when = q.rejected_at ? new Date(q.rejected_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
+        return `<div class="q-review-note q-reject-note"><b>Rejected${when ? ' · ' + escapeHtml(when) : ''}:</b> ${escapeHtml(q.reject_reason)}</div>`;
+      }
       if (!q.review_note || q.review_status === 'approved') return '';
       const label = q.review_status === 'pending' ? 'Fixed by contractor -- your note was:' : 'Sent back:';
       return `<div class="q-review-note"><b>${label}</b> ${escapeHtml(q.review_note)}</div>`;
+    }
+
+    function rejectBoxHtml(q) {
+      if (!rejectOpenIds.has(q.id)) return '';
+      const draft = rejectDrafts[q.id] || {};
+      const preset = draft.preset || PYQ_REJECT_REASONS[0];
+      const note = draft.note || '';
+      return `
+        <div class="q-note-box">
+          <select id="reject-preset-${q.id}">
+            ${PYQ_REJECT_REASONS.map(r => `<option value="${escapeHtml(r)}" ${r === preset ? 'selected' : ''}>${escapeHtml(r)}</option>`).join('')}
+          </select>
+          <textarea id="reject-note-${q.id}" placeholder="Optional note">${escapeHtml(note)}</textarea>
+          <div class="q-note-actions">
+            <button type="button" class="q-reject-btn" onclick="sendReject('${q.id}', this)">Confirm</button>
+            <button type="button" class="q-edit-btn" style="margin-left:0" onclick="closeReject('${q.id}')">Cancel</button>
+          </div>
+        </div>`;
     }
 
     function needsFixBoxHtml(q) {
@@ -1926,10 +2086,13 @@
             ${minimalActions ? '' : `<button class="q-edit-btn" onclick="startEdit('${q.id}')">✏️ Edit</button>`}
             ${waiting ? `<button class="q-approve-btn" onclick="reviewApprove('${q.id}', this)">✅ Approve for students</button>` : ''}
             ${reviewMode && !waiting ? `<button class="q-approve-btn" onclick="approveQuestion('${q.id}', this)">✅ Approve</button>` : ''}
-            ${reviewActions && q.review_status && !noteOpenIds.has(q.id) ? `<button class="q-fix-btn" onclick="openNeedsFix('${q.id}')">🔧 Needs fix</button>` : ''}
+            ${reviewActions && q.review_status === 'rejected' ? `<button class="q-approve-btn" onclick="restoreQuestion('${q.id}', this)">Restore</button>` : ''}
+            ${reviewActions && q.review_status && q.review_status !== 'rejected' && !noteOpenIds.has(q.id) && !rejectOpenIds.has(q.id) ? `<button class="q-fix-btn" onclick="openNeedsFix('${q.id}')">🔧 Needs fix</button>` : ''}
+            ${reviewActions && q.review_status !== 'rejected' && !noteOpenIds.has(q.id) && !rejectOpenIds.has(q.id) ? `<button class="q-reject-btn" onclick="openReject('${q.id}')">Reject (error)</button>` : ''}
             ${minimalActions ? '' : `<button class="q-delete-btn" onclick="deleteQuestion('${q.id}', this)">🗑 Delete</button>`}
           </div>
           ${reviewActions ? needsFixBoxHtml(q) : ''}
+          ${reviewActions ? rejectBoxHtml(q) : ''}
         </div>`;
     }
 
@@ -2091,6 +2254,7 @@
         const emptySecondaryHtml = `<div class="contractor-panel-secondary">`
           + secondaryRow('Approved', data.approved || 0)
           + secondaryRow('Needs fix', data.needs_fix || 0)
+          + secondaryRow('Rejected', data.rejected || 0)
           + secondaryRow('Deleted', data.deleted || 0)
           + pdfsButtonHtml()
           + `</div>`;
@@ -2110,6 +2274,7 @@
       const secondaryHtml = `<div class="contractor-panel-secondary">`
         + secondaryRow('Approved', data.approved || 0)
         + secondaryRow('Needs fix', data.needs_fix || 0)
+        + secondaryRow('Rejected', data.rejected || 0)
         + secondaryRow('Deleted', data.deleted || 0)
         + contractorDupButtonHtml()
         + pdfsButtonHtml()

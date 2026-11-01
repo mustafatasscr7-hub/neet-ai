@@ -8966,7 +8966,8 @@ async def admin_pyq_search(
             "is_active,year,source_tag,source_pdf_filename,class,has_diagram,diagram_url,option_a_diagram_url,"
             "option_b_diagram_url,option_c_diagram_url,option_d_diagram_url,reviewed,created_at,"
             "question_type,difficulty,"
-            "review_status,review_note,uploaded_by,uploaded_at,batch_id,reviewed_at,reviewed_by,uploader_name"
+            "review_status,review_note,uploaded_by,uploaded_at,batch_id,reviewed_at,reviewed_by,uploader_name,"
+            "reject_reason,rejected_at"
             if full else
             "id,subject,chapter,question,correct_answer,is_active,year"
         )
@@ -9209,7 +9210,10 @@ async def _pyq_dup_corpus(subject: str):
     while True:
         resp = await async_client.get(
             f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
+            # review_status neq.rejected: a rejected row is kept as proof, not a legitimate
+            # duplicate signal against a real question.
             params={"subject": f"eq.{subject}", "select": PYQ_DUP_CORPUS_SELECT,
+                    "review_status": "neq.rejected",
                     "order": "id.asc", "limit": page_size, "offset": offset}
         )
         page = resp.json() if resp.status_code < 400 else None
@@ -9362,19 +9366,20 @@ async def admin_pyq_contractor_queue_counts(_: None = Depends(verify_admin)):
         diagram_or = ("(diagram_url.neq.,option_a_diagram_url.neq.,"
                       "option_b_diagram_url.neq.,option_c_diagram_url.neq.,"
                       "option_d_diagram_url.neq.)")
-        (total, with_diagram, approved, needs_fix, deleted,
+        (total, with_diagram, approved, needs_fix, rejected, deleted,
          uploaded_with_diagram, uploaded_without_diagram) = await asyncio.gather(
             _pyq_count(base),
             _pyq_count({**base, "or": diagram_or}),
             _pyq_count({"review_status": "eq.approved", "uploader_name": f"eq.{CONTRACTOR_UPLOADER_NAME}"}),
             _pyq_count({"review_status": "eq.needs_fix", "uploader_name": f"eq.{CONTRACTOR_UPLOADER_NAME}"}),
+            _pyq_count({"review_status": "eq.rejected", "uploader_name": f"eq.{CONTRACTOR_UPLOADER_NAME}"}),
             _pyq_delete_log_count(CONTRACTOR_UPLOADER_NAME),
             _pyq_upload_log_count(CONTRACTOR_UPLOADER_NAME, True),
             _pyq_upload_log_count(CONTRACTOR_UPLOADER_NAME, False),
         )
         return {
             "with_diagram": with_diagram, "without_diagram": max(0, total - with_diagram),
-            "approved": approved, "needs_fix": needs_fix, "deleted": deleted,
+            "approved": approved, "needs_fix": needs_fix, "rejected": rejected, "deleted": deleted,
             "uploaded_with_diagram": uploaded_with_diagram, "uploaded_without_diagram": uploaded_without_diagram,
         }
     except Exception as e:
@@ -9385,12 +9390,13 @@ async def admin_pyq_review_summary(_: None = Depends(verify_admin)):
     """Today's numbers (India time) for the review bar, plus the recent batches for its filter."""
     try:
         today_start, _today_end = _ist_day_bounds_utc(_ist_today())
-        uploaded, uploaded_contractor, checked, pending, needs_fix = await asyncio.gather(
+        uploaded, uploaded_contractor, checked, pending, needs_fix, rejected = await asyncio.gather(
             _pyq_count({"uploaded_at": f"gte.{today_start}"}),
             _pyq_count({"uploaded_at": f"gte.{today_start}", "uploaded_by": "eq.contractor"}),
             _pyq_count({"reviewed_at": f"gte.{today_start}"}),
             _pyq_count({"review_status": "eq.pending"}),
             _pyq_count({"review_status": "eq.needs_fix"}),
+            _pyq_count({"review_status": "eq.rejected"}),
         )
         batch_resp = await async_client.get(
             f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
@@ -9403,13 +9409,13 @@ async def admin_pyq_review_summary(_: None = Depends(verify_admin)):
         for r in batch_resp.json():
             b = batches.setdefault(r["batch_id"], {"batch_id": r["batch_id"], "uploaded_by": r.get("uploaded_by"),
                                                    "uploaded_at": r.get("uploaded_at"), "count": 0,
-                                                   "pending": 0, "needs_fix": 0, "approved": 0})
+                                                   "pending": 0, "needs_fix": 0, "approved": 0, "rejected": 0})
             b["count"] += 1
             if r.get("review_status") in PYQ_REVIEW_STATUSES:
                 b[r["review_status"]] += 1
         return {
             "today": {"uploaded": uploaded, "uploaded_by_contractor": uploaded_contractor, "checked": checked},
-            "pending": pending, "needs_fix": needs_fix,
+            "pending": pending, "needs_fix": needs_fix, "rejected": rejected,
             "batches": list(batches.values())[:100],
         }
     except Exception as e:
@@ -9454,6 +9460,117 @@ async def admin_pyq_review(body: PyqReviewRequest, _: None = Depends(verify_admi
     except Exception as e:
         return {"error": str(e)}
 
+# ---------- Reject (error) -- pyq_reject.sql ----------
+# Unlike Delete, a rejected row is kept (full text + options) as proof of what was submitted, just
+# hidden from students the same way pending/needs_fix already are (PYQ_STUDENT_VISIBLE requires
+# review_status = 'approved'), and counted against the uploader's payable total below.
+
+class PyqRejectRequest(BaseModel):
+    id: str
+    reason: str
+
+@app.post("/admin/pyq-reject")
+async def admin_pyq_reject(body: PyqRejectRequest, _: None = Depends(verify_admin)):
+    if not _UUID_RE.match(body.id or ""):
+        return {"error": "Invalid question id"}
+    reason = (body.reason or "").strip()[:300]
+    if not reason:
+        return {"error": "Choose or write a reason -- it's kept as the record of why this was rejected"}
+    fields = {
+        "review_status": "rejected",
+        "reject_reason": reason,
+        "rejected_at": datetime.now(timezone.utc).isoformat(),
+        "review_note": None,
+        # Rejecting is also a definitive content check, same as approving -- clears the legacy
+        # Review Queue (reviewed=false) too, instead of leaving a rejected row stuck in it.
+        "reviewed": True,
+    }
+    try:
+        # If pyq_reject.sql hasn't been run yet, the check constraint rejects 'rejected' (or the
+        # columns don't exist) and PostgREST answers with a 400 -- surfaced here as a plain error,
+        # not a crash.
+        resp = await async_client.patch(
+            f"{SUPABASE_URL}/rest/v1/pyq",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
+            params={"id": f"eq.{body.id}",
+                    "select": "id,review_status,reject_reason,rejected_at,uploader_name,reviewed"},
+            json=fields
+        )
+        if resp.status_code >= 400:
+            return {"error": resp.text}
+        updated = resp.json()
+        if not updated:
+            return {"error": "Row not found"}
+        _invalidate_processed_pdfs_cache()
+        return {"updated": updated[0]}
+    except Exception as e:
+        return {"error": str(e)}
+
+class PyqUnrejectRequest(BaseModel):
+    id: str
+
+@app.post("/admin/pyq-unreject")
+async def admin_pyq_unreject(body: PyqUnrejectRequest, _: None = Depends(verify_admin)):
+    """Restores a rejected row to pending review -- same destination a contractor's Needs-fix
+    correction lands on, so it goes through the normal Approve/Needs-fix/Reject flow again rather
+    than silently becoming visible to students."""
+    if not _UUID_RE.match(body.id or ""):
+        return {"error": "Invalid question id"}
+    fields = {"review_status": "pending", "reject_reason": None, "rejected_at": None}
+    try:
+        resp = await async_client.patch(
+            f"{SUPABASE_URL}/rest/v1/pyq",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
+            params={"id": f"eq.{body.id}", "review_status": "eq.rejected",
+                    "select": "id,review_status,reject_reason,rejected_at"},
+            json=fields
+        )
+        if resp.status_code >= 400:
+            return {"error": resp.text}
+        updated = resp.json()
+        if not updated:
+            return {"error": "This question is not currently rejected"}
+        _invalidate_processed_pdfs_cache()
+        return {"updated": updated[0]}
+    except Exception as e:
+        return {"error": str(e)}
+
+async def _pyq_uploaded_total(uploader_name: str) -> int:
+    """Same source as the Contractor Queue's permanent 'Uploaded so far' tile (pyq_upload_log) --
+    with-diagram and without-diagram counts added together."""
+    with_d, without_d = await asyncio.gather(
+        _pyq_upload_log_count(uploader_name, True),
+        _pyq_upload_log_count(uploader_name, False),
+    )
+    return with_d + without_d
+
+@app.get("/admin/contractor-tally")
+async def admin_contractor_tally(_: None = Depends(verify_admin)):
+    """Per-uploader payout numbers: uploaded (pyq_upload_log, never decreases), all-time review
+    breakdown (approved/pending/needs_fix/rejected), deleted (pyq_delete_log), and
+    payable = uploaded - rejected. Covers every named uploader (PYQ_UPLOADER_NAMES), not just the
+    contractor, so an admin-attributed batch shows up here too."""
+    try:
+        async def tally_for(name):
+            uploaded, approved, pending, needs_fix, rejected, deleted = await asyncio.gather(
+                _pyq_uploaded_total(name),
+                _pyq_count({"review_status": "eq.approved", "uploader_name": f"eq.{name}"}),
+                _pyq_count({"review_status": "eq.pending", "uploader_name": f"eq.{name}"}),
+                _pyq_count({"review_status": "eq.needs_fix", "uploader_name": f"eq.{name}"}),
+                _pyq_count({"review_status": "eq.rejected", "uploader_name": f"eq.{name}"}),
+                _pyq_delete_log_count(name),
+            )
+            return {
+                "uploader_name": name, "uploaded": uploaded, "approved": approved,
+                "pending": pending, "needs_fix": needs_fix, "rejected": rejected,
+                "deleted": deleted, "payable": max(0, uploaded - rejected),
+                "target": PYQ_PAYOUT_TARGET,
+            }
+        rows = await asyncio.gather(*(tally_for(name) for name in PYQ_UPLOADER_NAMES))
+        return {"rows": rows}
+    except Exception as e:
+        return {"error": str(e)}
+
 # The contractor's side: only their own needs_fix rows, only through the contractor key (never
 # ADMIN_PASSWORD, same isolation as /contractor-pdf-review/verify).
 CONTRACTOR_FIX_COLUMNS = (
@@ -9477,6 +9594,35 @@ async def contractor_pyq_needs_fix(_: None = Depends(verify_contractor_pdf_revie
             return {"error": resp.text}
         pending = await _pyq_count({"uploaded_by": "eq.contractor", "review_status": "eq.pending"})
         return {"rows": resp.json(), "pending_count": pending}
+    except Exception as e:
+        return {"error": str(e)}
+
+# Read-only mirror of /admin/pyq-reject for the contractor's own rows -- never accepts a write,
+# and the filter below (uploader_name=CONTRACTOR_UPLOADER_NAME baked in server-side, never taken
+# from the request) means this can only ever return the contractor's own rejected questions.
+CONTRACTOR_REJECTED_COLUMNS = (
+    "id,subject,chapter,class,year,question,option_a,option_b,option_c,option_d,correct_answer,"
+    "reject_reason,rejected_at"
+)
+
+@app.get("/contractor/pyq-rejected")
+async def contractor_pyq_rejected(_: None = Depends(verify_contractor_pdf_review)):
+    try:
+        resp, uploaded, rejected = await asyncio.gather(
+            async_client.get(
+                f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
+                params={"review_status": "eq.rejected", "uploader_name": f"eq.{CONTRACTOR_UPLOADER_NAME}",
+                        "select": CONTRACTOR_REJECTED_COLUMNS, "order": "rejected_at.desc", "limit": 500}
+            ),
+            _pyq_uploaded_total(CONTRACTOR_UPLOADER_NAME),
+            _pyq_count({"review_status": "eq.rejected", "uploader_name": f"eq.{CONTRACTOR_UPLOADER_NAME}"}),
+        )
+        if resp.status_code >= 400:
+            return {"error": resp.text}
+        return {
+            "rows": resp.json(), "uploaded": uploaded, "rejected": rejected,
+            "payable": max(0, uploaded - rejected), "target": PYQ_PAYOUT_TARGET,
+        }
     except Exception as e:
         return {"error": str(e)}
 
@@ -11598,8 +11744,11 @@ async def _embed_pyq_row_background(row_id, question, chapter, option_a, option_
     except Exception as e:
         print(f"PYQ EMBEDDING FAILED (generation) id={row_id}: {e}", flush=True)
 
-PYQ_REVIEW_STATUSES = ("pending", "approved", "needs_fix")
+PYQ_REVIEW_STATUSES = ("pending", "approved", "needs_fix", "rejected")
 PYQ_UPLOADERS = ("admin", "contractor")
+# Kept as proof, deducted from payable -- see pyq_reject.sql. A constant here, not a DB column,
+# since it's the same number for every uploader and changes rarely enough to just edit in code.
+PYQ_PAYOUT_TARGET = 1000
 _BATCH_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
 
 @app.post("/admin/pyq-bulk-create")
@@ -12347,6 +12496,9 @@ def admin_pyq_duplicates(threshold: float = 0.5, _: None = Depends(verify_admin)
                               "diagram_url,option_a_diagram_url,option_b_diagram_url,"
                               "option_c_diagram_url,option_d_diagram_url,created_at",
                     "is_active": "eq.true",
+                    # Rejected rows are kept as proof but shouldn't flag a real question as a
+                    # duplicate of error-filled proof content.
+                    "review_status": "neq.rejected",
                     "order": "id",
                     "limit": page_size,
                     "offset": offset
