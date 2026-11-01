@@ -2092,6 +2092,15 @@
           <span id="limitBannerText" style="font-size:12px;color:#666;" data-i18n="chat.dailyLimitReached">⚡ Daily limit reached — resets at midnight</span>
           <button id="limitBannerBtn" onclick="window.location.href='./pricing.html'" style="background:linear-gradient(135deg,#4f8ef7,#7c3aed);border:none;color:white;padding:5px 14px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;font-family:Inter,sans-serif;white-space:nowrap;flex-shrink:0;" data-i18n="chat.upgradeToPro">Upgrade to Pro →</button>
         </div>
+        <div id="longChatNudge" style="display:none;align-items:center;justify-content:space-between;gap:10px;padding:8px 12px;margin-bottom:8px;border-radius:10px;background:#141c26;border:1px solid #1d3550;">
+          <span style="font-size:12px;color:#9cc3f0;" data-i18n="chat.longChatNudge">Long chat. A new chat gives faster answers.</span>
+          <div style="display:flex;align-items:center;gap:14px;flex-shrink:0;">
+            <a href="#" id="longChatNudgeNewChat" style="font-size:12px;color:#4f8ef7;font-weight:600;text-decoration:none;" data-i18n="chat.longChatNudgeNewChat">New chat</a>
+            <button type="button" id="longChatNudgeClose" title="Dismiss" data-i18n-title="chat.sfbClose" style="background:transparent;border:none;color:#5f7187;cursor:pointer;padding:2px;display:flex;align-items:center;">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+        </div>
         <div id="attachment-preview-inner"></div>
         <div id="quotedContextPreview" style="display:none;"></div>
         <div class="input-row">
@@ -2332,6 +2341,15 @@
     let conversations = [];
     let currentConversation = [];
     let currentId = null;
+    // Long-chat load perf (2026-11-01): a saved chat's full `messages` array already sits in
+    // memory (fetched in bulk for the whole sidebar at login -- there's no per-chat paged
+    // endpoint to call), but building a DOM row for every single one of possibly thousands of
+    // messages on every chat switch was the actual slow part. Only the latest CHAT_PAGE_SIZE are
+    // rendered up front; scrolling to the top renders the next batch backwards from
+    // oldestRenderedIndex, which stays null for a short/fresh chat where no paging applies.
+    const CHAT_PAGE_SIZE = 40;
+    let oldestRenderedIndex = null;
+    let loadingOlderMessages = false;
     // saveToSidebar (title generation + the initial Supabase insert that gives a new chat its
     // supabaseId) is deliberately fire-and-forget where it's called -- awaiting it there would
     // block the AI response from even starting until title generation finishes, which measured
@@ -2364,6 +2382,12 @@
       // (e.g. reading old messages with nothing streaming). The button's own visibility is based
       // purely on real scroll position, computed fresh here on every scroll event.
       updateScrollToBottomBtn(false);
+      // Scrolling near the top of a chat that still has older, un-rendered messages loads the
+      // next batch -- see CHAT_PAGE_SIZE above. Synchronous (the data's already in memory, this
+      // is pure DOM insertion) so there's no spinner/network wait to show.
+      if (chatWindow.scrollTop < 100 && oldestRenderedIndex !== null && oldestRenderedIndex > 0 && !loadingOlderMessages) {
+        loadOlderMessages();
+      }
     });
 
     // The only place userScrolled is set true -- gated on real physical input (wheel/touch),
@@ -2511,7 +2535,25 @@ function toggleSearchChats() {
       }
     });
 
+    // Quiet nudge (2026-11-01) shown once a chat reaches LONG_CHAT_NUDGE_THRESHOLD messages --
+    // never blocks sending, just a hint above the input that a fresh chat answers faster (less
+    // history for the server to resend/summarize each turn). Dismissal is per-chat (keyed by
+    // currentId in localStorage) so closing it on one long chat doesn't hide it on another.
+    const LONG_CHAT_NUDGE_THRESHOLD = 80;
+    function updateLongChatNudge() {
+      const nudge = document.getElementById('longChatNudge');
+      if (!nudge) return;
+      if (!currentId || currentConversation.length < LONG_CHAT_NUDGE_THRESHOLD) {
+        nudge.style.display = 'none';
+        return;
+      }
+      let dismissed = false;
+      try { dismissed = localStorage.getItem('longChatNudgeDismissed_' + currentId) === '1'; } catch(e) {}
+      nudge.style.display = dismissed ? 'none' : 'flex';
+    }
+
     function scrollBottom() {
+      updateLongChatNudge();
       if (!userScrolled) {
         chatWindow.scrollTo({ top: chatWindow.scrollHeight, behavior: 'smooth' });
       } else {
@@ -5461,7 +5503,7 @@ let selectedImages = [];
       return actions;
     }
 
-    function addMessageRow(role, text, userQuestion, msgIndex, diagram, msgObj) {
+    function addMessageRow(role, text, userQuestion, msgIndex, diagram, msgObj, beforeNode) {
       const row = document.createElement('div');
       row.className = 'message-row ' + role;
       if (msgIndex !== undefined) row.dataset.msgIndex = msgIndex;
@@ -5514,8 +5556,7 @@ let selectedImages = [];
           contentWrapper.appendChild(bubble);
           if (avatar) row.appendChild(avatar);
           row.appendChild(contentWrapper);
-          chatWindow.appendChild(row);
-          scrollBottom();
+          if (beforeNode) { chatWindow.insertBefore(row, beforeNode); } else { chatWindow.appendChild(row); scrollBottom(); }
           return bubble;
         }
 
@@ -5642,8 +5683,7 @@ let selectedImages = [];
     
       if (avatar) row.appendChild(avatar);
       row.appendChild(contentWrapper);
-      chatWindow.appendChild(row);
-      scrollBottom();
+      if (beforeNode) { chatWindow.insertBefore(row, beforeNode); } else { chatWindow.appendChild(row); scrollBottom(); }
       return bubble;
     }
 function plainTextFromMarkdown(text) {
@@ -8000,19 +8040,64 @@ function plainTextFromMarkdown(text) {
       return id;
     }
 
+    // Shared by the initial-load (latest CHAT_PAGE_SIZE) and scroll-triggered older-batch
+    // renders below. `messages` is always the full, real array (currentConversation itself, or
+    // chat.messages right before it becomes that) -- only the DOM subset being built is bounded
+    // by [startIndex, endIndexExclusive). lastUserText has to be seeded from whatever came before
+    // startIndex (not just '') or the first AI row in a non-initial window would show no question
+    // context on its action buttons.
+    function lastUserTextBefore(messages, index) {
+      for (let i = index; i >= 0; i--) {
+        if (messages[i].role === 'user') return messages[i].text;
+      }
+      return '';
+    }
+
+    function renderMessageRange(messages, startIndex, endIndexExclusive, beforeNode) {
+      let lastUserText = lastUserTextBefore(messages, startIndex - 1);
+      for (let i = startIndex; i < endIndexExclusive; i++) {
+        const msg = messages[i];
+        if (msg.role === 'user') {
+          lastUserText = msg.text;
+          addMessageRow(msg.role, msg.text, undefined, i, undefined, msg, beforeNode);
+        } else if (msg.role === 'ai') {
+          addMessageRow('ai', msg.text, lastUserText, i, msg.diagram, msg, beforeNode);
+        }
+      }
+    }
+
+    // Scrolling near the top calls this (see the chatWindow 'scroll' listener). Everything is
+    // already in memory -- this only grows the DOM, so it stays synchronous and keeps the
+    // viewport pinned to what the student was looking at (same scrollHeight-delta trick as an
+    // infinite-scroll feed) instead of jumping.
+    function loadOlderMessages() {
+      if (oldestRenderedIndex === null || oldestRenderedIndex <= 0 || loadingOlderMessages) return;
+      loadingOlderMessages = true;
+      const prevScrollHeight = chatWindow.scrollHeight;
+      const prevScrollTop = chatWindow.scrollTop;
+      const anchor = chatWindow.firstElementChild;
+      const newStart = Math.max(0, oldestRenderedIndex - CHAT_PAGE_SIZE);
+      renderMessageRange(currentConversation, newStart, oldestRenderedIndex, anchor);
+      oldestRenderedIndex = newStart;
+      // .chat-window has scroll-behavior:smooth in CSS, which Chrome also applies to a plain
+      // scrollTop assignment (not just scrollTo()) -- an animated correction here would show up
+      // as a brief float/stutter instead of landing instantly, defeating the point of correcting
+      // it at all. Forcing 'auto' just for this one write keeps it an instant, invisible jump.
+      const prevBehavior = chatWindow.style.scrollBehavior;
+      chatWindow.style.scrollBehavior = 'auto';
+      chatWindow.scrollTop = prevScrollTop + (chatWindow.scrollHeight - prevScrollHeight);
+      chatWindow.style.scrollBehavior = prevBehavior;
+      loadingOlderMessages = false;
+    }
+
     function loadConversationFromSupabase(chat) {
       chatWindow.innerHTML = '';
       inputArea.style.display = 'block';
-      let lastUserText = '';
-      chat.messages.forEach(function(msg, i) {
-        if (msg.role === 'user') {
-          lastUserText = msg.text;
-          addMessageRow(msg.role, msg.text, undefined, i, undefined, msg);
-        } else if (msg.role === 'ai') {
-          const bubble = addMessageRow('ai', msg.text, lastUserText, i, msg.diagram, msg);
-        }
-      });
-      currentConversation = chat.messages;
+      const messages = chat.messages;
+      const startIndex = Math.max(0, messages.length - CHAT_PAGE_SIZE);
+      renderMessageRange(messages, startIndex, messages.length, null);
+      oldestRenderedIndex = startIndex;
+      currentConversation = messages;
       currentId = chat.supabaseId || chat.id;
       updateHeaderTitle(chat.title);
       scrollBottom();
@@ -8023,16 +8108,11 @@ function plainTextFromMarkdown(text) {
       const conv = conversations.find(c => c.id === id || c.supabaseId === id);
       if (!conv) return;
       chatWindow.innerHTML = '';
-      let lastUserText = '';
-      conv.messages.forEach(function(msg, i) {
-        if (msg.role === 'user') {
-          lastUserText = msg.text;
-          addMessageRow(msg.role, msg.text, undefined, i, undefined, msg);
-        } else if (msg.role === 'ai') {
-          addMessageRow('ai', msg.text, lastUserText, i, msg.diagram, msg);
-        }
-      });
-      currentConversation = conv.messages;
+      const messages = conv.messages;
+      const startIndex = Math.max(0, messages.length - CHAT_PAGE_SIZE);
+      renderMessageRange(messages, startIndex, messages.length, null);
+      oldestRenderedIndex = startIndex;
+      currentConversation = messages;
       currentId = id;
       updateHeaderTitle(conv.title);
       inputArea.style.display = 'block';
@@ -8042,6 +8122,9 @@ function plainTextFromMarkdown(text) {
 
     function showWelcome() {
       chatWindow.innerHTML = '';
+      oldestRenderedIndex = null;
+      const longChatNudgeEl = document.getElementById('longChatNudge');
+      if (longChatNudgeEl) longChatNudgeEl.style.display = 'none';
       inputArea.style.display = 'none';
       resetHeaderTitle();
       const welcome = document.createElement('div');
@@ -8079,6 +8162,18 @@ function plainTextFromMarkdown(text) {
       currentId = null;
       document.querySelectorAll('.history-item').forEach(i => i.classList.remove('active'));
       showWelcome();
+    });
+
+    document.getElementById('longChatNudgeNewChat').addEventListener('click', function(e) {
+      e.preventDefault();
+      document.getElementById('newChatBtn').click();
+    });
+
+    document.getElementById('longChatNudgeClose').addEventListener('click', function() {
+      if (currentId) {
+        try { localStorage.setItem('longChatNudgeDismissed_' + currentId, '1'); } catch (e) {}
+      }
+      updateLongChatNudge();
     });
 
     // Daily usage banner: reads usage_log/user_plan directly (RLS allows reading only your own
