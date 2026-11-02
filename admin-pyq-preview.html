@@ -1679,16 +1679,19 @@
     let contractorTallyOpen = false;
 
     function contractorTallyRowHtml(r) {
-      const warn = r.rejected > 0 ? ' style="color:#ef4444;"' : '';
+      const warn = (r.rejected_errors > 0 || r.duplicates_deducted > 0) ? ' style="color:#ef4444;"' : '';
       return `<tr>
         <td style="padding:4px 10px;">${escapeHtml(r.uploader_name || '—')}</td>
         <td style="padding:4px 10px;">${r.uploaded}</td>
         <td style="padding:4px 10px;">${r.approved}</td>
         <td style="padding:4px 10px;">${r.pending}</td>
         <td style="padding:4px 10px;">${r.needs_fix}</td>
-        <td style="padding:4px 10px;"${warn}>${r.rejected}</td>
+        <td style="padding:4px 10px;"${warn}>${r.rejected_errors}</td>
+        <td style="padding:4px 10px;"${warn}>${r.duplicates_deducted}</td>
+        <td style="padding:4px 10px;">${r.duplicates_free}</td>
         <td style="padding:4px 10px;">${r.deleted}</td>
         <td style="padding:4px 10px;"><strong>${r.payable}</strong> / ${r.target}</td>
+        <td style="padding:4px 10px;">$${Number(r.amount_usd ?? 0).toFixed(2)}</td>
       </tr>`;
     }
 
@@ -1701,20 +1704,22 @@
         const data = await res.json();
         if (!res.ok || data.error) { body.textContent = 'Could not load: ' + (data.error || res.status); return; }
         const rows = data.rows || [];
-        // Also drives the Contractor payout panel's own header summary ("Payable X / target"),
+        // Also drives the Contractor payout panel's own header summary ("Payable X, $Y"),
         // visible even while the panel stays collapsed -- fetched up front in enterDashboard()
         // for that reason, not just when the panel is first opened.
         const headerSummary = document.getElementById('contractorPayoutHeaderSummary');
         if (headerSummary) {
           const mainRow = rows.find(r => r.uploader_name === CONTRACTOR_UPLOADER_NAME) || rows[0];
-          headerSummary.textContent = mainRow ? `Payable ${mainRow.payable} / ${mainRow.target}` : '';
+          headerSummary.textContent = mainRow ? `Payable ${mainRow.payable}, $${Number(mainRow.amount_usd ?? 0).toFixed(2)}` : '';
         }
         body.innerHTML = `<table style="border-collapse:collapse;width:100%;color:#ececec;">
           <thead><tr style="color:#888;text-align:left;">
             <th style="padding:4px 10px;">Uploader</th><th style="padding:4px 10px;">Uploaded</th>
             <th style="padding:4px 10px;">Approved</th><th style="padding:4px 10px;">Pending</th>
-            <th style="padding:4px 10px;">Needs fix</th><th style="padding:4px 10px;">Rejected</th>
-            <th style="padding:4px 10px;">Deleted</th><th style="padding:4px 10px;">Payable / target</th>
+            <th style="padding:4px 10px;">Needs fix</th><th style="padding:4px 10px;">Errors (deducted)</th>
+            <th style="padding:4px 10px;">Duplicates (deducted)</th><th style="padding:4px 10px;">Duplicates before 1 Nov (free)</th>
+            <th style="padding:4px 10px;">Deleted</th><th style="padding:4px 10px;">Payable</th>
+            <th style="padding:4px 10px;">Amount (USD)</th>
           </tr></thead>
           <tbody>${rows.map(contractorTallyRowHtml).join('')}</tbody>
         </table>`;

@@ -9651,27 +9651,68 @@ async def _pyq_uploaded_total(uploader_name: str) -> int:
     )
     return with_d + without_d
 
+def _pyq_reject_classify(reason: Optional[str], created_at: Optional[datetime]) -> str:
+    """Classifies one rejected row into 'error', 'duplicate_deducted' or 'duplicate_free', per
+    PYQ_DUP_DEDUCT_FROM: a reject_reason not starting with "Duplicate" is always an error
+    (deducted); one that does is a free duplicate only if created_at is before the cutoff. Pure
+    and network-free so it's unit-testable and reusable by the contractor's per-row
+    "duplicate_free" flag -- _pyq_reject_breakdown encodes the same rule as PostgREST filters for
+    counting without downloading every row."""
+    if not (reason or "").strip().lower().startswith("duplicate"):
+        return "error"
+    if created_at and created_at < PYQ_DUP_DEDUCT_FROM:
+        return "duplicate_free"
+    return "duplicate_deducted"
+
+async def _pyq_reject_breakdown(uploader_name: str) -> dict:
+    """Splits one uploader's rejected rows into what's deducted from payable and what isn't, per
+    PYQ_DUP_DEDUCT_FROM: non-duplicate rejections ("errors") are always deducted; a duplicate
+    rejection is deducted only if its created_at falls on or after the cutoff, otherwise it's a
+    free duplicate (rejected/hidden from students, but not counted against payable)."""
+    cutoff_iso = PYQ_DUP_DEDUCT_FROM.isoformat()
+    rejected_errors, duplicates_deducted, duplicates_free = await asyncio.gather(
+        _pyq_count({"review_status": "eq.rejected", "uploader_name": f"eq.{uploader_name}",
+                    "reject_reason": "not.ilike.Duplicate*"}),
+        _pyq_count({"review_status": "eq.rejected", "uploader_name": f"eq.{uploader_name}",
+                    "reject_reason": "ilike.Duplicate*", "created_at": f"gte.{cutoff_iso}"}),
+        _pyq_count({"review_status": "eq.rejected", "uploader_name": f"eq.{uploader_name}",
+                    "reject_reason": "ilike.Duplicate*", "created_at": f"lt.{cutoff_iso}"}),
+    )
+    return {"rejected_errors": rejected_errors, "duplicates_deducted": duplicates_deducted,
+            "duplicates_free": duplicates_free}
+
+def _pyq_payable_amount(uploaded: int, rejected_errors: int, duplicates_deducted: int) -> dict:
+    """Shared payable/amount_usd math for both the admin tally and the contractor's own totals --
+    see PYQ_PRICE_USD_PER_Q/PYQ_DUP_DEDUCT_FROM. Free duplicates are not subtracted."""
+    payable = max(0, uploaded - rejected_errors - duplicates_deducted)
+    return {"payable": payable, "amount_usd": round(payable * PYQ_PRICE_USD_PER_Q, 2)}
+
 @app.get("/admin/contractor-tally")
 async def admin_contractor_tally(_: None = Depends(verify_admin)):
     """Per-uploader payout numbers: uploaded (pyq_upload_log, never decreases), all-time review
-    breakdown (approved/pending/needs_fix/rejected), deleted (pyq_delete_log), and
-    payable = uploaded - rejected. Contractors only (CONTRACTOR_UPLOADER_NAME) -- this is a payout
-    sheet, so "Admin" or any other non-contractor uploader in PYQ_UPLOADER_NAMES never belongs
-    here even though they can legitimately upload batches."""
+    breakdown (approved/pending/needs_fix), the rejected split (_pyq_reject_breakdown), deleted
+    (pyq_delete_log), and payable/amount_usd (_pyq_payable_amount). Contractors only
+    (CONTRACTOR_UPLOADER_NAME) -- this is a payout sheet, so "Admin" or any other non-contractor
+    uploader in PYQ_UPLOADER_NAMES never belongs here even though they can legitimately upload
+    batches."""
     try:
         async def tally_for(name):
-            uploaded, approved, pending, needs_fix, rejected, deleted = await asyncio.gather(
-                _pyq_uploaded_total(name),
-                _pyq_count({"review_status": "eq.approved", "uploader_name": f"eq.{name}"}),
-                _pyq_count({"review_status": "eq.pending", "uploader_name": f"eq.{name}"}),
-                _pyq_count({"review_status": "eq.needs_fix", "uploader_name": f"eq.{name}"}),
-                _pyq_count({"review_status": "eq.rejected", "uploader_name": f"eq.{name}"}),
-                _pyq_delete_log_count(name),
+            (uploaded, approved, pending, needs_fix, deleted), reject_breakdown = await asyncio.gather(
+                asyncio.gather(
+                    _pyq_uploaded_total(name),
+                    _pyq_count({"review_status": "eq.approved", "uploader_name": f"eq.{name}"}),
+                    _pyq_count({"review_status": "eq.pending", "uploader_name": f"eq.{name}"}),
+                    _pyq_count({"review_status": "eq.needs_fix", "uploader_name": f"eq.{name}"}),
+                    _pyq_delete_log_count(name),
+                ),
+                _pyq_reject_breakdown(name),
             )
             return {
                 "uploader_name": name, "uploaded": uploaded, "approved": approved,
-                "pending": pending, "needs_fix": needs_fix, "rejected": rejected,
-                "deleted": deleted, "payable": max(0, uploaded - rejected),
+                "pending": pending, "needs_fix": needs_fix, **reject_breakdown,
+                "deleted": deleted,
+                **_pyq_payable_amount(uploaded, reject_breakdown["rejected_errors"],
+                                       reject_breakdown["duplicates_deducted"]),
                 "target": PYQ_PAYOUT_TARGET,
             }
         rows = await asyncio.gather(*(tally_for(name) for name in PYQ_CONTRACTOR_NAMES))
@@ -10110,26 +10151,35 @@ async def contractor_pyq_needs_fix(_: None = Depends(verify_contractor_pdf_revie
 # from the request) means this can only ever return the contractor's own rejected questions.
 CONTRACTOR_REJECTED_COLUMNS = (
     "id,subject,chapter,class,year,question,option_a,option_b,option_c,option_d,correct_answer,"
-    "reject_reason,rejected_at"
+    "reject_reason,rejected_at,created_at"
 )
 
 @app.get("/contractor/pyq-rejected")
 async def contractor_pyq_rejected(_: None = Depends(verify_contractor_pdf_review)):
     try:
-        resp, uploaded, rejected = await asyncio.gather(
+        resp, uploaded, reject_breakdown = await asyncio.gather(
             async_client.get(
                 f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
                 params={"review_status": "eq.rejected", "uploader_name": f"eq.{CONTRACTOR_UPLOADER_NAME}",
                         "select": CONTRACTOR_REJECTED_COLUMNS, "order": "rejected_at.desc", "limit": 500}
             ),
             _pyq_uploaded_total(CONTRACTOR_UPLOADER_NAME),
-            _pyq_count({"review_status": "eq.rejected", "uploader_name": f"eq.{CONTRACTOR_UPLOADER_NAME}"}),
+            _pyq_reject_breakdown(CONTRACTOR_UPLOADER_NAME),
         )
         if resp.status_code >= 400:
             return {"error": resp.text}
+        rows = resp.json()
+        # Per-row flag so the contractor's own list can mark a free duplicate (rejected/hidden,
+        # but not deducted) without re-deriving the cutoff rule client-side.
+        for r in rows:
+            created_at = r.get("created_at")
+            created_dt = datetime.fromisoformat(created_at.replace("Z", "+00:00")) if created_at else None
+            r["duplicate_free"] = _pyq_reject_classify(r.get("reject_reason"), created_dt) == "duplicate_free"
         return {
-            "rows": resp.json(), "uploaded": uploaded, "rejected": rejected,
-            "payable": max(0, uploaded - rejected), "target": PYQ_PAYOUT_TARGET,
+            "rows": rows, "uploaded": uploaded, **reject_breakdown,
+            **_pyq_payable_amount(uploaded, reject_breakdown["rejected_errors"],
+                                   reject_breakdown["duplicates_deducted"]),
+            "target": PYQ_PAYOUT_TARGET,
         }
     except Exception as e:
         return {"error": str(e)}
@@ -12257,6 +12307,14 @@ PYQ_UPLOADERS = ("admin", "contractor")
 # Kept as proof, deducted from payable -- see pyq_reject.sql. A constant here, not a DB column,
 # since it's the same number for every uploader and changes rarely enough to just edit in code.
 PYQ_PAYOUT_TARGET = 1000
+# $100 per 5,000 payable questions. A code constant, not a DB column, for the same reason as
+# PYQ_PAYOUT_TARGET above.
+PYQ_PRICE_USD_PER_Q = 0.02
+# Duplicate rejections (reject_reason starting "Duplicate") dated before this (India time) predate
+# the payout rules and stay rejected/hidden from students without being deducted from payable; on
+# or after this instant a duplicate rejection is deducted like any other rejection reason. Non-
+# duplicate rejections ("errors") are always deducted regardless of when they happened.
+PYQ_DUP_DEDUCT_FROM = datetime(2026, 11, 1, 0, 0, tzinfo=IST)
 _BATCH_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
 
 @app.post("/admin/pyq-bulk-create")

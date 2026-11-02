@@ -2254,9 +2254,12 @@
       return `<div${isCorrect ? ' class="correct"' : ''}>${l.toUpperCase()}) ${escapeHtml(text)}</div>`;
     }).join('');
     const when = r.rejected_at ? new Date(r.rejected_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+    // A duplicate rejected before the 1 Nov cutoff stays rejected/hidden from students but is
+    // never deducted from payable -- see PYQ_DUP_DEDUCT_FROM in server.py.
+    const reasonText = r.duplicate_free ? 'Duplicate (not deducted)' : (r.reject_reason || '(no reason given)');
     return `
       <div class="q-block">
-        <div class="rejected-note"><b>Reason${when ? ' · ' + escapeHtml(when) : ''}:</b> ${escapeHtml(r.reject_reason || '(no reason given)')}</div>
+        <div class="rejected-note"><b>Reason${when ? ' · ' + escapeHtml(when) : ''}:</b> ${escapeHtml(reasonText)}</div>
         <div class="rejected-q-text">${escapeHtml(r.question || '')}</div>
         <div class="rejected-options">${optsHtml}</div>
       </div>`;
@@ -2274,8 +2277,9 @@
       document.getElementById('rejectedListSummary').innerHTML =
         `<div class="rejected-summary">`
         + `<span>Uploaded: <b>${data.uploaded ?? 0}</b></span>`
-        + `<span>Rejected: <b>${data.rejected ?? 0}</b></span>`
+        + `<span>Deducted: <b>${data.rejected_errors ?? 0}</b> errors, <b>${data.duplicates_deducted ?? 0}</b> duplicates</span>`
         + `<span>Payable: <b>${data.payable ?? 0}</b> / ${data.target ?? 0}</span>`
+        + `<span>Amount: <b>$${Number(data.amount_usd ?? 0).toFixed(2)}</b></span>`
         + `</div>`;
       listEl.innerHTML = rows.length ? rows.map(rejectedCardHtml).join('') : '<div class="empty-hint">No rejected questions.</div>';
       document.getElementById('rejectedListBtn').textContent = rows.length ? `Rejected by admin (${rows.length})` : 'Rejected by admin';
