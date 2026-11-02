@@ -195,6 +195,23 @@
     .collapse-panel.open .collapse-body { display: block; }
     .contractor-counts-error { font-size: 11px; color: #ef4444; margin-bottom: 8px; }
     .contractor-uploaded-summary { font-size: 12px; color: #888; margin-bottom: 10px; }
+    /* Contractor payout tally table -- compact to match the other admin tables/cards; scrolls
+       horizontally on narrow screens instead of clipping its rightmost columns, with the
+       Uploader column pinned so it stays visible while scrolling. */
+    .contractor-tally-wrap { overflow-x: auto; }
+    .contractor-tally-table { border-collapse: collapse; width: 100%; font-size: 13px; color: #ececec; }
+    .contractor-tally-table th, .contractor-tally-table td { padding: 6px 10px; white-space: nowrap; }
+    .contractor-tally-table thead th {
+      text-align: left; color: #888; font-size: 11px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.04em; border-bottom: 1px solid #1e1e1e;
+    }
+    .contractor-tally-table td:not(:first-child), .contractor-tally-table th:not(:first-child) {
+      text-align: right; font-variant-numeric: tabular-nums;
+    }
+    .contractor-tally-table td.payable, .contractor-tally-table td.amount { font-weight: 700; }
+    .contractor-tally-table th:first-child, .contractor-tally-table td:first-child {
+      position: sticky; left: 0; background: #111; text-align: left;
+    }
 
     /* "Showing: <file>" chip -- set only by tapping a row in the Processed PDFs popup below
        (pdfHistoryRowClick), narrowing the Contractor Queue to one PDF's questions. */
@@ -1681,17 +1698,17 @@
     function contractorTallyRowHtml(r) {
       const warn = (r.rejected_errors > 0 || r.duplicates_deducted > 0) ? ' style="color:#ef4444;"' : '';
       return `<tr>
-        <td style="padding:4px 10px;">${escapeHtml(r.uploader_name || '—')}</td>
-        <td style="padding:4px 10px;">${r.uploaded}</td>
-        <td style="padding:4px 10px;">${r.approved}</td>
-        <td style="padding:4px 10px;">${r.pending}</td>
-        <td style="padding:4px 10px;">${r.needs_fix}</td>
-        <td style="padding:4px 10px;"${warn}>${r.rejected_errors}</td>
-        <td style="padding:4px 10px;"${warn}>${r.duplicates_deducted}</td>
-        <td style="padding:4px 10px;">${r.duplicates_free}</td>
-        <td style="padding:4px 10px;">${r.deleted}</td>
-        <td style="padding:4px 10px;"><strong>${r.payable}</strong> / ${r.target}</td>
-        <td style="padding:4px 10px;">$${Number(r.amount_usd ?? 0).toFixed(2)}</td>
+        <td>${escapeHtml(r.uploader_name || '—')}</td>
+        <td>${r.uploaded}</td>
+        <td>${r.approved}</td>
+        <td>${r.pending}</td>
+        <td>${r.needs_fix}</td>
+        <td${warn}>${r.rejected_errors}</td>
+        <td${warn}>${r.duplicates_deducted}</td>
+        <td>${r.duplicates_free}</td>
+        <td>${r.deleted}</td>
+        <td class="payable">${r.payable} / ${r.target}</td>
+        <td class="amount">$${Number(r.amount_usd ?? 0).toFixed(2)}</td>
       </tr>`;
     }
 
@@ -1712,17 +1729,17 @@
           const mainRow = rows.find(r => r.uploader_name === CONTRACTOR_UPLOADER_NAME) || rows[0];
           headerSummary.textContent = mainRow ? `Payable ${mainRow.payable}, $${Number(mainRow.amount_usd ?? 0).toFixed(2)}` : '';
         }
-        body.innerHTML = `<table style="border-collapse:collapse;width:100%;color:#ececec;">
-          <thead><tr style="color:#888;text-align:left;">
-            <th style="padding:4px 10px;">Uploader</th><th style="padding:4px 10px;">Uploaded</th>
-            <th style="padding:4px 10px;">Approved</th><th style="padding:4px 10px;">Pending</th>
-            <th style="padding:4px 10px;">Needs fix</th><th style="padding:4px 10px;">Errors (deducted)</th>
-            <th style="padding:4px 10px;">Duplicates (deducted)</th><th style="padding:4px 10px;">Duplicates before 1 Nov (free)</th>
-            <th style="padding:4px 10px;">Deleted</th><th style="padding:4px 10px;">Payable</th>
-            <th style="padding:4px 10px;">Amount (USD)</th>
+        body.innerHTML = `<div class="contractor-tally-wrap"><table class="contractor-tally-table">
+          <thead><tr>
+            <th>Uploader</th><th>Uploaded</th>
+            <th>Approved</th><th>Pending</th>
+            <th title="Needs fix">Needs fix</th><th title="Errors (deducted)">Errors</th>
+            <th title="Duplicates (deducted, from 1 Nov)">Duplicates</th><th title="Duplicates before 1 Nov (free)">Dup. pre-Nov</th>
+            <th>Deleted</th><th>Payable</th>
+            <th title="Amount (USD)">Amount</th>
           </tr></thead>
           <tbody>${rows.map(contractorTallyRowHtml).join('')}</tbody>
-        </table>`;
+        </table></div>`;
       } catch (e) {
         body.textContent = 'Could not reach server.';
         const headerSummary = document.getElementById('contractorPayoutHeaderSummary');
