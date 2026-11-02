@@ -12306,10 +12306,10 @@ PYQ_REVIEW_STATUSES = ("pending", "approved", "needs_fix", "rejected")
 PYQ_UPLOADERS = ("admin", "contractor")
 # Kept as proof, deducted from payable -- see pyq_reject.sql. A constant here, not a DB column,
 # since it's the same number for every uploader and changes rarely enough to just edit in code.
-PYQ_PAYOUT_TARGET = 1000
-# $100 per 5,000 payable questions. A code constant, not a DB column, for the same reason as
+PYQ_PAYOUT_TARGET = 5000
+# $90 per 5,000 payable questions. A code constant, not a DB column, for the same reason as
 # PYQ_PAYOUT_TARGET above.
-PYQ_PRICE_USD_PER_Q = 0.02
+PYQ_PRICE_USD_PER_Q = 0.018
 # Duplicate rejections (reject_reason starting "Duplicate") dated before this (India time) predate
 # the payout rules and stay rejected/hidden from students without being deducted from payable; on
 # or after this instant a duplicate rejection is deducted like any other rejection reason. Non-

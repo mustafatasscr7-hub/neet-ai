@@ -34,17 +34,17 @@ def test_duplicate_after_cutoff_is_deducted():
 
 
 def test_payable_and_amount_rounding():
-    # 1000 uploaded, 50 errors, 30 deducted duplicates -> 920 payable * $0.02 = $18.40.
+    # 1000 uploaded, 50 errors, 30 deducted duplicates -> 920 payable * $0.018 = $16.56.
     result = server._pyq_payable_amount(1000, 50, 30)
-    assert result == {"payable": 920, "amount_usd": 18.40}
+    assert result == {"payable": 920, "amount_usd": 16.56}
 
     # Free duplicates never reduce payable -- only rejected_errors/duplicates_deducted do.
     result = server._pyq_payable_amount(1000, 0, 0)
-    assert result == {"payable": 1000, "amount_usd": 20.00}
+    assert result == {"payable": 1000, "amount_usd": 18.00}
 
-    # Fractional-cent rounding: 7 payable * $0.02 = $0.14 exactly, no float drift surfacing.
-    result = server._pyq_payable_amount(7, 0, 0)
-    assert result == {"payable": 7, "amount_usd": 0.14}
+    # Fractional-cent rounding: 1944 payable * $0.018 = $34.992, rounds to $34.99.
+    result = server._pyq_payable_amount(1944, 0, 0)
+    assert result == {"payable": 1944, "amount_usd": 34.99}
 
     # Can't go negative even if deductions somehow exceed uploaded (stale log, manual edit, etc).
     result = server._pyq_payable_amount(5, 10, 0)

@@ -10,6 +10,7 @@
   <link rel="apple-touch-icon" href="assets/apple-touch-icon.png"/>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+  <link rel="stylesheet" href="./scrollbar.css">
   <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
   <script src="./math-format.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
@@ -30,7 +31,7 @@
     .gate-box button:hover { background: #3b7de8; }
     .gate-error { font-size: 12px; color: #ef4444; margin-top: 10px; min-height: 14px; }
 
-    #dashboard { display: none; max-width: 900px; margin: 0 auto; padding: 24px; }
+    #dashboard { display: none; max-width: 1100px; margin: 0 auto; padding: 24px; }
     .db-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
     .db-header h1 { font-size: 18px; font-weight: 700; }
     .db-header h1 span { color: #4f8ef7; }
@@ -195,16 +196,19 @@
     .collapse-panel.open .collapse-body { display: block; }
     .contractor-counts-error { font-size: 11px; color: #ef4444; margin-bottom: 8px; }
     .contractor-uploaded-summary { font-size: 12px; color: #888; margin-bottom: 10px; }
-    /* Contractor payout tally table -- compact to match the other admin tables/cards; scrolls
-       horizontally on narrow screens instead of clipping its rightmost columns, with the
-       Uploader column pinned so it stays visible while scrolling. */
+    /* Contractor payout tally table -- compact to match the other admin tables/cards. At desktop
+       width (>=1100px, see #dashboard's max-width) all 11 columns fit with no horizontal scroll;
+       below that the wrap scrolls horizontally instead of clipping rightmost columns, with the
+       Uploader column pinned (opaque background, so scrolled columns don't show through it). */
     .contractor-tally-wrap { overflow-x: auto; }
-    .contractor-tally-table { border-collapse: collapse; width: 100%; font-size: 13px; color: #ececec; }
-    .contractor-tally-table th, .contractor-tally-table td { padding: 6px 10px; white-space: nowrap; }
+    .contractor-tally-table { border-collapse: collapse; width: 100%; font-size: 14px; color: #ececec; }
+    .contractor-tally-table th, .contractor-tally-table td { padding: 12px 14px; white-space: nowrap; }
     .contractor-tally-table thead th {
-      text-align: left; color: #888; font-size: 11px; font-weight: 700; text-transform: uppercase;
-      letter-spacing: 0.04em; border-bottom: 1px solid #1e1e1e;
+      text-align: left; color: #888; font-size: 12px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.04em; border-bottom: 1px solid #262626;
     }
+    .contractor-tally-table tbody td { border-bottom: 1px solid #1a1a1a; }
+    .contractor-tally-table tbody tr:last-child td { border-bottom: none; }
     .contractor-tally-table td:not(:first-child), .contractor-tally-table th:not(:first-child) {
       text-align: right; font-variant-numeric: tabular-nums;
     }
