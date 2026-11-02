@@ -77,6 +77,7 @@
   .q-number { font-size: 13px; font-weight: 700; color: #4f8ef7; }
   .q-diagram-badge { font-size: 11px; background: #f9731620; color: #f97316; padding: 2px 8px; border-radius: 20px; font-weight: 600; }
   .q-saved-badge { font-size: 11px; background: #4ade8020; color: #4ade80; padding: 2px 8px; border-radius: 20px; font-weight: 600; }
+  .q-language-badge { font-size: 11px; background: #2dd4bf20; color: #2dd4bf; padding: 2px 8px; border-radius: 20px; font-weight: 600; }
   /* Paste-mode parse confidence -- only "fallback" gets a loud warning color since that's the
      tier that needs real scrutiny; "delimiter" is informational (unusual but reliable format). */
   .q-confidence-badge { font-size: 11px; padding: 2px 8px; border-radius: 20px; font-weight: 600; }
@@ -308,6 +309,12 @@
       <button type="button" class="subject-btn" data-subject="Chemistry" onclick="selectSubject('Chemistry')">Chemistry</button>
     </div>
 
+    <h2>Language</h2>
+    <div class="subject-picker" id="languagePicker">
+      <button type="button" class="subject-btn active" data-language="en" onclick="selectLanguage('en')">English</button>
+      <button type="button" class="subject-btn" data-language="hi" onclick="selectLanguage('hi')">Hindi</button>
+    </div>
+
     <div id="pdfModeSection">
       <h2>2. Upload PDF</h2>
       <div style="margin-bottom:10px;">
@@ -316,10 +323,10 @@
           <option value="standard">Standard (official question papers)</option>
           <option value="3col_book">3-column book (coaching-book PYQ chapters)</option>
           <option value="scanned_ocr">Scanned pages (free OCR)</option>
-          <!-- Gemini scanned mode: backend, /admin/scan-pdf/estimate and confirmScannedRun() are kept; hidden from the UI
-               in favour of free OCR (2026-10-14). To bring it back, restore:
-               <option value="scanned">Scanned pages (image-only)</option> -->
-
+          <!-- Hidden from English's default choices in favour of free OCR (2026-10-14) -- still
+               selectable there if an admin wants it. Hindi (selectLanguage) forces and locks this
+               to "scanned" itself: Hindi has no free-OCR path, only the Gemini vision one. -->
+          <option value="scanned">Scanned pages (image-only)</option>
         </select>
       </div>
       <div class="upload-row">
@@ -369,6 +376,7 @@
   const API_BASE = 'https://neet-ai-production.up.railway.app';
   let adminKey = sessionStorage.getItem('admin_key') || '';
   let currentSubject = null;
+  let currentLanguage = 'en'; // 'en' or 'hi' -- picked once per PDF, saved on every question from it (pyq_language.sql)
   let currentPdfFilename = null; // filename of the last-scanned PDF, attached to saves so it shows up in Processed PDFs
   let currentBatchId = null; // one upload batch per scanned PDF / parsed paste -- saved as pyq.batch_id for the review filters
   let currentProcessedPdfId = null;  // id of this scan's processed_pdfs row, for the completion/failure update
@@ -557,7 +565,7 @@
 
   async function selectSubject(subject) {
     currentSubject = subject;
-    document.querySelectorAll('.subject-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.subject === subject));
+    document.querySelectorAll('.subject-btn[data-subject]').forEach(btn => btn.classList.toggle('active', btn.dataset.subject === subject));
     blocks = [];
     scanFilenameMatch = null;
     renderAllBlocks();
@@ -566,6 +574,22 @@
     updateScanButton();
     clearDraft(); // a fresh subject pick discards whatever in-progress blocks it just reset
     await loadSubjectData(subject);
+  }
+
+  // Hindi has no free-OCR path (process_pyq_scanned_ocr is English-only) -- only the Gemini
+  // vision "scanned" layout (process_pyq_scanned's two-pass Hindi mode). Locking the layout
+  // dropdown to it when Hindi is picked, rather than just leaving it to a server-side 400, saves
+  // the admin a failed scan attempt. Switching back to English restores free choice of layout.
+  function selectLanguage(language) {
+    currentLanguage = language;
+    document.querySelectorAll('.subject-btn[data-language]').forEach(btn => btn.classList.toggle('active', btn.dataset.language === language));
+    const layoutSelect = document.getElementById('pdfLayoutSelect');
+    if (language === 'hi') {
+      layoutSelect.value = 'scanned';
+      layoutSelect.disabled = true;
+    } else {
+      layoutSelect.disabled = false;
+    }
   }
 
   // Split out of selectSubject so resumeDraft() can load a subject's chapter/classifier data
@@ -628,6 +652,7 @@
         version: 1,
         savedAt: Date.now(),
         subject: currentSubject,
+        language: currentLanguage,
         pdfFilename: currentPdfFilename,
         processedPdfId: currentProcessedPdfId,
         pdfQuestionsExtracted: currentPdfQuestionsExtracted,
@@ -699,6 +724,7 @@
     document.getElementById('draftBanner').style.display = 'none';
 
     currentSubject = draft.subject || null;
+    selectLanguage(draft.language || 'en'); // also re-locks the layout dropdown if the draft was Hindi
     currentPdfFilename = draft.pdfFilename || null;
     currentBatchId = newBatchId(currentPdfFilename);
     currentProcessedPdfId = draft.processedPdfId || null;
@@ -708,7 +734,7 @@
     blocks = draft.blocks;
 
     if (currentSubject) {
-      document.querySelectorAll('.subject-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.subject === currentSubject));
+      document.querySelectorAll('.subject-btn[data-subject]').forEach(btn => btn.classList.toggle('active', btn.dataset.subject === currentSubject));
     }
     selectInputMode(draft.inputMode || 'pdf'); // absent on v1 drafts saved before Paste LaTeX mode existed -- default to the only mode that existed then
     renderAllBlocks();
@@ -1681,7 +1707,7 @@
     const res = await fetch(`${API_BASE}/admin/scan-pdf/estimate`, {
       method: 'POST',
       headers: authHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ subject: currentSubject, data: b64 })
+      body: JSON.stringify({ subject: currentSubject, data: b64, language: currentLanguage })
     });
     if (res.status === 401) { logout(); return null; }
     if (!res.ok) throw new Error(await describeHttpError(res));
@@ -1730,7 +1756,7 @@
     document.getElementById('scanModeHint').style.display = 'none';
     try {
       const b64 = await fileToBase64(file);
-      const body = { subject: currentSubject, data: b64, filename: file.name, layout };
+      const body = { subject: currentSubject, data: b64, filename: file.name, layout, language: currentLanguage };
       if (layout === 'scanned') body.confirm_over_cap = confirmOverCap;
       let data;
       if (layout === 'scanned_ocr') {
@@ -2184,6 +2210,7 @@
       <div class="q-block-header">
         <span class="q-number">Q<input type="text" id="qnum-${b.id}" value="${escapeHtml(b.display_number != null ? b.display_number : String(displayIndex))}" onchange="setQNumber('${b.id}')" title="Edit to match the actual question number in the PDF, if it drifted from the auto count" style="width:34px;background:transparent;border:none;border-bottom:1px dashed #4f8ef780;color:#4f8ef7;font-weight:700;font-size:13px;font-family:'Inter',sans-serif;padding:0 0 1px 2px;"/></span>
         ${b.has_diagram ? '<span class="q-diagram-badge">Diagram</span>' : ''}
+        ${currentLanguage === 'hi' ? '<span class="q-language-badge">Hindi</span>' : ''}
         <span id="confidence-badge-${b.id}" style="display:${b.saved ? 'none' : 'inline'}">
           ${b.parse_confidence === 'fallback' ? `<span class="q-confidence-badge fallback" title="${escapeHtml(describeDetectedPattern(b.detected_pattern, true))}">⚠ Needs review</span>` : ''}
           ${b.parse_confidence === 'delimiter' ? `<span class="q-confidence-badge delimiter" title="${escapeHtml(describeDetectedPattern(b.detected_pattern, false))}">${b.detected_pattern === 'table' ? 'Table row' : 'Pipe-delimited'}</span>` : ''}
@@ -2912,7 +2939,7 @@
 
   function buildCreatePayload(id) {
     const fields = readBlockFromDom(id);
-    return Object.assign({ subject: currentSubject, source_pdf_filename: currentPdfFilename }, fields);
+    return Object.assign({ subject: currentSubject, language: currentLanguage, source_pdf_filename: currentPdfFilename }, fields);
   }
 
   async function saveBlock(id) {
@@ -3028,7 +3055,7 @@
         const result = checkDuplicates(existingRows, fields.question, fields.chapter);
         if (result.exactMatch) dupCount++;
         else if (result.similar.length > 0) warnedCount++;
-        const payload = Object.assign({ subject: currentSubject, source_pdf_filename: currentPdfFilename }, fields);
+        const payload = Object.assign({ subject: currentSubject, language: currentLanguage, source_pdf_filename: currentPdfFilename }, fields);
         payload.diagram_url = b.diagram_url;
         payload.option_a_diagram_url = b.option_a_diagram_url;
         payload.option_b_diagram_url = b.option_b_diagram_url;

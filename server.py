@@ -1012,10 +1012,15 @@ class ScanPdfRequest(BaseModel):
     layout: str = "standard"
     # Scanned mode only: a PDF over its per-run page cap is refused unless the admin confirmed.
     confirm_over_cap: bool = False
+    # "en" (default) or "hi" -- Hindi only runs through layout="scanned" (process_pyq_scanned's
+    # two-pass Gemini-vision mode); admin_scan_pdf rejects "hi" with any other layout. See
+    # pyq_language.sql.
+    language: str = "en"
 
 class ScanPdfEstimateRequest(BaseModel):
     subject: str
     data: str  # base64-encoded PDF bytes
+    language: str = "en"
 
 class PdfMarkProcessedRequest(BaseModel):
     id: int
@@ -1094,6 +1099,13 @@ class PyqQuestionCreate(BaseModel):
     year: Optional[int] = None
     source_tag: Optional[str] = None
     source_pdf_filename: Optional[str] = None
+    # "en" or "hi" -- set once per upload (admin-pdf-review.html's language picker), same value on
+    # every question saved from one PDF. None (an old cached review page, or any pre-feature
+    # caller) omits the column entirely on insert, same reasoning as source_pdf_filename right
+    # below -- the column needs pyq_language.sql's `alter table` before it exists. admin_pyq_
+    # bulk_create forces a Hindi row's review_status back to "pending" regardless of role or any
+    # review_status override: see requirement 4 ("Hindi rows always stay pending for human review").
+    language: Optional[str] = None
     class_: Optional[int] = Field(None, alias="class")
     has_diagram: bool = False
     diagram_url: Optional[str] = None
@@ -3317,9 +3329,10 @@ PYQ_CARD_COLUMNS = "id,subject,chapter,year,question,option_a,option_b,option_c,
 
 # The one filter every student-facing pyq read adds (add_pyq_review_status.sql). is_active is the
 # report/deactivate switch; review_status keeps contractor uploads hidden until an admin approves
-# them (pending / needs_fix never reach a student). test_pyq_review_gate.py fails if a student
-# path reads pyq without it.
-PYQ_STUDENT_VISIBLE = {"is_active": "eq.true", "review_status": "eq.approved"}
+# them (pending / needs_fix never reach a student). language keeps Hindi PYQ rows (pyq_language.sql)
+# out of every student surface for now, regardless of review_status -- see requirement 5. test_pyq_
+# review_gate.py fails if a student path reads pyq without it.
+PYQ_STUDENT_VISIBLE = {"is_active": "eq.true", "review_status": "eq.approved", "language": "eq.en"}
 
 async def _backfill_pyq_chapters(results: list, headers: dict) -> list:
     """match_pyq (the RPC search_pyq below calls into) doesn't return a chapter column, so this
@@ -8950,6 +8963,7 @@ async def admin_pyq_search(
     source_pdf_filename: str = None,
     warnings: bool = False,
     auto_pass: str = None,
+    language: str = None,
     page: int = 1,
     sort_by: str = "id",
     sort_dir: str = "asc",
@@ -8967,14 +8981,14 @@ async def admin_pyq_search(
         # actually see (options, diagrams, source tag) -- the plain-table admin dashboard doesn't
         # use any of that, so its requests stay on the smaller default select.
         select_fields = (
-            "id,subject,chapter,question,option_a,option_b,option_c,option_d,correct_answer,"
+            "id,subject,language,chapter,question,option_a,option_b,option_c,option_d,correct_answer,"
             "is_active,year,source_tag,source_pdf_filename,class,has_diagram,diagram_url,option_a_diagram_url,"
             "option_b_diagram_url,option_c_diagram_url,option_d_diagram_url,reviewed,created_at,"
             "question_type,difficulty,"
             "review_status,review_note,uploaded_by,uploaded_at,batch_id,reviewed_at,reviewed_by,uploader_name,"
             "reject_reason,rejected_at"
             if full else
-            "id,subject,chapter,question,correct_answer,is_active,year"
+            "id,subject,language,chapter,question,correct_answer,is_active,year"
         )
         # auto_pass/auto_reasons/auto_approved/auto_sampled only exist once pyq_auto_approve.sql
         # has been run -- added to the select (and therefore to every card in admin-pyq-preview.html)
@@ -9004,6 +9018,8 @@ async def admin_pyq_search(
         # as every other new auto-approve endpoint.
         if auto_pass in ("true", "false"):
             params["auto_pass"] = f"eq.{auto_pass}"
+        if language in ("en", "hi"):
+            params["language"] = f"eq.{language}"
         if reviewed in ("true", "false"):
             params["reviewed"] = f"eq.{reviewed}"
         if review_status in PYQ_REVIEW_STATUSES:
@@ -9217,17 +9233,26 @@ def _pyq_dup_tokens(row: dict) -> set:
 # same column list /admin/pyq-search's full=true uses, so a row read from here looks exactly
 # like one read from there.
 PYQ_DUP_CORPUS_SELECT = (
-    "id,subject,chapter,question,option_a,option_b,option_c,option_d,correct_answer,"
+    "id,subject,language,chapter,question,option_a,option_b,option_c,option_d,correct_answer,"
     "is_active,year,source_tag,class,has_diagram,diagram_url,option_a_diagram_url,"
     "option_b_diagram_url,option_c_diagram_url,option_d_diagram_url,created_at,"
     "review_status,review_note,uploaded_by,uploaded_at,uploader_name"
 )
 
-async def _pyq_dup_corpus(subject: str):
-    """[(id, tokens, row)] for every pyq row in the subject, any status -- cached briefly since
-    the review page asks for it on every page turn. None if the read fails (the duplicate check
-    is then skipped, never guessed)."""
-    hit = _pyq_dup_corpus_cache.get(subject)
+async def _pyq_dup_corpus(subject: str, language: str = "en"):
+    """[(id, tokens, row)] for every pyq row in the (subject, language) pair, any status --
+    cached briefly since the review page asks for it on every page turn. None if the read fails
+    (the duplicate check is then skipped, never guessed). Scoped by language too (pyq_language.sql,
+    requirement 3: "compare only within the same language") -- a Hindi row should never be flagged
+    as a duplicate of an unrelated English one just because the token overlap happens to match.
+
+    The language filter is applied in Python, AFTER the fetch, rather than as a `language=eq.X`
+    REST param: a row with no language value at all (any gap before pyq_language.sql's backfill
+    finishes, or simply a column PostgREST doesn't know about yet) should read as 'en' here, the
+    same "missing means en" convention used everywhere else in this feature -- a REST-level
+    `eq.en` filter would silently drop a NULL-language row instead of treating it as English."""
+    cache_key = (subject, language)
+    hit = _pyq_dup_corpus_cache.get(cache_key)
     if hit and time.time() - hit[0] < PYQ_DUP_CORPUS_TTL:
         return hit[1]
     rows, offset, page_size = [], 0, 1000
@@ -9242,14 +9267,14 @@ async def _pyq_dup_corpus(subject: str):
         )
         page = resp.json() if resp.status_code < 400 else None
         if not isinstance(page, list):
-            print(f"PYQ DUP CORPUS READ FAILED (subject={subject}): {resp.status_code}", flush=True)
+            print(f"PYQ DUP CORPUS READ FAILED (subject={subject}, language={language}): {resp.status_code}", flush=True)
             return None
-        rows.extend(page)
+        rows.extend([r for r in page if (r.get("language") or "en") == language])
         if len(page) < page_size:
             break
         offset += page_size
     corpus = [(r["id"], _pyq_dup_tokens(r), r) for r in rows]
-    _pyq_dup_corpus_cache[subject] = (time.time(), corpus)
+    _pyq_dup_corpus_cache[cache_key] = (time.time(), corpus)
     return corpus
 
 def _best_duplicate(row_id, tokens: set, corpus: list) -> tuple:
@@ -9285,23 +9310,25 @@ def _dup_matches(row_id, tokens: set, corpus: list, threshold: float, cap: int =
     return hits[:cap], len(hits)
 
 async def _attach_pyq_review_warnings(rows: list):
-    """Adds row["warnings"] = [{code, text}] to each row. The duplicate check (a subject-wide
-    sweep) only runs for rows still waiting on review."""
+    """Adds row["warnings"] = [{code, text}] to each row. The duplicate check (a (subject,
+    language)-wide sweep -- see pyq_language.sql, requirement 3) only runs for rows still waiting
+    on review."""
     for row in rows:
         row["warnings"] = _pyq_basic_warnings(row)
     to_check = [r for r in rows if r.get("review_status") != "approved" and r.get("subject") and r.get("id")]
-    subjects = sorted({r["subject"] for r in to_check})
-    corpora = dict(zip(subjects, await asyncio.gather(*[_pyq_dup_corpus(s) for s in subjects])))
+    pairs = sorted({(r["subject"], r.get("language") or "en") for r in to_check})
+    corpora = dict(zip(pairs, await asyncio.gather(*[_pyq_dup_corpus(s, lang) for s, lang in pairs])))
 
     def scan():
-        for subject in subjects:
-            corpus = corpora.get(subject)
+        for subject, language in pairs:
+            corpus = corpora.get((subject, language))
             if corpus is None:
                 continue
             # This page's own rows too, in case they were saved after the cached corpus was read.
             known = {i for i, _, _ in corpus}
-            combined = corpus + [(o["id"], _pyq_dup_tokens(o), o) for o in rows if o.get("subject") == subject and o.get("id") not in known]
-            for row in (r for r in to_check if r["subject"] == subject):
+            combined = corpus + [(o["id"], _pyq_dup_tokens(o), o) for o in rows
+                                  if o.get("subject") == subject and (o.get("language") or "en") == language and o.get("id") not in known]
+            for row in (r for r in to_check if r["subject"] == subject and (r.get("language") or "en") == language):
                 tokens = _pyq_dup_tokens(row)
                 if not tokens:
                     continue
@@ -9851,35 +9878,38 @@ def _auto_subject_chapter_ok(row: dict) -> bool:
 # ---- duplicate check: same tokenizer/threshold/corpus scope as /admin/pyq-duplicates ----
 _auto_dup_corpus_cache = {}
 
-async def _auto_dup_corpus(subject: str):
-    """[(id, tokens)] for every OTHER row in this subject, same source filter as
+async def _auto_dup_corpus(subject: str, language: str = "en"):
+    """[(id, tokens)] for every OTHER row in this (subject, language) pair, same source filter as
     /admin/pyq-duplicates (is_active=true, review_status<>rejected) -- cached the same way
-    _pyq_dup_corpus is, since the sweep and the bulk-create hook build this once per subject per
-    batch, not once per row. None if the read fails (duplicate rule is then skipped, never
-    guessed, for that batch)."""
-    hit = _auto_dup_corpus_cache.get(subject)
+    _pyq_dup_corpus is, since the sweep and the bulk-create hook build this once per (subject,
+    language) per batch, not once per row. None if the read fails (duplicate rule is then
+    skipped, never guessed, for that batch). Scoped by language for the same reason _pyq_dup_
+    corpus is -- see pyq_language.sql, requirement 3. Same "filter in Python, not as a REST
+    eq.X param" reasoning as _pyq_dup_corpus too -- a row with no language value reads as 'en'."""
+    cache_key = (subject, language)
+    hit = _auto_dup_corpus_cache.get(cache_key)
     if hit and time.time() - hit[0] < PYQ_DUP_CORPUS_TTL:
         return hit[1]
     rows, offset, page_size = [], 0, 1000
     while True:
         resp = await async_client.get(
             f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
-            params={"subject": f"eq.{subject}", "select": "id,question,option_a,option_b,option_c,option_d",
+            params={"subject": f"eq.{subject}", "select": "id,language,question,option_a,option_b,option_c,option_d",
                     "is_active": "eq.true", "review_status": "neq.rejected",
                     "order": "id.asc", "limit": page_size, "offset": offset}
         )
         page = resp.json() if resp.status_code < 400 else None
         if not isinstance(page, list):
-            print(f"PYQ AUTO-CHECK DUP CORPUS READ FAILED (subject={subject}): {resp.status_code}", flush=True)
+            print(f"PYQ AUTO-CHECK DUP CORPUS READ FAILED (subject={subject}, language={language}): {resp.status_code}", flush=True)
             return None
-        rows.extend(page)
+        rows.extend([r for r in page if (r.get("language") or "en") == language])
         if len(page) < page_size:
             break
         offset += page_size
     corpus = [(r["id"], _tokenize_for_dup_check(" ".join(filter(None, [
         r.get("question"), r.get("option_a"), r.get("option_b"), r.get("option_c"), r.get("option_d")
     ])))) for r in rows]
-    _auto_dup_corpus_cache[subject] = (time.time(), corpus)
+    _auto_dup_corpus_cache[cache_key] = (time.time(), corpus)
     return corpus
 
 def _auto_is_duplicate(row_id, tokens: set, corpus: list) -> bool:
@@ -9907,6 +9937,11 @@ def auto_check(row: dict, dup_corpus: list = None) -> tuple:
         return False, ["rejected"]
 
     reasons = []
+    # Never auto-approve a non-English row (pyq_language.sql, requirement 4) -- still runs every
+    # other check below too, so auto_reasons stays a genuinely useful diagnostic for the human
+    # review this row needs regardless.
+    if (row.get("language") or "en") != "en":
+        reasons.append("non_english")
     if _auto_has_diagram(row):
         reasons.append("diagram")
     if _auto_is_match_following(row.get("question")):
@@ -9938,7 +9973,7 @@ async def _auto_check_row(row: dict, corpora: dict, now_iso: str) -> dict:
     """Runs auto_check on one row and returns the Supabase PATCH fields -- shared by the sweep
     and the bulk-create hook so the real-time switch (AUTO_APPROVE_ENABLED) behaves identically
     whichever path checked the row."""
-    corpus = corpora.get(row.get("subject")) or []
+    corpus = corpora.get((row.get("subject"), row.get("language") or "en")) or []
     ok, reasons = auto_check(row, corpus)
     fields = {"auto_pass": ok, "auto_reasons": ",".join(reasons) if reasons else None, "auto_checked_at": now_iso}
     if ok and AUTO_APPROVE_ENABLED and row.get("review_status") == "pending":
@@ -9956,8 +9991,8 @@ async def _auto_check_and_patch_rows(rows: list) -> dict:
     this file (e.g. _log_pyq_upload, admin_pyq_reject)."""
     if not rows:
         return {"checked": 0, "passed": 0, "failed": 0, "auto_approved": 0, "auto_sampled": 0}
-    subjects = sorted({r["subject"] for r in rows if r.get("subject")})
-    corpora = dict(zip(subjects, await asyncio.gather(*[_auto_dup_corpus(s) for s in subjects])))
+    pairs = sorted({(r["subject"], r.get("language") or "en") for r in rows if r.get("subject")})
+    corpora = dict(zip(pairs, await asyncio.gather(*[_auto_dup_corpus(s, lang) for s, lang in pairs])))
     now_iso = datetime.now(timezone.utc).isoformat()
     counts = {"checked": 0, "passed": 0, "failed": 0, "auto_approved": 0, "auto_sampled": 0}
 
@@ -10383,7 +10418,7 @@ async def admin_pyq_delete(pyq_id: str, _: None = Depends(verify_admin)):
         # still seeing the just-deleted row for up to PYQ_DUP_CORPUS_TTL more seconds -- otherwise
         # a group whose "original" was just deleted could keep pointing at it a little longer.
         if deleted[0].get("subject"):
-            _pyq_dup_corpus_cache.pop(deleted[0]["subject"], None)
+            _pyq_dup_corpus_cache.pop((deleted[0]["subject"], deleted[0].get("language") or "en"), None)
         _invalidate_processed_pdfs_cache()  # a deleted row can no longer count toward any PDF's totals
         # Returning the deleted row (not just success:true) is what lets the admin tool's
         # Ctrl+Z undo restore it -- this is a hard DELETE, so this response is the only place
@@ -11106,6 +11141,10 @@ def admin_scan_pdf(req: ScanPdfRequest, _: None = Depends(verify_admin_or_contra
         return {"error": "Invalid subject"}
     if req.layout not in ("standard", "3col_book", "scanned", "scanned_ocr"):
         return {"error": "Invalid layout"}
+    if req.language not in ("en", "hi"):
+        return {"error": "Invalid language"}
+    if req.language == "hi" and req.layout != "scanned":
+        return {"error": "Hindi extraction only supports the scanned layout"}
     if req.uploader_name and req.uploader_name not in PYQ_UPLOADER_NAMES:
         raise HTTPException(status_code=400, detail="Invalid uploader name")
     try:
@@ -11127,7 +11166,7 @@ def admin_scan_pdf(req: ScanPdfRequest, _: None = Depends(verify_admin_or_contra
     processed_pdf_id = _create_processed_pdf_row(req.filename, req.subject) if req.filename else None
     try:
         if req.layout == "scanned":
-            result = scan_scanned_pdf_bytes(pdf_bytes, req.subject, confirm_over_cap=req.confirm_over_cap)
+            result = scan_scanned_pdf_bytes(pdf_bytes, req.subject, confirm_over_cap=req.confirm_over_cap, language=req.language)
         elif req.layout == "scanned_ocr":
             result = scan_ocr_pdf_bytes(pdf_bytes, req.subject)
         else:
@@ -11317,9 +11356,11 @@ def admin_scan_pdf_estimate(req: ScanPdfEstimateRequest, _: None = Depends(verif
     admin_scan_pdf (page rendering is CPU work)."""
     if req.subject not in ("Biology", "Physics", "Chemistry"):
         return {"error": "Invalid subject"}
+    if req.language not in ("en", "hi"):
+        return {"error": "Invalid language"}
     try:
         pdf_bytes = base64.b64decode(req.data)
-        return estimate_scanned_pdf_cost(pdf_bytes, req.subject)
+        return estimate_scanned_pdf_cost(pdf_bytes, req.subject, language=req.language)
     except Exception as e:
         return {"error": f"Could not read PDF: {e}"}
 
@@ -12323,6 +12364,8 @@ async def admin_pyq_bulk_create(body: PyqBulkCreate, role: str = Depends(verify_
         return {"error": "No questions provided"}
     if any(q.subject not in ("Biology", "Physics", "Chemistry") for q in body.questions):
         return {"error": "Invalid subject"}
+    if any(q.language not in (None, "en", "hi") for q in body.questions):
+        return {"error": "Invalid language"}
     if body.uploader_name is not None and body.uploader_name not in PYQ_UPLOADER_NAMES:
         raise HTTPException(status_code=400, detail="Invalid uploader name")
     # Who uploaded comes from the key that authenticated this request, never from the body.
@@ -12357,6 +12400,13 @@ async def admin_pyq_bulk_create(body: PyqBulkCreate, role: str = Depends(verify_
         # entirely keeps every save working before that migration is run, not just this feature.
         if q.source_pdf_filename:
             item["source_pdf_filename"] = q.source_pdf_filename
+        # Same reasoning again: needs pyq_language.sql's `alter table` before the column exists.
+        # Hindi rows are force-pended below (after the admin-role override block), regardless of
+        # role or any review_status the caller sent -- see requirement 4 and PyqQuestionCreate's
+        # own docstring on `language`.
+        language = q.language if q.language in ("en", "hi") else "en"
+        if q.language:
+            item["language"] = language
         # Same reasoning: uploader_name needs its own migration too, and omitting the key for a
         # row with no name (an old cached contractor-portal page, or any pre-feature caller)
         # leaves the column at its default of NULL, which is exactly "earlier upload".
@@ -12387,6 +12437,12 @@ async def admin_pyq_bulk_create(body: PyqBulkCreate, role: str = Depends(verify_
                 item["uploaded_at"] = q.uploaded_at
             if q.batch_id and _BATCH_ID_RE.match(q.batch_id):
                 item["batch_id"] = q.batch_id
+        # Final say, after every other override above: a Hindi row never leaves this endpoint as
+        # "approved", no matter who uploaded it or what review_status they sent. It still needs a
+        # real human review pass -- "rejected"/"needs_fix" (an admin's own explicit downgrade
+        # decision) are left alone, only "approved" is overridden.
+        if language == "hi" and item["review_status"] == "approved":
+            item["review_status"] = "pending"
         payload.append(item)
     try:
         response = await async_client.post(
@@ -13060,7 +13116,7 @@ def admin_pyq_duplicates(threshold: float = 0.5, _: None = Depends(verify_admin)
                 f"{SUPABASE_URL}/rest/v1/pyq",
                 headers=ADMIN_HEADERS,
                 params={
-                    "select": "id,subject,chapter,question,option_a,option_b,option_c,option_d,"
+                    "select": "id,subject,language,chapter,question,option_a,option_b,option_c,option_d,"
                               "correct_answer,is_active,year,source_tag,class,has_diagram,"
                               "diagram_url,option_a_diagram_url,option_b_diagram_url,"
                               "option_c_diagram_url,option_d_diagram_url,created_at",
@@ -13096,9 +13152,11 @@ def admin_pyq_duplicates(threshold: float = 0.5, _: None = Depends(verify_admin)
         except Exception:
             pass
 
+        # Grouped by (subject, language), not subject alone -- compare only within the same
+        # language (pyq_language.sql, requirement 3).
         by_subject = {}
         for r in all_rows:
-            by_subject.setdefault(r["subject"], []).append(r)
+            by_subject.setdefault((r["subject"], r.get("language") or "en"), []).append(r)
 
         rows_by_id = {}
         pairs = []
@@ -13200,7 +13258,7 @@ async def admin_pyq_contractor_duplicates(_: None = Depends(verify_admin)):
             resp = await async_client.get(
                 f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
                 params={"review_status": "eq.pending", "uploader_name": f"eq.{CONTRACTOR_UPLOADER_NAME}",
-                        "select": "id,subject", "order": "id.asc", "limit": page_size, "offset": offset}
+                        "select": "id,subject,language", "order": "id.asc", "limit": page_size, "offset": offset}
             )
             if resp.status_code >= 400:
                 return {"error": resp.text}
@@ -13210,15 +13268,17 @@ async def admin_pyq_contractor_duplicates(_: None = Depends(verify_admin)):
                 break
             offset += page_size
 
-        subjects = sorted({r["subject"] for r in to_check_ids if r.get("subject")})
-        corpora = dict(zip(subjects, await asyncio.gather(*[_pyq_dup_corpus(s) for s in subjects])))
-        to_check = [r["id"] for r in to_check_ids if r.get("subject") in corpora and corpora[r["subject"]] is not None]
-        subject_of = {r["id"]: r["subject"] for r in to_check_ids}
+        # (subject, language) pairs -- compare only within the same language (pyq_language.sql,
+        # requirement 3): a Hindi contractor row should never be flagged against an English one.
+        pairs = sorted({(r["subject"], r.get("language") or "en") for r in to_check_ids if r.get("subject")})
+        corpora = dict(zip(pairs, await asyncio.gather(*[_pyq_dup_corpus(s, lang) for s, lang in pairs])))
+        pair_of = {r["id"]: (r["subject"], r.get("language") or "en") for r in to_check_ids}
+        to_check = [r["id"] for r in to_check_ids if pair_of.get(r["id"]) in corpora and corpora[pair_of[r["id"]]] is not None]
 
         def scan():
             flagged = {}
             meta_by_id = {}
-            for subject, corpus in corpora.items():
+            for pair, corpus in corpora.items():
                 if corpus is None:
                     continue
                 for oid, _toks, row in corpus:
@@ -13226,8 +13286,7 @@ async def admin_pyq_contractor_duplicates(_: None = Depends(verify_admin)):
             by_id = {oid: (toks, row) for corpus in corpora.values() if corpus for oid, toks, row in corpus}
 
             for qid in to_check:
-                subject = subject_of.get(qid)
-                corpus = corpora.get(subject)
+                corpus = corpora.get(pair_of.get(qid))
                 toks, q_row = by_id.get(qid, (None, None))
                 if not corpus or not toks:
                     continue

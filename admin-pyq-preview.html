@@ -68,6 +68,7 @@
     .auto-approve-bar .auto-status { color: #888; margin-left: auto; white-space: nowrap; }
     .auto-approve-bar .auto-status.on { color: #4ade80; }
     .q-auto-badge { font-size: 11px; padding: 3px 9px; border-radius: 20px; font-weight: 600; background: #4f8ef720; color: #4f8ef7; }
+    .q-language-badge { font-size: 11px; padding: 3px 9px; border-radius: 20px; font-weight: 600; background: #2dd4bf20; color: #2dd4bf; }
 
     /* Bulk select/action bar -- appears above the results list once 1+ question is checked via
        the corner checkbox on question-card. Only ever populated from questionCardHtml (the
@@ -499,6 +500,11 @@
           <option value="Mr. Md Moniruzzaman">Mr. Md Moniruzzaman</option>
           <option value="Admin">Admin</option>
           <option value="__earlier__">Earlier uploads (no name)</option>
+        </select>
+        <select id="filterLanguage" onchange="onFilterChange()" title="Language">
+          <option value="">Any language</option>
+          <option value="en">English</option>
+          <option value="hi">Hindi</option>
         </select>
         <select id="filterBatch" onchange="onFilterChange()" title="Upload batch" hidden>
           <option value="">All batches</option>
@@ -1168,10 +1174,12 @@
       const uploaderName = document.getElementById('filterUploadedBy').value;
       const batchId = document.getElementById('filterBatch').value;
       const uploadedDate = document.getElementById('filterUploadedDate').value;
+      const language = document.getElementById('filterLanguage').value;
       if (reviewStatus) params.set('review_status', reviewStatus);
       if (uploaderName) params.set('uploader_name', uploaderName);
       if (batchId) params.set('batch_id', batchId);
       if (uploadedDate) params.set('uploaded_date', uploadedDate);
+      if (language) params.set('language', language);
       if (autoPassFilterOn) params.set('auto_pass', 'true');
       // Processed PDFs popup -> tap a row -> narrow the Contractor Queue to that PDF's questions
       // (only ever set from pdfHistoryRowClick, so only in contractorMode -- see below).
@@ -2445,6 +2453,7 @@
               ${!q.is_active ? '<span class="q-inactive-flag">Inactive</span>' : ''}
               ${reviewStatusHtml(q)}
               ${q.auto_approved ? '<span class="q-auto-badge">Auto</span>' : ''}
+              ${q.language === 'hi' ? '<span class="q-language-badge">Hindi</span>' : ''}
             </div>
             ${reviewUploadMetaHtml(q) ? `<div class="q-meta-secondary">${reviewUploadMetaHtml(q)}</div>` : ''}
           </div>
