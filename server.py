@@ -23,6 +23,7 @@ import gzip
 import io
 import ipaddress
 import json
+import random
 import re
 import shutil
 import tempfile
@@ -8945,6 +8946,7 @@ async def admin_pyq_search(
     uploaded_date: str = None,
     source_pdf_filename: str = None,
     warnings: bool = False,
+    auto_pass: str = None,
     page: int = 1,
     sort_by: str = "id",
     sort_dir: str = "asc",
@@ -8971,6 +8973,11 @@ async def admin_pyq_search(
             if full else
             "id,subject,chapter,question,correct_answer,is_active,year"
         )
+        # auto_pass/auto_reasons/auto_approved/auto_sampled only exist once pyq_auto_approve.sql
+        # has been run -- added to the select (and therefore to every card in admin-pyq-preview.html)
+        # only once that's confirmed, so this endpoint keeps working unchanged before that migration.
+        if full and await _pyq_auto_columns_exist():
+            select_fields += ",auto_pass,auto_reasons,auto_approved,auto_sampled"
         params = {
             "select": select_fields,
             "order": f"{sort_col}.{sort_direction}",
@@ -8988,6 +8995,12 @@ async def admin_pyq_search(
             params["chapter"] = f"eq.{chapter}"
         if is_active in ("true", "false"):
             params["is_active"] = f"eq.{is_active}"
+        # Used by the admin preview's "Would auto-approve N" tile to list pending rows with
+        # auto_pass=true -- only meaningful once pyq_auto_approve.sql has run (see select_fields
+        # above); a request with this param before that returns the same clear PostgREST error
+        # as every other new auto-approve endpoint.
+        if auto_pass in ("true", "false"):
+            params["auto_pass"] = f"eq.{auto_pass}"
         if reviewed in ("true", "false"):
             params["reviewed"] = f"eq.{reviewed}"
         if review_status in PYQ_REVIEW_STATUSES:
@@ -9576,6 +9589,406 @@ async def admin_contractor_tally(_: None = Depends(verify_admin)):
             }
         rows = await asyncio.gather(*(tally_for(name) for name in PYQ_UPLOADER_NAMES))
         return {"rows": rows}
+    except Exception as e:
+        return {"error": str(e)}
+
+# ---------- PYQ auto-approve (pyq_auto_approve.sql) ----------
+# Trial mode by default: auto_check below only ever sets auto_pass/auto_reasons/auto_checked_at
+# on a pending row -- nothing leaves pending on its own, and students see no change at all
+# (PYQ_STUDENT_VISIBLE already requires review_status='approved', which nothing here touches
+# unless AUTO_APPROVE_ENABLED is on). Flip AUTO_APPROVE_ENABLED=true in Railway to let a passing
+# row approve itself; even then a random 10% of passes are deliberately held back (auto_sampled)
+# for a human spot-check rather than approved outright.
+#
+# auto_check mirrors auto-tmp/check.js's read-only feasibility check line for line, with one
+# substitution: Railway has no Node/KaTeX available, so the LaTeX-sanity rule here is a
+# balanced-braces check on every extracted $...$ / \(...\) span instead of an actual KaTeX parse
+# (see _auto_latex_ok). Everything else -- the options/text-clean/subject-chapter rules, the
+# excluded-type heuristics, and the duplicate check's tokenizer/threshold/corpus scope -- is
+# either transcribed straight from check.js or reused directly from the existing Duplicates tool
+# (_tokenize_for_dup_check/DUP_CHECK_STOPWORDS, same 0.5 overlap threshold as /admin/pyq-duplicates).
+AUTO_APPROVE_ENABLED = os.getenv("AUTO_APPROVE_ENABLED", "false").strip().lower() == "true"
+AUTO_APPROVE_DUP_THRESHOLD = 0.5
+AUTO_APPROVE_SAMPLE_RATE = 0.10
+
+_PYQ_AUTO_COLUMNS_STATE = {"exists": False}
+PYQ_AUTO_APPROVE_MIGRATION_ERROR = "pyq_auto_approve.sql hasn't been run yet -- the auto_pass/auto_reasons columns don't exist."
+
+async def _pyq_auto_columns_exist() -> bool:
+    """Whether pyq_auto_approve.sql has been run yet. Cached once true (a migration is never
+    un-run); re-checked on every call otherwise so the feature starts working the moment it's
+    applied, with no restart needed."""
+    if _PYQ_AUTO_COLUMNS_STATE["exists"]:
+        return True
+    try:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
+            params={"select": "id,auto_pass,auto_reasons,auto_checked_at,auto_approved,auto_sampled", "limit": 1}
+        )
+        _PYQ_AUTO_COLUMNS_STATE["exists"] = resp.status_code < 400
+    except Exception:
+        pass
+    return _PYQ_AUTO_COLUMNS_STATE["exists"]
+
+def _auto_row_text(row: dict) -> str:
+    return " ".join(filter(None, [row.get("question"), row.get("option_a"), row.get("option_b"),
+                                   row.get("option_c"), row.get("option_d")]))
+
+# ---- excluded types (check.js: hasDiagram/isMatchTheFollowing/hasMathOrFormula/looksChemicalFormula) ----
+_AUTO_MATCH_RE = re.compile(r"match", re.I)
+_AUTO_COLUMN_RE = re.compile(r"column", re.I)
+_AUTO_COLUMN_I_II_RE = re.compile(r"column\s*i\b.*column\s*ii", re.I | re.S)
+_AUTO_FORMULA_LATEX_RE = re.compile(r"\$[^$]+\$|\\\(|\\frac|\\sqrt|\\sum|\\int|\\[a-zA-Z]+\{")
+_AUTO_FORMULA_WORD_RE = re.compile(r"\b(formula|calculation|calculate)\b", re.I)
+_AUTO_CHEM_SUBSCRIPT_RE = re.compile(r"[A-Z][a-z]?\d+")
+_AUTO_CHEM_ARROW_RE = re.compile(r"\u2192|->|<=>|\\rightarrow|\\longrightarrow|\\rightleftharpoons")
+
+def _auto_has_diagram(row: dict) -> bool:
+    return bool(row.get("has_diagram") or row.get("diagram_url") or row.get("option_a_diagram_url") or
+                row.get("option_b_diagram_url") or row.get("option_c_diagram_url") or row.get("option_d_diagram_url"))
+
+def _auto_is_match_following(question) -> bool:
+    t = question or ""
+    if not _AUTO_MATCH_RE.search(t):
+        return False
+    return bool(_AUTO_COLUMN_RE.search(t)) or bool(_AUTO_COLUMN_I_II_RE.search(t))
+
+def _auto_has_math_or_formula(row: dict) -> bool:
+    t = _auto_row_text(row)
+    if _AUTO_FORMULA_LATEX_RE.search(t):
+        return True
+    return bool(_AUTO_FORMULA_WORD_RE.search(t))
+
+def _auto_looks_chemical_formula(row: dict) -> bool:
+    t = _auto_row_text(row)
+    subscripts = _AUTO_CHEM_SUBSCRIPT_RE.findall(t)
+    arrows = _AUTO_CHEM_ARROW_RE.findall(t)
+    return len(subscripts) >= 3 or len(arrows) >= 1
+
+# ---- rule checks (check.js: optionsOk/textCleanOk/latexOk/subjectChapterOk) ----
+_AUTO_LITERAL_BACKSLASH_N_RE = re.compile(r"\\n")
+_AUTO_STRAY_BACKSLASH_RE = re.compile(r"\\[^a-zA-Z(){}\[\]$^_\\, ]")
+_AUTO_MOJIBAKE_RE = re.compile(r"[\u00c3\u00c2\u00e2\u20ac]{2,}")
+_AUTO_DOLLAR_SPAN_RE = re.compile(r"\$([^$]+)\$")
+_AUTO_PAREN_SPAN_RE = re.compile(r"\\\(([^)]*?)\\\)")
+
+def _auto_options_ok(row: dict) -> bool:
+    opts = [row.get("option_a"), row.get("option_b"), row.get("option_c"), row.get("option_d")]
+    if any(o is None for o in opts):
+        return False
+    trimmed = [str(o).strip() for o in opts]
+    if any(len(o) == 0 for o in trimmed):
+        return False
+    return len(set(trimmed)) == 4
+
+def _auto_text_clean_ok(row: dict) -> bool:
+    fields = [row.get("question"), row.get("option_a"), row.get("option_b"), row.get("option_c"), row.get("option_d")]
+    joined = " ".join(f for f in fields if f is not None)
+    if _AUTO_LITERAL_BACKSLASH_N_RE.search(joined):
+        return False
+    if _AUTO_STRAY_BACKSLASH_RE.search(joined):
+        return False
+    if "\ufffd" in joined:
+        return False
+    if _AUTO_MOJIBAKE_RE.search(joined):
+        return False
+    return len((row.get("question") or "").strip()) >= 15
+
+def _auto_extract_latex_spans(text) -> list:
+    if not text:
+        return []
+    return _AUTO_DOLLAR_SPAN_RE.findall(text) + _AUTO_PAREN_SPAN_RE.findall(text)
+
+def _auto_braces_balanced(expr: str) -> bool:
+    depth = 0
+    for ch in expr:
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth < 0:
+                return False
+    return depth == 0
+
+def _auto_latex_ok(row: dict) -> bool:
+    for field in (row.get("question"), row.get("option_a"), row.get("option_b"), row.get("option_c"), row.get("option_d")):
+        for expr in _auto_extract_latex_spans(field):
+            if not _auto_braces_balanced(expr):
+                return False
+    return True
+
+def _auto_subject_chapter_ok(row: dict) -> bool:
+    return bool((row.get("subject") or "").strip()) and bool((row.get("chapter") or "").strip())
+
+# ---- duplicate check: same tokenizer/threshold/corpus scope as /admin/pyq-duplicates ----
+_auto_dup_corpus_cache = {}
+
+async def _auto_dup_corpus(subject: str):
+    """[(id, tokens)] for every OTHER row in this subject, same source filter as
+    /admin/pyq-duplicates (is_active=true, review_status<>rejected) -- cached the same way
+    _pyq_dup_corpus is, since the sweep and the bulk-create hook build this once per subject per
+    batch, not once per row. None if the read fails (duplicate rule is then skipped, never
+    guessed, for that batch)."""
+    hit = _auto_dup_corpus_cache.get(subject)
+    if hit and time.time() - hit[0] < PYQ_DUP_CORPUS_TTL:
+        return hit[1]
+    rows, offset, page_size = [], 0, 1000
+    while True:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
+            params={"subject": f"eq.{subject}", "select": "id,question,option_a,option_b,option_c,option_d",
+                    "is_active": "eq.true", "review_status": "neq.rejected",
+                    "order": "id.asc", "limit": page_size, "offset": offset}
+        )
+        page = resp.json() if resp.status_code < 400 else None
+        if not isinstance(page, list):
+            print(f"PYQ AUTO-CHECK DUP CORPUS READ FAILED (subject={subject}): {resp.status_code}", flush=True)
+            return None
+        rows.extend(page)
+        if len(page) < page_size:
+            break
+        offset += page_size
+    corpus = [(r["id"], _tokenize_for_dup_check(" ".join(filter(None, [
+        r.get("question"), r.get("option_a"), r.get("option_b"), r.get("option_c"), r.get("option_d")
+    ])))) for r in rows]
+    _auto_dup_corpus_cache[subject] = (time.time(), corpus)
+    return corpus
+
+def _auto_is_duplicate(row_id, tokens: set, corpus: list) -> bool:
+    if not tokens or not corpus:
+        return False
+    for other_id, other_tokens in corpus:
+        if other_id == row_id or not other_tokens:
+            continue
+        shared = len(tokens & other_tokens)
+        if not shared:
+            continue
+        if shared / len(tokens | other_tokens) >= AUTO_APPROVE_DUP_THRESHOLD:
+            return True
+    return False
+
+def auto_check(row: dict, dup_corpus: list = None) -> tuple:
+    """(pass: bool, reasons: list[str]) for one pyq row. Year and answer key are deliberately
+    never checked -- neither is required for a question to be shown to students. A rejected row
+    is never checked (it's kept only as reject-reason proof, never a candidate for approval).
+
+    dup_corpus: [(other_id, other_tokens), ...] for every other row in this row's subject, from
+    _auto_dup_corpus -- the caller builds this once per subject per batch. None/empty just skips
+    the duplicate rule for this call (the sweep and the bulk-create hook always pass a real one)."""
+    if row.get("review_status") == "rejected":
+        return False, ["rejected"]
+
+    reasons = []
+    if _auto_has_diagram(row):
+        reasons.append("diagram")
+    if _auto_is_match_following(row.get("question")):
+        reasons.append("match_following")
+    if _auto_has_math_or_formula(row):
+        reasons.append("math_formula")
+    if _auto_looks_chemical_formula(row):
+        reasons.append("chemical_formula")
+    if not _auto_options_ok(row):
+        reasons.append("options")
+    if not _auto_text_clean_ok(row):
+        reasons.append("broken_text")
+    if not _auto_latex_ok(row):
+        reasons.append("latex")
+    if not _auto_subject_chapter_ok(row):
+        reasons.append("subject_chapter")
+    tokens = _tokenize_for_dup_check(_auto_row_text(row))
+    if dup_corpus and _auto_is_duplicate(row.get("id"), tokens, dup_corpus):
+        reasons.append("duplicate")
+
+    return (len(reasons) == 0), reasons
+
+def _auto_approve_all_count_ok(expected: int, current: int) -> bool:
+    """The guard behind /admin/pyq-auto-approve-all: only approve the exact set the admin saw and
+    confirmed, never a set that grew or shrank (another sweep, a new upload) since they looked."""
+    return expected == current
+
+async def _auto_check_row(row: dict, corpora: dict, now_iso: str) -> dict:
+    """Runs auto_check on one row and returns the Supabase PATCH fields -- shared by the sweep
+    and the bulk-create hook so the real-time switch (AUTO_APPROVE_ENABLED) behaves identically
+    whichever path checked the row."""
+    corpus = corpora.get(row.get("subject")) or []
+    ok, reasons = auto_check(row, corpus)
+    fields = {"auto_pass": ok, "auto_reasons": ",".join(reasons) if reasons else None, "auto_checked_at": now_iso}
+    if ok and AUTO_APPROVE_ENABLED and row.get("review_status") == "pending":
+        if random.random() < AUTO_APPROVE_SAMPLE_RATE:
+            fields["auto_sampled"] = True
+        else:
+            fields.update({"review_status": "approved", "auto_approved": True,
+                           "reviewed_by": "auto", "reviewed_at": now_iso})
+    return fields
+
+async def _auto_check_and_patch_rows(rows: list) -> dict:
+    """Checks every row, PATCHes each one's own result fields, and returns per-batch counts.
+    Fields differ per row (different reasons, some approved, some not), so this is one PATCH per
+    row rather than a single bulk update -- same as every other per-row-field admin update in
+    this file (e.g. _log_pyq_upload, admin_pyq_reject)."""
+    if not rows:
+        return {"checked": 0, "passed": 0, "failed": 0, "auto_approved": 0, "auto_sampled": 0}
+    subjects = sorted({r["subject"] for r in rows if r.get("subject")})
+    corpora = dict(zip(subjects, await asyncio.gather(*[_auto_dup_corpus(s) for s in subjects])))
+    now_iso = datetime.now(timezone.utc).isoformat()
+    counts = {"checked": 0, "passed": 0, "failed": 0, "auto_approved": 0, "auto_sampled": 0}
+
+    async def process(row):
+        fields = await _auto_check_row(row, corpora, now_iso)
+        counts["checked"] += 1
+        counts["passed" if fields["auto_pass"] else "failed"] += 1
+        if fields.get("auto_approved"):
+            counts["auto_approved"] += 1
+        if fields.get("auto_sampled"):
+            counts["auto_sampled"] += 1
+        try:
+            await async_client.patch(
+                f"{SUPABASE_URL}/rest/v1/pyq", headers={**ADMIN_HEADERS, "Content-Type": "application/json"},
+                params={"id": f"eq.{row['id']}"}, json=fields
+            )
+        except Exception as e:
+            print(f"PYQ AUTO-CHECK PATCH FAILED id={row.get('id')}: {e}", flush=True)
+
+    await asyncio.gather(*(process(r) for r in rows))
+    return counts
+
+async def _auto_check_new_rows_background(rows: list):
+    """Called (fire-and-forget) right after pyq-bulk-create inserts new rows, so a contractor
+    upload already has auto_pass/auto_reasons the first time it shows up in review. Must never
+    fail or slow the upload itself -- every failure here is caught and only printed, same
+    reasoning as _log_pyq_upload/_embed_pyq_row_background above."""
+    try:
+        if not rows or not await _pyq_auto_columns_exist():
+            return
+        await _auto_check_and_patch_rows(rows)
+    except Exception as e:
+        print(f"PYQ AUTO-CHECK (new rows) FAILED: {e}", flush=True)
+
+@app.post("/admin/pyq-auto-check")
+async def admin_pyq_auto_check(_: None = Depends(verify_admin)):
+    """Sweeps up to 500 pending rows that have never been checked (auto_checked_at is null).
+    The frontend calls this repeatedly until `remaining` comes back false."""
+    if not await _pyq_auto_columns_exist():
+        return {"error": PYQ_AUTO_APPROVE_MIGRATION_ERROR}
+    try:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
+            params={"review_status": "eq.pending", "auto_checked_at": "is.null",
+                    "select": "id,subject,chapter,question,option_a,option_b,option_c,option_d,"
+                              "has_diagram,diagram_url,option_a_diagram_url,option_b_diagram_url,"
+                              "option_c_diagram_url,option_d_diagram_url,review_status",
+                    "order": "id.asc", "limit": 500}
+        )
+        if resp.status_code >= 400:
+            return {"error": resp.text}
+        rows = resp.json()
+        counts = await _auto_check_and_patch_rows(rows)
+        if counts["checked"]:
+            _invalidate_processed_pdfs_cache()
+        counts["remaining"] = len(rows) == 500
+        return counts
+    except Exception as e:
+        return {"error": str(e)}
+
+class PyqAutoApproveAllRequest(BaseModel):
+    expected_count: int
+
+@app.post("/admin/pyq-auto-approve-all")
+async def admin_pyq_auto_approve_all(body: PyqAutoApproveAllRequest, _: None = Depends(verify_admin)):
+    if not await _pyq_auto_columns_exist():
+        return {"error": PYQ_AUTO_APPROVE_MIGRATION_ERROR}
+    try:
+        current = await _pyq_count({"review_status": "eq.pending", "auto_pass": "eq.true"})
+        if not _auto_approve_all_count_ok(body.expected_count, current):
+            return {"count_changed": True, "current_count": current}
+        if current == 0:
+            return {"approved": 0}
+        now = datetime.now(timezone.utc).isoformat()
+        resp = await async_client.patch(
+            f"{SUPABASE_URL}/rest/v1/pyq",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
+            params={"review_status": "eq.pending", "auto_pass": "eq.true", "select": "id"},
+            json={"review_status": "approved", "auto_approved": True, "reviewed_by": "auto-bulk", "reviewed_at": now}
+        )
+        if resp.status_code >= 400:
+            return {"error": resp.text}
+        _invalidate_processed_pdfs_cache()
+        return {"approved": len(resp.json())}
+    except Exception as e:
+        return {"error": str(e)}
+
+class PyqUnapproveRequest(BaseModel):
+    id: str
+
+@app.post("/admin/pyq-unapprove")
+async def admin_pyq_unapprove(body: PyqUnapproveRequest, _: None = Depends(verify_admin)):
+    """Puts an approved row back to pending, same destination a fresh upload lands on -- goes
+    through the normal Approve/Needs-fix/Reject flow again rather than silently staying live."""
+    if not await _pyq_auto_columns_exist():
+        return {"error": PYQ_AUTO_APPROVE_MIGRATION_ERROR}
+    if not _UUID_RE.match(body.id or ""):
+        return {"error": "Invalid question id"}
+    try:
+        resp = await async_client.patch(
+            f"{SUPABASE_URL}/rest/v1/pyq",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
+            params={"id": f"eq.{body.id}", "review_status": "eq.approved",
+                    "select": "id,review_status,auto_approved,auto_pass,auto_reasons"},
+            json={"review_status": "pending", "auto_approved": False, "reviewed_at": None}
+        )
+        if resp.status_code >= 400:
+            return {"error": resp.text}
+        updated = resp.json()
+        if not updated:
+            return {"error": "This question is not currently approved"}
+        _invalidate_processed_pdfs_cache()
+        return {"updated": updated[0]}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/admin/pyq-auto-stats")
+async def admin_pyq_auto_stats(_: None = Depends(verify_admin)):
+    """Numbers for the admin preview's auto-approve tile: would-auto-approve count, held counts
+    per reason, how many are still unchecked, the all-time auto-approved count, and whether the
+    real switch is on."""
+    if not await _pyq_auto_columns_exist():
+        return {"error": PYQ_AUTO_APPROVE_MIGRATION_ERROR, "enabled": AUTO_APPROVE_ENABLED}
+    try:
+        would_approve, auto_approved_count, pending_unchecked = await asyncio.gather(
+            _pyq_count({"review_status": "eq.pending", "auto_pass": "eq.true"}),
+            _pyq_count({"review_status": "eq.approved", "auto_approved": "eq.true"}),
+            _pyq_count({"review_status": "eq.pending", "auto_checked_at": "is.null"}),
+        )
+        # auto_reasons is a free comma-separated string, not an array/enum column, so there's no
+        # SQL-side group-by for it -- read the held rows' reason text and tally in Python.
+        held_rows, offset, page_size = [], 0, 1000
+        while True:
+            resp = await async_client.get(
+                f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
+                params={"review_status": "eq.pending", "auto_pass": "eq.false",
+                        "select": "auto_reasons", "limit": page_size, "offset": offset}
+            )
+            if resp.status_code >= 400:
+                return {"error": resp.text}
+            page = resp.json()
+            held_rows.extend(page)
+            if len(page) < page_size:
+                break
+            offset += page_size
+        held_by_reason = {}
+        for r in held_rows:
+            for code in (r.get("auto_reasons") or "").split(","):
+                code = code.strip()
+                if code:
+                    held_by_reason[code] = held_by_reason.get(code, 0) + 1
+        return {
+            "enabled": AUTO_APPROVE_ENABLED,
+            "would_approve": would_approve,
+            "held_total": len(held_rows),
+            "held_by_reason": held_by_reason,
+            "auto_approved_count": auto_approved_count,
+            "pending_unchecked": pending_unchecked,
+        }
     except Exception as e:
         return {"error": str(e)}
 
@@ -11851,6 +12264,9 @@ async def admin_pyq_bulk_create(body: PyqBulkCreate, role: str = Depends(verify_
             # PostgREST actually stored, not the request's role or body.uploader_name.
             if row.get("uploader_name") == CONTRACTOR_UPLOADER_NAME:
                 asyncio.create_task(_log_pyq_upload(row["id"], CONTRACTOR_UPLOADER_NAME, _pyq_row_has_diagram(row)))
+        # Fire-and-forget: flags (and, if AUTO_APPROVE_ENABLED, approves) the new rows -- never
+        # allowed to fail or slow this response down, see _auto_check_new_rows_background.
+        asyncio.create_task(_auto_check_new_rows_background(created))
         return {"created": created, "batch_id": batch_id}
     except Exception as e:
         return {"error": str(e)}

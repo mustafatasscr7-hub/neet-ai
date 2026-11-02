@@ -61,6 +61,13 @@
     .dup-toggle-btn:hover { border-color: #4f8ef7; color: #4f8ef7; }
     .dup-toggle-btn.active { background: #4f8ef7; border-color: #4f8ef7; color: white; }
 
+    /* Auto-approve bar (pyq_auto_approve.sql) -- the "Would auto-approve N" tile, Check pending
+       sweep, Approve all, and the on/off status line, all together just below the review bar. */
+    .auto-approve-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; background: #111; border: 1px solid #1e1e1e; border-radius: 10px; padding: 8px 12px; margin-bottom: 12px; font-size: 12px; }
+    .auto-approve-bar .auto-status { color: #888; margin-left: auto; white-space: nowrap; }
+    .auto-approve-bar .auto-status.on { color: #4ade80; }
+    .q-auto-badge { font-size: 11px; padding: 3px 9px; border-radius: 20px; font-weight: 600; background: #4f8ef720; color: #4f8ef7; }
+
     /* Bulk select/action bar -- appears above the results list once 1+ question is checked via
        the corner checkbox on question-card. Only ever populated from questionCardHtml (the
        normal/review-queue card list), so it's hidden whenever duplicates/reports/diagram mode
@@ -443,6 +450,13 @@
       <button type="button" class="dup-toggle-btn" onclick="toggleContractorTally()">Contractor tally</button>
     </div>
 
+    <div class="auto-approve-bar" id="autoApproveBar">
+      <button type="button" class="dup-toggle-btn" id="autoApproveTileBtn" onclick="toggleAutoPassFilter()">Would auto-approve …</button>
+      <button type="button" class="dup-toggle-btn" id="autoCheckPendingBtn" onclick="runAutoCheckSweep()">Check pending</button>
+      <button type="button" class="q-approve-btn" id="autoApproveAllBtn" onclick="approveAllAuto()" style="display:none">Approve all</button>
+      <span class="auto-status" id="autoApproveStatus">Auto-approve: …</span>
+    </div>
+
     <div id="contractorTallyPanel" style="display:none;background:#111;border:1px solid #1e1e1e;border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:12px;overflow-x:auto;">
       <div id="contractorTallyBody">Loading...</div>
     </div>
@@ -586,6 +600,18 @@
     let rejectDrafts = {}; // id -> { preset, note }, kept across re-renders
     const PYQ_REJECT_REASONS = ['Unfixable formatting', 'Wrong or missing options', 'Garbled text', 'Other'];
 
+    // Auto-approve (pyq_auto_approve.sql) -- codes auto_check can put in a row's auto_reasons.
+    // math_formula/chemical_formula/latex all collapse to the same "Formula" chip on a card
+    // (autoReasonChipsHtml dedupes by label) since to an admin they all mean the same thing:
+    // this question has a formula, which is why it's held.
+    const AUTO_REASON_LABELS = {
+      duplicate: 'Duplicate', diagram: 'Diagram', match_following: 'Match the following',
+      math_formula: 'Formula', chemical_formula: 'Formula', latex: 'Formula',
+      broken_text: 'Broken text', options: 'Options', subject_chapter: 'Subject/chapter', rejected: 'Rejected'
+    };
+    let autoPassFilterOn = false; // "Would auto-approve" tile -- narrows the list to pending+auto_pass=true
+    let autoApproveStats = null;
+
     // Full canonical NCERT chapter list per subject (Class 11 + 12 combined, same source list
     // pyqbank.html's picker uses) -- merged into the edit form's dropdown below because the
     // data-driven /admin/pyq-chapters list only ever returns chapters that already have at least
@@ -653,6 +679,7 @@
       document.getElementById('dashboard').style.display = 'block';
       const urlId = new URLSearchParams(window.location.search).get('id');
       loadReviewSummary();
+      loadAutoApproveStats();
       // Deferred to a fresh tick: on this page the `let`/`const` declarations further down the
       // file happen to run before any returning-session call to enterDashboard() can reach them,
       // but deferring here too matches the other two pages and removes any future ordering risk.
@@ -1097,6 +1124,7 @@
       if (uploaderName) params.set('uploader_name', uploaderName);
       if (batchId) params.set('batch_id', batchId);
       if (uploadedDate) params.set('uploaded_date', uploadedDate);
+      if (autoPassFilterOn) params.set('auto_pass', 'true');
       // Processed PDFs popup -> tap a row -> narrow the Contractor Queue to that PDF's questions
       // (only ever set from pdfHistoryRowClick, so only in contractorMode -- see below).
       if (contractorMode && pdfFilenameFilter) params.set('source_pdf_filename', pdfFilenameFilter);
@@ -1185,6 +1213,10 @@
     function showReviewQueue(status) {
       document.getElementById('filterReviewStatus').value = status;
       currentPage = 1;
+      // Pending/Needs fix/Rejected are plain status tiles, not "modes" -- but they should still
+      // drop the "Would auto-approve" narrowing, same as every other tile here.
+      autoPassFilterOn = false;
+      document.getElementById('autoApproveTileBtn').classList.remove('active');
       if (duplicatesMode) return toggleDuplicatesView();
       if (reportsMode) return toggleReportsView();
       if (diagramMode) return toggleDiagramMode();
@@ -1194,6 +1226,138 @@
       if (contractorMode) return toggleContractorMode();
       if (reviewMode) return toggleReviewMode();
       loadResults();
+    }
+
+    // "Would auto-approve N" tile -- narrows the list to pending rows with auto_pass=true,
+    // reusing the normal list/pagination/card machinery rather than a separate view.
+    function toggleAutoPassFilter() {
+      autoPassFilterOn = !autoPassFilterOn;
+      document.getElementById('autoApproveTileBtn').classList.toggle('active', autoPassFilterOn);
+      if (autoPassFilterOn) {
+        document.getElementById('filterReviewStatus').value = 'pending';
+        currentPage = 1;
+        if (duplicatesMode) return toggleDuplicatesView();
+        if (reportsMode) return toggleReportsView();
+        if (diagramMode) return toggleDiagramMode();
+        if (contractorMode) return toggleContractorMode();
+        if (reviewMode) return toggleReviewMode();
+      }
+      loadResults();
+    }
+
+    async function loadAutoApproveStats() {
+      try {
+        const res = await fetch(`${API_BASE}/admin/pyq-auto-stats`, { headers: authHeaders() });
+        if (res.status === 401) return logout();
+        const data = await res.json();
+        const tileBtn = document.getElementById('autoApproveTileBtn');
+        const approveBtn = document.getElementById('autoApproveAllBtn');
+        const status = document.getElementById('autoApproveStatus');
+        if (data.error) {
+          autoApproveStats = null;
+          tileBtn.textContent = 'Would auto-approve …';
+          approveBtn.style.display = 'none';
+          status.textContent = 'Auto-approve: unavailable (' + data.error + ')';
+          status.className = 'auto-status';
+          return;
+        }
+        autoApproveStats = data;
+        tileBtn.textContent = `Would auto-approve ${data.would_approve}`;
+        approveBtn.style.display = data.would_approve > 0 ? 'inline-block' : 'none';
+        approveBtn.textContent = `Approve all ${data.would_approve}`;
+        status.innerHTML = `Auto-approve: <strong>${data.enabled ? 'on' : 'off'}</strong>` +
+          (data.pending_unchecked ? ` · ${data.pending_unchecked} not yet checked` : '');
+        status.className = 'auto-status' + (data.enabled ? ' on' : '');
+      } catch (e) {
+        document.getElementById('autoApproveStatus').textContent = 'Auto-approve: could not reach server.';
+      }
+    }
+
+    async function runAutoCheckSweep() {
+      const btn = document.getElementById('autoCheckPendingBtn');
+      btn.disabled = true;
+      let totalChecked = 0;
+      try {
+        while (true) {
+          btn.textContent = totalChecked ? `Checking... (${totalChecked} done)` : 'Checking...';
+          const res = await fetch(`${API_BASE}/admin/pyq-auto-check`, { method: 'POST', headers: authHeaders() });
+          if (res.status === 401) return logout();
+          const data = await res.json();
+          if (data.error) { alert('Check pending failed: ' + data.error); break; }
+          totalChecked += data.checked || 0;
+          if (!data.remaining) break;
+        }
+      } catch (e) {
+        alert('Check pending failed: could not reach server.');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Check pending';
+        loadAutoApproveStats();
+        loadResults();
+      }
+    }
+
+    async function approveAllAuto() {
+      if (!autoApproveStats || !autoApproveStats.would_approve) return;
+      const n = autoApproveStats.would_approve;
+      if (!(await showConfirmModal(`Approve all ${n} question${n === 1 ? '' : 's'} that passed auto-check? They go live for students straight away.`, { confirmLabel: 'Approve all' }))) return;
+      const btn = document.getElementById('autoApproveAllBtn');
+      btn.disabled = true;
+      btn.textContent = 'Approving...';
+      try {
+        const res = await fetch(`${API_BASE}/admin/pyq-auto-approve-all`, {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ expected_count: n })
+        });
+        if (res.status === 401) return logout();
+        const data = await res.json();
+        if (data.error) { alert('Approve all failed: ' + data.error); return; }
+        if (data.count_changed) { alert(`The count changed (now ${data.current_count}) -- check again before approving.`); return; }
+        loadAutoApproveStats();
+        loadResults();
+        loadReviewSummary();
+      } catch (e) {
+        alert('Approve all failed: could not reach server.');
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    async function unapproveQuestion(id, btnEl) {
+      btnEl.disabled = true;
+      btnEl.textContent = 'Unapproving...';
+      try {
+        const res = await fetch(`${API_BASE}/admin/pyq-unapprove`, {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ id })
+        });
+        if (res.status === 401) return logout();
+        const data = await res.json();
+        if (data.error) {
+          alert('Unapprove failed: ' + data.error);
+          btnEl.disabled = false;
+          btnEl.textContent = 'Unapprove';
+          return;
+        }
+        applyReviewResult([data.updated]);
+      } catch (e) {
+        alert('Unapprove failed: could not reach server.');
+        btnEl.disabled = false;
+        btnEl.textContent = 'Unapprove';
+      }
+    }
+
+    function autoReasonChipsHtml(q) {
+      if (q.auto_pass !== false || !q.auto_reasons) return '';
+      const seen = new Set();
+      return q.auto_reasons.split(',').map(c => c.trim()).filter(Boolean).map(code => {
+        const label = AUTO_REASON_LABELS[code] || code;
+        if (seen.has(label)) return '';
+        seen.add(label);
+        return `<span class="report-reason-chip">${escapeHtml(label)}</span>`;
+      }).join('');
     }
 
     function updateApproveCleanBtn() {
@@ -1244,6 +1408,7 @@
       updateBulkBar();
       updateApproveCleanBtn();
       loadReviewSummary();
+      loadAutoApproveStats();
       if (contractorMode) loadContractorCounts();
     }
 
@@ -2079,6 +2244,7 @@
               ${q.source_tag ? `<span>${escapeHtml(q.source_tag)}</span>` : ''}
               ${!q.is_active ? '<span class="q-inactive-flag">Inactive</span>' : ''}
               ${reviewStatusHtml(q)}
+              ${q.auto_approved ? '<span class="q-auto-badge">Auto</span>' : ''}
             </div>
             ${reviewUploadMetaHtml(q) ? `<div class="q-meta-secondary">${reviewUploadMetaHtml(q)}</div>` : ''}
           </div>
@@ -2090,10 +2256,12 @@
             <span class="q-admin-id">${escapeHtml(q.id)}</span>
             ${flags.map(f => `<span class="q-flag">${escapeHtml(f)}</span>`).join('')}
             ${reviewWarningsHtml(q)}
+            ${autoReasonChipsHtml(q)}
             ${minimalActions || q.review_status === 'rejected' ? '' : `<button class="q-edit-btn" onclick="startEdit('${q.id}')">✏️ Edit</button>`}
             ${waiting ? `<button class="q-approve-btn" onclick="reviewApprove('${q.id}', this)">✅ Approve for students</button>` : ''}
             ${reviewMode && !waiting ? `<button class="q-approve-btn" onclick="approveQuestion('${q.id}', this)">✅ Approve</button>` : ''}
             ${reviewActions && q.review_status === 'rejected' ? `<button class="q-approve-btn" onclick="restoreQuestion('${q.id}', this)">Restore</button>` : ''}
+            ${reviewActions && q.review_status === 'approved' && q.auto_approved ? `<button class="q-edit-btn" onclick="unapproveQuestion('${q.id}', this)">Unapprove</button>` : ''}
             ${reviewActions && q.review_status && q.review_status !== 'rejected' && !noteOpenIds.has(q.id) && !rejectOpenIds.has(q.id) ? `<button class="q-fix-btn" onclick="openNeedsFix('${q.id}')">🔧 Needs fix</button>` : ''}
             ${reviewActions && q.review_status !== 'rejected' && !noteOpenIds.has(q.id) && !rejectOpenIds.has(q.id) ? `<button class="q-reject-btn" onclick="openReject('${q.id}')">Reject (error)</button>` : ''}
             ${minimalActions || q.review_status === 'rejected' ? '' : `<button class="q-delete-btn" onclick="deleteQuestion('${q.id}', this)">🗑 Delete</button>`}
@@ -2135,6 +2303,8 @@
       document.getElementById('diagramToggleBtn').classList.remove('active');
       document.getElementById('contractorToggleBtn').classList.remove('active');
       document.getElementById('contractorPanel').classList.remove('cq-visible');
+      autoPassFilterOn = false;
+      document.getElementById('autoApproveTileBtn').classList.remove('active');
       document.getElementById('reviewSortOrder').style.display = 'none';
       document.getElementById('filterChapter').disabled = false;
       document.getElementById('filterSearch').disabled = false;
