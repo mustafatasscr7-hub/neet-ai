@@ -1278,6 +1278,9 @@ CONTRACTOR_PDF_KEY = os.getenv("CONTRACTOR_PDF_KEY")
 # is uploading?" picker) -- not auth, just an attribution tag stored in pyq.uploader_name.
 PYQ_UPLOADER_NAMES = ("Mr. Md Moniruzzaman", "Admin")
 CONTRACTOR_UPLOADER_NAME = PYQ_UPLOADER_NAMES[0]
+# Payout-sheet scope only (/admin/contractor-tally) -- everyone else in PYQ_UPLOADER_NAMES
+# (just "Admin" today) is a legitimate uploader but never gets paid, so never belongs in that tally.
+PYQ_CONTRACTOR_NAMES = (CONTRACTOR_UPLOADER_NAME,)
 
 def verify_contractor_pdf_review(request: Request, x_admin_key: str = Header(None)):
     """Login check for the isolated tool's own gate -- deliberately its OWN endpoint
@@ -9556,6 +9559,89 @@ async def admin_pyq_unreject(body: PyqUnrejectRequest, _: None = Depends(verify_
     except Exception as e:
         return {"error": str(e)}
 
+def _pyq_normalize_question_text(text: Optional[str]) -> str:
+    return re.sub(r"\s+", " ", (text or "").strip().lower())
+
+def _pyq_bulk_reject_plan(rows: List[dict]) -> dict:
+    """Pure (no DB/network) planning step for /admin/pyq-reject-bulk, split out so it's testable
+    on its own. `rows` is each candidate id's current {id, question, review_status}. Already-
+    rejected rows are left alone (skip, not an error). Among the rest, rows are grouped by exact
+    normalized question text -- the cheap, deterministic stand-in for "these are the same
+    duplicate group" that a bulk request can check without re-running the embedding-similarity
+    scan /admin/pyq-duplicates uses. Any group of 2+ has one id held back (kept_for_safety) so a
+    bulk reject can never remove every copy of a group in one call."""
+    already_rejected = [r["id"] for r in rows if r.get("review_status") == "rejected"]
+    candidates = [r for r in rows if r.get("review_status") != "rejected"]
+    groups: dict = {}
+    for r in candidates:
+        norm = _pyq_normalize_question_text(r.get("question"))
+        key = norm if norm else r["id"]  # blank/missing text never merges with another row
+        groups.setdefault(key, []).append(r["id"])
+    to_reject = []
+    kept_for_safety = []
+    for ids in groups.values():
+        if len(ids) > 1:
+            kept_for_safety.append(ids[0])
+            to_reject.extend(ids[1:])
+        else:
+            to_reject.extend(ids)
+    return {"to_reject": to_reject, "kept_for_safety": kept_for_safety, "already_rejected": already_rejected}
+
+class PyqRejectBulkRequest(BaseModel):
+    ids: List[str]
+    reason: str
+
+@app.post("/admin/pyq-reject-bulk")
+async def admin_pyq_reject_bulk(body: PyqRejectBulkRequest, _: None = Depends(verify_admin)):
+    """Batch version of /admin/pyq-reject for the Find Duplicates view's "Reject selected" --
+    same rules as the single reject (non-empty reason, same admin auth), plus: rows already
+    rejected are silently skipped, and _pyq_bulk_reject_plan keeps at least one unrejected copy
+    per exact-text duplicate group instead of ever wiping one out in a single call."""
+    ids = [i for i in body.ids if i]
+    if not ids or len(ids) > 200 or not all(_UUID_RE.match(i) for i in ids):
+        return {"error": "1-200 valid question ids required"}
+    reason = (body.reason or "").strip()[:300]
+    if not reason:
+        return {"error": "Choose or write a reason -- it's kept as the record of why this was rejected"}
+    try:
+        fetch_resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/pyq",
+            headers=ADMIN_HEADERS,
+            params={"id": f"in.({','.join(ids)})", "select": "id,question,review_status"},
+        )
+        if fetch_resp.status_code >= 400:
+            return {"error": fetch_resp.text}
+        rows = fetch_resp.json()
+        plan = _pyq_bulk_reject_plan(rows)
+        to_reject = plan["to_reject"]
+        if not to_reject:
+            return {"rejected_count": 0, "kept_for_safety": plan["kept_for_safety"],
+                    "already_rejected": len(plan["already_rejected"])}
+        fields = {
+            "review_status": "rejected",
+            "reject_reason": reason,
+            "rejected_at": datetime.now(timezone.utc).isoformat(),
+            "review_note": None,
+            "reviewed": True,
+        }
+        patch_resp = await async_client.patch(
+            f"{SUPABASE_URL}/rest/v1/pyq",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
+            params={"id": f"in.({','.join(to_reject)})", "select": "id"},
+            json=fields
+        )
+        if patch_resp.status_code >= 400:
+            return {"error": patch_resp.text}
+        updated = patch_resp.json()
+        _invalidate_processed_pdfs_cache()
+        return {
+            "rejected_count": len(updated),
+            "kept_for_safety": plan["kept_for_safety"],
+            "already_rejected": len(plan["already_rejected"]),
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
 async def _pyq_uploaded_total(uploader_name: str) -> int:
     """Same source as the Contractor Queue's permanent 'Uploaded so far' tile (pyq_upload_log) --
     with-diagram and without-diagram counts added together."""
@@ -9569,8 +9655,9 @@ async def _pyq_uploaded_total(uploader_name: str) -> int:
 async def admin_contractor_tally(_: None = Depends(verify_admin)):
     """Per-uploader payout numbers: uploaded (pyq_upload_log, never decreases), all-time review
     breakdown (approved/pending/needs_fix/rejected), deleted (pyq_delete_log), and
-    payable = uploaded - rejected. Covers every named uploader (PYQ_UPLOADER_NAMES), not just the
-    contractor, so an admin-attributed batch shows up here too."""
+    payable = uploaded - rejected. Contractors only (CONTRACTOR_UPLOADER_NAME) -- this is a payout
+    sheet, so "Admin" or any other non-contractor uploader in PYQ_UPLOADER_NAMES never belongs
+    here even though they can legitimately upload batches."""
     try:
         async def tally_for(name):
             uploaded, approved, pending, needs_fix, rejected, deleted = await asyncio.gather(
@@ -9587,7 +9674,7 @@ async def admin_contractor_tally(_: None = Depends(verify_admin)):
                 "deleted": deleted, "payable": max(0, uploaded - rejected),
                 "target": PYQ_PAYOUT_TARGET,
             }
-        rows = await asyncio.gather(*(tally_for(name) for name in PYQ_UPLOADER_NAMES))
+        rows = await asyncio.gather(*(tally_for(name) for name in PYQ_CONTRACTOR_NAMES))
         return {"rows": rows}
     except Exception as e:
         return {"error": str(e)}

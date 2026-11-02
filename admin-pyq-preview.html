@@ -328,6 +328,9 @@
     .dup-select-delete-btn { background: #ef4444; border: none; color: #fff; padding: 7px 14px; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600; font-family: 'Inter', sans-serif; white-space: nowrap; }
     .dup-select-delete-btn:hover { filter: brightness(1.1); }
     .dup-select-delete-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+    .dup-select-reject-btn { background: #fb923c; border: none; color: #1a1a1a; padding: 7px 14px; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600; font-family: 'Inter', sans-serif; white-space: nowrap; }
+    .dup-select-reject-btn:hover { filter: brightness(1.1); }
+    .dup-select-reject-btn:disabled { opacity: 0.6; cursor: not-allowed; }
     .dup-select-clear-btn { background: transparent; border: 1px solid #2a2a2a; color: #999; padding: 7px 14px; border-radius: 6px; cursor: pointer; font-size: 12px; font-family: 'Inter', sans-serif; white-space: nowrap; }
     .dup-select-clear-btn:hover { border-color: #4a4a4a; color: #ccc; }
     .dup-columns { display: flex; gap: 12px; flex-wrap: wrap; }
@@ -613,6 +616,8 @@
     let rejectOpenIds = new Set(); // cards with the Reject reason/note box open
     let rejectDrafts = {}; // id -> { preset, note }, kept across re-renders
     const PYQ_REJECT_REASONS = ['Unfixable formatting', 'Wrong or missing options', 'Garbled text', 'Other'];
+    let dupRejectOpenIds = new Set(); // duplicate-view cards with the "Reject (duplicate)" note box open
+    let dupRejectDrafts = {}; // id -> unsent note text, kept across re-renders
 
     // Auto-approve (pyq_auto_approve.sql) -- codes auto_check can put in a row's auto_reasons.
     // math_formula/chemical_formula/latex all collapse to the same "Formula" chip on a card
@@ -1565,6 +1570,87 @@
       applyReviewResult([result.updated]);
     }
 
+    // ---------------- Reject (duplicate) -- Find Duplicates + Contractor Queue Duplicates ----------------
+    // Fixed reason ("Duplicate"), optional note, no preset chooser -- reuses the same
+    // /admin/pyq-reject endpoint and the same review_status='rejected' + reject_reason record
+    // as "Reject (error)" above, just a simpler box since the reason is never in question here.
+    function rerenderDupView() {
+      if (duplicatesMode) renderDuplicatePairs(document.getElementById('filterSubject').value);
+      else if (contractorMode && contractorDupFilterOn) renderContractorDuplicatesList();
+    }
+
+    // Same per-view count/panel refresh bulkDeleteDupSelected already does once after its loop --
+    // shared here so a reject (single or bulk) keeps the Contractor Queue's tile numbers (and the
+    // "Duplicates" button's own count) in sync without re-fetching them on every single card.
+    function refreshContractorDupCounts() {
+      if (!(contractorMode && contractorDupFilterOn)) return;
+      loadContractorCounts();
+      renderContractorPanel(contractorCountsCache);
+    }
+
+    function openDupReject(id) {
+      dupRejectOpenIds.add(id);
+      rerenderDupView();
+    }
+
+    function closeDupReject(id) {
+      dupRejectOpenIds.delete(id);
+      delete dupRejectDrafts[id];
+      rerenderDupView();
+    }
+
+    function dupRejectBoxHtml(q) {
+      if (!dupRejectOpenIds.has(q.id)) return '';
+      const note = dupRejectDrafts[q.id] || '';
+      return `
+        <div class="q-note-box">
+          <div style="font-size:12px;color:#999;margin-bottom:4px;">Reason: Duplicate</div>
+          <textarea id="dup-reject-note-${q.id}" placeholder="Optional note">${escapeHtml(note)}</textarea>
+          <div class="q-note-actions">
+            <button type="button" class="q-reject-btn" onclick="sendDupReject('${q.id}', this)">Confirm</button>
+            <button type="button" class="q-edit-btn" style="margin-left:0" onclick="closeDupReject('${q.id}')">Cancel</button>
+          </div>
+        </div>`;
+    }
+
+    // Removes `id` from whichever duplicate-view state it lives in (global scan's
+    // duplicateRowsMap/duplicatePairs, or the Contractor Queue's contractorDupData via the
+    // existing purgeContractorDupId) -- the same per-view cleanup deleteQuestion already does,
+    // just without the hard-delete undo toast since a reject keeps the row, not removes it.
+    function removeDuplicateCardFromView(id) {
+      dupSelectedIds.delete(id);
+      clearDupDeleteError(id);
+      if (contractorMode && contractorDupFilterOn) {
+        purgeContractorDupId(id);
+      } else if (duplicatesMode) {
+        delete duplicateRowsMap[id];
+        duplicatePairs = duplicatePairs.filter(p => p.a !== id && p.b !== id);
+      }
+    }
+
+    async function sendDupReject(id, btnEl) {
+      const note = (document.getElementById('dup-reject-note-' + id).value || '').trim();
+      dupRejectDrafts[id] = note;
+      const reason = note ? `Duplicate: ${note}` : 'Duplicate';
+      btnEl.disabled = true;
+      btnEl.textContent = 'Rejecting...';
+      const result = await postReject(id, reason);
+      if (result.error === 'unauthorized') return logout();
+      if (result.error) {
+        alert('Reject failed: ' + result.error);
+        btnEl.disabled = false;
+        btnEl.textContent = 'Confirm';
+        return;
+      }
+      dupRejectOpenIds.delete(id);
+      delete dupRejectDrafts[id];
+      const scrollY = window.scrollY;
+      removeDuplicateCardFromView(id);
+      refreshContractorDupCounts();
+      rerenderDupView();
+      window.scrollTo(0, scrollY);
+    }
+
     async function restoreQuestion(id, btnEl) {
       btnEl.disabled = true;
       btnEl.textContent = 'Restoring...';
@@ -2352,10 +2438,12 @@
             ${reviewActions && q.review_status === 'approved' && q.auto_approved ? `<button class="q-edit-btn" onclick="unapproveQuestion('${q.id}', this)">Unapprove</button>` : ''}
             ${reviewActions && q.review_status && q.review_status !== 'rejected' && !noteOpenIds.has(q.id) && !rejectOpenIds.has(q.id) ? `<button class="q-fix-btn" onclick="openNeedsFix('${q.id}')">🔧 Needs fix</button>` : ''}
             ${reviewActions && q.review_status !== 'rejected' && !noteOpenIds.has(q.id) && !rejectOpenIds.has(q.id) ? `<button class="q-reject-btn" onclick="openReject('${q.id}')">Reject (error)</button>` : ''}
+            ${dupSelect && q.review_status !== 'rejected' && !dupRejectOpenIds.has(q.id) ? `<button class="q-reject-btn" onclick="openDupReject('${q.id}')">Reject (duplicate)</button>` : ''}
             ${minimalActions || q.review_status === 'rejected' ? '' : `<button class="q-delete-btn" onclick="deleteQuestion('${q.id}', this)">🗑 Delete</button>`}
           </div>
           ${reviewActions ? needsFixBoxHtml(q) : ''}
           ${reviewActions ? rejectBoxHtml(q) : ''}
+          ${dupSelect ? dupRejectBoxHtml(q) : ''}
         </div>`;
     }
 
@@ -3769,9 +3857,11 @@
         bar.innerHTML = `
           <span class="dup-select-count" id="dupSelectCount"></span>
           <button type="button" class="dup-select-delete-btn" id="dupSelectDeleteBtn">Delete selected</button>
+          <button type="button" class="dup-select-reject-btn" id="dupSelectRejectBtn">Reject selected</button>
           <button type="button" class="dup-select-clear-btn" id="dupSelectClearBtn">Clear</button>`;
         document.body.appendChild(bar);
         document.getElementById('dupSelectDeleteBtn').onclick = bulkDeleteDupSelected;
+        document.getElementById('dupSelectRejectBtn').onclick = bulkRejectDupSelected;
         document.getElementById('dupSelectClearBtn').onclick = clearDupSelection;
       }
       document.getElementById('dupSelectCount').textContent = `${count} selected`;
@@ -3842,6 +3932,68 @@
         // very first bulk delete of a session.
         if (deleteBtn) { deleteBtn.disabled = false; deleteBtn.textContent = 'Delete selected'; }
         if (clearBtn) clearBtn.disabled = false;
+      }
+    }
+
+    async function postRejectBulk(ids, reason) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 20000);
+      try {
+        const res = await fetch(`${API_BASE}/admin/pyq-reject-bulk`, {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ ids, reason }),
+          signal: controller.signal
+        });
+        if (res.status === 401) return { error: 'unauthorized' };
+        if (!res.ok) return { error: await describeHttpError(res) };
+        const data = await res.json();
+        return data.error ? { error: data.error } : data;
+      } catch (e) {
+        if (e.name === 'AbortError') return { error: 'Timed out waiting for the server -- check your connection and try again.' };
+        return { error: 'Could not reach server.' };
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    }
+
+    // Rejects every ticked question in one server batch (/admin/pyq-reject-bulk), reason fixed
+    // to "Duplicate" same as the per-card Reject (duplicate) button above. Unlike bulk delete,
+    // never confirms past a group-wipe warning -- the server itself refuses to let a batch
+    // reject every copy of a duplicate group, holding one id back (kept_for_safety) instead, so
+    // the only thing to tell the admin afterwards is which id(s) that happened to.
+    async function bulkRejectDupSelected() {
+      const ids = Array.from(dupSelectedIds);
+      if (ids.length === 0) return;
+      const countMsg = `Reject ${ids.length} question${ids.length === 1 ? '' : 's'} as duplicates? They stay saved (hidden from students) as proof.`;
+      if (!(await showConfirmModal(countMsg, { confirmLabel: 'Reject', danger: true }))) return;
+
+      const rejectBtn = document.getElementById('dupSelectRejectBtn');
+      const deleteBtn = document.getElementById('dupSelectDeleteBtn');
+      const clearBtn = document.getElementById('dupSelectClearBtn');
+      if (deleteBtn) deleteBtn.disabled = true;
+      if (clearBtn) clearBtn.disabled = true;
+      if (rejectBtn) { rejectBtn.disabled = true; rejectBtn.textContent = 'Rejecting...'; }
+      const scrollY = window.scrollY;
+      try {
+        const result = await postRejectBulk(ids, 'Duplicate');
+        if (result.error === 'unauthorized') { logout(); return; }
+        if (result.error) {
+          alert('Bulk reject failed: ' + result.error);
+          return;
+        }
+        const keptIds = new Set(result.kept_for_safety || []);
+        ids.filter(id => !keptIds.has(id)).forEach(removeDuplicateCardFromView);
+        refreshContractorDupCounts();
+        rerenderDupView();
+        window.scrollTo(0, scrollY);
+        if (keptIds.size) {
+          alert(`Kept ${keptIds.size} question${keptIds.size === 1 ? '' : 's'} unrejected so a duplicate group isn't left with zero copies.`);
+        }
+      } finally {
+        if (deleteBtn) deleteBtn.disabled = false;
+        if (clearBtn) clearBtn.disabled = false;
+        if (rejectBtn) { rejectBtn.disabled = false; rejectBtn.textContent = 'Reject selected'; }
       }
     }
 
