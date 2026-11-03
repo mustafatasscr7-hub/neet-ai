@@ -75,12 +75,59 @@ def test_excluded_type_match_the_following():
     assert "match_following" in reasons
 
 
-def test_excluded_type_math_or_latex_formula():
+def test_formula_word_mention_without_latex_passes():
+    # Just the word "formula"/"calculate" with no actual LaTeX span -- nothing for the formula
+    # gate to parse, so it's not held on that basis alone (see _auto_formula_check).
     ok, reasons = server.auto_check(_row(
         question=GOOD_ROW["question"] + " Calculate the net value using the given formula."
     ))
+    assert ok is True
+    assert reasons == []
+
+
+def test_formula_with_valid_latex_passes():
+    ok, reasons = server.auto_check(_row(
+        question="A particle starts from rest. Using $v^2 = u^2 + 2as$, what is its final velocity?"
+    ))
+    assert ok is True
+    assert reasons == []
+
+
+def test_formula_unbalanced_braces_fails():
+    ok, reasons = server.auto_check(_row(
+        question="What is the value of $\\frac{1}{2mv^2$ for this particle?"
+    ))
     assert ok is False
-    assert "math_formula" in reasons
+    assert "formula_unbalanced" in reasons
+
+
+def test_formula_text_corruption_fails():
+    # "\text{Ans}" with its leading backslash-t dropped, e.g. by a lossy PDF extraction.
+    ok, reasons = server.auto_check(_row(
+        question="Evaluate $ext{Ans} = 5$ for the following reaction."
+    ))
+    assert ok is False
+    assert "formula_text_corruption" in reasons
+
+
+def test_formula_duplicate_options_after_normalizing_fails():
+    # Raw strings differ only by whitespace inside the math span -- _auto_options_ok (raw string
+    # compare) would miss this, which is exactly why formula questions get their own normalized
+    # distinctness check.
+    ok, reasons = server.auto_check(_row(
+        question="What is the molecular formula of water, written as $H_2O$?",
+        option_a="$H_2O$", option_b="$ H_2 O $", option_c="$CO_2$", option_d="$NH_3$",
+    ))
+    assert ok is False
+    assert "formula_duplicate_options" in reasons
+
+
+def test_formula_unknown_command_fails():
+    ok, reasons = server.auto_check(_row(
+        question="What is the value of $\\bogus{x}$ in this expression?"
+    ))
+    assert ok is False
+    assert "formula_unknown_command" in reasons
 
 
 def test_excluded_type_chemical_formula():
@@ -121,7 +168,12 @@ if __name__ == "__main__":
     test_too_short()
     test_excluded_type_diagram()
     test_excluded_type_match_the_following()
-    test_excluded_type_math_or_latex_formula()
+    test_formula_word_mention_without_latex_passes()
+    test_formula_with_valid_latex_passes()
+    test_formula_unbalanced_braces_fails()
+    test_formula_text_corruption_fails()
+    test_formula_duplicate_options_after_normalizing_fails()
+    test_formula_unknown_command_fails()
     test_excluded_type_chemical_formula()
     test_rejected_row_never_passes()
     test_duplicate_against_corpus()

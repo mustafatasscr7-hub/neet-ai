@@ -551,9 +551,11 @@
         <div class="auto-approve-bar" id="autoApproveBar">
           <button type="button" class="dup-toggle-btn" id="autoApproveTileBtn" onclick="toggleAutoPassFilter()">Would auto-approve …</button>
           <button type="button" class="dup-toggle-btn" id="autoCheckPendingBtn" onclick="runAutoCheckSweep()">Check pending</button>
+          <button type="button" class="dup-toggle-btn" id="formulaSampleBtn" onclick="toggleFormulaSample()">Spot-check formula sample</button>
           <button type="button" class="q-approve-btn" id="autoApproveAllBtn" onclick="approveAllAuto()" style="display:none">Approve all</button>
           <span class="auto-status" id="autoApproveStatus">Auto-approve: …</span>
         </div>
+        <div id="formulaSampleList" style="display:none; margin-top:10px; max-height:420px; overflow-y:auto; border:1px solid #1e1e1e; border-radius:10px; padding:10px; font-size:13px;"></div>
       </div>
     </div>
 
@@ -651,12 +653,18 @@
     let dupRejectDrafts = {}; // id -> unsent note text, kept across re-renders
 
     // Auto-approve (pyq_auto_approve.sql) -- codes auto_check can put in a row's auto_reasons.
-    // math_formula/chemical_formula/latex all collapse to the same "Formula" chip on a card
-    // (autoReasonChipsHtml dedupes by label) since to an admin they all mean the same thing:
-    // this question has a formula, which is why it's held.
+    // chemical_formula/latex collapse to the same "Formula" chip on a card (autoReasonChipsHtml
+    // dedupes by label) since to an admin they mean the same thing: this question has a formula,
+    // which is why it's held. math_formula itself is no longer appended on its own -- a formula
+    // question only gets held once the formula_* parse-cleanliness gate below actually fails it.
     const AUTO_REASON_LABELS = {
       duplicate: 'Duplicate', diagram: 'Diagram', match_following: 'Match the following',
-      math_formula: 'Formula', chemical_formula: 'Formula', latex: 'Formula',
+      chemical_formula: 'Formula', latex: 'Formula',
+      formula_empty_option: 'Empty option', formula_duplicate_options: 'Duplicate options',
+      formula_unbalanced: 'Unbalanced formula', formula_control_char: 'Formula control characters',
+      formula_text_corruption: 'Corrupted formula text', formula_unknown_command: 'Unknown LaTeX command',
+      formula_stray_backslash: 'Stray backslash in formula', formula_katex_parse_error: 'Formula failed to parse',
+      formula_katex_unavailable: 'Formula check unavailable',
       broken_text: 'Broken text', options: 'Options', subject_chapter: 'Subject/chapter', rejected: 'Rejected'
     };
     let autoPassFilterOn = false; // "Would auto-approve" tile -- narrows the list to pending+auto_pass=true
@@ -1372,7 +1380,8 @@
         approveBtn.style.display = data.would_approve > 0 ? 'inline-block' : 'none';
         approveBtn.textContent = `Approve all ${data.would_approve}`;
         status.innerHTML = `Auto-approve: <strong>${data.enabled ? 'on' : 'off'}</strong>` +
-          (data.pending_unchecked ? ` · ${data.pending_unchecked} not yet checked` : '');
+          (data.pending_unchecked ? ` · ${data.pending_unchecked} not yet checked` : '') +
+          (data.formula_eligible ? ` · formula: ${data.formula_passed}/${data.formula_eligible} passed` : '');
         status.className = 'auto-status' + (data.enabled ? ' on' : '');
         if (headerSummary) headerSummary.textContent = `${data.enabled ? 'on' : 'off'}, ${data.would_approve} waiting`;
       } catch (e) {
@@ -1435,6 +1444,43 @@
         alert('Approve all failed: could not reach server.');
       } finally {
         btn.disabled = false;
+      }
+    }
+
+    let formulaSampleOpen = false; // "Spot-check formula sample" panel toggle
+
+    async function toggleFormulaSample() {
+      formulaSampleOpen = !formulaSampleOpen;
+      const panel = document.getElementById('formulaSampleList');
+      const btn = document.getElementById('formulaSampleBtn');
+      btn.classList.toggle('active', formulaSampleOpen);
+      if (!formulaSampleOpen) { panel.style.display = 'none'; return; }
+      panel.style.display = 'block';
+      panel.innerHTML = 'Loading...';
+      try {
+        const res = await fetch(`${API_BASE}/admin/pyq-auto-formula-sample`, { headers: authHeaders() });
+        if (res.status === 401) return logout();
+        const data = await res.json();
+        if (data.error) { panel.innerHTML = escapeHtml('Could not load sample: ' + data.error); return; }
+        if (!data.sample || !data.sample.length) {
+          panel.innerHTML = 'No formula questions are currently eligible for auto-approve.';
+          return;
+        }
+        panel.innerHTML = `<div style="font-size:11px;color:#666;margin-bottom:8px;">Showing ${data.sample.length} of ${data.total_eligible} eligible formula questions</div>` +
+          data.sample.map(q => `
+            <div style="padding:10px 0;border-bottom:1px solid #1e1e1e;">
+              <div style="font-size:11px;color:#666;margin-bottom:4px;">${escapeHtml(q.subject || '')}${q.chapter ? ' · ' + escapeHtml(q.chapter) : ''}</div>
+              <div style="margin-bottom:6px;">${parseWithMath(q.question)}</div>
+              <div style="font-size:13px;color:#ccc;">
+                <div>A. ${parseWithMath(q.option_a)}</div>
+                <div>B. ${parseWithMath(q.option_b)}</div>
+                <div>C. ${parseWithMath(q.option_c)}</div>
+                <div>D. ${parseWithMath(q.option_d)}</div>
+              </div>
+            </div>
+          `).join('');
+      } catch (e) {
+        panel.innerHTML = 'Could not reach server.';
       }
     }
 

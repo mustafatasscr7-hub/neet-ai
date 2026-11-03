@@ -26,6 +26,7 @@ import json
 import random
 import re
 import shutil
+import subprocess
 import tempfile
 import threading
 import uuid
@@ -9872,6 +9873,149 @@ def _auto_latex_ok(row: dict) -> bool:
                 return False
     return True
 
+# ---- formula/LaTeX parse-cleanliness gate ----
+# _auto_has_math_or_formula above used to be a hard exclusion -- any row it flagged stayed pending
+# forever, however clean its LaTeX actually was. This gate instead decides whether a flagged row's
+# formulas are clean enough to lift that exclusion: auto_check calls _auto_formula_check only on
+# rows _auto_has_math_or_formula already flagged, and a failure there becomes the row's reason
+# instead of a blanket "math_formula". Every failure returns one of a small fixed set of reason
+# codes (never per-row text) so admin_pyq_auto_stats's auto_reasons tally stays meaningful.
+#
+# Preferred path is a real KaTeX parse (throwOnError) via a node subprocess, matching what the
+# student-facing renderer actually does -- but Railway's web dyno (Procfile: "python server.py",
+# Railpack python builder, no katex in package.json) has no node_modules/katex, so
+# _auto_katex_node_available() is false there and every environment falls back to the conservative
+# Python validator below: balanced braces/delimiters, a whitelist of known LaTeX/KaTeX commands,
+# no leftover backslashes once known commands and escaped specials are stripped, no "\text"
+# corruption (a dropped leading backslash-t, e.g. "ext{Ans}"), no stray tab/control characters.
+_AUTO_KATEX_NODE_STATE = {"checked": False, "available": False}
+
+def _auto_katex_node_available() -> bool:
+    """True only if both `node` is on PATH and a local katex npm package is actually installed --
+    checked once and cached (neither can change without a redeploy)."""
+    if not _AUTO_KATEX_NODE_STATE["checked"]:
+        _AUTO_KATEX_NODE_STATE["checked"] = True
+        katex_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "node_modules", "katex")
+        _AUTO_KATEX_NODE_STATE["available"] = bool(shutil.which("node")) and os.path.isdir(katex_dir)
+    return _AUTO_KATEX_NODE_STATE["available"]
+
+_AUTO_KATEX_NODE_SCRIPT = (
+    "const katex=require('katex');"
+    "let ok=true,reason=null;"
+    "const exprs=JSON.parse(process.argv[1]);"
+    "for(const e of exprs){try{katex.renderToString(e,{throwOnError:true,strict:'ignore'});}"
+    "catch(err){ok=false;reason=String(err&&err.message||err).slice(0,200);break;}}"
+    "process.stdout.write(JSON.stringify({ok,reason}));"
+)
+
+def _auto_formula_exprs_ok_katex(exprs: list) -> tuple:
+    """(ok, reason_code) running a real KaTeX parse over every span via a node subprocess -- only
+    ever called when _auto_katex_node_available() is true. The underlying KaTeX error message is
+    only ever printed to the server log; the returned reason is always the same fixed code."""
+    if not exprs:
+        return True, None
+    try:
+        result = subprocess.run(
+            ["node", "-e", _AUTO_KATEX_NODE_SCRIPT, json.dumps(exprs)],
+            capture_output=True, text=True, timeout=5
+        )
+        data = json.loads(result.stdout)
+        if not data.get("ok"):
+            print(f"PYQ AUTO-CHECK KATEX PARSE FAILED: {data.get('reason')}", flush=True)
+            return False, "formula_katex_parse_error"
+        return True, None
+    except Exception as e:
+        print(f"PYQ AUTO-CHECK KATEX SUBPROCESS FAILED: {e}", flush=True)
+        return False, "formula_katex_unavailable"
+
+_AUTO_KATEX_KNOWN_COMMANDS = frozenset({
+    "frac", "dfrac", "tfrac", "sqrt", "sum", "prod", "int", "oint", "lim", "limsup", "liminf",
+    "rightarrow", "leftarrow", "Rightarrow", "Leftarrow", "leftrightarrow", "Leftrightarrow",
+    "longrightarrow", "longleftarrow", "Longrightarrow", "rightleftharpoons", "to", "mapsto",
+    "text", "mathrm", "mathbf", "mathit", "mathsf", "mathtt", "boldsymbol", "overline", "underline",
+    "overrightarrow", "overleftarrow", "vec", "hat", "bar", "dot", "ddot", "tilde", "widehat", "widetilde",
+    "alpha", "beta", "gamma", "delta", "epsilon", "varepsilon", "zeta", "eta", "theta", "vartheta", "iota",
+    "kappa", "lambda", "mu", "nu", "xi", "pi", "varpi", "rho", "varrho", "sigma", "varsigma", "tau", "upsilon",
+    "phi", "varphi", "chi", "psi", "omega",
+    "Gamma", "Delta", "Theta", "Lambda", "Xi", "Pi", "Sigma", "Upsilon", "Phi", "Psi", "Omega",
+    "times", "div", "pm", "mp", "cdot", "cdots", "ldots", "vdots", "ddots", "leq", "geq", "neq", "approx",
+    "equiv", "propto", "sim", "simeq", "cong", "parallel", "perp", "angle", "triangle", "degree", "circ",
+    "infty", "partial", "nabla", "forall", "exists", "in", "notin", "subset", "subseteq", "supset",
+    "supseteq", "cup", "cap", "emptyset", "setminus", "wedge", "vee", "neg", "implies", "iff", "therefore",
+    "because", "sin", "cos", "tan", "cot", "sec", "csc", "arcsin", "arccos", "arctan", "sinh", "cosh",
+    "tanh", "log", "ln", "exp", "left", "right", "big", "Big", "bigg", "Bigg", "quad", "qquad",
+    "hspace", "vspace", "binom", "choose", "overset", "underset", "stackrel", "prime", "dagger", "ast", "star",
+})
+_AUTO_LATEX_ESCAPED_SPECIAL_RE = re.compile(r"\\[$%&#_{}~^,:;! ]")
+_AUTO_LATEX_COMMAND_RE = re.compile(r"\\([a-zA-Z]+)")
+_AUTO_LATEX_TEXT_CORRUPTION_RE = re.compile(r"(?<!\\t)ext\{")
+_AUTO_LATEX_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+_AUTO_LATEX_WHITESPACE_RE = re.compile(r"\s+")
+
+def _auto_dollar_delims_balanced(text: str) -> bool:
+    """Unescaped $ signs must pair up (handles $$...$$ too -- it's still an even count); \\$ is an
+    escaped literal dollar, never a delimiter."""
+    return re.sub(r"\\\$", "", text or "").count("$") % 2 == 0
+
+def _auto_paren_delims_balanced(text: str) -> bool:
+    t = text or ""
+    return t.count("\\(") == t.count("\\)")
+
+def _auto_formula_expr_ok(expr: str) -> tuple:
+    """(ok, reason_code) for one extracted LaTeX span's content (the text between $...$/\\(...\\))."""
+    if not _auto_braces_balanced(expr):
+        return False, "formula_unbalanced"
+    if "\t" in expr or _AUTO_LATEX_CONTROL_CHAR_RE.search(expr):
+        return False, "formula_control_char"
+    if _AUTO_LATEX_TEXT_CORRUPTION_RE.search(expr):
+        return False, "formula_text_corruption"
+    scrubbed = _AUTO_LATEX_ESCAPED_SPECIAL_RE.sub("", expr)
+    for cmd in _AUTO_LATEX_COMMAND_RE.findall(scrubbed):
+        if cmd not in _AUTO_KATEX_KNOWN_COMMANDS:
+            return False, "formula_unknown_command"
+    if "\\" in _AUTO_LATEX_COMMAND_RE.sub("", scrubbed):
+        return False, "formula_stray_backslash"
+    return True, None
+
+def _auto_normalize_formula_text(text) -> str:
+    """Collapses whitespace outside AND inside every $...$/\\(...\\) span, so two options that only
+    differ by spacing around their math (e.g. "$H_2O$" vs "$ H_2 O $") normalize to the same string."""
+    t = _AUTO_LATEX_WHITESPACE_RE.sub(" ", (text or "").strip())
+    t = _AUTO_DOLLAR_SPAN_RE.sub(lambda m: "$" + _AUTO_LATEX_WHITESPACE_RE.sub("", m.group(1)) + "$", t)
+    t = _AUTO_PAREN_SPAN_RE.sub(lambda m: "\\(" + _AUTO_LATEX_WHITESPACE_RE.sub("", m.group(1)) + "\\)", t)
+    return t
+
+def _auto_formula_options_ok(row: dict) -> tuple:
+    opts = [row.get("option_a"), row.get("option_b"), row.get("option_c"), row.get("option_d")]
+    if any(o is None or not str(o).strip() for o in opts):
+        return False, "formula_empty_option"
+    if len({_auto_normalize_formula_text(o) for o in opts}) != 4:
+        return False, "formula_duplicate_options"
+    return True, None
+
+def _auto_formula_check(row: dict) -> tuple:
+    """(ok, reason_code) deciding whether a formula/LaTeX-flagged row (auto_check only calls this
+    when _auto_has_math_or_formula(row) is true) is clean enough to stay eligible for auto-approve
+    instead of being held outright. Options are checked first since a duplicate/empty option is
+    cheap to catch and doesn't need any LaTeX parsing."""
+    ok, reason = _auto_formula_options_ok(row)
+    if not ok:
+        return False, reason
+
+    fields = [row.get("question"), row.get("option_a"), row.get("option_b"), row.get("option_c"), row.get("option_d")]
+    for field in fields:
+        if field and (not _auto_dollar_delims_balanced(field) or not _auto_paren_delims_balanced(field)):
+            return False, "formula_unbalanced"
+
+    all_spans = [expr for field in fields for expr in _auto_extract_latex_spans(field)]
+    if _auto_katex_node_available():
+        return _auto_formula_exprs_ok_katex(all_spans)
+    for expr in all_spans:
+        ok, reason = _auto_formula_expr_ok(expr)
+        if not ok:
+            return False, reason
+    return True, None
+
 def _auto_subject_chapter_ok(row: dict) -> bool:
     return bool((row.get("subject") or "").strip()) and bool((row.get("chapter") or "").strip())
 
@@ -9947,7 +10091,9 @@ def auto_check(row: dict, dup_corpus: list = None) -> tuple:
     if _auto_is_match_following(row.get("question")):
         reasons.append("match_following")
     if _auto_has_math_or_formula(row):
-        reasons.append("math_formula")
+        formula_ok, formula_reason = _auto_formula_check(row)
+        if not formula_ok:
+            reasons.append(formula_reason)
     if _auto_looks_chemical_formula(row):
         reasons.append("chemical_formula")
     if not _auto_options_ok(row):
@@ -10037,7 +10183,7 @@ async def admin_pyq_auto_check(_: None = Depends(verify_admin)):
         resp = await async_client.get(
             f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
             params={"review_status": "eq.pending", "auto_checked_at": "is.null",
-                    "select": "id,subject,chapter,question,option_a,option_b,option_c,option_d,"
+                    "select": "id,subject,chapter,question,option_a,option_b,option_c,option_d,language,"
                               "has_diagram,diagram_url,option_a_diagram_url,option_b_diagram_url,"
                               "option_c_diagram_url,option_d_diagram_url,review_status",
                     "order": "id.asc", "limit": 500}
@@ -10109,11 +10255,20 @@ async def admin_pyq_unapprove(body: PyqUnapproveRequest, _: None = Depends(verif
     except Exception as e:
         return {"error": str(e)}
 
+PYQ_AUTO_STATS_SELECT = (
+    "auto_pass,auto_reasons,question,option_a,option_b,option_c,option_d,language,"
+    "has_diagram,diagram_url,option_a_diagram_url,option_b_diagram_url,option_c_diagram_url,option_d_diagram_url"
+)
+
 @app.get("/admin/pyq-auto-stats")
 async def admin_pyq_auto_stats(_: None = Depends(verify_admin)):
     """Numbers for the admin preview's auto-approve tile: would-auto-approve count, held counts
-    per reason, how many are still unchecked, the all-time auto-approved count, and whether the
-    real switch is on."""
+    per reason, how many are still unchecked, the all-time auto-approved count, whether the real
+    switch is on, and the formula-check breakdown (eligible/passed/failed) requirement 3 asks for.
+
+    The formula counts are recomputed live from each checked pending row's own fields rather than
+    read off a stored column -- trial mode (the default) never changes review_status, so a passing
+    formula row stays pending exactly like a held one, and both still need to be told apart here."""
     if not await _pyq_auto_columns_exist():
         return {"error": PYQ_AUTO_APPROVE_MIGRATION_ERROR, "enabled": AUTO_APPROVE_ENABLED}
     try:
@@ -10123,35 +10278,81 @@ async def admin_pyq_auto_stats(_: None = Depends(verify_admin)):
             _pyq_count({"review_status": "eq.pending", "auto_checked_at": "is.null"}),
         )
         # auto_reasons is a free comma-separated string, not an array/enum column, so there's no
-        # SQL-side group-by for it -- read the held rows' reason text and tally in Python.
-        held_rows, offset, page_size = [], 0, 1000
+        # SQL-side group-by for it -- read every checked pending row's own fields and tally/recompute
+        # in Python (also lets the formula breakdown below reuse the same single paged fetch).
+        checked_rows, offset, page_size = [], 0, 1000
         while True:
             resp = await async_client.get(
                 f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
-                params={"review_status": "eq.pending", "auto_pass": "eq.false",
-                        "select": "auto_reasons", "limit": page_size, "offset": offset}
+                params={"review_status": "eq.pending", "auto_checked_at": "not.is.null",
+                        "select": PYQ_AUTO_STATS_SELECT, "limit": page_size, "offset": offset}
             )
             if resp.status_code >= 400:
                 return {"error": resp.text}
             page = resp.json()
-            held_rows.extend(page)
+            checked_rows.extend(page)
             if len(page) < page_size:
                 break
             offset += page_size
         held_by_reason = {}
-        for r in held_rows:
-            for code in (r.get("auto_reasons") or "").split(","):
-                code = code.strip()
-                if code:
-                    held_by_reason[code] = held_by_reason.get(code, 0) + 1
+        formula_eligible = formula_passed = 0
+        for r in checked_rows:
+            if r.get("auto_pass") is False:
+                for code in (r.get("auto_reasons") or "").split(","):
+                    code = code.strip()
+                    if code:
+                        held_by_reason[code] = held_by_reason.get(code, 0) + 1
+            if (_auto_has_math_or_formula(r) and not _auto_has_diagram(r)
+                    and not _auto_is_match_following(r.get("question")) and not _auto_looks_chemical_formula(r)
+                    and (r.get("language") or "en") == "en"):
+                formula_eligible += 1
+                if _auto_formula_check(r)[0]:
+                    formula_passed += 1
         return {
             "enabled": AUTO_APPROVE_ENABLED,
             "would_approve": would_approve,
-            "held_total": len(held_rows),
+            "held_total": sum(1 for r in checked_rows if r.get("auto_pass") is False),
             "held_by_reason": held_by_reason,
             "auto_approved_count": auto_approved_count,
             "pending_unchecked": pending_unchecked,
+            "formula_eligible": formula_eligible,
+            "formula_passed": formula_passed,
+            "formula_failed": formula_eligible - formula_passed,
         }
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/admin/pyq-auto-formula-sample")
+async def admin_pyq_auto_formula_sample(_: None = Depends(verify_admin)):
+    """Up to 30 random pending rows that passed the formula check and would currently be
+    auto-approved, for the admin panel's "Spot-check formula sample" button. Fetches every
+    candidate (PostgREST has no server-side RANDOM() ordering here) and samples in Python --
+    fine at this table's size, same tradeoff _auto_dup_corpus already makes for a full scan."""
+    if not await _pyq_auto_columns_exist():
+        return {"error": PYQ_AUTO_APPROVE_MIGRATION_ERROR}
+    try:
+        candidates, offset, page_size = [], 0, 1000
+        select = ("id,subject,chapter,question,option_a,option_b,option_c,option_d,language,"
+                  "has_diagram,diagram_url,option_a_diagram_url,option_b_diagram_url,"
+                  "option_c_diagram_url,option_d_diagram_url")
+        while True:
+            resp = await async_client.get(
+                f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
+                params={"review_status": "eq.pending", "auto_pass": "eq.true",
+                        "select": select, "order": "id.asc", "limit": page_size, "offset": offset}
+            )
+            if resp.status_code >= 400:
+                return {"error": resp.text}
+            page = resp.json()
+            candidates.extend(
+                r for r in page
+                if _auto_has_math_or_formula(r) and (r.get("language") or "en") == "en"
+            )
+            if len(page) < page_size:
+                break
+            offset += page_size
+        sample = random.sample(candidates, min(30, len(candidates)))
+        return {"total_eligible": len(candidates), "sample": sample}
     except Exception as e:
         return {"error": str(e)}
 
