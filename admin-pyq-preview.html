@@ -355,8 +355,12 @@
     .dup-select-reject-btn:disabled { opacity: 0.6; cursor: not-allowed; }
     .dup-select-clear-btn { background: transparent; border: 1px solid #2a2a2a; color: #999; padding: 7px 14px; border-radius: 6px; cursor: pointer; font-size: 12px; font-family: 'Inter', sans-serif; white-space: nowrap; }
     .dup-select-clear-btn:hover { border-color: #4a4a4a; color: #ccc; }
-    .dup-columns { display: flex; gap: 12px; flex-wrap: wrap; }
-    .dup-columns .question-card { flex: 1; min-width: 280px; margin-bottom: 0; }
+    /* Stacked full-width, not side-by-side -- side-by-side squeezed each card down to ~280px,
+       which left no room for match-the-following's two-column lists (each needs 140px+ per
+       column) and made the question stem wrap hard against the card's own padding. Full width
+       matches the normal review card exactly, so the same text renders the same way. */
+    .dup-columns { display: flex; flex-direction: column; gap: 12px; }
+    .dup-columns .question-card { margin-bottom: 0; }
 
     /* Reported Questions view */
     .report-wrap { margin-bottom: 20px; border: 1px solid #1e1e1e; border-radius: 12px; padding: 14px; background: #0a0a0a; }
