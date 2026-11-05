@@ -9568,7 +9568,7 @@ async def admin_pyq_reject(body: PyqRejectRequest, _: None = Depends(verify_admi
             f"{SUPABASE_URL}/rest/v1/pyq",
             headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
             params={"id": f"eq.{body.id}",
-                    "select": "id,review_status,reject_reason,rejected_at,uploader_name,reviewed"},
+                    "select": "id,review_status,reject_reason,rejected_at,uploader_name,reviewed,subject,language"},
             json=fields
         )
         if resp.status_code >= 400:
@@ -9577,7 +9577,15 @@ async def admin_pyq_reject(body: PyqRejectRequest, _: None = Depends(verify_admi
         if not updated:
             return {"error": "Row not found"}
         _invalidate_processed_pdfs_cache()
-        return {"updated": updated[0]}
+        row = updated[0]
+        # Rejecting this row can be the thing that clears some other pending row's stale
+        # "duplicate" flag. The cache invalidation is synchronous so it can never be stale by the
+        # time anything reads it next; the actual recheck is bounded, fire-and-forget, and never
+        # slows this response down.
+        pair = {(row.get("subject"), row.get("language"))}
+        _invalidate_pyq_dup_caches(pair)
+        asyncio.create_task(_recheck_duplicate_flagged_rows(pair))
+        return {"updated": row}
     except Exception as e:
         return {"error": str(e)}
 
@@ -9597,7 +9605,7 @@ async def admin_pyq_unreject(body: PyqUnrejectRequest, _: None = Depends(verify_
             f"{SUPABASE_URL}/rest/v1/pyq",
             headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
             params={"id": f"eq.{body.id}", "review_status": "eq.rejected",
-                    "select": "id,review_status,reject_reason,rejected_at"},
+                    "select": "id,review_status,reject_reason,rejected_at,subject,language"},
             json=fields
         )
         if resp.status_code >= 400:
@@ -9606,7 +9614,14 @@ async def admin_pyq_unreject(body: PyqUnrejectRequest, _: None = Depends(verify_
         if not updated:
             return {"error": "This question is not currently rejected"}
         _invalidate_processed_pdfs_cache()
-        return {"updated": updated[0]}
+        row = updated[0]
+        # Restoring this row can make it match a live row again, putting the "duplicate" flag
+        # back. The cache invalidation is synchronous; the actual recheck is bounded,
+        # fire-and-forget, and never slows this response down.
+        pair = {(row.get("subject"), row.get("language"))}
+        _invalidate_pyq_dup_caches(pair)
+        asyncio.create_task(_recheck_duplicate_flagged_rows(pair))
+        return {"updated": row}
     except Exception as e:
         return {"error": str(e)}
 
@@ -9658,11 +9673,12 @@ async def admin_pyq_reject_bulk(body: PyqRejectBulkRequest, _: None = Depends(ve
         fetch_resp = await async_client.get(
             f"{SUPABASE_URL}/rest/v1/pyq",
             headers=ADMIN_HEADERS,
-            params={"id": f"in.({','.join(ids)})", "select": "id,question,review_status"},
+            params={"id": f"in.({','.join(ids)})", "select": "id,question,review_status,subject,language"},
         )
         if fetch_resp.status_code >= 400:
             return {"error": fetch_resp.text}
         rows = fetch_resp.json()
+        rows_by_id = {r["id"]: r for r in rows}
         plan = _pyq_bulk_reject_plan(rows)
         to_reject = plan["to_reject"]
         if not to_reject:
@@ -9685,6 +9701,11 @@ async def admin_pyq_reject_bulk(body: PyqRejectBulkRequest, _: None = Depends(ve
             return {"error": patch_resp.text}
         updated = patch_resp.json()
         _invalidate_processed_pdfs_cache()
+        pairs = {(rows_by_id[r["id"]].get("subject"), rows_by_id[r["id"]].get("language"))
+                 for r in updated if r["id"] in rows_by_id}
+        if pairs:
+            _invalidate_pyq_dup_caches(pairs)
+            asyncio.create_task(_recheck_duplicate_flagged_rows(pairs))
         return {
             "rejected_count": len(updated),
             "kept_for_safety": plan["kept_for_safety"],
@@ -10205,6 +10226,94 @@ PYQ_AUTO_CHECK_SELECT = (
     "option_c_diagram_url,option_d_diagram_url,review_status"
 )
 
+def _pyq_duplicate_flagged(row: dict) -> bool:
+    """True if row's auto_reasons (the comma-joined string auto_check() writes, e.g.
+    "diagram,duplicate") currently carries the "duplicate" flag."""
+    return "duplicate" in (row.get("auto_reasons") or "").split(",")
+
+def _invalidate_pyq_dup_caches(pairs) -> None:
+    """Pops both duplicate-corpus caches for every (subject, language) pair -- synchronous,
+    in-memory, no network, no await. Callers invalidate directly with this, inline, the moment a
+    reject/delete/soft-deactivate/restore changes which rows are "live", so neither cache can
+    serve a stale corpus afterward -- this must never be deferred into the fire-and-forget
+    recheck task below, since asyncio.create_task gives no guarantee about when (or whether,
+    before the next request) that task actually runs.
+
+    _auto_dup_corpus_cache is keyed (subject, language). _pyq_dup_corpus_cache (the older
+    Duplicates-tool/cross-check-panel cache) is keyed (subject, language, include_rejected) --
+    both the True and False variant are cached separately (see _pyq_dup_corpus), so both must be
+    popped here or the include_rejected=True entry (used by /admin/pyq-matches) would keep
+    serving a corpus containing a row that's since been hard-deleted. (A plain (subject,
+    language) pop here was the pre-existing bug behind admin_pyq_delete's own cache-invalidation
+    comment never actually working -- fixed here rather than left in place, since this function
+    now owns that invalidation.)"""
+    for subject, language in pairs:
+        if not subject:
+            continue
+        language = language or "en"
+        _auto_dup_corpus_cache.pop((subject, language), None)
+        _pyq_dup_corpus_cache.pop((subject, language, False), None)
+        _pyq_dup_corpus_cache.pop((subject, language, True), None)
+
+def _pyq_rows_for_duplicate_recheck(rows: list, language: str) -> list:
+    """Pure filter used by _recheck_duplicate_flagged_rows, split out so it's testable without a
+    live Supabase read: only pending rows, in the given language, still flagged "duplicate" in
+    auto_reasons. Re-checks review_status/auto_reasons in Python even though the GET request's
+    own params already filter for them (review_status=eq.pending, auto_reasons ilike duplicate)
+    -- belt-and-suspenders the same way _auto_dup_corpus re-checks language in Python rather than
+    trusting a REST param alone -- so an approved row or a wrong-language row is never patched by
+    this path even if a caller's query params ever drift from this list."""
+    return [r for r in rows if r.get("review_status") == "pending"
+            and (r.get("language") or "en") == language and _pyq_duplicate_flagged(r)]
+
+async def _recheck_duplicate_flagged_rows(pairs) -> dict:
+    """After a reject/bulk-reject/delete/soft-deactivate/unreject changes which rows count as
+    "live" in one or more (subject, language) pairs, re-runs the full current auto_check on every
+    pending row in those same pairs that's still flagged "duplicate" in auto_reasons. A row whose
+    only match just got rejected/deleted/deactivated loses the flag here and, if nothing else is
+    holding it, becomes auto-eligible through the normal _auto_check_row path -- same
+    AUTO_APPROVE_ENABLED/10%-sample gate as every other sweep, so review_status is never touched
+    any other way. Restoring a match (unreject, or reactivating is_active) can just as easily put
+    the flag back on a row that now matches a live row again.
+
+    Bounded to already-flagged pending rows only -- never a full-table sweep -- so this stays
+    fast; every caller fires it with asyncio.create_task rather than awaiting it, so it can never
+    add noticeable latency to the reject/delete/restore response itself. Every caller sits behind
+    verify_admin, so a contractor-key request never reaches this.
+
+    Also clears both duplicate-corpus caches for every pair again (callers already do this
+    synchronously themselves before firing this as a task -- see _invalidate_pyq_dup_caches --
+    but repeating it here keeps this function correct on its own too, e.g. if ever called
+    directly instead of via create_task)."""
+    pairs = {(subject, language or "en") for subject, language in pairs if subject}
+    if not pairs:
+        return {"checked": 0}
+    _invalidate_pyq_dup_caches(pairs)
+    if not await _pyq_auto_columns_exist():
+        return {"checked": 0}
+    try:
+        rows = []
+        for subject, language in pairs:
+            resp = await async_client.get(
+                f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
+                params={"subject": f"eq.{subject}", "review_status": "eq.pending",
+                        "auto_reasons": "ilike.*duplicate*",
+                        "select": PYQ_AUTO_CHECK_SELECT, "limit": 1000}
+            )
+            if resp.status_code >= 400:
+                print(f"PYQ DUPLICATE RECHECK READ FAILED (subject={subject}): {resp.status_code}", flush=True)
+                continue
+            rows.extend(_pyq_rows_for_duplicate_recheck(resp.json(), language))
+        if not rows:
+            return {"checked": 0}
+        counts = await _auto_check_and_patch_rows(rows, allow_approve=True)
+        if counts["checked"]:
+            _invalidate_processed_pdfs_cache()
+        return counts
+    except Exception as e:
+        print(f"PYQ DUPLICATE RECHECK FAILED: {e}", flush=True)
+        return {"checked": 0}
+
 @app.post("/admin/pyq-auto-check")
 async def admin_pyq_auto_check(recheck: bool = False, offset: int = 0, _: None = Depends(verify_admin)):
     """Sweeps up to 500 pending rows that have never been checked (auto_checked_at is null).
@@ -10218,7 +10327,15 @@ async def admin_pyq_auto_check(recheck: bool = False, offset: int = 0, _: None =
     itself is never part of the fields _auto_check_row writes, so approved/rejected rows are
     never touched regardless of mode, and Hindi rows are filtered out in Python before patching
     (same "no language value reads as 'en'" rule _auto_dup_corpus uses) so they're never touched
-    either."""
+    either.
+
+    The duplicate rule inside auto_check always scores against live rows only (_auto_dup_corpus
+    filters is_active=true, review_status<>rejected, so a rejected or deleted match is never in
+    it) -- but that corpus is cached for PYQ_DUP_CORPUS_TTL, so a backlog recheck starting right
+    after a batch of rejects/deletes could still see a corpus cached from just before them. The
+    first page (offset==0) of a recheck clears both duplicate-corpus caches up front so this
+    sweep is guaranteed to read the current live set, not a stale one -- this is what lets one
+    "Re-check pending" pass clear a backlog of stale duplicate flags in one click."""
     if not await _pyq_auto_columns_exist():
         return {"error": PYQ_AUTO_APPROVE_MIGRATION_ERROR}
     try:
@@ -10226,6 +10343,9 @@ async def admin_pyq_auto_check(recheck: bool = False, offset: int = 0, _: None =
                   "order": "id.asc", "limit": 500}
         if recheck:
             params["offset"] = offset
+            if offset == 0:
+                _pyq_dup_corpus_cache.clear()
+                _auto_dup_corpus_cache.clear()
         else:
             params["auto_checked_at"] = "is.null"
         resp = await async_client.get(f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS, params=params)
@@ -10576,7 +10696,8 @@ async def admin_pyq_update(pyq_id: str, body: AdminPyqUpdate, _: None = Depends(
             headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
             params={"id": f"eq.{pyq_id}", "select": "id,subject,chapter,question,option_a,option_b,option_c,"
                     "option_d,correct_answer,is_active,year,source_tag,class,has_diagram,diagram_url,"
-                    "option_a_diagram_url,option_b_diagram_url,option_c_diagram_url,option_d_diagram_url,reviewed,created_at"},
+                    "option_a_diagram_url,option_b_diagram_url,option_c_diagram_url,option_d_diagram_url,"
+                    "reviewed,created_at,language"},
             json=update_fields
         )
         if response.status_code >= 400:
@@ -10585,7 +10706,15 @@ async def admin_pyq_update(pyq_id: str, body: AdminPyqUpdate, _: None = Depends(
         if not updated:
             return {"error": "Row not found"}
         _invalidate_processed_pdfs_cache()  # an edit can change is_active/subject/diagram urls etc.
-        return {"updated": updated[0]}
+        row = updated[0]
+        if body.is_active is False:
+            # Soft-deactivating this row can clear some other pending row's stale "duplicate"
+            # flag. The cache invalidation is synchronous; the actual recheck is bounded,
+            # fire-and-forget, and never slows this response down.
+            pair = {(row.get("subject"), row.get("language"))}
+            _invalidate_pyq_dup_caches(pair)
+            asyncio.create_task(_recheck_duplicate_flagged_rows(pair))
+        return {"updated": row}
     except Exception as e:
         return {"error": str(e)}
 
@@ -10602,16 +10731,23 @@ async def admin_pyq_bulk_update(body: AdminPyqBulkUpdate, _: None = Depends(veri
         return {"error": "No fields to update"}
     try:
         id_list = ",".join(str(i) for i in body.ids)
+        select_fields = "id,subject,language" if body.is_active is False else "id"
         response = http_requests.patch(
             f"{SUPABASE_URL}/rest/v1/pyq",
             headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
-            params={"id": f"in.({id_list})", "select": "id"},
+            params={"id": f"in.({id_list})", "select": select_fields},
             json=update_fields
         )
         if response.status_code >= 400:
             return {"error": response.text}
+        updated = response.json()
         _invalidate_processed_pdfs_cache()  # chapter/is_active changes can affect per-PDF counts
-        return {"updated_count": len(response.json())}
+        if body.is_active is False:
+            pairs = {(r.get("subject"), r.get("language")) for r in updated if r.get("subject")}
+            if pairs:
+                _invalidate_pyq_dup_caches(pairs)
+                asyncio.create_task(_recheck_duplicate_flagged_rows(pairs))
+        return {"updated_count": len(updated)}
     except Exception as e:
         return {"error": str(e)}
 
@@ -10660,12 +10796,16 @@ async def admin_pyq_delete(pyq_id: str, _: None = Depends(verify_admin)):
         # i.e. before the row is gone) rather than a separate query -- same data, one round trip.
         # Fire-and-forget: never delays or risks this response.
         asyncio.create_task(_log_pyq_delete(deleted[0].get("id"), deleted[0].get("uploader_name")))
-        # Drop this subject's duplicate-corpus cache so the next duplicate check (review-page
-        # warnings or the Contractor Queue's Duplicates button) re-reads from the DB instead of
-        # still seeing the just-deleted row for up to PYQ_DUP_CORPUS_TTL more seconds -- otherwise
-        # a group whose "original" was just deleted could keep pointing at it a little longer.
+        # Drop this subject's duplicate-corpus caches synchronously (both the Duplicates-tool one
+        # and the auto-check one -- the latter used to be left stale here), then re-check any
+        # pending row still flagged "duplicate" against this row, so a group whose "original" was
+        # just deleted doesn't keep pointing at it, in either tool, for up to PYQ_DUP_CORPUS_TTL
+        # more seconds or forever. The recheck itself is bounded, fire-and-forget: never delays or
+        # risks this response.
         if deleted[0].get("subject"):
-            _pyq_dup_corpus_cache.pop((deleted[0]["subject"], deleted[0].get("language") or "en"), None)
+            pair = {(deleted[0].get("subject"), deleted[0].get("language"))}
+            _invalidate_pyq_dup_caches(pair)
+            asyncio.create_task(_recheck_duplicate_flagged_rows(pair))
         _invalidate_processed_pdfs_cache()  # a deleted row can no longer count toward any PDF's totals
         # Returning the deleted row (not just success:true) is what lets the admin tool's
         # Ctrl+Z undo restore it -- this is a hard DELETE, so this response is the only place
