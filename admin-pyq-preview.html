@@ -61,6 +61,9 @@
     .dup-toggle-btn { background: #1a1a1a; border: 1px solid #2a2a2a; color: #ececec; padding: 8px 14px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; white-space: nowrap; }
     .dup-toggle-btn:hover { border-color: #4f8ef7; color: #4f8ef7; }
     .dup-toggle-btn.active { background: #4f8ef7; border-color: #4f8ef7; color: white; }
+    .recheck-btn { background: #4f8ef7; border: none; color: white; padding: 8px 14px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; white-space: nowrap; }
+    .recheck-btn:hover { background: #3b7de8; }
+    .recheck-btn:disabled { opacity: 0.6; cursor: default; }
 
     /* Auto-approve bar (pyq_auto_approve.sql) -- the "Would auto-approve N" tile, Check pending
        sweep, Approve all, and the on/off status line, all together just below the review bar. */
@@ -551,6 +554,7 @@
         <div class="auto-approve-bar" id="autoApproveBar">
           <button type="button" class="dup-toggle-btn" id="autoApproveTileBtn" onclick="toggleAutoPassFilter()">Would auto-approve …</button>
           <button type="button" class="dup-toggle-btn" id="autoCheckPendingBtn" onclick="runAutoCheckSweep()">Check pending</button>
+          <button type="button" class="recheck-btn" id="recheckPendingBtn" onclick="recheckPendingRows()">Re-check pending</button>
           <button type="button" class="dup-toggle-btn" id="formulaSampleBtn" onclick="toggleFormulaSample()">Spot-check formula sample</button>
           <button type="button" class="q-approve-btn" id="autoApproveAllBtn" onclick="approveAllAuto()" style="display:none">Approve all</button>
           <span class="auto-status" id="autoApproveStatus">Auto-approve: …</span>
@@ -1416,6 +1420,36 @@
         btn.disabled = false;
         btn.textContent = 'Check pending';
         loadAutoApproveStats();
+        loadResults();
+      }
+    }
+
+    async function recheckPendingRows() {
+      const btn = document.getElementById('recheckPendingBtn');
+      btn.disabled = true;
+      let totalChecked = 0;
+      let offset = 0;
+      try {
+        while (true) {
+          btn.textContent = totalChecked ? `Re-checking... (${totalChecked} done)` : 'Re-checking...';
+          const res = await fetch(`${API_BASE}/admin/pyq-auto-check?recheck=true&offset=${offset}`, { method: 'POST', headers: authHeaders() });
+          if (res.status === 401) return logout();
+          const data = await res.json();
+          if (data.error) { alert('Re-check pending failed: ' + data.error); break; }
+          totalChecked += data.checked || 0;
+          offset = data.next_offset;
+          if (!data.remaining) break;
+        }
+        await loadAutoApproveStats();
+        const stats = autoApproveStats;
+        alert(stats
+          ? `Re-checked ${totalChecked} rows.\nFormula eligible: ${stats.formula_eligible}, passed: ${stats.formula_passed}, failed: ${stats.formula_failed}.`
+          : `Re-checked ${totalChecked} rows.`);
+      } catch (e) {
+        alert('Re-check pending failed: could not reach server.');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Re-check pending';
         loadResults();
       }
     }

@@ -4,6 +4,8 @@ Supabase. Run with dummy credentials, e.g.:
   SUPABASE_SERVICE_KEY=dummy DEEPSEEK_KEY=dummy QWEN_API_KEY=dummy GEMINI_API_KEY=dummy \
   ADMIN_PASSWORD=dummy python -m pytest test_pyq_auto_approve.py
 """
+import asyncio
+
 import server
 
 GOOD_ROW = {
@@ -160,6 +162,34 @@ def test_approve_all_count_guard():
     assert server._auto_approve_all_count_ok(0, 0) is True
 
 
+def test_recheck_flips_stale_fail_to_pass_without_approving():
+    # Simulates a pending row that was checked before _auto_formula_check existed: it carries a
+    # stale auto_pass=false/math_formula verdict even though its formula is actually clean.
+    # allow_approve=False is what /admin/pyq-auto-check passes in recheck mode -- confirms the
+    # fresh verdict overwrites the stale one and that review_status/auto_approved are never set,
+    # regardless of AUTO_APPROVE_ENABLED.
+    row = _row(
+        question="A particle starts from rest. Using $v^2 = u^2 + 2as$, what is its final velocity?",
+        auto_pass=False, auto_reasons="math_formula",
+    )
+    fields = asyncio.run(server._auto_check_row(row, {}, "2026-11-05T00:00:00+00:00", allow_approve=False))
+    assert fields["auto_pass"] is True
+    assert fields["auto_reasons"] is None
+    assert "review_status" not in fields
+    assert "auto_approved" not in fields
+
+
+def test_recheck_never_touches_approved_row():
+    # An already-approved row should never be re-checked by the real sweep (it only ever fetches
+    # review_status=pending rows), but _auto_check_row itself must still refuse to move it even
+    # if it were ever called on one -- allow_approve=False is an unconditional guard, not just a
+    # filter applied earlier.
+    row = _row(review_status="approved")
+    fields = asyncio.run(server._auto_check_row(row, {}, "2026-11-05T00:00:00+00:00", allow_approve=False))
+    assert "review_status" not in fields
+    assert "auto_approved" not in fields
+
+
 if __name__ == "__main__":
     test_pass()
     test_fewer_than_four_options()
@@ -178,4 +208,6 @@ if __name__ == "__main__":
     test_rejected_row_never_passes()
     test_duplicate_against_corpus()
     test_approve_all_count_guard()
+    test_recheck_flips_stale_fail_to_pass_without_approving()
+    test_recheck_never_touches_approved_row()
     print("OK")

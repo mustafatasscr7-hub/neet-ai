@@ -10115,14 +10115,17 @@ def _auto_approve_all_count_ok(expected: int, current: int) -> bool:
     confirmed, never a set that grew or shrank (another sweep, a new upload) since they looked."""
     return expected == current
 
-async def _auto_check_row(row: dict, corpora: dict, now_iso: str) -> dict:
+async def _auto_check_row(row: dict, corpora: dict, now_iso: str, allow_approve: bool = True) -> dict:
     """Runs auto_check on one row and returns the Supabase PATCH fields -- shared by the sweep
     and the bulk-create hook so the real-time switch (AUTO_APPROVE_ENABLED) behaves identically
-    whichever path checked the row."""
+    whichever path checked the row. allow_approve=False (the recheck sweep) skips the
+    auto-approve branch entirely, so review_status is guaranteed untouched regardless of
+    AUTO_APPROVE_ENABLED -- recheck's job is only to refresh auto_pass/auto_reasons/
+    auto_checked_at on rows that already got a verdict, never to move anything out of pending."""
     corpus = corpora.get((row.get("subject"), row.get("language") or "en")) or []
     ok, reasons = auto_check(row, corpus)
     fields = {"auto_pass": ok, "auto_reasons": ",".join(reasons) if reasons else None, "auto_checked_at": now_iso}
-    if ok and AUTO_APPROVE_ENABLED and row.get("review_status") == "pending":
+    if allow_approve and ok and AUTO_APPROVE_ENABLED and row.get("review_status") == "pending":
         if random.random() < AUTO_APPROVE_SAMPLE_RATE:
             fields["auto_sampled"] = True
         else:
@@ -10130,7 +10133,7 @@ async def _auto_check_row(row: dict, corpora: dict, now_iso: str) -> dict:
                            "reviewed_by": "auto", "reviewed_at": now_iso})
     return fields
 
-async def _auto_check_and_patch_rows(rows: list) -> dict:
+async def _auto_check_and_patch_rows(rows: list, allow_approve: bool = True) -> dict:
     """Checks every row, PATCHes each one's own result fields, and returns per-batch counts.
     Fields differ per row (different reasons, some approved, some not), so this is one PATCH per
     row rather than a single bulk update -- same as every other per-row-field admin update in
@@ -10143,7 +10146,7 @@ async def _auto_check_and_patch_rows(rows: list) -> dict:
     counts = {"checked": 0, "passed": 0, "failed": 0, "auto_approved": 0, "auto_sampled": 0}
 
     async def process(row):
-        fields = await _auto_check_row(row, corpora, now_iso)
+        fields = await _auto_check_row(row, corpora, now_iso, allow_approve)
         counts["checked"] += 1
         counts["passed" if fields["auto_pass"] else "failed"] += 1
         if fields.get("auto_approved"):
@@ -10173,28 +10176,48 @@ async def _auto_check_new_rows_background(rows: list):
     except Exception as e:
         print(f"PYQ AUTO-CHECK (new rows) FAILED: {e}", flush=True)
 
+PYQ_AUTO_CHECK_SELECT = (
+    "id,subject,chapter,question,option_a,option_b,option_c,option_d,language,"
+    "has_diagram,diagram_url,option_a_diagram_url,option_b_diagram_url,"
+    "option_c_diagram_url,option_d_diagram_url,review_status"
+)
+
 @app.post("/admin/pyq-auto-check")
-async def admin_pyq_auto_check(_: None = Depends(verify_admin)):
+async def admin_pyq_auto_check(recheck: bool = False, offset: int = 0, _: None = Depends(verify_admin)):
     """Sweeps up to 500 pending rows that have never been checked (auto_checked_at is null).
-    The frontend calls this repeatedly until `remaining` comes back false."""
+    The frontend calls this repeatedly until `remaining` comes back false.
+
+    recheck=true instead re-runs the full current check on every pending English row --
+    overwriting a stale auto_pass/auto_reasons/auto_checked_at left over from before
+    _auto_formula_check existed -- paging by `offset` over review_status=pending (not
+    auto_checked_at is.null, which this mode intentionally ignores both ways: already-checked
+    rows are revisited and freshly-checked ones don't vanish from the next page). review_status
+    itself is never part of the fields _auto_check_row writes, so approved/rejected rows are
+    never touched regardless of mode, and Hindi rows are filtered out in Python before patching
+    (same "no language value reads as 'en'" rule _auto_dup_corpus uses) so they're never touched
+    either."""
     if not await _pyq_auto_columns_exist():
         return {"error": PYQ_AUTO_APPROVE_MIGRATION_ERROR}
     try:
-        resp = await async_client.get(
-            f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
-            params={"review_status": "eq.pending", "auto_checked_at": "is.null",
-                    "select": "id,subject,chapter,question,option_a,option_b,option_c,option_d,language,"
-                              "has_diagram,diagram_url,option_a_diagram_url,option_b_diagram_url,"
-                              "option_c_diagram_url,option_d_diagram_url,review_status",
-                    "order": "id.asc", "limit": 500}
-        )
+        params = {"review_status": "eq.pending", "select": PYQ_AUTO_CHECK_SELECT,
+                  "order": "id.asc", "limit": 500}
+        if recheck:
+            params["offset"] = offset
+        else:
+            params["auto_checked_at"] = "is.null"
+        resp = await async_client.get(f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS, params=params)
         if resp.status_code >= 400:
             return {"error": resp.text}
-        rows = resp.json()
-        counts = await _auto_check_and_patch_rows(rows)
+        page = resp.json()
+        rows = [r for r in page if (r.get("language") or "en") == "en"] if recheck else page
+        counts = await _auto_check_and_patch_rows(rows, allow_approve=not recheck)
         if counts["checked"]:
             _invalidate_processed_pdfs_cache()
-        counts["remaining"] = len(rows) == 500
+        if recheck:
+            counts["remaining"] = len(page) == 500
+            counts["next_offset"] = offset + len(page)
+        else:
+            counts["remaining"] = len(rows) == 500
         return counts
     except Exception as e:
         return {"error": str(e)}
