@@ -225,8 +225,9 @@
     .pdf-filename-chip span { word-break: break-word; overflow-wrap: anywhere; }
     .pdf-filename-chip button { background: none; border: none; color: #4f8ef7; cursor: pointer; font-size: 13px; line-height: 1; padding: 0; }
 
-    /* Processed PDFs popup -- same markup/CSS/JS as admin-pdf-review.html and
-       contractor-pdf-review.html's own copies of this block (kept byte-identical on purpose). */
+    /* Processed PDFs popup -- started as the same markup/CSS/JS as admin-pdf-review.html and
+       contractor-pdf-review.html's own copies of this block; this page's copy has since gained
+       Remove/Add file/Undo management (admin-only), the other two have not. */
     #pdfHistoryOverlay { position: fixed; inset: 0; background: #000000a0; z-index: 900; align-items: center; justify-content: center; padding: 16px; }
     .pdf-history-box { background: #111; border: 1px solid #2a2a2a; border-radius: 14px; padding: 18px; width: 100%; max-width: 560px; max-height: 85vh; display: flex; flex-direction: column; font-family: 'Inter', sans-serif; }
     .pdf-history-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
@@ -261,6 +262,12 @@
     .pdf-history-counts-note { font-size: 11px; color: #e0a030; padding: 6px 2px; border-bottom: 1px solid #1e1e1e; margin-bottom: 4px; }
     .pdf-history-counts-note a { color: #4f8ef7; text-decoration: none; }
     .pdf-history-show-more { margin-top: 8px; width: 100%; font-size: 12px; }
+    .pdf-history-add-form { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; padding: 10px; background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 8px; }
+    .pdf-history-add-form input, .pdf-history-add-form select { background: #111; border: 1px solid #2a2a2a; border-radius: 7px; color: #ececec; font-family: 'Inter', sans-serif; font-size: 12px; padding: 6px 8px; }
+    .pdf-history-add-form input[type="text"] { flex: 2; min-width: 140px; }
+    .pdf-history-add-form input[type="number"] { flex: 1; min-width: 110px; }
+    .pdf-history-add-form select { flex: 1; min-width: 100px; }
+    .pdf-history-add-form-actions { display: flex; gap: 6px; margin-left: auto; }
 
     /* Shared by both the global Find Duplicates clusters and the Contractor Queue's own
        Duplicates filter (which renders through the exact same renderDuplicatePairs-style
@@ -442,8 +449,24 @@
         <h2>Processed PDFs</h2>
         <div class="pdf-history-head-actions">
           <span id="pdfHistoryUpdatedAt" class="pdf-history-updated"></span>
+          <button type="button" id="pdfHistoryAddBtn" class="action-btn" onclick="openAddPdfForm()" style="display:none;">Add file</button>
+          <button type="button" id="pdfHistoryUndoBtn" class="action-btn" onclick="undoLastPdfAction()" disabled style="display:none;">Undo</button>
           <button type="button" class="action-btn" onclick="refreshPdfHistory()">Refresh</button>
           <button type="button" class="action-btn" onclick="closePdfHistory()">Close</button>
+        </div>
+      </div>
+      <div id="pdfHistoryAddForm" class="pdf-history-add-form" style="display:none;">
+        <input type="text" id="pdfAddFilename" placeholder="File name">
+        <select id="pdfAddSubject">
+          <option value="">Subject...</option>
+          <option value="Biology">Biology</option>
+          <option value="Physics">Physics</option>
+          <option value="Chemistry">Chemistry</option>
+        </select>
+        <input type="number" id="pdfAddChapter" placeholder="Chapter # (optional)" min="1">
+        <div class="pdf-history-add-form-actions">
+          <button type="button" class="action-btn" onclick="cancelAddPdfForm()">Cancel</button>
+          <button type="button" id="pdfAddSaveBtn" class="action-btn" onclick="submitAddPdfForm()">Save</button>
         </div>
       </div>
       <div id="pdfHistoryGaps" class="pdf-history-gaps"></div>
@@ -2964,8 +2987,10 @@
       el.innerHTML = `<span>Showing: ${escapeHtml(pdfFilenameFilter)}</span><button type="button" onclick="clearPdfFilenameFilter()">✕</button>`;
     }
 
-    // ---------------- Processed PDFs popup -- same markup/JS as admin-pdf-review.html and
-    // contractor-pdf-review.html's own copies of this block (kept byte-identical on purpose). ----------------
+    // ---------------- Processed PDFs popup -- started as the same markup/JS as
+    // admin-pdf-review.html and contractor-pdf-review.html's own copies of this block, but this
+    // page's copy now also has Remove/Add file/Undo management (admin-only); the other two pages
+    // still have their original, unmanaged copy. ----------------
     const PDF_STATUS_META = {
       completed: { label: 'Completed', color: '#4caf50' },
       processing: { label: 'Processing', color: '#4f8ef7' },
@@ -2979,6 +3004,10 @@
     let pdfHistoryData = null; // last /admin/processed-pdfs response: {pdfs, total, offset, limit, has_more, counts_unavailable, gap_summary, can_remove, updated_at}
     let pdfHistoryCacheSavedAt = 0; // ms epoch pdfHistoryData was actually fetched (not just read from localStorage)
     let pdfHistoryInflight = null; // in-flight loadPdfHistory() promise -- so preload and a manual open never both fire
+    // Last 10 Remove/Add actions taken on this page load, most recent last -- Undo pops the end
+    // and reverses it (restore for a remove, soft-remove for an add). Not persisted across a
+    // page reload; admin-pyq-preview.html only, by design (see processed_pdfs_soft_delete.sql).
+    let pdfHistoryUndoStack = [];
 
     function readPdfHistoryCache() {
       try {
@@ -3148,9 +3177,100 @@
         .sort((a, b) => new Date(b.upload_date) - new Date(a.upload_date));
     }
 
+    // Add file / Undo are admin-only (same role the backend's can_remove already reflects) --
+    // hidden rather than merely disabled so a contractor key never even sees them offered.
+    function renderPdfHistoryAdminControls() {
+      const canAdmin = !!(pdfHistoryData && pdfHistoryData.can_remove);
+      const addBtn = document.getElementById('pdfHistoryAddBtn');
+      const undoBtn = document.getElementById('pdfHistoryUndoBtn');
+      if (addBtn) addBtn.style.display = canAdmin ? '' : 'none';
+      if (undoBtn) undoBtn.style.display = canAdmin ? '' : 'none';
+      if (!canAdmin) cancelAddPdfForm();
+      renderPdfHistoryUndoButton();
+    }
+
+    function renderPdfHistoryUndoButton() {
+      const btn = document.getElementById('pdfHistoryUndoBtn');
+      if (!btn) return;
+      const last = pdfHistoryUndoStack[pdfHistoryUndoStack.length - 1];
+      btn.disabled = !last;
+      btn.title = last ? (last.type === 'remove' ? `Undo: restore ${last.filename}` : `Undo: remove ${last.filename}`) : 'Nothing to undo';
+    }
+
+    function pushPdfUndo(action) {
+      pdfHistoryUndoStack.push(action);
+      if (pdfHistoryUndoStack.length > 10) pdfHistoryUndoStack.shift();
+      renderPdfHistoryUndoButton();
+    }
+
+    async function undoLastPdfAction() {
+      const action = pdfHistoryUndoStack[pdfHistoryUndoStack.length - 1];
+      if (!action) return;
+      const btn = document.getElementById('pdfHistoryUndoBtn');
+      if (btn) btn.disabled = true;
+      try {
+        const res = action.type === 'remove'
+          ? await fetch(`${API_BASE}/admin/processed-pdfs/${action.id}/restore`, { method: 'POST', headers: authHeaders() })
+          : await fetch(`${API_BASE}/admin/processed-pdfs/${action.id}`, { method: 'DELETE', headers: authHeaders() });
+        if (res.status === 401) return logout();
+        const data = await res.json();
+        if (data.error) { alert(data.error); return; }
+        pdfHistoryUndoStack.pop();
+        await loadPdfHistory(true, {});
+      } catch (e) {
+        alert('Could not reach server.');
+      } finally {
+        renderPdfHistoryUndoButton();
+      }
+    }
+
+    function openAddPdfForm() {
+      document.getElementById('pdfHistoryAddForm').style.display = 'flex';
+      document.getElementById('pdfAddFilename').value = '';
+      document.getElementById('pdfAddSubject').value = '';
+      document.getElementById('pdfAddChapter').value = '';
+      document.getElementById('pdfAddFilename').focus();
+    }
+
+    function cancelAddPdfForm() {
+      const form = document.getElementById('pdfHistoryAddForm');
+      if (form) form.style.display = 'none';
+    }
+
+    async function submitAddPdfForm() {
+      const filename = document.getElementById('pdfAddFilename').value.trim();
+      const subject = document.getElementById('pdfAddSubject').value;
+      const chapterRaw = document.getElementById('pdfAddChapter').value.trim();
+      if (!filename) { alert('File name is required.'); return; }
+      let chapter_number = null;
+      if (chapterRaw) {
+        chapter_number = parseInt(chapterRaw, 10);
+        if (!Number.isInteger(chapter_number) || chapter_number < 1) { alert('Chapter number must be a positive whole number.'); return; }
+      }
+      const btn = document.getElementById('pdfAddSaveBtn');
+      if (btn) { btn.disabled = true; btn.textContent = 'Saving...'; }
+      try {
+        const res = await fetch(`${API_BASE}/admin/processed-pdfs/manual`, {
+          method: 'POST', headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filename, subject: subject || null, chapter_number })
+        });
+        if (res.status === 401) return logout();
+        const data = await res.json();
+        if (data.error) { alert(data.error); return; }
+        pushPdfUndo({ type: 'add', id: data.pdf.id, filename: data.pdf.filename });
+        cancelAddPdfForm();
+        await loadPdfHistory(true, {});
+      } catch (e) {
+        alert('Could not reach server.');
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
+      }
+    }
+
     function renderPdfHistoryList() {
       const listEl = document.getElementById('pdfHistoryList');
       if (!pdfHistoryData) return;
+      renderPdfHistoryAdminControls();
       const rows = pdfHistoryFilteredRows();
       const unavailableNote = pdfHistoryData.counts_unavailable
         ? '<div class="pdf-history-counts-note">Counts unavailable right now. <a href="#" onclick="refreshPdfHistory(); return false;">Refresh</a></div>'
@@ -3162,17 +3282,22 @@
       listEl.innerHTML = unavailableNote + rows.map(pdfHistoryRowHtml).join('') + showMoreHtml;
     }
 
-    // Shared by admin-pdf-review.html, contractor-pdf-review.html and admin-pyq-preview.html --
-    // identical in all three. canClickThrough is admin-pyq-preview.html's own extension point
-    // (pdfHistoryRowClick, defined only there) for the Contractor Queue's "tap a PDF to filter"
-    // behavior -- the other two pages simply never define that function, so rows render inert.
+    // Was identical to admin-pdf-review.html and contractor-pdf-review.html's own copies of this
+    // block; this page's copy has since diverged (Remove/Add file/Undo management, admin-only --
+    // see processed_pdfs_soft_delete.sql), the other two have not. canClickThrough is
+    // admin-pyq-preview.html's own extension point (pdfHistoryRowClick, defined only there) for
+    // the Contractor Queue's "tap a PDF to filter" behavior -- the other two pages simply never
+    // define that function, so rows render inert.
     function pdfHistoryRowHtml(p) {
       const meta = PDF_STATUS_META[p.status] || { label: p.status, color: '#888' };
+      const isManual = p.processed_by === 'manual';
+      const badgeLabel = isManual ? 'Added manually' : meta.label;
+      const badgeColor = isManual ? '#4f8ef7' : meta.color;
       const c = p.counts;
       const uploader = p.uploader_name || 'Earlier upload';
       const reason = p.interrupted_reason || (p.status === 'failed' ? p.error_message : null);
       const canClickThrough = typeof pdfHistoryRowClick === 'function';
-      const canRemove = pdfHistoryData.can_remove && (p.status === 'interrupted' || p.status === 'failed');
+      const canRemove = pdfHistoryData.can_remove;
       let countsHtml;
       if (c) {
         const deletedText = c.deleted == null ? 'unknown' : c.deleted;
@@ -3184,7 +3309,7 @@
         <div class="pdf-history-row${canClickThrough ? ' clickable' : ''}" ${canClickThrough ? `onclick="pdfHistoryRowClick(${JSON.stringify(p.filename)})"` : ''}>
           <div class="pdf-history-row-top">
             <span class="pdf-history-filename">${escapeHtml(p.filename)}</span>
-            <span class="pdf-history-badge" style="color:${meta.color};border-color:${meta.color};">${escapeHtml(meta.label)}</span>
+            <span class="pdf-history-badge" style="color:${badgeColor};border-color:${badgeColor};">${escapeHtml(badgeLabel)}</span>
           </div>
           <div class="pdf-history-row-meta">${escapeHtml(p.subject || '—')} · ${new Date(p.upload_date).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })} · ${escapeHtml(uploader)}</div>
           ${countsHtml}
@@ -3194,13 +3319,15 @@
     }
 
     async function removeProcessedPdf(id) {
-      const ok = await showConfirmModal('Remove this processed-PDF tracking record? This never deletes any question -- only the record of this scan.', { confirmLabel: 'Remove', danger: true });
+      const ok = await showConfirmModal('Remove this processed-PDF tracking record? This never deletes any question -- only the record of this scan. You can Undo right after.', { confirmLabel: 'Remove', danger: true });
       if (!ok) return;
+      const existing = (pdfHistoryData && pdfHistoryData.pdfs || []).find(p => p.id === id);
       try {
         const res = await fetch(`${API_BASE}/admin/processed-pdfs/${id}`, { method: 'DELETE', headers: authHeaders() });
         if (res.status === 401) return logout();
         const data = await res.json();
         if (data.error) { alert(data.error); return; }
+        pushPdfUndo({ type: 'remove', id, filename: existing ? existing.filename : '' });
         await loadPdfHistory(true, {});
       } catch (e) {
         alert('Could not reach server.');

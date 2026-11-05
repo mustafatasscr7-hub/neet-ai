@@ -1,6 +1,7 @@
 """Regression test for the enriched Processed PDFs list (GET /admin/processed-pdfs), the
-admin-only Remove record endpoint (DELETE /admin/processed-pdfs/{id}), the startup repair of
-stuck "processing" rows, the per-subject chapter gap summary, and the Contractor Queue's new
+admin-only Remove/Undo/Add-file endpoints (DELETE /admin/processed-pdfs/{id} [soft delete],
+POST /admin/processed-pdfs/{id}/restore, POST /admin/processed-pdfs/manual), the startup repair
+of stuck "processing" rows, the per-subject chapter gap summary, and the Contractor Queue's new
 source_pdf_filename filter on /admin/pyq-search.
 
 Run with: python test_processed_pdfs_list.py
@@ -192,11 +193,13 @@ class FakeSupabase:
         raise AssertionError(f"fake PostgREST: unsupported {method}")
 
 
-def pdf_row(id, filename, status, *, subject="Biology", age_minutes=0, error_message=None, questions_extracted=0):
+def pdf_row(id, filename, status, *, subject="Biology", age_minutes=0, error_message=None, questions_extracted=0,
+            chapter_number=None, processed_by=None, deleted_at=None):
     upload_date = datetime.now(timezone.utc) - timedelta(minutes=age_minutes)
     return {"id": id, "filename": filename, "subject": subject, "status": status,
             "questions_extracted": questions_extracted, "error_message": error_message,
-            "upload_date": upload_date.isoformat(), "processed_at": None}
+            "upload_date": upload_date.isoformat(), "processed_at": None,
+            "chapter_number": chapter_number, "processed_by": processed_by, "deleted_at": deleted_at}
 
 
 def pyq_row(filename, *, review_status="approved", active=True, has_diagram=False, uploader_name=None, subject="Biology"):
@@ -301,6 +304,16 @@ def test_gap_summary():
     check("missing is exactly 6-35 (a still-processing Chapter 10 doesn't count)", gaps["Biology"]["missing"] == "6-35", gaps["Biology"])
     check("unnumbered filename listed separately", gaps["Biology"]["unnumbered"] == ["Full Mock Test.pdf"])
 
+    print("\n# _processed_pdfs_gap_summary: an explicit chapter_number (manual add) wins over filename regex")
+    manual_pdfs = [
+        {"status": "completed", "subject": "Physics", "filename": "No chapter pattern here.pdf", "chapter_number": 7},
+        {"status": "completed", "subject": "Physics", "filename": "Chapter 9 - Z.pdf", "chapter_number": None},
+    ]
+    manual_gaps = server._processed_pdfs_gap_summary(manual_pdfs)
+    check("manual entry's chapter_number fills chapter 7 despite no 'Chapter N' in its filename",
+          manual_gaps["Physics"]["found"] == "7, 9", manual_gaps["Physics"])
+    check("manual entry is never listed as unnumbered", manual_gaps["Physics"]["unnumbered"] == [], manual_gaps["Physics"])
+
 
 # ---------------------------------------------------------------- HTTP-level tests
 def test_list_counts_and_roles(client, fake):
@@ -354,29 +367,102 @@ def test_zero_and_cache(client, fake):
 
 
 def test_remove_record(client, fake):
-    print("\n# DELETE /admin/processed-pdfs/{id}: admin-only, interrupted/failed only, removes only the record")
+    print("\n# DELETE /admin/processed-pdfs/{id}: admin-only soft delete (any status), reversible via /restore")
     fake.tables["processed_pdfs"] = [
         pdf_row(300, "completed.pdf", "completed"),
         pdf_row(301, "failed.pdf", "failed", error_message="boom"),
         pdf_row(302, "stale.pdf", "processing", age_minutes=45),
     ]
-    fake.tables["pyq"] = [pyq_row("failed.pdf", review_status="approved")]
+    fake.tables["pyq"] = [pyq_row("completed.pdf", review_status="approved")]
+    server._PROCESSED_PDFS_CACHE.update({"at": 0.0, "base_rows": None, "gaps": None, "stats_map": None})
 
     check("contractor key -> 403 (cannot remove)", client.delete("/admin/processed-pdfs/301", headers=CONTRACTOR).status_code == 403)
-    check("record still present after the 403", any(r["id"] == 301 for r in fake.tables["processed_pdfs"]))
+    check("record still present, not soft-deleted, after the 403",
+          any(r["id"] == 301 and not r.get("deleted_at") for r in fake.tables["processed_pdfs"]))
 
-    check("admin cannot remove a Completed record", client.delete("/admin/processed-pdfs/300", headers=ADMIN).json().get("error"))
-    check("completed record untouched", any(r["id"] == 300 for r in fake.tables["processed_pdfs"]))
+    # Unlike the old hard-delete endpoint, a Completed record can be removed too now -- it's
+    # reversible (soft delete + Undo), so there's no reason to restrict by status any more.
+    r = client.delete("/admin/processed-pdfs/300", headers=ADMIN)
+    check("admin removes a Completed record: success", r.json().get("success") is True, r.text)
+    row300 = next(row for row in fake.tables["processed_pdfs"] if row["id"] == 300)
+    check("the row is still in the table (soft delete, not hard delete)", row300 is not None)
+    check("deleted_at is now set", row300.get("deleted_at") is not None, row300)
+    check("its question was never touched (still active, unchanged)",
+          any(q["source_pdf_filename"] == "completed.pdf" and q["is_active"] for q in fake.tables["pyq"]))
 
-    r = client.delete("/admin/processed-pdfs/301", headers=ADMIN)
-    check("admin removes a Failed record: success", r.json().get("success") is True, r.text)
-    check("that record is gone", not any(r["id"] == 301 for r in fake.tables["processed_pdfs"]))
-    check("its questions were never touched", any(q["source_pdf_filename"] == "failed.pdf" for q in fake.tables["pyq"]))
+    r2 = client.delete("/admin/processed-pdfs/301", headers=ADMIN)
+    check("admin removes a Failed record too: success", r2.json().get("success") is True, r2.text)
+    r3 = client.delete("/admin/processed-pdfs/302", headers=ADMIN)
+    check("admin removes a stale/Interrupted record too: success", r3.json().get("success") is True, r3.text)
 
-    r2 = client.delete("/admin/processed-pdfs/302", headers=ADMIN)
-    check("admin removes a stale/Interrupted record too: success", r2.json().get("success") is True, r2.text)
-
+    check("double-remove is idempotent, not an error",
+          client.delete("/admin/processed-pdfs/300", headers=ADMIN).json().get("success") is True)
     check("unknown id -> error, not a 500", "error" in client.delete("/admin/processed-pdfs/9999", headers=ADMIN).json())
+
+    server._PROCESSED_PDFS_CACHE.update({"at": 0.0, "base_rows": None, "gaps": None, "stats_map": None})
+    listed = client.get("/admin/processed-pdfs", headers=ADMIN).json()
+    check("none of the 3 removed records appear in the list any more",
+          not any(p["id"] in (300, 301, 302) for p in listed["pdfs"]), listed["pdfs"])
+    check("removed records don't count toward 'total' either", listed["total"] == 0, listed["total"])
+
+    print("\n# POST /admin/processed-pdfs/{id}/restore: admin-only Undo of a Remove")
+    check("contractor key -> 403 (cannot restore)", client.post("/admin/processed-pdfs/300/restore", headers=CONTRACTOR).status_code == 403)
+    r4 = client.post("/admin/processed-pdfs/300/restore", headers=ADMIN)
+    check("admin restores: success", r4.json().get("success") is True, r4.text)
+    check("deleted_at cleared back to null",
+          next(row for row in fake.tables["processed_pdfs"] if row["id"] == 300).get("deleted_at") is None)
+    check("unknown id -> error, not a 500", "error" in client.post("/admin/processed-pdfs/9999/restore", headers=ADMIN).json())
+
+    server._PROCESSED_PDFS_CACHE.update({"at": 0.0, "base_rows": None, "gaps": None, "stats_map": None})
+    listed2 = client.get("/admin/processed-pdfs", headers=ADMIN).json()
+    check("restored record is back in the list", any(p["id"] == 300 for p in listed2["pdfs"]), listed2["pdfs"])
+    check("the other two (never restored) are still gone",
+          not any(p["id"] in (301, 302) for p in listed2["pdfs"]), listed2["pdfs"])
+
+    server._PROCESSED_PDFS_CACHE.update({"at": 0.0, "base_rows": None, "gaps": None, "stats_map": None})
+
+
+def test_manual_add(client, fake):
+    print("\n# POST /admin/processed-pdfs/manual: admin-only, creates an 'Added manually' entry")
+    fake.tables["processed_pdfs"] = [
+        pdf_row(800, "Chapter 1 - X.pdf", "completed", subject="Biology"),
+        pdf_row(801, "Chapter 3 - Y.pdf", "completed", subject="Biology"),
+    ]
+    fake.tables["pyq"] = []
+    server._PROCESSED_PDFS_CACHE.update({"at": 0.0, "base_rows": None, "gaps": None, "stats_map": None})
+
+    check("contractor key -> 403 (cannot add)",
+          client.post("/admin/processed-pdfs/manual", headers=CONTRACTOR, json={"filename": "x"}).status_code == 403)
+    check("blank file name -> error",
+          "error" in client.post("/admin/processed-pdfs/manual", headers=ADMIN, json={"filename": "   "}).json())
+
+    r = client.post("/admin/processed-pdfs/manual", headers=ADMIN,
+                     json={"filename": "Covered elsewhere.pdf", "subject": "Biology", "chapter_number": 2})
+    check("admin add: success", r.json().get("success") is True, r.text)
+    pdf = r.json()["pdf"]
+    check("created row is marked processed_by=manual", pdf.get("processed_by") == "manual", pdf)
+    check("created row's status is a real 'completed' (counts toward gap detection)", pdf.get("status") == "completed", pdf)
+    check("created row carries the chapter_number given in the form", pdf.get("chapter_number") == 2, pdf)
+    check("created row has questions_extracted=0 (no scan ever ran)", pdf.get("questions_extracted") == 0, pdf)
+    new_id = pdf["id"]
+
+    server._PROCESSED_PDFS_CACHE.update({"at": 0.0, "base_rows": None, "gaps": None, "stats_map": None})
+    listed = client.get("/admin/processed-pdfs", headers=ADMIN).json()
+    row = next(p for p in listed["pdfs"] if p["id"] == new_id)
+    check("manual entry shows up in the list", row is not None)
+    check("gap between chapter 1 and 3 is closed now that 2 was added manually",
+          listed["gap_summary"]["Biology"]["found"] == "1-3" and not listed["gap_summary"]["Biology"]["missing"],
+          listed["gap_summary"])
+
+    # "add creates a manual entry" + undo-of-add (soft-remove the created row) in one flow.
+    r2 = client.delete(f"/admin/processed-pdfs/{new_id}", headers=ADMIN)
+    check("Undo of an Add (soft-remove the created row): success", r2.json().get("success") is True, r2.text)
+    server._PROCESSED_PDFS_CACHE.update({"at": 0.0, "base_rows": None, "gaps": None, "stats_map": None})
+    listed2 = client.get("/admin/processed-pdfs", headers=ADMIN).json()
+    check("manual entry is gone after Undo", not any(p["id"] == new_id for p in listed2["pdfs"]), listed2["pdfs"])
+    check("the gap reopens to exactly chapter 2", listed2["gap_summary"]["Biology"]["missing"] == "2", listed2["gap_summary"])
+
+    server._PROCESSED_PDFS_CACHE.update({"at": 0.0, "base_rows": None, "gaps": None, "stats_map": None})
 
 
 def test_pyq_search_filename_filter(client, fake):
@@ -546,6 +632,7 @@ def main():
     test_list_counts_and_roles(client, fake)
     test_zero_and_cache(client, fake)
     test_remove_record(client, fake)
+    test_manual_add(client, fake)
     test_pyq_search_filename_filter(client, fake)
     test_rpc_fast_path_matches_fallback(client, fake)
     test_pagination(client, fake)

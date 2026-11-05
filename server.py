@@ -1029,6 +1029,11 @@ class PdfMarkProcessedRequest(BaseModel):
     questions_extracted: Optional[int] = None
     error_message: Optional[str] = None
 
+class ManualProcessedPdfRequest(BaseModel):
+    filename: str
+    subject: Optional[str] = None
+    chapter_number: Optional[int] = None
+
 class DiagramUploadRequest(BaseModel):
     filename: str
     data: str  # base64-encoded image bytes
@@ -12926,9 +12931,15 @@ def _processed_pdfs_gap_summary(pdfs: list) -> dict:
             continue
         subject = p.get("subject") or "Unknown"
         info = by_subject.setdefault(subject, {"found": set(), "unnumbered": []})
-        m = _CHAPTER_NUM_FROM_FILENAME_RE.search(p.get("filename") or "")
-        if m:
-            info["found"].add(int(m.group(1)))
+        # A manually-added entry (admin-pyq-preview.html's "Add file" form) carries its chapter
+        # number directly, since there's no real filename to regex-match against -- any other
+        # row falls back to the filename pattern same as before.
+        chapter_number = p.get("chapter_number")
+        if chapter_number is None:
+            m = _CHAPTER_NUM_FROM_FILENAME_RE.search(p.get("filename") or "")
+            chapter_number = int(m.group(1)) if m else None
+        if chapter_number is not None:
+            info["found"].add(chapter_number)
         else:
             info["unnumbered"].append(p["filename"])
     gaps = {}
@@ -13059,7 +13070,11 @@ async def _processed_pdfs_base_rows_and_gaps() -> tuple:
     completed PDF's filename, not just whatever page is currently being viewed)."""
     resp = await async_client.get(
         f"{SUPABASE_URL}/rest/v1/processed_pdfs", headers=ADMIN_HEADERS,
-        params={"select": "id,filename,subject,status,questions_extracted,error_message,upload_date,processed_at",
+        params={"select": "id,filename,subject,status,questions_extracted,error_message,upload_date,"
+                           "processed_at,chapter_number,processed_by",
+                "deleted_at": "is.null",  # soft-removed rows (admin-pyq-preview.html's Remove
+                                           # button) never show up, count toward the gap summary,
+                                           # or count as a processed PDF again
                 "order": "upload_date.desc", "limit": 500}
     )
     if resp.status_code >= 400:
@@ -13152,35 +13167,97 @@ async def admin_processed_pdfs(force: bool = False, offset: int = 0, limit: int 
         "updated_at": datetime.fromtimestamp(_PROCESSED_PDFS_CACHE["at"], tz=timezone.utc).isoformat(),
     }
 
-# Admin-only: the contractor key must never be able to remove a processed_pdfs record (it can
-# only ever read this list, same as the rest of its read-only access to this endpoint).
+# Admin-only: the contractor key must never be able to remove, restore or manually add a
+# processed_pdfs record (it can only ever read this list, same as the rest of its read-only
+# access to this endpoint).
 @app.delete("/admin/processed-pdfs/{pdf_id}")
 async def admin_remove_processed_pdf(pdf_id: int, role: str = Depends(verify_admin_or_contractor_pdf)):
+    """Soft delete only -- stamps deleted_at so the record (and whatever questions were extracted
+    from it) is kept forever, just no longer shown in the list, counted toward the gap summary, or
+    counted as a processed PDF. Never touches `pyq` or the contractor payout tally, and is fully
+    reversible via the restore endpoint below (admin-pyq-preview.html's Undo button)."""
     if role != "admin":
         raise HTTPException(status_code=403, detail="Only the admin key can remove a processed-PDF record")
     try:
         resp = await async_client.get(
             f"{SUPABASE_URL}/rest/v1/processed_pdfs", headers=ADMIN_HEADERS,
-            params={"id": f"eq.{pdf_id}", "select": "id,status,error_message,upload_date"}
+            params={"id": f"eq.{pdf_id}", "select": "id,deleted_at"}
         )
         if resp.status_code >= 400:
             return {"error": resp.text}
         rows = resp.json()
         if not rows:
             return {"error": "Record not found"}
-        # Guards against removing a record that's actually Completed or still genuinely
-        # Processing -- recomputed server-side rather than trusting whatever status the client
-        # last rendered, since this never re-scans or touches any question either way.
-        if _effective_pdf_status(rows[0]) not in ("interrupted", "failed"):
-            return {"error": "Only an Interrupted or Failed record can be removed."}
-        del_resp = await async_client.delete(
-            f"{SUPABASE_URL}/rest/v1/processed_pdfs", headers=ADMIN_HEADERS,
-            params={"id": f"eq.{pdf_id}"}
+        if rows[0].get("deleted_at"):
+            return {"success": True}  # already removed -- Undo/double-click safe, not an error
+        patch_resp = await async_client.patch(
+            f"{SUPABASE_URL}/rest/v1/processed_pdfs", headers={**ADMIN_HEADERS, "Content-Type": "application/json"},
+            params={"id": f"eq.{pdf_id}"}, json={"deleted_at": datetime.now(timezone.utc).isoformat()}
         )
-        if del_resp.status_code >= 400:
-            return {"error": del_resp.text}
+        if patch_resp.status_code >= 400:
+            return {"error": patch_resp.text}
         _invalidate_processed_pdfs_cache()  # next list read re-fetches instead of showing a removed row
         return {"success": True}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.post("/admin/processed-pdfs/{pdf_id}/restore")
+async def admin_restore_processed_pdf(pdf_id: int, role: str = Depends(verify_admin_or_contractor_pdf)):
+    """Reverses a soft delete -- admin-pyq-preview.html's Undo button calling this right back on
+    the id it just removed. Clearing deleted_at is all that's needed: the list, gap summary and
+    counts all read it live, nothing else about the row was ever touched."""
+    if role != "admin":
+        raise HTTPException(status_code=403, detail="Only the admin key can restore a processed-PDF record")
+    try:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/processed_pdfs", headers=ADMIN_HEADERS,
+            params={"id": f"eq.{pdf_id}", "select": "id"}
+        )
+        if resp.status_code >= 400:
+            return {"error": resp.text}
+        if not resp.json():
+            return {"error": "Record not found"}
+        patch_resp = await async_client.patch(
+            f"{SUPABASE_URL}/rest/v1/processed_pdfs", headers={**ADMIN_HEADERS, "Content-Type": "application/json"},
+            params={"id": f"eq.{pdf_id}"}, json={"deleted_at": None}
+        )
+        if patch_resp.status_code >= 400:
+            return {"error": patch_resp.text}
+        _invalidate_processed_pdfs_cache()
+        return {"success": True}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.post("/admin/processed-pdfs/manual")
+async def admin_add_manual_processed_pdf(body: ManualProcessedPdfRequest, role: str = Depends(verify_admin_or_contractor_pdf)):
+    """Admin-pyq-preview.html's "Add file" form -- a placeholder entry (no upload, no scan) that
+    marks a chapter as covered in the Processed PDFs list and chapter gap summary. processed_by
+    is set to the "manual" marker so the frontend can label it "Added manually" instead of
+    "Completed"; status stays a real 'completed' so it participates in gap detection exactly like
+    any other finished scan."""
+    if role != "admin":
+        raise HTTPException(status_code=403, detail="Only the admin key can add a manual processed-PDF record")
+    filename = body.filename.strip()
+    if not filename:
+        return {"error": "File name is required"}
+    subject = (body.subject or "").strip() or None
+    try:
+        resp = await async_client.post(
+            f"{SUPABASE_URL}/rest/v1/processed_pdfs",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
+            json={
+                "filename": filename, "subject": subject, "status": "completed",
+                "questions_extracted": 0, "processed_by": "manual", "chapter_number": body.chapter_number,
+                "processed_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        if resp.status_code >= 400:
+            return {"error": resp.text}
+        rows = resp.json()
+        if not rows:
+            return {"error": "Insert failed"}
+        _invalidate_processed_pdfs_cache()
+        return {"success": True, "pdf": rows[0]}
     except Exception as e:
         return {"error": str(e)}
 
