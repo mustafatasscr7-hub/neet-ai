@@ -1287,6 +1287,12 @@ def verify_admin(request: Request, x_admin_key: str = Header(None)):
 # touching the founder's own admin login. Unset by default (contractor access is opt-in via env).
 CONTRACTOR_PDF_KEY = os.getenv("CONTRACTOR_PDF_KEY")
 
+# Kill switch for Hindi PDF uploads (they cost real Gemini-vision money) -- default OFF, only the
+# literal string "true" turns it on. Checked by admin_scan_pdf, admin_scan_pdf_estimate and
+# admin_pyq_bulk_create before any Gemini call or DB write for a new Hindi row; English uploads and
+# existing Hindi rows/restores are unaffected. Set on Railway to flip it.
+HINDI_UPLOADS_ENABLED = os.getenv("HINDI_UPLOADS_ENABLED", "false").lower() == "true"
+
 # The two people allowed to be named as a question's uploader (contractor-pdf-review.html's "Who
 # is uploading?" picker) -- not auth, just an attribution tag stored in pyq.uploader_name.
 PYQ_UPLOADER_NAMES = ("Mr. Md Moniruzzaman", "Admin")
@@ -1351,6 +1357,13 @@ def verify_admin_or_contractor_pdf(request: Request, x_admin_key: str = Header(N
 @app.post("/contractor-pdf-review/verify")
 async def contractor_pdf_review_verify(_: None = Depends(verify_contractor_pdf_review)):
     return {"ok": True, "uploader_names": list(PYQ_UPLOADER_NAMES)}
+
+@app.get("/admin/pdf-review-config")
+async def admin_pdf_review_config(_: None = Depends(verify_admin_or_contractor_pdf)):
+    """Small shared config read for admin-pdf-review.html and contractor-pdf-review.html -- today
+    just the Hindi-uploads kill switch, so both pages can grey out the Hindi button instead of
+    discovering it's paused only after a scan request comes back rejected."""
+    return {"hindi_uploads_enabled": HINDI_UPLOADS_ENABLED}
 
 # ---------- Rate limiting ----------
 # Carrier NAT puts many students behind one public IP, so limits are keyed on who is asking, not
@@ -11367,6 +11380,8 @@ def admin_scan_pdf(req: ScanPdfRequest, _: None = Depends(verify_admin_or_contra
         return {"error": "Invalid layout"}
     if req.language not in ("en", "hi"):
         return {"error": "Invalid language"}
+    if req.language == "hi" and not HINDI_UPLOADS_ENABLED:
+        return {"error": "Hindi uploads are paused"}
     if req.language == "hi" and req.layout != "scanned":
         return {"error": "Hindi extraction only supports the scanned layout"}
     if req.uploader_name and req.uploader_name not in PYQ_UPLOADER_NAMES:
@@ -11582,6 +11597,8 @@ def admin_scan_pdf_estimate(req: ScanPdfEstimateRequest, _: None = Depends(verif
         return {"error": "Invalid subject"}
     if req.language not in ("en", "hi"):
         return {"error": "Invalid language"}
+    if req.language == "hi" and not HINDI_UPLOADS_ENABLED:
+        return {"error": "Hindi uploads are paused"}
     try:
         pdf_bytes = base64.b64decode(req.data)
         return estimate_scanned_pdf_cost(pdf_bytes, req.subject, language=req.language)
@@ -12590,6 +12607,11 @@ async def admin_pyq_bulk_create(body: PyqBulkCreate, role: str = Depends(verify_
         return {"error": "Invalid subject"}
     if any(q.language not in (None, "en", "hi") for q in body.questions):
         return {"error": "Invalid language"}
+    # Blocks new Hindi rows while paused, same as admin_scan_pdf -- but not a restore (q.id set,
+    # see PyqQuestionCreate's docstring), which re-inserts a row that was already extracted and
+    # paid for, not a fresh Gemini-costing upload.
+    if not HINDI_UPLOADS_ENABLED and any(q.language == "hi" and not q.id for q in body.questions):
+        return {"error": "Hindi uploads are paused"}
     if body.uploader_name is not None and body.uploader_name not in PYQ_UPLOADER_NAMES:
         raise HTTPException(status_code=400, detail="Invalid uploader name")
     # Who uploaded comes from the key that authenticated this request, never from the body.

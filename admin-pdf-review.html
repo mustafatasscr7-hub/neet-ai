@@ -312,8 +312,9 @@
     <h2>Language</h2>
     <div class="subject-picker" id="languagePicker">
       <button type="button" class="subject-btn active" data-language="en" onclick="selectLanguage('en')">English</button>
-      <button type="button" class="subject-btn" data-language="hi" onclick="selectLanguage('hi')">Hindi</button>
+      <button type="button" class="subject-btn" data-language="hi" onclick="selectLanguage('hi')" id="hindiLangBtn">Hindi</button>
     </div>
+    <div id="hindiPausedNote" style="display:none;font-size:11px;color:#888;margin-top:-6px;margin-bottom:10px;">Hindi uploads paused</div>
 
     <div id="pdfModeSection">
       <h2>2. Upload PDF</h2>
@@ -557,6 +558,27 @@
     // calling preloadPdfHistory() directly here throws (temporal dead zone) and aborts the rest
     // of the script. setTimeout(..., 0) runs it after the whole script has finished once.
     setTimeout(preloadPdfHistory, 0);
+    loadPdfReviewConfig();
+  }
+
+  // Greys out the Hindi language button while HINDI_UPLOADS_ENABLED is off on the server, so an
+  // admin finds out before picking a subject/PDF rather than from a rejected scan request.
+  async function loadPdfReviewConfig() {
+    try {
+      const res = await fetch(`${API_BASE}/admin/pdf-review-config`, { headers: authHeaders() });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (!data.hindi_uploads_enabled) {
+        const btn = document.getElementById('hindiLangBtn');
+        btn.disabled = true;
+        btn.title = 'Hindi uploads paused';
+        btn.style.opacity = '0.4';
+        btn.style.cursor = 'not-allowed';
+        document.getElementById('hindiPausedNote').style.display = 'block';
+      }
+    } catch (e) {
+      // Config read failing is non-fatal - the server itself still enforces the pause either way.
+    }
   }
 
   if (adminKey) enterDashboard();
