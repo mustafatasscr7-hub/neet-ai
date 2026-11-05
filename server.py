@@ -1218,6 +1218,7 @@ import time
 ADMIN_MAX_ATTEMPTS = 3
 ADMIN_COOLDOWN_SECONDS = 300  # 5 minutes
 _admin_login_attempts = {}  # ip -> {"count": int, "blocked_until": float}
+_contractor_key_collision_warned = False  # set once verify_admin_or_contractor_pdf has logged the CONTRACTOR_PDF_KEY == ADMIN_PASSWORD misconfig, so it isn't re-logged on every request
 
 # Client IP: the one source for the admin 3-strike lockout, every per-IP rate limit and ceiling, the
 # per-IP guest token total (guest_usage_log), media_doubt_log.ip and session location lookups.
@@ -1339,15 +1340,21 @@ def verify_admin_or_contractor_pdf(request: Request, x_admin_key: str = Header(N
     everywhere outside this specific set, by construction rather than convention.
 
     Returns who is calling, "admin" or "contractor" -- pyq-bulk-create stamps it on every row as
-    uploaded_by and starts contractor rows as pending. Checked contractor-first so a
-    misconfigured CONTRACTOR_PDF_KEY == ADMIN_PASSWORD can only ever hide uploads, never
-    auto-approve them."""
+    uploaded_by and starts contractor rows as pending. Checked admin-first: a request carrying
+    ADMIN_PASSWORD always resolves to "admin", even if CONTRACTOR_PDF_KEY happens to collide with
+    it -- that collision isn't a real second credential anyway (whoever holds that value already
+    passes verify_admin everywhere else in the app), and resolving it to "contractor" was silently
+    hiding admin-pyq-preview.html's Remove/Add file/Undo buttons for the founder's own admin login."""
+    global _contractor_key_collision_warned
     ip = _client_ip(request)
     now = time.time()
     record = _admin_login_attempts.get(ip, {"count": 0, "blocked_until": 0})
     if record["blocked_until"] > now:
         remaining = int(record["blocked_until"] - now)
         raise HTTPException(status_code=429, detail=f"Too many failed attempts. Try again in {remaining} seconds.")
+    if CONTRACTOR_PDF_KEY and ADMIN_PASSWORD and CONTRACTOR_PDF_KEY == ADMIN_PASSWORD and not _contractor_key_collision_warned:
+        _contractor_key_collision_warned = True
+        print("CONTRACTOR_PDF_KEY equals ADMIN_PASSWORD -- every request now resolves as admin. Rotate CONTRACTOR_PDF_KEY to a distinct value on Railway.", flush=True)
     valid = x_admin_key and (x_admin_key == ADMIN_PASSWORD or (CONTRACTOR_PDF_KEY and x_admin_key == CONTRACTOR_PDF_KEY))
     if not valid:
         record["count"] += 1
@@ -1357,7 +1364,7 @@ def verify_admin_or_contractor_pdf(request: Request, x_admin_key: str = Header(N
         _admin_login_attempts[ip] = record
         raise HTTPException(status_code=401, detail="Unauthorized")
     _admin_login_attempts.pop(ip, None)
-    return "contractor" if CONTRACTOR_PDF_KEY and x_admin_key == CONTRACTOR_PDF_KEY else "admin"
+    return "admin" if x_admin_key == ADMIN_PASSWORD else "contractor"
 
 @app.post("/contractor-pdf-review/verify")
 async def contractor_pdf_review_verify(_: None = Depends(verify_contractor_pdf_review)):

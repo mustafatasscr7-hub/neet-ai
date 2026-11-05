@@ -348,6 +348,26 @@ def test_list_counts_and_roles(client, fake):
     check("wrong key -> 401", client.get("/admin/processed-pdfs", headers={"X-Admin-Key": "nope"}).status_code == 401)
 
 
+def test_contractor_key_collides_with_admin_password(client, fake):
+    print("\n# GET /admin/processed-pdfs: a CONTRACTOR_PDF_KEY misconfigured to equal ADMIN_PASSWORD")
+    print("# must still resolve the admin login as \"admin\" (can_remove true), not \"contractor\"")
+    fake.tables["processed_pdfs"] = [pdf_row(900, "Collision.pdf", "completed")]
+    fake.tables["pyq"] = []
+    server._PROCESSED_PDFS_CACHE.update({"at": 0.0, "base_rows": None, "gaps": None, "stats_map": None})
+
+    original_contractor_key = server.CONTRACTOR_PDF_KEY
+    try:
+        server.CONTRACTOR_PDF_KEY = ADMIN_KEY  # simulate the Railway misconfig directly
+        r = client.get("/admin/processed-pdfs", headers=ADMIN)
+        check("still 200", r.status_code == 200, r.text)
+        check("can_remove stays true for the real admin password even though it now equals CONTRACTOR_PDF_KEY too",
+              r.json()["can_remove"] is True, r.json())
+    finally:
+        server.CONTRACTOR_PDF_KEY = original_contractor_key
+
+    server._PROCESSED_PDFS_CACHE.update({"at": 0.0, "base_rows": None, "gaps": None, "stats_map": None})
+
+
 def test_zero_and_cache(client, fake):
     print("\n# A PDF with zero saved questions shows all-zero counts; list is cached for 30s")
     fake.tables["processed_pdfs"] = [pdf_row(200, "Untouched.pdf", "processing", age_minutes=1, subject="Physics")]
@@ -630,6 +650,7 @@ def main():
     client = TestClient(server.app)  # no `with`: skips startup hooks, nothing here needs them
 
     test_list_counts_and_roles(client, fake)
+    test_contractor_key_collides_with_admin_password(client, fake)
     test_zero_and_cache(client, fake)
     test_remove_record(client, fake)
     test_manual_add(client, fake)

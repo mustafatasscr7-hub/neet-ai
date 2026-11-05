@@ -261,6 +261,7 @@
     .pdf-history-counts-unavailable { color: #e0a030; }
     .pdf-history-counts-note { font-size: 11px; color: #e0a030; padding: 6px 2px; border-bottom: 1px solid #1e1e1e; margin-bottom: 4px; }
     .pdf-history-counts-note a { color: #4f8ef7; text-decoration: none; }
+    .pdf-history-admin-note { font-size: 11px; color: #888; padding: 2px 4px 8px; }
     .pdf-history-show-more { margin-top: 8px; width: 100%; font-size: 12px; }
     .pdf-history-add-form { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; padding: 10px; background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 8px; }
     .pdf-history-add-form input, .pdf-history-add-form select { background: #111; border: 1px solid #2a2a2a; border-radius: 7px; color: #ececec; font-family: 'Inter', sans-serif; font-size: 12px; padding: 6px 8px; }
@@ -455,6 +456,7 @@
           <button type="button" class="action-btn" onclick="closePdfHistory()">Close</button>
         </div>
       </div>
+      <div id="pdfHistoryAdminNote" class="pdf-history-admin-note" style="display:none;">Log in as admin to edit this list.</div>
       <div id="pdfHistoryAddForm" class="pdf-history-add-form" style="display:none;">
         <input type="text" id="pdfAddFilename" placeholder="File name">
         <select id="pdfAddSubject">
@@ -3183,8 +3185,10 @@
       const canAdmin = !!(pdfHistoryData && pdfHistoryData.can_remove);
       const addBtn = document.getElementById('pdfHistoryAddBtn');
       const undoBtn = document.getElementById('pdfHistoryUndoBtn');
+      const note = document.getElementById('pdfHistoryAdminNote');
       if (addBtn) addBtn.style.display = canAdmin ? '' : 'none';
       if (undoBtn) undoBtn.style.display = canAdmin ? '' : 'none';
+      if (note) note.style.display = canAdmin ? 'none' : '';
       if (!canAdmin) cancelAddPdfForm();
       renderPdfHistoryUndoButton();
     }
