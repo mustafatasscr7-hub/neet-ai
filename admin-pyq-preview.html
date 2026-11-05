@@ -164,7 +164,7 @@
     .q-warn { font-size: 11px; padding: 3px 9px; border-radius: 20px; font-weight: 600; background: #f59e0b1c; color: #f5b445; text-decoration: none; }
     a.q-warn:hover { text-decoration: underline; }
 
-    /* Consolidated status tile row (Pending/Needs fix/Approved/Rejected/Deleted) -- doubles as
+    /* Consolidated status tile row (Pending/Needs fix/Approved/Rejected) -- doubles as
        the review-status filter. Reuses the same blue-accent "active" tile look the Contractor
        Queue's diagram counts used to own exclusively. The With/Without-diagram toggle and the
        contractor-scoped Duplicates check append themselves here too, only while Contractor
@@ -177,12 +177,6 @@
     .contractor-count-row.active .contractor-count-label, .contractor-count-row.active .contractor-count-num { color: #fff; }
     .contractor-count-label { font-size: 12px; color: #ccc; }
     .contractor-count-num { font-size: 16px; font-weight: 700; color: #ececec; }
-    /* Secondary (display-only) boxes: quieter than the clickable diagram counts -- smaller
-       text, muted colour, thin border, no blue accent, not clickable. */
-    .contractor-count-row.secondary { padding: 6px 10px; border-color: #202020; background: #141414; cursor: default; }
-    .contractor-count-row.secondary:hover { border-color: #202020; }
-    .contractor-count-row.secondary .contractor-count-label { font-size: 10px; color: #777; }
-    .contractor-count-row.secondary .contractor-count-num { font-size: 13px; font-weight: 600; color: #999; }
 
     /* Mode tabs (Review / Contractor queue / Find duplicates / Reported / Diagram review / PDFs)
        -- reuses dup-toggle-btn's existing active (blue) state, just arranged as its own row. */
@@ -199,24 +193,24 @@
     .collapse-body { display: none; padding: 0 12px 12px 12px; }
     .collapse-panel.open .collapse-body { display: block; }
     .contractor-counts-error { font-size: 11px; color: #ef4444; margin-bottom: 8px; }
-    .contractor-uploaded-summary { font-size: 12px; color: #888; margin-bottom: 10px; }
     /* Contractor payout tally table -- compact to match the other admin tables/cards. At desktop
-       width (>=1100px, see #dashboard's max-width) all 11 columns fit with no horizontal scroll;
+       width (>=1100px, see #dashboard's max-width) all 9 columns fit with no horizontal scroll;
        below that the wrap scrolls horizontally instead of clipping rightmost columns, with the
        Uploader column pinned (opaque background, so scrolled columns don't show through it). */
     .contractor-tally-wrap { overflow-x: auto; }
     .contractor-tally-table { border-collapse: collapse; width: 100%; font-size: 14px; color: #ececec; }
-    .contractor-tally-table th, .contractor-tally-table td { padding: 12px 14px; white-space: nowrap; }
+    .contractor-tally-table td { padding: 12px 14px; white-space: nowrap; }
     .contractor-tally-table thead th {
       text-align: left; color: #888; font-size: 12px; font-weight: 700; text-transform: uppercase;
-      letter-spacing: 0.04em; border-bottom: 1px solid #262626;
+      letter-spacing: 0.04em; border-bottom: 1px solid #262626; padding: 8px 10px;
+      white-space: normal; line-height: 1.35;
     }
     .contractor-tally-table tbody td { border-bottom: 1px solid #1a1a1a; }
     .contractor-tally-table tbody tr:last-child td { border-bottom: none; }
     .contractor-tally-table td:not(:first-child), .contractor-tally-table th:not(:first-child) {
       text-align: right; font-variant-numeric: tabular-nums;
     }
-    .contractor-tally-table td.payable, .contractor-tally-table td.amount { font-weight: 700; }
+    .contractor-tally-table td.payable { font-weight: 700; }
     .contractor-tally-table th:first-child, .contractor-tally-table td:first-child {
       position: sticky; left: 0; background: #111; text-align: left;
     }
@@ -571,7 +565,6 @@
       </div>
       <div class="collapse-body">
         <div id="contractorCountsError" class="contractor-counts-error"></div>
-        <div id="contractorUploadedSummary" class="contractor-uploaded-summary"></div>
         <div id="contractorTallyBody">Loading...</div>
       </div>
     </div>
@@ -1266,7 +1259,7 @@
         }
         const t = data.today;
         document.getElementById('reviewToday').innerHTML =
-          `Today: <strong>${t.uploaded}</strong> uploaded (${t.uploaded_by_contractor} by contractor), <strong>${t.checked}</strong> checked`;
+          `Today: <strong>${t.uploaded}</strong> uploaded`;
         reviewSummaryData = data;
         renderStatusTiles();
         const sel = document.getElementById('filterBatch');
@@ -1284,13 +1277,13 @@
       }
     }
 
-    // Consolidated status tile row (Pending / Needs fix / Approved / Rejected / Deleted) --
-    // doubles as the review-status filter via showReviewQueue, same click behavior (and the
-    // same "leaves Contractor Queue mode" fix) as the tiles it replaces. Deleted stays
-    // display-only, same as it always was in the old contractor panel -- a deleted row no
-    // longer exists to filter back to. While Contractor Queue mode is active, the contractor's
-    // own With/Without-diagram toggle and Duplicates check append themselves to this same row
-    // instead of living in a separate panel.
+    // Consolidated status tile row (Pending / Needs fix / Approved / Rejected) -- doubles as
+    // the review-status filter via showReviewQueue, same click behavior (and the same "leaves
+    // Contractor Queue mode" fix) as the tiles it replaces. Deleted isn't shown here -- it has
+    // no filter to show it for, and its count already lives in the Contractor payout table.
+    // While Contractor Queue mode is active, the contractor's own With/Without-diagram toggle
+    // and Duplicates check append themselves to this same row instead of living in a separate
+    // panel.
     function renderStatusTiles() {
       const row = document.getElementById('statusTileRow');
       if (!row) return;
@@ -1306,11 +1299,7 @@
       let html = tile('pending', 'Pending', rs.pending != null ? rs.pending : 0)
         + tile('needs_fix', 'Needs fix', rs.needs_fix != null ? rs.needs_fix : 0)
         + tile('approved', 'Approved', cc.approved != null ? cc.approved : 0)
-        + tile('rejected', 'Rejected', rs.rejected != null ? rs.rejected : 0)
-        + `<div class="contractor-count-row secondary">
-             <span class="contractor-count-label">Deleted</span>
-             <span class="contractor-count-num">${cc.deleted != null ? cc.deleted : 0}</span>
-           </div>`;
+        + tile('rejected', 'Rejected', rs.rejected != null ? rs.rejected : 0);
       if (contractorMode) {
         html += `
           <div class="contractor-count-row dup-btn${contractorDiagramFilter === 'with' ? ' active' : ''}" onclick="toggleContractorDiagramFilter('with')">
@@ -1374,7 +1363,7 @@
           autoApproveStats = null;
           tileBtn.textContent = 'Would auto-approve …';
           approveBtn.style.display = 'none';
-          status.textContent = 'Auto-approve: unavailable (' + data.error + ')';
+          status.textContent = 'unavailable (' + data.error + ')';
           status.className = 'auto-status';
           if (headerSummary) headerSummary.textContent = 'unavailable';
           return;
@@ -1383,13 +1372,14 @@
         tileBtn.textContent = `Would auto-approve ${data.would_approve}`;
         approveBtn.style.display = data.would_approve > 0 ? 'inline-block' : 'none';
         approveBtn.textContent = `Approve all ${data.would_approve}`;
-        status.innerHTML = `Auto-approve: <strong>${data.enabled ? 'on' : 'off'}</strong>` +
-          (data.pending_unchecked ? ` · ${data.pending_unchecked} not yet checked` : '') +
-          (data.formula_eligible ? ` · formula: ${data.formula_passed}/${data.formula_eligible} passed` : '');
+        const statusParts = [];
+        if (data.pending_unchecked) statusParts.push(`${data.pending_unchecked} not yet checked`);
+        if (data.formula_eligible) statusParts.push(`formula: ${data.formula_passed}/${data.formula_eligible} passed`);
+        status.textContent = statusParts.join(' · ');
         status.className = 'auto-status' + (data.enabled ? ' on' : '');
-        if (headerSummary) headerSummary.textContent = `${data.enabled ? 'on' : 'off'}, ${data.would_approve} waiting`;
+        if (headerSummary) headerSummary.textContent = data.enabled ? 'on' : 'off';
       } catch (e) {
-        document.getElementById('autoApproveStatus').textContent = 'Auto-approve: could not reach server.';
+        document.getElementById('autoApproveStatus').textContent = 'could not reach server.';
         const headerSummary = document.getElementById('autoApproveHeaderSummary');
         if (headerSummary) headerSummary.textContent = 'unavailable';
       }
@@ -1798,13 +1788,11 @@
         <td>${r.uploaded}</td>
         <td>${r.approved}</td>
         <td>${r.pending}</td>
-        <td>${r.needs_fix}</td>
         <td${warn}>${r.rejected_errors}</td>
         <td${warn}>${r.duplicates_deducted}</td>
         <td>${r.duplicates_free}</td>
         <td>${r.deleted}</td>
         <td class="payable">${r.payable} / ${r.target}</td>
-        <td class="amount">$${Number(r.amount_usd ?? 0).toFixed(2)}</td>
       </tr>`;
     }
 
@@ -1829,10 +1817,10 @@
           <thead><tr>
             <th>Uploader</th><th>Uploaded</th>
             <th>Approved</th><th>Pending</th>
-            <th title="Needs fix">Needs fix</th><th title="Errors (deducted)">Errors</th>
-            <th title="Duplicates (deducted, from 1 Nov)">Duplicates</th><th title="Duplicates before 1 Nov (free)">Dup. pre-Nov</th>
+            <th title="Errors (deducted)">Errors</th>
+            <th title="Duplicates (deducted, from 1 Nov)">Duplicates (deducted)</th>
+            <th title="Duplicates before 1 Nov (free)">Duplicates (free, pre-Nov)</th>
             <th>Deleted</th><th>Payable</th>
-            <th title="Amount (USD)">Amount</th>
           </tr></thead>
           <tbody>${rows.map(contractorTallyRowHtml).join('')}</tbody>
         </table></div>`;
@@ -2699,9 +2687,8 @@
       }
     }
 
-    // contractorCountsCache feeds three places now: the consolidated status tile row (Approved/
-    // Deleted/With-diagram/Without-diagram/Duplicates while Contractor Queue mode is active --
-    // see renderStatusTiles), and the Contractor payout panel's "Uploaded so far" numbers below.
+    // contractorCountsCache feeds the consolidated status tile row (Approved/With-diagram/
+    // Without-diagram/Duplicates while Contractor Queue mode is active -- see renderStatusTiles).
     function renderContractorPanelError(msg) {
       const el = document.getElementById('contractorCountsError');
       if (el) el.textContent = 'Counts unavailable: ' + msg;
@@ -2711,11 +2698,6 @@
       const err = document.getElementById('contractorCountsError');
       if (err) err.textContent = '';
       renderStatusTiles();
-      const uploadedEl = document.getElementById('contractorUploadedSummary');
-      if (uploadedEl) {
-        uploadedEl.innerHTML = `Uploaded so far — With diagram: <strong>${data.uploaded_with_diagram || 0}</strong> ` +
-          `· Without diagram: <strong>${data.uploaded_without_diagram || 0}</strong>`;
-      }
     }
 
     function toggleContractorDiagramFilter(key) {
