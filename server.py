@@ -9253,7 +9253,7 @@ PYQ_DUP_CORPUS_SELECT = (
     "review_status,review_note,uploaded_by,uploaded_at,uploader_name"
 )
 
-async def _pyq_dup_corpus(subject: str, language: str = "en"):
+async def _pyq_dup_corpus(subject: str, language: str = "en", include_rejected: bool = False):
     """[(id, tokens, row)] for every pyq row in the (subject, language) pair, any status --
     cached briefly since the review page asks for it on every page turn. None if the read fails
     (the duplicate check is then skipped, never guessed). Scoped by language too (pyq_language.sql,
@@ -9264,21 +9264,24 @@ async def _pyq_dup_corpus(subject: str, language: str = "en"):
     REST param: a row with no language value at all (any gap before pyq_language.sql's backfill
     finishes, or simply a column PostgREST doesn't know about yet) should read as 'en' here, the
     same "missing means en" convention used everywhere else in this feature -- a REST-level
-    `eq.en` filter would silently drop a NULL-language row instead of treating it as English."""
-    cache_key = (subject, language)
+    `eq.en` filter would silently drop a NULL-language row instead of treating it as English.
+
+    include_rejected=False (the default, used for the live review-page duplicate warning) drops
+    rejected rows at the REST level: a rejected row is kept as proof, not a legitimate duplicate
+    signal against a real question someone is actively reviewing. include_rejected=True (used by
+    /admin/pyq-matches' cross-check panel) keeps them -- that panel's whole job is to show what a
+    stored "Duplicate" pill actually matched, even if the other copy has since been rejected."""
+    cache_key = (subject, language, include_rejected)
     hit = _pyq_dup_corpus_cache.get(cache_key)
     if hit and time.time() - hit[0] < PYQ_DUP_CORPUS_TTL:
         return hit[1]
     rows, offset, page_size = [], 0, 1000
     while True:
-        resp = await async_client.get(
-            f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
-            # review_status neq.rejected: a rejected row is kept as proof, not a legitimate
-            # duplicate signal against a real question.
-            params={"subject": f"eq.{subject}", "select": PYQ_DUP_CORPUS_SELECT,
-                    "review_status": "neq.rejected",
-                    "order": "id.asc", "limit": page_size, "offset": offset}
-        )
+        params = {"subject": f"eq.{subject}", "select": PYQ_DUP_CORPUS_SELECT,
+                  "order": "id.asc", "limit": page_size, "offset": offset}
+        if not include_rejected:
+            params["review_status"] = "neq.rejected"
+        resp = await async_client.get(f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS, params=params)
         page = resp.json() if resp.status_code < 400 else None
         if not isinstance(page, list):
             print(f"PYQ DUP CORPUS READ FAILED (subject={subject}, language={language}): {resp.status_code}", flush=True)
@@ -9303,16 +9306,23 @@ def _best_duplicate(row_id, tokens: set, corpus: list) -> tuple:
                 best_id, best = other_id, overlap
     return best_id, best
 
-def _dup_matches(row_id, tokens: set, corpus: list, threshold: float, cap: int = 50) -> tuple:
+def _dup_matches(row_id, tokens: set, corpus: list, threshold: float, cap: int = 50,
+                  include_inactive: bool = False) -> tuple:
     """Every corpus row at or above `threshold` against (row_id, tokens), most-similar first --
     same token-overlap scoring _best_duplicate uses, just returning every hit instead of only
     the best one. Returns (hits, total) where hits is [(overlap, other_id, other_row), ...]
-    capped at `cap`, and total is the uncapped count (so a caller can say "and N more")."""
+    capped at `cap`, and total is the uncapped count (so a caller can say "and N more").
+
+    include_inactive=False (the default, used by the Contractor Queue's Duplicates button) skips
+    a soft-deactivated row (is_active=False, e.g. pulled from circulation by a student report) --
+    that candidate is already off the bank, not a live duplicate to resolve. include_inactive=True
+    (used by /admin/pyq-matches) keeps it, since the panel's job is to show what a stored
+    "Duplicate" pill actually matched even if that copy was since deactivated."""
     hits = []
     for other_id, other_tokens, other_row in corpus:
         if other_id == row_id or not other_tokens:
             continue
-        if other_row.get("is_active") is False:
+        if not include_inactive and other_row.get("is_active") is False:
             continue
         shared = len(tokens & other_tokens)
         if not shared:
@@ -13463,15 +13473,59 @@ def admin_pyq_dismiss_duplicate(req: DismissDuplicateRequest, _: None = Depends(
     except Exception as e:
         return {"error": str(e)}
 
+def _pyq_match_status(other: dict) -> str:
+    """Admin-facing status label for one /admin/pyq-matches row. A soft-deactivated row
+    (is_active=False -- e.g. pulled from circulation by a student report, see
+    /question-reports above) is labelled 'deleted' regardless of review_status, since it's off
+    the bank either way; otherwise the label is just review_status itself ('pending' if unset,
+    which only happens for a pre-pyq_auto_approve.sql row)."""
+    if other.get("is_active") is False:
+        return "deleted"
+    return other.get("review_status") or "pending"
+
+def _pyq_dup_pill_flagged(row: dict) -> bool:
+    return "duplicate" in [r.strip() for r in (row.get("auto_reasons") or "").split(",")]
+
+def _pyq_build_dup_matches(target: dict, corpus: list, cap: int = 5) -> dict:
+    """Pure part of /admin/pyq-matches (split out so it's unit-testable without a network call):
+    given the target row and a (subject, language) corpus that already includes rejected and
+    soft-deactivated rows (see _pyq_dup_corpus(..., include_rejected=True)), returns the
+    {matches, total_matches, stale_flag} payload the endpoint sends.
+
+    stale_flag is True only when the row's own stored auto_reasons says 'duplicate' (the pill is
+    showing) but nothing in this now-widened corpus matches it -- i.e. whatever the pill
+    originally matched was rejected and then hard-deleted (admin_pyq_delete), not merely rejected
+    or soft-deactivated (those still come back as a match, labelled accordingly). The front end
+    uses this to offer "Clear duplicate flag" instead of just "No similar questions found"."""
+    tokens = _pyq_dup_tokens(target)
+    hits, total = _dup_matches(target["id"], tokens, corpus, AUTO_APPROVE_DUP_THRESHOLD, cap=cap, include_inactive=True)
+    matches = [{
+        "id": other["id"], "match_percent": round(overlap * 100), "status": _pyq_match_status(other),
+        "uploader_name": other.get("uploader_name"), "uploaded_at": other.get("uploaded_at"),
+        "review_status": other.get("review_status"), "is_active": other.get("is_active"),
+        "subject": other.get("subject"), "chapter": other.get("chapter"), "year": other.get("year"),
+        "question": other.get("question"), "option_a": other.get("option_a"),
+        "option_b": other.get("option_b"), "option_c": other.get("option_c"),
+        "option_d": other.get("option_d"), "correct_answer": other.get("correct_answer"),
+        "diagram_url": other.get("diagram_url"),
+        "option_a_diagram_url": other.get("option_a_diagram_url"),
+        "option_b_diagram_url": other.get("option_b_diagram_url"),
+        "option_c_diagram_url": other.get("option_c_diagram_url"),
+        "option_d_diagram_url": other.get("option_d_diagram_url"),
+    } for overlap, _other_id, other in hits]
+    return {"matches": matches, "total_matches": total, "stale_flag": _pyq_dup_pill_flagged(target) and not matches}
+
 @app.get("/admin/pyq-matches")
 async def admin_pyq_matches(id: str, _: None = Depends(verify_admin)):
     """Top-5 most similar OTHER rows for one question, for the "Duplicate" pill's cross-check
-    panel on admin-pyq-preview.html -- same token-overlap rule, (subject, language) scope and
+    panel on admin-pyq-preview.html -- same token-overlap rule and (subject, language) scope and
     AUTO_APPROVE_DUP_THRESHOLD the pill's own auto_reasons 'duplicate' flag already used to decide
-    this row needed a look (see auto_check/_auto_is_duplicate above), just returning full match
-    rows instead of a bool so the admin can see what it actually matched. Read-only -- no writes,
-    and admin-only (verify_admin, not verify_admin_or_contractor_pdf -- the contractor key must
-    not work here)."""
+    this row needed a look (see auto_check/_auto_is_duplicate above), just widened to include
+    rejected and soft-deactivated rows too (include_rejected=True / include_inactive=True below)
+    so the panel can always find what actually triggered the pill, not just what's still a live
+    candidate -- the pill is a one-time snapshot (auto_checked_at) that never gets un-set just
+    because the other copy was rejected afterward. Read-only -- no writes, and admin-only
+    (verify_admin, not verify_admin_or_contractor_pdf -- the contractor key must not work here)."""
     try:
         resp = await async_client.get(
             f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
@@ -13484,26 +13538,50 @@ async def admin_pyq_matches(id: str, _: None = Depends(verify_admin)):
             return {"error": "not found"}
         target = rows[0]
         language = target.get("language") or "en"
-        tokens = _pyq_dup_tokens(target)
-        corpus = await _pyq_dup_corpus(target["subject"], language)
+        corpus = await _pyq_dup_corpus(target["subject"], language, include_rejected=True)
         if corpus is None:
             return {"error": "could not read the duplicate corpus"}
-        hits, total = _dup_matches(target["id"], tokens, corpus, AUTO_APPROVE_DUP_THRESHOLD, cap=5)
-        matches = [{
-            "id": other["id"], "match_percent": round(overlap * 100),
-            "uploader_name": other.get("uploader_name"), "uploaded_at": other.get("uploaded_at"),
-            "review_status": other.get("review_status"), "subject": other.get("subject"),
-            "chapter": other.get("chapter"), "year": other.get("year"),
-            "question": other.get("question"), "option_a": other.get("option_a"),
-            "option_b": other.get("option_b"), "option_c": other.get("option_c"),
-            "option_d": other.get("option_d"), "correct_answer": other.get("correct_answer"),
-            "diagram_url": other.get("diagram_url"),
-            "option_a_diagram_url": other.get("option_a_diagram_url"),
-            "option_b_diagram_url": other.get("option_b_diagram_url"),
-            "option_c_diagram_url": other.get("option_c_diagram_url"),
-            "option_d_diagram_url": other.get("option_d_diagram_url"),
-        } for overlap, _other_id, other in hits]
-        return {"matches": matches, "total_matches": total}
+        return _pyq_build_dup_matches(target, corpus)
+    except Exception as e:
+        return {"error": str(e)}
+
+class PyqClearDuplicateFlagRequest(BaseModel):
+    id: str
+
+@app.post("/admin/pyq-clear-duplicate-flag")
+async def admin_pyq_clear_duplicate_flag(body: PyqClearDuplicateFlagRequest, _: None = Depends(verify_admin)):
+    """Removes a stale 'duplicate' code from one row's auto_reasons -- for when
+    /admin/pyq-matches' cross-check panel (widened above to include rejected/deactivated matches)
+    still finds nothing, because whatever the pill originally matched was hard-deleted
+    (admin_pyq_delete), not just rejected or deactivated. Touches auto_reasons only -- never
+    review_status, auto_pass, or anything payout-related -- so this is purely "this pill no
+    longer points at anything, stop showing it", not a re-review of the row. Admin-only."""
+    if not _UUID_RE.match(body.id or ""):
+        return {"error": "Invalid question id"}
+    try:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
+            params={"id": f"eq.{body.id}", "select": "id,auto_reasons", "limit": 1}
+        )
+        if resp.status_code >= 400:
+            return {"error": resp.text}
+        rows = resp.json()
+        if not rows:
+            return {"error": "Row not found"}
+        if not _pyq_dup_pill_flagged(rows[0]):
+            return {"error": "This row is not flagged as a duplicate"}
+        remaining = [r.strip() for r in (rows[0].get("auto_reasons") or "").split(",") if r.strip() and r.strip() != "duplicate"]
+        patch_resp = await async_client.patch(
+            f"{SUPABASE_URL}/rest/v1/pyq", headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
+            params={"id": f"eq.{body.id}", "select": "id,auto_pass,auto_reasons,auto_checked_at"},
+            json={"auto_reasons": ",".join(remaining) if remaining else None}
+        )
+        if patch_resp.status_code >= 400:
+            return {"error": patch_resp.text}
+        updated = patch_resp.json()
+        if not updated:
+            return {"error": "Row not found"}
+        return {"updated": updated[0]}
     except Exception as e:
         return {"error": str(e)}
 

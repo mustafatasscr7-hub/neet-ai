@@ -1805,8 +1805,9 @@
         }
         const data = await res.json();
         dupMatchData[id] = data.error
-          ? { loading: false, error: data.error, matches: [], total_matches: 0 }
-          : { loading: false, error: null, matches: data.matches || [], total_matches: data.total_matches || 0 };
+          ? { loading: false, error: data.error, matches: [], total_matches: 0, stale_flag: false }
+          : { loading: false, error: null, matches: data.matches || [], total_matches: data.total_matches || 0,
+              stale_flag: !!data.stale_flag };
       } catch (e) {
         dupMatchData[id] = { loading: false, error: 'Could not reach server.', matches: [], total_matches: 0 };
       }
@@ -1861,14 +1862,49 @@
       rerenderCurrentMode();
     }
 
+    // "Clear duplicate flag" -- only ever offered once the panel's own widened search (rejected
+    // + deactivated rows included) still finds nothing, i.e. whatever the pill matched was
+    // hard-deleted. Touches auto_reasons only (/admin/pyq-clear-duplicate-flag); review_status
+    // and payout are never part of this.
+    async function clearDuplicateFlag(id, btnEl) {
+      btnEl.disabled = true;
+      btnEl.textContent = 'Clearing...';
+      try {
+        const res = await fetch(`${API_BASE}/admin/pyq-clear-duplicate-flag`, {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ id })
+        });
+        if (res.status === 401) return logout();
+        const data = await res.json();
+        if (!res.ok || data.error) {
+          alert('Could not clear the duplicate flag: ' + (data.error || res.status));
+          btnEl.disabled = false;
+          btnEl.textContent = 'Clear duplicate flag';
+          return;
+        }
+        dupMatchPanelOpenIds.delete(id);
+        delete dupMatchData[id];
+        applyReviewResultAnywhere(data.updated);
+        rerenderCurrentMode();
+      } catch (e) {
+        alert('Could not reach server.');
+        btnEl.disabled = false;
+        btnEl.textContent = 'Clear duplicate flag';
+      }
+    }
+
+    // m.status (from /admin/pyq-matches) is 'deleted' (soft is_active=false, takes priority),
+    // else m.review_status itself -- see _pyq_match_status in server.py.
     function dupMatchStatusLabel(status) {
-      return { pending: 'Pending review', needs_fix: 'Needs fix', approved: 'Approved', rejected: 'Rejected' }[status] || '';
+      return { pending: 'Pending review', needs_fix: 'Needs fix', approved: 'Approved',
+                rejected: 'Rejected', deleted: 'Removed from bank' }[status] || '';
     }
 
     function dupMatchRowHtml(cardId, m) {
-      const statusLabel = dupMatchStatusLabel(m.review_status);
-      const actionsHtml = m.review_status === 'rejected'
-        ? '<span class="dup-match-rejected-note">Already rejected</span>'
+      const statusLabel = dupMatchStatusLabel(m.status);
+      const actionsHtml = (m.status === 'rejected' || m.status === 'deleted')
+        ? `<span class="dup-match-rejected-note">${m.status === 'deleted' ? 'Already removed from the bank' : 'Already rejected'}</span>`
         : `<button type="button" class="q-reject-btn" onclick="dupMatchReject('${cardId}', '${cardId}', this)">Reject this one (duplicate)</button>
            <button type="button" class="q-reject-btn" onclick="dupMatchReject('${cardId}', '${m.id}', this)">Reject the other (duplicate)</button>`;
       return `
@@ -1895,6 +1931,12 @@
         return `<div class="dup-match-panel"><div class="dup-match-error">Could not load matches: ${escapeHtml(state.error)}</div></div>`;
       }
       if (!state.matches.length) {
+        if (state.stale_flag) {
+          return `<div class="dup-match-panel">
+            <div class="dup-match-empty">Match no longer exists (the other copy was rejected or deleted).</div>
+            <button type="button" class="q-edit-btn" onclick="clearDuplicateFlag('${cardId}', this)">Clear duplicate flag</button>
+          </div>`;
+        }
         return '<div class="dup-match-panel"><div class="dup-match-empty">No similar questions found right now.</div></div>';
       }
       const moreNote = state.total_matches > state.matches.length
