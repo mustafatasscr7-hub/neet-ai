@@ -13463,6 +13463,50 @@ def admin_pyq_dismiss_duplicate(req: DismissDuplicateRequest, _: None = Depends(
     except Exception as e:
         return {"error": str(e)}
 
+@app.get("/admin/pyq-matches")
+async def admin_pyq_matches(id: str, _: None = Depends(verify_admin)):
+    """Top-5 most similar OTHER rows for one question, for the "Duplicate" pill's cross-check
+    panel on admin-pyq-preview.html -- same token-overlap rule, (subject, language) scope and
+    AUTO_APPROVE_DUP_THRESHOLD the pill's own auto_reasons 'duplicate' flag already used to decide
+    this row needed a look (see auto_check/_auto_is_duplicate above), just returning full match
+    rows instead of a bool so the admin can see what it actually matched. Read-only -- no writes,
+    and admin-only (verify_admin, not verify_admin_or_contractor_pdf -- the contractor key must
+    not work here)."""
+    try:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
+            params={"id": f"eq.{id}", "select": PYQ_DUP_CORPUS_SELECT, "limit": 1}
+        )
+        if resp.status_code >= 400:
+            return {"error": resp.text}
+        rows = resp.json()
+        if not rows:
+            return {"error": "not found"}
+        target = rows[0]
+        language = target.get("language") or "en"
+        tokens = _pyq_dup_tokens(target)
+        corpus = await _pyq_dup_corpus(target["subject"], language)
+        if corpus is None:
+            return {"error": "could not read the duplicate corpus"}
+        hits, total = _dup_matches(target["id"], tokens, corpus, AUTO_APPROVE_DUP_THRESHOLD, cap=5)
+        matches = [{
+            "id": other["id"], "match_percent": round(overlap * 100),
+            "uploader_name": other.get("uploader_name"), "uploaded_at": other.get("uploaded_at"),
+            "review_status": other.get("review_status"), "subject": other.get("subject"),
+            "chapter": other.get("chapter"), "year": other.get("year"),
+            "question": other.get("question"), "option_a": other.get("option_a"),
+            "option_b": other.get("option_b"), "option_c": other.get("option_c"),
+            "option_d": other.get("option_d"), "correct_answer": other.get("correct_answer"),
+            "diagram_url": other.get("diagram_url"),
+            "option_a_diagram_url": other.get("option_a_diagram_url"),
+            "option_b_diagram_url": other.get("option_b_diagram_url"),
+            "option_c_diagram_url": other.get("option_c_diagram_url"),
+            "option_d_diagram_url": other.get("option_d_diagram_url"),
+        } for overlap, _other_id, other in hits]
+        return {"matches": matches, "total_matches": total}
+    except Exception as e:
+        return {"error": str(e)}
+
 # ---------- Contractor Queue "Duplicates" button ----------
 # Checks the contractor's still-pending uploads against the whole bank AND the rest of the
 # queue, reusing /admin/pyq-duplicates' own 50% token-overlap rule and the per-subject corpus

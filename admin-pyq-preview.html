@@ -369,6 +369,22 @@
     .report-approve-btn:disabled { opacity: 0.6; cursor: default; }
     .report-deleted-note { color: #ef4444; font-style: italic; font-size: 12px; padding: 10px 0; }
 
+    /* Clickable "Duplicate" pill (an auto_reasons chip, see autoReasonChipsHtml) and the
+       cross-check panel it opens under the card. Reuses .dup-columns' own stacked-full-width
+       layout -- no side-by-side columns here either, for the same reason: squeezing a question
+       and its options into a narrow column wraps text hard and hides match-the-following lists. */
+    .dup-pill-btn { background: #1a1a1a; border: 1px solid #2a2a2a; color: #888; font-size: 11px; padding: 2px 8px; border-radius: 12px; font-family: 'Inter', sans-serif; cursor: pointer; }
+    .dup-pill-btn:hover { border-color: #4f8ef7; color: #4f8ef7; }
+    .dup-pill-btn.active { background: #4f8ef715; border-color: #4f8ef7; color: #4f8ef7; }
+    .dup-match-panel { margin-top: 14px; padding-top: 14px; border-top: 1px dashed #2a2a2a; }
+    .dup-match-panel-title { font-size: 12px; color: #4f8ef7; font-weight: 600; margin-bottom: 10px; }
+    .dup-match-loading, .dup-match-empty { font-size: 12px; color: #666; }
+    .dup-match-error { font-size: 12px; color: #ef4444; }
+    .dup-match-row { border: 1px solid #1e1e1e; border-radius: 12px; padding: 14px; background: #0a0a0a; }
+    .dup-match-row .question-card { margin-bottom: 10px; }
+    .dup-match-row-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+    .dup-match-rejected-note { font-size: 12px; color: #666; }
+
     .pagination { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 16px; }
     .pagination button { background: #1a1a1a; border: 1px solid #2a2a2a; color: #ececec; padding: 6px 14px; border-radius: 6px; font-size: 12px; cursor: pointer; font-family: 'Inter', sans-serif; }
     .pagination button:hover:not(:disabled) { border-color: #4f8ef7; color: #4f8ef7; }
@@ -641,6 +657,13 @@
     const PYQ_REJECT_REASONS = ['Unfixable formatting', 'Wrong or missing options', 'Garbled text', 'Other'];
     let dupRejectOpenIds = new Set(); // duplicate-view cards with the "Reject (duplicate)" note box open
     let dupRejectDrafts = {}; // id -> unsent note text, kept across re-renders
+
+    // Cross-check panel opened by clicking a card's "Duplicate" pill (/admin/pyq-matches) --
+    // card id -> { loading, error, matches: [...], total_matches }. Separate from the
+    // Find-Duplicates/Contractor-Duplicates views above: this is a per-card drill-down on
+    // whichever card the pill lives on, in any mode, not its own view.
+    let dupMatchPanelOpenIds = new Set();
+    let dupMatchData = {};
 
     // Auto-approve (pyq_auto_approve.sql) -- codes auto_check can put in a row's auto_reasons.
     // chemical_formula/latex collapse to the same "Formula" chip on a card (autoReasonChipsHtml
@@ -1532,6 +1555,13 @@
         const label = AUTO_REASON_LABELS[code] || code;
         if (seen.has(label)) return '';
         seen.add(label);
+        // The "Duplicate" pill specifically: clickable, opens the cross-check panel for this
+        // card (dupMatchPanelHtml) so the admin can compare it against its actual matches
+        // instead of just trusting the auto-check's yes/no.
+        if (code === 'duplicate') {
+          const open = dupMatchPanelOpenIds.has(q.id);
+          return `<button type="button" class="dup-pill-btn${open ? ' active' : ''}" onclick="toggleDupMatchPanel('${q.id}')">${escapeHtml(label)}</button>`;
+        }
         return `<span class="report-reason-chip">${escapeHtml(label)}</span>`;
       }).join('');
     }
@@ -1744,6 +1774,138 @@
       refreshContractorDupCounts();
       rerenderDupView();
       window.scrollTo(0, scrollY);
+    }
+
+    // ---------------- "Duplicate" pill cross-check panel (/admin/pyq-matches) ----------------
+    // Lets the admin open the top-5 most similar rows for one card and compare them in place,
+    // instead of just trusting the auto-check's yes/no "Duplicate" pill. Works wherever
+    // questionCardHtml renders that pill (plain list, Contractor Queue, Find Duplicates,
+    // Reported) since the panel is rendered inside questionCardHtml itself.
+    function toggleDupMatchPanel(id) {
+      if (dupMatchPanelOpenIds.has(id)) {
+        dupMatchPanelOpenIds.delete(id);
+        rerenderCurrentMode();
+        return;
+      }
+      dupMatchPanelOpenIds.add(id);
+      rerenderCurrentMode();
+      if (!dupMatchData[id]) loadDupMatches(id);
+    }
+
+    async function loadDupMatches(id) {
+      dupMatchData[id] = { loading: true, error: null, matches: [], total_matches: 0 };
+      rerenderCurrentMode();
+      try {
+        const res = await fetch(`${API_BASE}/admin/pyq-matches?id=${encodeURIComponent(id)}`, { headers: authHeaders() });
+        if (res.status === 401) return logout();
+        if (!res.ok) {
+          dupMatchData[id] = { loading: false, error: await describeHttpError(res), matches: [], total_matches: 0 };
+          rerenderCurrentMode();
+          return;
+        }
+        const data = await res.json();
+        dupMatchData[id] = data.error
+          ? { loading: false, error: data.error, matches: [], total_matches: 0 }
+          : { loading: false, error: null, matches: data.matches || [], total_matches: data.total_matches || 0 };
+      } catch (e) {
+        dupMatchData[id] = { loading: false, error: 'Could not reach server.', matches: [], total_matches: 0 };
+      }
+      rerenderCurrentMode();
+    }
+
+    // Patches a review-status update wherever the row happens to be cached, not just
+    // currentRows -- the card and the match in this panel can each live in a different view's
+    // own map (duplicateRowsMap, reportedRowsMap, the Contractor Duplicates view's own rows).
+    // Mirrors applyReviewResult's "update the card and counts" behaviour for whichever map
+    // actually holds this id.
+    function applyReviewResultAnywhere(updated) {
+      if (currentRows.some(r => r.id === updated.id)) {
+        applyReviewResult([updated]);
+        return;
+      }
+      if (duplicateRowsMap[updated.id]) Object.assign(duplicateRowsMap[updated.id], updated);
+      if (reportedRowsMap[updated.id]) Object.assign(reportedRowsMap[updated.id], updated);
+      if (contractorDupData && contractorDupData.rows && contractorDupData.rows[updated.id]) {
+        Object.assign(contractorDupData.rows[updated.id], updated);
+      }
+      loadContractorCounts();
+    }
+
+    async function dupMatchReject(cardId, targetId, btnEl) {
+      const rejectingCard = targetId === cardId;
+      if (!(await showConfirmModal(
+        rejectingCard ? 'Reject this question as a duplicate? It stays in the database but is hidden from students.'
+                      : 'Reject the other question as a duplicate? It stays in the database but is hidden from students.',
+        { confirmLabel: 'Reject', danger: true }
+      ))) return;
+      const originalLabel = btnEl.textContent;
+      btnEl.disabled = true;
+      btnEl.textContent = 'Rejecting...';
+      const result = await postReject(targetId, 'Duplicate');
+      if (result.error === 'unauthorized') return logout();
+      if (result.error) {
+        alert('Reject failed: ' + result.error);
+        btnEl.disabled = false;
+        btnEl.textContent = originalLabel;
+        return;
+      }
+      if (rejectingCard) {
+        dupMatchPanelOpenIds.delete(cardId);
+        delete dupMatchData[cardId];
+      } else {
+        const state = dupMatchData[cardId];
+        const match = state && state.matches.find(m => m.id === targetId);
+        if (match) match.review_status = 'rejected';
+      }
+      applyReviewResultAnywhere(result.updated);
+      rerenderCurrentMode();
+    }
+
+    function dupMatchStatusLabel(status) {
+      return { pending: 'Pending review', needs_fix: 'Needs fix', approved: 'Approved', rejected: 'Rejected' }[status] || '';
+    }
+
+    function dupMatchRowHtml(cardId, m) {
+      const statusLabel = dupMatchStatusLabel(m.review_status);
+      const actionsHtml = m.review_status === 'rejected'
+        ? '<span class="dup-match-rejected-note">Already rejected</span>'
+        : `<button type="button" class="q-reject-btn" onclick="dupMatchReject('${cardId}', '${cardId}', this)">Reject this one (duplicate)</button>
+           <button type="button" class="q-reject-btn" onclick="dupMatchReject('${cardId}', '${m.id}', this)">Reject the other (duplicate)</button>`;
+      return `
+        <div class="dup-match-row">
+          <div class="dup-match-row-head">
+            <span class="dup-badge ${m.match_percent >= 90 ? 'exact' : (m.match_percent >= 75 ? 'high' : 'moderate')}">${m.match_percent}% match</span>
+            ${statusLabel ? `<span class="report-reason-chip">${escapeHtml(statusLabel)}</span>` : ''}
+          </div>
+          ${questionCardHtml(m, { minimalActions: true })}
+          <div class="dup-card-actions">
+            ${actionsHtml}
+            <button type="button" class="q-edit-btn" style="margin-left:0" onclick="toggleDupMatchPanel('${cardId}')">Keep both</button>
+          </div>
+        </div>`;
+    }
+
+    function dupMatchPanelHtml(cardId) {
+      if (!dupMatchPanelOpenIds.has(cardId)) return '';
+      const state = dupMatchData[cardId];
+      if (!state || state.loading) {
+        return '<div class="dup-match-panel"><div class="dup-match-loading">Checking for matches...</div></div>';
+      }
+      if (state.error) {
+        return `<div class="dup-match-panel"><div class="dup-match-error">Could not load matches: ${escapeHtml(state.error)}</div></div>`;
+      }
+      if (!state.matches.length) {
+        return '<div class="dup-match-panel"><div class="dup-match-empty">No similar questions found right now.</div></div>';
+      }
+      const moreNote = state.total_matches > state.matches.length
+        ? ` (and ${state.total_matches - state.matches.length} more)` : '';
+      return `
+        <div class="dup-match-panel">
+          <div class="dup-match-panel-title">${state.matches.length} similar question${state.matches.length === 1 ? '' : 's'}${moreNote}</div>
+          <div class="dup-columns">
+            ${state.matches.map(m => dupMatchRowHtml(cardId, m)).join('')}
+          </div>
+        </div>`;
     }
 
     async function restoreQuestion(id, btnEl) {
@@ -2552,6 +2714,7 @@
           ${reviewActions ? needsFixBoxHtml(q) : ''}
           ${reviewActions ? rejectBoxHtml(q) : ''}
           ${dupSelect ? dupRejectBoxHtml(q) : ''}
+          ${minimalActions ? '' : dupMatchPanelHtml(q.id)}
         </div>`;
     }
 
