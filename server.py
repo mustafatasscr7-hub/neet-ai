@@ -23,8 +23,10 @@ import gzip
 import io
 import ipaddress
 import json
+import random
 import re
 import shutil
+import subprocess
 import tempfile
 import threading
 import uuid
@@ -873,6 +875,7 @@ class Message(BaseModel):
     language: str = "en"
     user_id: str = ""
     personalize: bool = True
+    key_points: bool = True
     skip_cache: bool = False
     chapter: str = ""
     # Running-summary layer on top of the sliding-2 window (text doubts only) -- the client is
@@ -1010,16 +1013,26 @@ class ScanPdfRequest(BaseModel):
     layout: str = "standard"
     # Scanned mode only: a PDF over its per-run page cap is refused unless the admin confirmed.
     confirm_over_cap: bool = False
+    # "en" (default) or "hi" -- Hindi only runs through layout="scanned" (process_pyq_scanned's
+    # two-pass Gemini-vision mode); admin_scan_pdf rejects "hi" with any other layout. See
+    # pyq_language.sql.
+    language: str = "en"
 
 class ScanPdfEstimateRequest(BaseModel):
     subject: str
     data: str  # base64-encoded PDF bytes
+    language: str = "en"
 
 class PdfMarkProcessedRequest(BaseModel):
     id: int
     status: str  # 'completed' or 'failed'
     questions_extracted: Optional[int] = None
     error_message: Optional[str] = None
+
+class ManualProcessedPdfRequest(BaseModel):
+    filename: str
+    subject: Optional[str] = None
+    chapter_number: Optional[int] = None
 
 class DiagramUploadRequest(BaseModel):
     filename: str
@@ -1071,6 +1084,16 @@ class DiagramMatchRequest(BaseModel):
     text: str   # the student's doubt text (same text /chat embeds for NCERT RAG)
     answer: str = ""  # the AI's full answer, for chapter-line extraction
 
+# Same text/answer pair DiagramMatchRequest takes (diagram leg), plus the PYQ leg's own inputs
+# (pyq_text is chat.html's buildPyqSearchQuery(text, chapter) string, chapter the raw chapter
+# name) -- both exactly what the Diagram/PYQ buttons themselves send on click, so /reply-
+# availability's answer always matches what clicking the button would actually find.
+class ReplyAvailabilityRequest(BaseModel):
+    text: str
+    answer: str = ""
+    pyq_text: str = ""
+    chapter: str = ""
+
 class SummarizeAnswerRequest(BaseModel):
     text: str   # the AI's last full answer, to condense
     language: str = "en"
@@ -1092,6 +1115,13 @@ class PyqQuestionCreate(BaseModel):
     year: Optional[int] = None
     source_tag: Optional[str] = None
     source_pdf_filename: Optional[str] = None
+    # "en" or "hi" -- set once per upload (admin-pdf-review.html's language picker), same value on
+    # every question saved from one PDF. None (an old cached review page, or any pre-feature
+    # caller) omits the column entirely on insert, same reasoning as source_pdf_filename right
+    # below -- the column needs pyq_language.sql's `alter table` before it exists. admin_pyq_
+    # bulk_create forces a Hindi row's review_status back to "pending" regardless of role or any
+    # review_status override: see requirement 4 ("Hindi rows always stay pending for human review").
+    language: Optional[str] = None
     class_: Optional[int] = Field(None, alias="class")
     has_diagram: bool = False
     diagram_url: Optional[str] = None
@@ -1198,6 +1228,7 @@ import time
 ADMIN_MAX_ATTEMPTS = 3
 ADMIN_COOLDOWN_SECONDS = 300  # 5 minutes
 _admin_login_attempts = {}  # ip -> {"count": int, "blocked_until": float}
+_contractor_key_collision_warned = False  # set once verify_admin_or_contractor_pdf has logged the CONTRACTOR_PDF_KEY == ADMIN_PASSWORD misconfig, so it isn't re-logged on every request
 
 # Client IP: the one source for the admin 3-strike lockout, every per-IP rate limit and ceiling, the
 # per-IP guest token total (guest_usage_log), media_doubt_log.ip and session location lookups.
@@ -1272,10 +1303,19 @@ def verify_admin(request: Request, x_admin_key: str = Header(None)):
 # touching the founder's own admin login. Unset by default (contractor access is opt-in via env).
 CONTRACTOR_PDF_KEY = os.getenv("CONTRACTOR_PDF_KEY")
 
+# Kill switch for Hindi PDF uploads (they cost real Gemini-vision money) -- default OFF, only the
+# literal string "true" turns it on. Checked by admin_scan_pdf, admin_scan_pdf_estimate and
+# admin_pyq_bulk_create before any Gemini call or DB write for a new Hindi row; English uploads and
+# existing Hindi rows/restores are unaffected. Set on Railway to flip it.
+HINDI_UPLOADS_ENABLED = os.getenv("HINDI_UPLOADS_ENABLED", "false").lower() == "true"
+
 # The two people allowed to be named as a question's uploader (contractor-pdf-review.html's "Who
 # is uploading?" picker) -- not auth, just an attribution tag stored in pyq.uploader_name.
 PYQ_UPLOADER_NAMES = ("Mr. Md Moniruzzaman", "Admin")
 CONTRACTOR_UPLOADER_NAME = PYQ_UPLOADER_NAMES[0]
+# Payout-sheet scope only (/admin/contractor-tally) -- everyone else in PYQ_UPLOADER_NAMES
+# (just "Admin" today) is a legitimate uploader but never gets paid, so never belongs in that tally.
+PYQ_CONTRACTOR_NAMES = (CONTRACTOR_UPLOADER_NAME,)
 
 def verify_contractor_pdf_review(request: Request, x_admin_key: str = Header(None)):
     """Login check for the isolated tool's own gate -- deliberately its OWN endpoint
@@ -1310,15 +1350,21 @@ def verify_admin_or_contractor_pdf(request: Request, x_admin_key: str = Header(N
     everywhere outside this specific set, by construction rather than convention.
 
     Returns who is calling, "admin" or "contractor" -- pyq-bulk-create stamps it on every row as
-    uploaded_by and starts contractor rows as pending. Checked contractor-first so a
-    misconfigured CONTRACTOR_PDF_KEY == ADMIN_PASSWORD can only ever hide uploads, never
-    auto-approve them."""
+    uploaded_by and starts contractor rows as pending. Checked admin-first: a request carrying
+    ADMIN_PASSWORD always resolves to "admin", even if CONTRACTOR_PDF_KEY happens to collide with
+    it -- that collision isn't a real second credential anyway (whoever holds that value already
+    passes verify_admin everywhere else in the app), and resolving it to "contractor" was silently
+    hiding admin-pyq-preview.html's Remove/Add file/Undo buttons for the founder's own admin login."""
+    global _contractor_key_collision_warned
     ip = _client_ip(request)
     now = time.time()
     record = _admin_login_attempts.get(ip, {"count": 0, "blocked_until": 0})
     if record["blocked_until"] > now:
         remaining = int(record["blocked_until"] - now)
         raise HTTPException(status_code=429, detail=f"Too many failed attempts. Try again in {remaining} seconds.")
+    if CONTRACTOR_PDF_KEY and ADMIN_PASSWORD and CONTRACTOR_PDF_KEY == ADMIN_PASSWORD and not _contractor_key_collision_warned:
+        _contractor_key_collision_warned = True
+        print("CONTRACTOR_PDF_KEY equals ADMIN_PASSWORD -- every request now resolves as admin. Rotate CONTRACTOR_PDF_KEY to a distinct value on Railway.", flush=True)
     valid = x_admin_key and (x_admin_key == ADMIN_PASSWORD or (CONTRACTOR_PDF_KEY and x_admin_key == CONTRACTOR_PDF_KEY))
     if not valid:
         record["count"] += 1
@@ -1328,11 +1374,18 @@ def verify_admin_or_contractor_pdf(request: Request, x_admin_key: str = Header(N
         _admin_login_attempts[ip] = record
         raise HTTPException(status_code=401, detail="Unauthorized")
     _admin_login_attempts.pop(ip, None)
-    return "contractor" if CONTRACTOR_PDF_KEY and x_admin_key == CONTRACTOR_PDF_KEY else "admin"
+    return "admin" if x_admin_key == ADMIN_PASSWORD else "contractor"
 
 @app.post("/contractor-pdf-review/verify")
 async def contractor_pdf_review_verify(_: None = Depends(verify_contractor_pdf_review)):
     return {"ok": True, "uploader_names": list(PYQ_UPLOADER_NAMES)}
+
+@app.get("/admin/pdf-review-config")
+async def admin_pdf_review_config(_: None = Depends(verify_admin_or_contractor_pdf)):
+    """Small shared config read for admin-pdf-review.html and contractor-pdf-review.html -- today
+    just the Hindi-uploads kill switch, so both pages can grey out the Hindi button instead of
+    discovering it's paused only after a scan request comes back rejected."""
+    return {"hindi_uploads_enabled": HINDI_UPLOADS_ENABLED}
 
 # ---------- Rate limiting ----------
 # Carrier NAT puts many students behind one public IP, so limits are keyed on who is asking, not
@@ -3312,9 +3365,10 @@ PYQ_CARD_COLUMNS = "id,subject,chapter,year,question,option_a,option_b,option_c,
 
 # The one filter every student-facing pyq read adds (add_pyq_review_status.sql). is_active is the
 # report/deactivate switch; review_status keeps contractor uploads hidden until an admin approves
-# them (pending / needs_fix never reach a student). test_pyq_review_gate.py fails if a student
-# path reads pyq without it.
-PYQ_STUDENT_VISIBLE = {"is_active": "eq.true", "review_status": "eq.approved"}
+# them (pending / needs_fix never reach a student). language keeps Hindi PYQ rows (pyq_language.sql)
+# out of every student surface for now, regardless of review_status -- see requirement 5. test_pyq_
+# review_gate.py fails if a student path reads pyq without it.
+PYQ_STUDENT_VISIBLE = {"is_active": "eq.true", "review_status": "eq.approved", "language": "eq.en"}
 
 async def _backfill_pyq_chapters(results: list, headers: dict) -> list:
     """match_pyq (the RPC search_pyq below calls into) doesn't return a chapter column, so this
@@ -3635,36 +3689,53 @@ async def get_personalisation(_: None = Depends(rate_limit(30, 60, by="account")
 class MeSettingsUpdateRequest(BaseModel):
     personalize: Optional[bool] = None
     answer_style: Optional[str] = None
+    key_points: Optional[bool] = None
 
 @app.get("/me/settings")
 async def get_me_settings(_: None = Depends(rate_limit(30, 60, by="account")), verified_user_id: str = Depends(_get_verified_user_id)):
-    """Cross-device copy of the Personalize toggle and Answer Style, read by settings.js/
-    chat.html's sync code on page load. {"available": false} (never a 500) before
+    """Cross-device copy of the Personalize toggle, Answer Style and Show-key-points toggle, read
+    by settings.js/chat.html's sync code on page load. {"available": false} (never a 500) before
     user_settings.sql is applied, or on any other failure -- same convention as the admin
-    dashboard's *_available flags. Never logs the actual values."""
+    dashboard's *_available flags. Never logs the actual values.
+
+    key_points falls back to a second select without that column (then reports it as None, same
+    as an unset row) if user_settings_key_points.sql hasn't been run yet -- so personalize/
+    answer_style sync keeps working unaffected either way."""
     if not verified_user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
     try:
         resp = await async_client.get(
             f"{SUPABASE_URL}/rest/v1/user_settings", headers=ADMIN_HEADERS,
-            params={"user_id": f"eq.{verified_user_id}", "select": "personalize,answer_style", "limit": 1}
+            params={"user_id": f"eq.{verified_user_id}", "select": "personalize,answer_style,key_points", "limit": 1}
         )
         if resp.status_code >= 400:
-            return {"available": False}
+            resp = await async_client.get(
+                f"{SUPABASE_URL}/rest/v1/user_settings", headers=ADMIN_HEADERS,
+                params={"user_id": f"eq.{verified_user_id}", "select": "personalize,answer_style", "limit": 1}
+            )
+            if resp.status_code >= 400:
+                return {"available": False}
+            rows = resp.json()
+            row = rows[0] if rows else {}
+            return {"personalize": row.get("personalize"), "answer_style": row.get("answer_style"), "key_points": None}
         rows = resp.json()
         row = rows[0] if rows else {}
-        return {"personalize": row.get("personalize"), "answer_style": row.get("answer_style")}
+        return {"personalize": row.get("personalize"), "answer_style": row.get("answer_style"), "key_points": row.get("key_points")}
     except Exception as e:
         print(f"ME SETTINGS GET ERROR (user_id={verified_user_id}): {type(e).__name__}", flush=True)
         return {"available": False}
 
 @app.put("/me/settings")
 async def update_me_settings(body: MeSettingsUpdateRequest, _: None = Depends(rate_limit(30, 60, by="account")), verified_user_id: str = Depends(_get_verified_user_id)):
-    """Partial upsert of the same two settings -- only the fields actually sent are validated and
-    written (model_fields_set, same distinction todos_update makes). answer_style is checked
+    """Partial upsert of the same three settings -- only the fields actually sent are validated
+    and written (model_fields_set, same distinction todos_update makes). answer_style is checked
     against the same _VALID_ANSWER_STYLES the rest of the backend normalises against, and anything
     else is a 400, not a silent fallback to "detailed". {"available": false} on a missing table or
-    any other failure, never a 500."""
+    any other failure, never a 500.
+
+    If key_points was one of the fields sent and the upsert fails, it's dropped and the write is
+    retried once with whatever other fields were sent (in case user_settings_key_points.sql
+    hasn't been run yet) -- so a personalize/answer_style update in the same request still saves."""
     if not verified_user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
     update_fields = {}
@@ -3676,6 +3747,10 @@ async def update_me_settings(body: MeSettingsUpdateRequest, _: None = Depends(ra
         if body.answer_style not in _VALID_ANSWER_STYLES:
             raise HTTPException(status_code=400, detail="answer_style must be concise, medium or detailed")
         update_fields["answer_style"] = body.answer_style
+    if "key_points" in body.model_fields_set:
+        if body.key_points is None:
+            raise HTTPException(status_code=400, detail="key_points must be a boolean")
+        update_fields["key_points"] = bool(body.key_points)
     if not update_fields:
         raise HTTPException(status_code=400, detail="No fields to update")
     try:
@@ -3685,11 +3760,26 @@ async def update_me_settings(body: MeSettingsUpdateRequest, _: None = Depends(ra
             params={"on_conflict": "user_id"},
             json={"user_id": verified_user_id, **update_fields, "updated_at": datetime.now(timezone.utc).isoformat()}
         )
+        if resp.status_code >= 400 and "key_points" in update_fields:
+            retry_fields = {k: v for k, v in update_fields.items() if k != "key_points"}
+            if not retry_fields:
+                return {"available": False}
+            resp = await async_client.post(
+                f"{SUPABASE_URL}/rest/v1/user_settings",
+                headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation"},
+                params={"on_conflict": "user_id"},
+                json={"user_id": verified_user_id, **retry_fields, "updated_at": datetime.now(timezone.utc).isoformat()}
+            )
+            if resp.status_code >= 400:
+                return {"available": False}
+            saved = resp.json()
+            row = saved[0] if saved else {}
+            return {"personalize": row.get("personalize"), "answer_style": row.get("answer_style"), "key_points": None}
         if resp.status_code >= 400:
             return {"available": False}
         saved = resp.json()
         row = saved[0] if saved else {}
-        return {"personalize": row.get("personalize"), "answer_style": row.get("answer_style")}
+        return {"personalize": row.get("personalize"), "answer_style": row.get("answer_style"), "key_points": row.get("key_points")}
     except HTTPException:
         raise
     except Exception as e:
@@ -4792,6 +4882,12 @@ CONCISE_STYLE_CONTEXT = "\n\nIMPORTANT: The student has selected CONCISE mode. G
 # hash prefix for every cached answer_style (including detailed), invalidating the existing
 # cache. Medium is new, so it has no old cache to preserve.
 MEDIUM_STYLE_CONTEXT = "\n\nIMPORTANT: the student has selected MEDIUM mode. Give a balanced answer: the NEET importance line, the chapter line, a clear direct answer, then 2 to 3 key points. Keep every fact needed for a correct answer. Skip the memory trick, extra worked examples, and any repeated explanation. Aim for about half the length of a full detailed answer. Keep formulas, units and numbers exact."
+# Appended (never folded into the ANSWER_CACHE_PROMPT_VERSION hash below) only when the student's
+# key_points setting is off AND answer_style isn't concise -- Concise already has no Key Points
+# section of its own. Not folded into the hash because an answer generated with this appended is
+# never written to the shared cache in the first place (see stream_response/
+# _answer_cache_store_block), so there is no cached entry whose hash would need to change.
+KEY_POINTS_OFF_CONTEXT = "\n\nIMPORTANT: the student has turned OFF \"Key Points\". Omit the entire \"Key Points:\" section -- heading included -- from your answer: go straight from Answer: to the end (or to Quick Recall: if rule 9 would otherwise add one). Never write the \"Key Points:\" heading with nothing under it, and never fold its content into the Answer section instead."
 HINDI_LANG_CONTEXT = (
     f"\n\nIMPORTANT: {HINDI_ONLY_CORE} Proper nouns like NEET or NCERT also stay exactly "
     "as-is -- do not translate or romanize them. For the section headers specifically, use "
@@ -5445,6 +5541,31 @@ def _answer_cache_key(text: str, language: str, answer_style: str) -> str:
         f"{ANSWER_CACHE_PROMPT_VERSION}:{_answer_cache_language(language)}:{_answer_cache_style(answer_style)}:{normalized}".encode()
     ).hexdigest()
 
+# Only "Quick Recall:"/"त्वरित याद:" (rule 9) can ever follow "Key Points:"/"मुख्य बिंदु:" in the
+# format SYSTEM_PROMPT defines -- see the format template above. Used to strip Key Points back out
+# of an already-cached FULL answer when a student's key_points setting is off (the shared cache
+# only ever stores full answers -- see _answer_cache_store_block).
+_KEY_POINTS_HEADING_RE = re.compile(r'(?:Key Points|मुख्य बिंदु)\s*:')
+_QUICK_RECALL_HEADING_RE = re.compile(r'(?:Quick Recall|त्वरित याद)\s*:')
+
+def _strip_key_points_section(answer: str) -> str:
+    """Removes the Key Points section from a cached full answer. If a Quick Recall section
+    follows it, that section is kept; otherwise Key Points ran to the end and nothing is left
+    after it. Returns `answer` unchanged if no Key Points heading is found at all (e.g. a Concise
+    answer, which never has one) -- never guesses or mangles unrecognized text."""
+    if not answer:
+        return answer
+    heading = _KEY_POINTS_HEADING_RE.search(answer)
+    if not heading:
+        return answer
+    before = answer[:heading.start()].rstrip()
+    rest = answer[heading.end():]
+    quick_recall = _QUICK_RECALL_HEADING_RE.search(rest)
+    if quick_recall:
+        after = rest[quick_recall.start():]
+        return f"{before}\n\n{after}" if before else after
+    return before
+
 def _answer_cache_skip_reason(images, pdf, history, running_summary, skip_cache) -> Optional[str]:
     """Why this request may not use the shared cache at all, or None if it may."""
     if images or pdf:
@@ -5455,11 +5576,21 @@ def _answer_cache_skip_reason(images, pdf, history, running_summary, skip_cache)
         return "history"
     return None
 
-def _answer_cache_store_block(answer: str, language: str, student_name: str, used_student_context: bool, flags: dict = None) -> Optional[str]:
+def _answer_cache_store_block(answer: str, language: str, student_name: str, used_student_context: bool, flags: dict = None, key_points: bool = True, answer_style: str = "detailed") -> Optional[str]:
     """Why this answer must not be stored, or None if it may. "self_correction" is checked last on
-    purpose: it is the only reason a background regeneration can fix (see stream_response)."""
+    purpose: it is the only reason a background regeneration can fix (see stream_response).
+
+    key_points/answer_style default to the "normal full answer" case on purpose: the background
+    self-correction regeneration (_regenerate_and_cache_chat_answer) only ever runs for an answer
+    that already passed this exact check once with key_points=True, so it never needs to pass
+    these through again."""
     flags = flags or {}
     text = answer or ""
+    if not key_points and answer_style != "concise":
+        # This answer was generated with the Key Points section deliberately left out -- the
+        # shared cache has no concept of key_points (the cache key doesn't include it), so storing
+        # this would later serve a student with key_points ON a cached answer missing the section.
+        return "key_points_off"
     if not text.strip() or _is_bare_conversational_marker(text):
         return "empty"
     head = text.lstrip()[:300]
@@ -6192,7 +6323,7 @@ def _planner_upgrade_response(language: str) -> str:
     reply = _PLANNER_UPGRADE_REPLY_HI if language == "hi" else _PLANNER_UPGRADE_REPLY_EN
     return f"PLANNER_UPGRADE: yes\n\n{reply}"
 
-async def stream_response(text: str, history: list = [], images: list = [], pdf: str = None, answer_style: str = "detailed", student_name: str = "", language: str = "en", user_id: str = "", personalize: bool = True, skip_cache: bool = False, ip: str = "", running_summary: str = "", dropped_question: str = "", dropped_answer: str = ""):
+async def stream_response(text: str, history: list = [], images: list = [], pdf: str = None, answer_style: str = "detailed", student_name: str = "", language: str = "en", user_id: str = "", personalize: bool = True, key_points: bool = True, skip_cache: bool = False, ip: str = "", running_summary: str = "", dropped_question: str = "", dropped_answer: str = ""):
     answer_style = _normalize_answer_style(answer_style)
     images = (images or [])[:3]
 
@@ -6207,7 +6338,7 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
         except Exception:
             refetched = []
         if refetched:
-            async for chunk in stream_response(text, history, refetched, None, answer_style, student_name, language, user_id, personalize, skip_cache, ip):
+            async for chunk in stream_response(text, history, refetched, None, answer_style, student_name, language, user_id, personalize, key_points, skip_cache, ip):
                 yield chunk
             return
     # Fast path for exact-match greeting/smalltalk, before ANY of the expensive work below --
@@ -6274,7 +6405,10 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
         cached_row = await _answer_cache_lookup(cache_key)
         if cached_row:
             _cache_log("hit")
-            yield cached_row["answer"]
+            # The shared cache only ever stores full answers (see _answer_cache_store_block) --
+            # the key_points setting isn't part of cache_key, so a student with it OFF still gets
+            # a cache hit here; strip the section back out before it's ever sent to them.
+            yield cached_row["answer"] if key_points else _strip_key_points_section(cached_row["answer"])
             return
         _cache_log("miss")
     else:
@@ -6377,6 +6511,8 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
         usable_student_name = _usable_student_name(student_name)
         name_context = f"\n\nThe student name is {usable_student_name}. Use their name naturally and occasionally in responses to make it personal." if usable_student_name else ""
         style_context = CONCISE_STYLE_CONTEXT if answer_style == "concise" else (MEDIUM_STYLE_CONTEXT if answer_style == "medium" else "")
+        if not key_points and answer_style != "concise":
+            style_context += KEY_POINTS_OFF_CONTEXT
         answer_max_tokens = _answer_max_tokens(language)
         # Deliberately NOT folded into full_system below -- appended last, after
         # student_context/graph_context/conciseness_context/mcq_context and (in the text branch)
@@ -6821,7 +6957,7 @@ the question, ignore this instruction entirely and use the plain "Answer:" heade
             if cache_skip_reason is None:
                 # billing_context is the dict of whichever attempt produced full_answer (each
                 # override retry starts a fresh one), so its capped/corrected flags are this answer's.
-                cache_block = _answer_cache_store_block(full_answer, language, usable_student_name, bool(student_context), billing_context)
+                cache_block = _answer_cache_store_block(full_answer, language, usable_student_name, bool(student_context), billing_context, key_points, answer_style)
                 if cache_block is None:
                     stored = await _answer_cache_store(cache_key, full_answer, language, answer_style)
                     _cache_log("stored" if stored else "not_stored", None if stored else "write_failed")
@@ -7255,7 +7391,7 @@ async def chat(message: Message, request: Request, _: None = Depends(rate_limit(
     await enforce_daily_budget(message.user_id, ip)
     await validate_pdf_limits(message.pdf, message.user_id)
     return StreamingResponse(
-       stream_response(message.text, message.history, message.images, message.pdf, message.answer_style, message.student_name, message.language, message.user_id, message.personalize, message.skip_cache, ip, message.running_summary, message.dropped_question, message.dropped_answer),
+       stream_response(message.text, message.history, message.images, message.pdf, message.answer_style, message.student_name, message.language, message.user_id, message.personalize, message.key_points, message.skip_cache, ip, message.running_summary, message.dropped_question, message.dropped_answer),
         media_type="text/plain"
     )
 
@@ -7778,37 +7914,44 @@ DIAGRAM_MATCH_THRESHOLD = 0.5
 # before /chat's fire-and-forget cache write (asyncio.create_task, not awaited) has completed;
 # that's a same-second race with negligible cost (one extra ~$0.00002 embedding call), not a
 # correctness issue.
+async def _diagram_match_rows(text: str, answer: str):
+    """The chapter-extraction + embedding + match_diagrams lookup /diagram-match itself runs,
+    factored out so /reply-availability can ask "would this find anything" with the exact same
+    inputs/logic the button's own click uses -- never a looser check that could call a button
+    available for a diagram the real click then finds nothing for."""
+    chapter = None
+    candidate = extract_chapter_candidate(answer)
+    if candidate:
+        chapters_resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/diagrams",
+            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+            params={"select": "chapter", "reviewed": "eq.true"}
+        )
+        known_chapters = sorted(set(r["chapter"] for r in chapters_resp.json() if r.get("chapter"))) if chapters_resp.status_code == 200 else []
+        chapter = fuzzy_match_chapter(candidate, known_chapters)
+        # Falls through to filter_chapter=None (search all reviewed diagrams) when
+        # extraction/fuzzy-match fails or is ambiguous, per spec.
+
+    async def _search(embedding):
+        response = await async_client.post(
+            f"{SUPABASE_URL}/rest/v1/rpc/match_diagrams",
+            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"},
+            json={"query_embedding": embedding, "match_threshold": DIAGRAM_MATCH_THRESHOLD, "match_count": 1, "filter_chapter": chapter}
+        )
+        # Out of scope for the off-topic gate (no gate threshold passed below -- this RPC is
+        # still called at the real threshold directly, so there's no raw/unfiltered score to
+        # report). _match_with_merge_fallback's contract just needs SOME second tuple element.
+        # None (not []) on a failed lookup, so it's retried once rather than fanned out.
+        return (response.json() if response.status_code == 200 else None), None
+    # Merge-variant fallback matters most here: diagram reference embeddings are built from
+    # very short text (often just a bare name), which measured as the most typo/spacing-
+    # fragile of the three matching systems this covers -- see _match_with_merge_fallback.
+    return await _match_with_merge_fallback(text, get_embedding, _search)
+
 @app.post("/diagram-match")
 async def diagram_match(req: DiagramMatchRequest, _: None = Depends(rate_limit(15, 60))):
     try:
-        chapter = None
-        candidate = extract_chapter_candidate(req.answer)
-        if candidate:
-            chapters_resp = await async_client.get(
-                f"{SUPABASE_URL}/rest/v1/diagrams",
-                headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
-                params={"select": "chapter", "reviewed": "eq.true"}
-            )
-            known_chapters = sorted(set(r["chapter"] for r in chapters_resp.json() if r.get("chapter"))) if chapters_resp.status_code == 200 else []
-            chapter = fuzzy_match_chapter(candidate, known_chapters)
-            # Falls through to filter_chapter=None (search all reviewed diagrams) when
-            # extraction/fuzzy-match fails or is ambiguous, per spec.
-
-        async def _search(embedding):
-            response = await async_client.post(
-                f"{SUPABASE_URL}/rest/v1/rpc/match_diagrams",
-                headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"},
-                json={"query_embedding": embedding, "match_threshold": DIAGRAM_MATCH_THRESHOLD, "match_count": 1, "filter_chapter": chapter}
-            )
-            # Out of scope for the off-topic gate (no gate threshold passed below -- this RPC is
-            # still called at the real threshold directly, so there's no raw/unfiltered score to
-            # report). _match_with_merge_fallback's contract just needs SOME second tuple element.
-            # None (not []) on a failed lookup, so it's retried once rather than fanned out.
-            return (response.json() if response.status_code == 200 else None), None
-        # Merge-variant fallback matters most here: diagram reference embeddings are built from
-        # very short text (often just a bare name), which measured as the most typo/spacing-
-        # fragile of the three matching systems this covers -- see _match_with_merge_fallback.
-        rows = await _match_with_merge_fallback(req.text, get_embedding, _search)
+        rows = await _diagram_match_rows(req.text, req.answer)
         if not rows:
             return {"matched": False}
         top = rows[0]
@@ -7822,6 +7965,25 @@ async def diagram_match(req: DiagramMatchRequest, _: None = Depends(rate_limit(1
         return {"matched": True, "diagram_id": top["id"], "image_url": top["image_url"], "name": top.get("name"), "description": top.get("description"), "name_hi": top.get("name_hi"), "description_hi": top.get("description_hi"), "importance_rating": top.get("importance_rating"), "similarity": top.get("similarity")}
     except Exception:
         return {"matched": False}
+
+# Powers chat.html's "only show a button when it would actually find something" rule for the
+# Diagram/PYQ action row under a finished AI reply -- called once per reply, after streaming
+# ends (fire-and-forget; never on the /chat critical path, so it cannot slow a reply down).
+# Deliberately calls _diagram_match_rows and search_pyq UNCHANGED -- the exact same lookups the
+# two buttons themselves run on click -- so a button this reports available for can never open
+# to an empty result. The two legs are independent of each other, hence gather rather than
+# sequential awaits.
+@app.post("/reply-availability")
+async def reply_availability(req: ReplyAvailabilityRequest, _: None = Depends(rate_limit(40, 60))):
+    try:
+        diagram_rows, pyq_result = await asyncio.gather(
+            _diagram_match_rows(req.text, req.answer),
+            search_pyq(req.pyq_text or req.text, chapter=req.chapter),
+        )
+        pyq_rows, _match_type = pyq_result
+        return {"has_diagram": bool(diagram_rows), "pyq_count": len(pyq_rows)}
+    except Exception:
+        return {"has_diagram": False, "pyq_count": 0}
 
 # Powers diagram-library.html's browsable gallery -- the student-facing counterpart to
 # /admin/diagrams-list, which requires the admin password. Uses the anon key (not
@@ -8077,12 +8239,19 @@ async def get_pyq_chapters(subject: str, _: None = Depends(rate_limit(30, 60))):
 # already always has a specific chapter in hand by the time it needs actual question rows, so this
 # costs nothing for genuine use and closes off this endpoint ever becoming a fresh bulk-read path
 # itself. year is optional, matching the year-filter dropdown on the chapter's own question view.
+PYQ_BROWSE_MAX_PAGE_SIZE = 200
+
 @app.get("/pyq-browse")
-async def pyq_browse(subject: str, chapter: str, year: int = None, _: None = Depends(rate_limit(30, 60))):
+async def pyq_browse(subject: str, chapter: str, year: int = None, limit: int = None, offset: int = 0,
+                      _: None = Depends(rate_limit(30, 60))):
     if subject not in ("Biology", "Physics", "Chemistry"):
         return {"error": "Invalid subject"}
     if not chapter.strip():
         return {"error": "chapter is required"}
+    if limit is not None and not (1 <= limit <= PYQ_BROWSE_MAX_PAGE_SIZE):
+        return {"error": f"limit must be between 1 and {PYQ_BROWSE_MAX_PAGE_SIZE}"}
+    if offset < 0:
+        return {"error": "offset must be >= 0"}
     try:
         headers = {
             "apikey": SUPABASE_SERVICE_KEY,
@@ -8096,12 +8265,31 @@ async def pyq_browse(subject: str, chapter: str, year: int = None, _: None = Dep
         }
         if year is not None:
             params["year"] = f"eq.{year}"
-        response = await async_client.get(f"{SUPABASE_URL}/rest/v1/pyq", headers=headers, params=params)
+        # Paging is opt-in: a caller that never passes limit (savedquestions, tests, chat, the app)
+        # gets the exact same single-shot response as before, byte for byte. Only when limit is
+        # given do we add an explicit order -- without one, Postgres gives no cross-request
+        # ordering guarantee for LIMIT/OFFSET, so two consecutive pages could repeat or skip rows.
+        # id.asc is a stand-in for "today's" order (there was never an explicit ORDER BY to match).
+        if limit is None:
+            response = await async_client.get(f"{SUPABASE_URL}/rest/v1/pyq", headers=headers, params=params)
+            if response.status_code >= 400:
+                return {"error": response.text}
+            return {"questions": response.json()}
+        params["order"] = "id.asc"
+        params["limit"] = limit
+        params["offset"] = offset
+        response = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/pyq", headers={**headers, "Prefer": "count=exact"}, params=params
+        )
         if response.status_code >= 400:
             return {"error": response.text}
-        return {"questions": response.json()}
+        content_range = response.headers.get("content-range", "")
+        tail = content_range.split("/")[-1] if "/" in content_range else ""
+        total_count = int(tail) if tail.isdigit() else 0
+        questions = response.json()
+        return {"questions": questions, "total_count": total_count, "has_more": offset + len(questions) < total_count}
     except Exception as e:
-        print(f"PYQ BROWSE ERROR (subject={subject}, chapter={chapter}, year={year}): {e}", flush=True)
+        print(f"PYQ BROWSE ERROR (subject={subject}, chapter={chapter}, year={year}, limit={limit}, offset={offset}): {e}", flush=True)
         return {"error": "Something went wrong. Please try again."}
 
 async def _sample_personalised_questions(selections: list, requested_count) -> tuple:
@@ -8862,6 +9050,8 @@ async def admin_pyq_search(
     uploaded_date: str = None,
     source_pdf_filename: str = None,
     warnings: bool = False,
+    auto_pass: str = None,
+    language: str = None,
     page: int = 1,
     sort_by: str = "id",
     sort_dir: str = "asc",
@@ -8879,14 +9069,20 @@ async def admin_pyq_search(
         # actually see (options, diagrams, source tag) -- the plain-table admin dashboard doesn't
         # use any of that, so its requests stay on the smaller default select.
         select_fields = (
-            "id,subject,chapter,question,option_a,option_b,option_c,option_d,correct_answer,"
+            "id,subject,language,chapter,question,option_a,option_b,option_c,option_d,correct_answer,"
             "is_active,year,source_tag,source_pdf_filename,class,has_diagram,diagram_url,option_a_diagram_url,"
             "option_b_diagram_url,option_c_diagram_url,option_d_diagram_url,reviewed,created_at,"
             "question_type,difficulty,"
-            "review_status,review_note,uploaded_by,uploaded_at,batch_id,reviewed_at,reviewed_by,uploader_name"
+            "review_status,review_note,uploaded_by,uploaded_at,batch_id,reviewed_at,reviewed_by,uploader_name,"
+            "reject_reason,rejected_at"
             if full else
-            "id,subject,chapter,question,correct_answer,is_active,year"
+            "id,subject,language,chapter,question,correct_answer,is_active,year"
         )
+        # auto_pass/auto_reasons/auto_approved/auto_sampled only exist once pyq_auto_approve.sql
+        # has been run -- added to the select (and therefore to every card in admin-pyq-preview.html)
+        # only once that's confirmed, so this endpoint keeps working unchanged before that migration.
+        if full and await _pyq_auto_columns_exist():
+            select_fields += ",auto_pass,auto_reasons,auto_approved,auto_sampled"
         params = {
             "select": select_fields,
             "order": f"{sort_col}.{sort_direction}",
@@ -8904,10 +9100,19 @@ async def admin_pyq_search(
             params["chapter"] = f"eq.{chapter}"
         if is_active in ("true", "false"):
             params["is_active"] = f"eq.{is_active}"
+        # Used by the admin preview's "Would auto-approve N" tile to list pending rows with
+        # auto_pass=true -- only meaningful once pyq_auto_approve.sql has run (see select_fields
+        # above); a request with this param before that returns the same clear PostgREST error
+        # as every other new auto-approve endpoint.
+        if auto_pass in ("true", "false"):
+            params["auto_pass"] = f"eq.{auto_pass}"
+        if language in ("en", "hi"):
+            params["language"] = f"eq.{language}"
         if reviewed in ("true", "false"):
             params["reviewed"] = f"eq.{reviewed}"
         if review_status in PYQ_REVIEW_STATUSES:
             params["review_status"] = f"eq.{review_status}"
+        exclude_rejected = review_status not in PYQ_REVIEW_STATUSES
         if uploaded_by in PYQ_UPLOADERS:
             params["uploaded_by"] = f"eq.{uploaded_by}"
         # "__earlier__" is the admin preview's sentinel for "no name" (every row uploaded before
@@ -8927,6 +9132,13 @@ async def admin_pyq_search(
         # One India-time calendar day of uploads, as a plain and-group so it combines with the
         # or-groups below instead of overwriting them.
         and_parts = []
+        # No explicit review_status filter ("Any status") used to also surface rejected rows --
+        # those are kept only as reject-reason proof and should stay out of every normal view,
+        # same as /admin/pyq-duplicates already excludes them. review_status.is.null is needed
+        # alongside the neq: NULL <> 'rejected' is NULL (not true) under 3-valued logic, so a
+        # bare neq. would silently drop every pre-migration row that has no status at all.
+        if exclude_rejected:
+            and_parts.append("or(review_status.is.null,review_status.neq.rejected)")
         # The Review Queue (reviewed=false) now excludes the contractor's own uploads
         # unconditionally -- those live only in the admin preview's separate Contractor Queue,
         # which queries uploader_name+review_status directly instead of this reviewed param.
@@ -9109,36 +9321,51 @@ def _pyq_dup_tokens(row: dict) -> set:
 # same column list /admin/pyq-search's full=true uses, so a row read from here looks exactly
 # like one read from there.
 PYQ_DUP_CORPUS_SELECT = (
-    "id,subject,chapter,question,option_a,option_b,option_c,option_d,correct_answer,"
+    "id,subject,language,chapter,question,option_a,option_b,option_c,option_d,correct_answer,"
     "is_active,year,source_tag,class,has_diagram,diagram_url,option_a_diagram_url,"
     "option_b_diagram_url,option_c_diagram_url,option_d_diagram_url,created_at,"
     "review_status,review_note,uploaded_by,uploaded_at,uploader_name"
 )
 
-async def _pyq_dup_corpus(subject: str):
-    """[(id, tokens, row)] for every pyq row in the subject, any status -- cached briefly since
-    the review page asks for it on every page turn. None if the read fails (the duplicate check
-    is then skipped, never guessed)."""
-    hit = _pyq_dup_corpus_cache.get(subject)
+async def _pyq_dup_corpus(subject: str, language: str = "en", include_rejected: bool = False):
+    """[(id, tokens, row)] for every pyq row in the (subject, language) pair, any status --
+    cached briefly since the review page asks for it on every page turn. None if the read fails
+    (the duplicate check is then skipped, never guessed). Scoped by language too (pyq_language.sql,
+    requirement 3: "compare only within the same language") -- a Hindi row should never be flagged
+    as a duplicate of an unrelated English one just because the token overlap happens to match.
+
+    The language filter is applied in Python, AFTER the fetch, rather than as a `language=eq.X`
+    REST param: a row with no language value at all (any gap before pyq_language.sql's backfill
+    finishes, or simply a column PostgREST doesn't know about yet) should read as 'en' here, the
+    same "missing means en" convention used everywhere else in this feature -- a REST-level
+    `eq.en` filter would silently drop a NULL-language row instead of treating it as English.
+
+    include_rejected=False (the default, used for the live review-page duplicate warning) drops
+    rejected rows at the REST level: a rejected row is kept as proof, not a legitimate duplicate
+    signal against a real question someone is actively reviewing. include_rejected=True (used by
+    /admin/pyq-matches' cross-check panel) keeps them -- that panel's whole job is to show what a
+    stored "Duplicate" pill actually matched, even if the other copy has since been rejected."""
+    cache_key = (subject, language, include_rejected)
+    hit = _pyq_dup_corpus_cache.get(cache_key)
     if hit and time.time() - hit[0] < PYQ_DUP_CORPUS_TTL:
         return hit[1]
     rows, offset, page_size = [], 0, 1000
     while True:
-        resp = await async_client.get(
-            f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
-            params={"subject": f"eq.{subject}", "select": PYQ_DUP_CORPUS_SELECT,
-                    "order": "id.asc", "limit": page_size, "offset": offset}
-        )
+        params = {"subject": f"eq.{subject}", "select": PYQ_DUP_CORPUS_SELECT,
+                  "order": "id.asc", "limit": page_size, "offset": offset}
+        if not include_rejected:
+            params["review_status"] = "neq.rejected"
+        resp = await async_client.get(f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS, params=params)
         page = resp.json() if resp.status_code < 400 else None
         if not isinstance(page, list):
-            print(f"PYQ DUP CORPUS READ FAILED (subject={subject}): {resp.status_code}", flush=True)
+            print(f"PYQ DUP CORPUS READ FAILED (subject={subject}, language={language}): {resp.status_code}", flush=True)
             return None
-        rows.extend(page)
+        rows.extend([r for r in page if (r.get("language") or "en") == language])
         if len(page) < page_size:
             break
         offset += page_size
     corpus = [(r["id"], _pyq_dup_tokens(r), r) for r in rows]
-    _pyq_dup_corpus_cache[subject] = (time.time(), corpus)
+    _pyq_dup_corpus_cache[cache_key] = (time.time(), corpus)
     return corpus
 
 def _best_duplicate(row_id, tokens: set, corpus: list) -> tuple:
@@ -9153,16 +9380,23 @@ def _best_duplicate(row_id, tokens: set, corpus: list) -> tuple:
                 best_id, best = other_id, overlap
     return best_id, best
 
-def _dup_matches(row_id, tokens: set, corpus: list, threshold: float, cap: int = 50) -> tuple:
+def _dup_matches(row_id, tokens: set, corpus: list, threshold: float, cap: int = 50,
+                  include_inactive: bool = False) -> tuple:
     """Every corpus row at or above `threshold` against (row_id, tokens), most-similar first --
     same token-overlap scoring _best_duplicate uses, just returning every hit instead of only
     the best one. Returns (hits, total) where hits is [(overlap, other_id, other_row), ...]
-    capped at `cap`, and total is the uncapped count (so a caller can say "and N more")."""
+    capped at `cap`, and total is the uncapped count (so a caller can say "and N more").
+
+    include_inactive=False (the default, used by the Contractor Queue's Duplicates button) skips
+    a soft-deactivated row (is_active=False, e.g. pulled from circulation by a student report) --
+    that candidate is already off the bank, not a live duplicate to resolve. include_inactive=True
+    (used by /admin/pyq-matches) keeps it, since the panel's job is to show what a stored
+    "Duplicate" pill actually matched even if that copy was since deactivated."""
     hits = []
     for other_id, other_tokens, other_row in corpus:
         if other_id == row_id or not other_tokens:
             continue
-        if other_row.get("is_active") is False:
+        if not include_inactive and other_row.get("is_active") is False:
             continue
         shared = len(tokens & other_tokens)
         if not shared:
@@ -9174,23 +9408,25 @@ def _dup_matches(row_id, tokens: set, corpus: list, threshold: float, cap: int =
     return hits[:cap], len(hits)
 
 async def _attach_pyq_review_warnings(rows: list):
-    """Adds row["warnings"] = [{code, text}] to each row. The duplicate check (a subject-wide
-    sweep) only runs for rows still waiting on review."""
+    """Adds row["warnings"] = [{code, text}] to each row. The duplicate check (a (subject,
+    language)-wide sweep -- see pyq_language.sql, requirement 3) only runs for rows still waiting
+    on review."""
     for row in rows:
         row["warnings"] = _pyq_basic_warnings(row)
     to_check = [r for r in rows if r.get("review_status") != "approved" and r.get("subject") and r.get("id")]
-    subjects = sorted({r["subject"] for r in to_check})
-    corpora = dict(zip(subjects, await asyncio.gather(*[_pyq_dup_corpus(s) for s in subjects])))
+    pairs = sorted({(r["subject"], r.get("language") or "en") for r in to_check})
+    corpora = dict(zip(pairs, await asyncio.gather(*[_pyq_dup_corpus(s, lang) for s, lang in pairs])))
 
     def scan():
-        for subject in subjects:
-            corpus = corpora.get(subject)
+        for subject, language in pairs:
+            corpus = corpora.get((subject, language))
             if corpus is None:
                 continue
             # This page's own rows too, in case they were saved after the cached corpus was read.
             known = {i for i, _, _ in corpus}
-            combined = corpus + [(o["id"], _pyq_dup_tokens(o), o) for o in rows if o.get("subject") == subject and o.get("id") not in known]
-            for row in (r for r in to_check if r["subject"] == subject):
+            combined = corpus + [(o["id"], _pyq_dup_tokens(o), o) for o in rows
+                                  if o.get("subject") == subject and (o.get("language") or "en") == language and o.get("id") not in known]
+            for row in (r for r in to_check if r["subject"] == subject and (r.get("language") or "en") == language):
                 tokens = _pyq_dup_tokens(row)
                 if not tokens:
                     continue
@@ -9279,19 +9515,20 @@ async def admin_pyq_contractor_queue_counts(_: None = Depends(verify_admin)):
         diagram_or = ("(diagram_url.neq.,option_a_diagram_url.neq.,"
                       "option_b_diagram_url.neq.,option_c_diagram_url.neq.,"
                       "option_d_diagram_url.neq.)")
-        (total, with_diagram, approved, needs_fix, deleted,
+        (total, with_diagram, approved, needs_fix, rejected, deleted,
          uploaded_with_diagram, uploaded_without_diagram) = await asyncio.gather(
             _pyq_count(base),
             _pyq_count({**base, "or": diagram_or}),
             _pyq_count({"review_status": "eq.approved", "uploader_name": f"eq.{CONTRACTOR_UPLOADER_NAME}"}),
             _pyq_count({"review_status": "eq.needs_fix", "uploader_name": f"eq.{CONTRACTOR_UPLOADER_NAME}"}),
+            _pyq_count({"review_status": "eq.rejected", "uploader_name": f"eq.{CONTRACTOR_UPLOADER_NAME}"}),
             _pyq_delete_log_count(CONTRACTOR_UPLOADER_NAME),
             _pyq_upload_log_count(CONTRACTOR_UPLOADER_NAME, True),
             _pyq_upload_log_count(CONTRACTOR_UPLOADER_NAME, False),
         )
         return {
             "with_diagram": with_diagram, "without_diagram": max(0, total - with_diagram),
-            "approved": approved, "needs_fix": needs_fix, "deleted": deleted,
+            "approved": approved, "needs_fix": needs_fix, "rejected": rejected, "deleted": deleted,
             "uploaded_with_diagram": uploaded_with_diagram, "uploaded_without_diagram": uploaded_without_diagram,
         }
     except Exception as e:
@@ -9302,12 +9539,13 @@ async def admin_pyq_review_summary(_: None = Depends(verify_admin)):
     """Today's numbers (India time) for the review bar, plus the recent batches for its filter."""
     try:
         today_start, _today_end = _ist_day_bounds_utc(_ist_today())
-        uploaded, uploaded_contractor, checked, pending, needs_fix = await asyncio.gather(
+        uploaded, uploaded_contractor, checked, pending, needs_fix, rejected = await asyncio.gather(
             _pyq_count({"uploaded_at": f"gte.{today_start}"}),
             _pyq_count({"uploaded_at": f"gte.{today_start}", "uploaded_by": "eq.contractor"}),
             _pyq_count({"reviewed_at": f"gte.{today_start}"}),
             _pyq_count({"review_status": "eq.pending"}),
             _pyq_count({"review_status": "eq.needs_fix"}),
+            _pyq_count({"review_status": "eq.rejected"}),
         )
         batch_resp = await async_client.get(
             f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
@@ -9320,13 +9558,13 @@ async def admin_pyq_review_summary(_: None = Depends(verify_admin)):
         for r in batch_resp.json():
             b = batches.setdefault(r["batch_id"], {"batch_id": r["batch_id"], "uploaded_by": r.get("uploaded_by"),
                                                    "uploaded_at": r.get("uploaded_at"), "count": 0,
-                                                   "pending": 0, "needs_fix": 0, "approved": 0})
+                                                   "pending": 0, "needs_fix": 0, "approved": 0, "rejected": 0})
             b["count"] += 1
             if r.get("review_status") in PYQ_REVIEW_STATUSES:
                 b[r["review_status"]] += 1
         return {
             "today": {"uploaded": uploaded, "uploaded_by_contractor": uploaded_contractor, "checked": checked},
-            "pending": pending, "needs_fix": needs_fix,
+            "pending": pending, "needs_fix": needs_fix, "rejected": rejected,
             "batches": list(batches.values())[:100],
         }
     except Exception as e:
@@ -9371,6 +9609,993 @@ async def admin_pyq_review(body: PyqReviewRequest, _: None = Depends(verify_admi
     except Exception as e:
         return {"error": str(e)}
 
+# ---------- Reject (error) -- pyq_reject.sql ----------
+# Unlike Delete, a rejected row is kept (full text + options) as proof of what was submitted, just
+# hidden from students the same way pending/needs_fix already are (PYQ_STUDENT_VISIBLE requires
+# review_status = 'approved'), and counted against the uploader's payable total below.
+
+class PyqRejectRequest(BaseModel):
+    id: str
+    reason: str
+
+@app.post("/admin/pyq-reject")
+async def admin_pyq_reject(body: PyqRejectRequest, _: None = Depends(verify_admin)):
+    if not _UUID_RE.match(body.id or ""):
+        return {"error": "Invalid question id"}
+    reason = (body.reason or "").strip()[:300]
+    if not reason:
+        return {"error": "Choose or write a reason -- it's kept as the record of why this was rejected"}
+    fields = {
+        "review_status": "rejected",
+        "reject_reason": reason,
+        "rejected_at": datetime.now(timezone.utc).isoformat(),
+        "review_note": None,
+        # Rejecting is also a definitive content check, same as approving -- clears the legacy
+        # Review Queue (reviewed=false) too, instead of leaving a rejected row stuck in it.
+        "reviewed": True,
+    }
+    try:
+        # If pyq_reject.sql hasn't been run yet, the check constraint rejects 'rejected' (or the
+        # columns don't exist) and PostgREST answers with a 400 -- surfaced here as a plain error,
+        # not a crash.
+        resp = await async_client.patch(
+            f"{SUPABASE_URL}/rest/v1/pyq",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
+            params={"id": f"eq.{body.id}",
+                    "select": "id,review_status,reject_reason,rejected_at,uploader_name,reviewed,subject,language"},
+            json=fields
+        )
+        if resp.status_code >= 400:
+            return {"error": resp.text}
+        updated = resp.json()
+        if not updated:
+            return {"error": "Row not found"}
+        _invalidate_processed_pdfs_cache()
+        row = updated[0]
+        # Rejecting this row can be the thing that clears some other pending row's stale
+        # "duplicate" flag. The cache invalidation is synchronous so it can never be stale by the
+        # time anything reads it next; the actual recheck is bounded, fire-and-forget, and never
+        # slows this response down.
+        pair = {(row.get("subject"), row.get("language"))}
+        _invalidate_pyq_dup_caches(pair)
+        asyncio.create_task(_recheck_duplicate_flagged_rows(pair))
+        return {"updated": row}
+    except Exception as e:
+        return {"error": str(e)}
+
+class PyqUnrejectRequest(BaseModel):
+    id: str
+
+@app.post("/admin/pyq-unreject")
+async def admin_pyq_unreject(body: PyqUnrejectRequest, _: None = Depends(verify_admin)):
+    """Restores a rejected row to pending review -- same destination a contractor's Needs-fix
+    correction lands on, so it goes through the normal Approve/Needs-fix/Reject flow again rather
+    than silently becoming visible to students."""
+    if not _UUID_RE.match(body.id or ""):
+        return {"error": "Invalid question id"}
+    fields = {"review_status": "pending", "reject_reason": None, "rejected_at": None}
+    try:
+        resp = await async_client.patch(
+            f"{SUPABASE_URL}/rest/v1/pyq",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
+            params={"id": f"eq.{body.id}", "review_status": "eq.rejected",
+                    "select": "id,review_status,reject_reason,rejected_at,subject,language"},
+            json=fields
+        )
+        if resp.status_code >= 400:
+            return {"error": resp.text}
+        updated = resp.json()
+        if not updated:
+            return {"error": "This question is not currently rejected"}
+        _invalidate_processed_pdfs_cache()
+        row = updated[0]
+        # Restoring this row can make it match a live row again, putting the "duplicate" flag
+        # back. The cache invalidation is synchronous; the actual recheck is bounded,
+        # fire-and-forget, and never slows this response down.
+        pair = {(row.get("subject"), row.get("language"))}
+        _invalidate_pyq_dup_caches(pair)
+        asyncio.create_task(_recheck_duplicate_flagged_rows(pair))
+        return {"updated": row}
+    except Exception as e:
+        return {"error": str(e)}
+
+def _pyq_normalize_question_text(text: Optional[str]) -> str:
+    return re.sub(r"\s+", " ", (text or "").strip().lower())
+
+def _pyq_bulk_reject_plan(rows: List[dict]) -> dict:
+    """Pure (no DB/network) planning step for /admin/pyq-reject-bulk, split out so it's testable
+    on its own. `rows` is each candidate id's current {id, question, review_status}. Already-
+    rejected rows are left alone (skip, not an error). Among the rest, rows are grouped by exact
+    normalized question text -- the cheap, deterministic stand-in for "these are the same
+    duplicate group" that a bulk request can check without re-running the embedding-similarity
+    scan /admin/pyq-duplicates uses. Any group of 2+ has one id held back (kept_for_safety) so a
+    bulk reject can never remove every copy of a group in one call."""
+    already_rejected = [r["id"] for r in rows if r.get("review_status") == "rejected"]
+    candidates = [r for r in rows if r.get("review_status") != "rejected"]
+    groups: dict = {}
+    for r in candidates:
+        norm = _pyq_normalize_question_text(r.get("question"))
+        key = norm if norm else r["id"]  # blank/missing text never merges with another row
+        groups.setdefault(key, []).append(r["id"])
+    to_reject = []
+    kept_for_safety = []
+    for ids in groups.values():
+        if len(ids) > 1:
+            kept_for_safety.append(ids[0])
+            to_reject.extend(ids[1:])
+        else:
+            to_reject.extend(ids)
+    return {"to_reject": to_reject, "kept_for_safety": kept_for_safety, "already_rejected": already_rejected}
+
+class PyqRejectBulkRequest(BaseModel):
+    ids: List[str]
+    reason: str
+
+@app.post("/admin/pyq-reject-bulk")
+async def admin_pyq_reject_bulk(body: PyqRejectBulkRequest, _: None = Depends(verify_admin)):
+    """Batch version of /admin/pyq-reject for the Find Duplicates view's "Reject selected" --
+    same rules as the single reject (non-empty reason, same admin auth), plus: rows already
+    rejected are silently skipped, and _pyq_bulk_reject_plan keeps at least one unrejected copy
+    per exact-text duplicate group instead of ever wiping one out in a single call."""
+    ids = [i for i in body.ids if i]
+    if not ids or len(ids) > 200 or not all(_UUID_RE.match(i) for i in ids):
+        return {"error": "1-200 valid question ids required"}
+    reason = (body.reason or "").strip()[:300]
+    if not reason:
+        return {"error": "Choose or write a reason -- it's kept as the record of why this was rejected"}
+    try:
+        fetch_resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/pyq",
+            headers=ADMIN_HEADERS,
+            params={"id": f"in.({','.join(ids)})", "select": "id,question,review_status,subject,language"},
+        )
+        if fetch_resp.status_code >= 400:
+            return {"error": fetch_resp.text}
+        rows = fetch_resp.json()
+        rows_by_id = {r["id"]: r for r in rows}
+        plan = _pyq_bulk_reject_plan(rows)
+        to_reject = plan["to_reject"]
+        if not to_reject:
+            return {"rejected_count": 0, "kept_for_safety": plan["kept_for_safety"],
+                    "already_rejected": len(plan["already_rejected"])}
+        fields = {
+            "review_status": "rejected",
+            "reject_reason": reason,
+            "rejected_at": datetime.now(timezone.utc).isoformat(),
+            "review_note": None,
+            "reviewed": True,
+        }
+        patch_resp = await async_client.patch(
+            f"{SUPABASE_URL}/rest/v1/pyq",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
+            params={"id": f"in.({','.join(to_reject)})", "select": "id"},
+            json=fields
+        )
+        if patch_resp.status_code >= 400:
+            return {"error": patch_resp.text}
+        updated = patch_resp.json()
+        _invalidate_processed_pdfs_cache()
+        pairs = {(rows_by_id[r["id"]].get("subject"), rows_by_id[r["id"]].get("language"))
+                 for r in updated if r["id"] in rows_by_id}
+        if pairs:
+            _invalidate_pyq_dup_caches(pairs)
+            asyncio.create_task(_recheck_duplicate_flagged_rows(pairs))
+        return {
+            "rejected_count": len(updated),
+            "kept_for_safety": plan["kept_for_safety"],
+            "already_rejected": len(plan["already_rejected"]),
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+async def _pyq_uploaded_total(uploader_name: str) -> int:
+    """Same source as the Contractor Queue's permanent 'Uploaded so far' tile (pyq_upload_log) --
+    with-diagram and without-diagram counts added together."""
+    with_d, without_d = await asyncio.gather(
+        _pyq_upload_log_count(uploader_name, True),
+        _pyq_upload_log_count(uploader_name, False),
+    )
+    return with_d + without_d
+
+def _pyq_reject_classify(reason: Optional[str], created_at: Optional[datetime]) -> str:
+    """Classifies one rejected row into 'error', 'duplicate_deducted' or 'duplicate_free', per
+    PYQ_DUP_DEDUCT_FROM: a reject_reason not starting with "Duplicate" is always an error
+    (deducted); one that does is a free duplicate only if created_at is before the cutoff. Pure
+    and network-free so it's unit-testable and reusable by the contractor's per-row
+    "duplicate_free" flag -- _pyq_reject_breakdown encodes the same rule as PostgREST filters for
+    counting without downloading every row."""
+    if not (reason or "").strip().lower().startswith("duplicate"):
+        return "error"
+    if created_at and created_at < PYQ_DUP_DEDUCT_FROM:
+        return "duplicate_free"
+    return "duplicate_deducted"
+
+async def _pyq_reject_breakdown(uploader_name: str) -> dict:
+    """Splits one uploader's rejected rows into what's deducted from payable and what isn't, per
+    PYQ_DUP_DEDUCT_FROM: non-duplicate rejections ("errors") are always deducted; a duplicate
+    rejection is deducted only if its created_at falls on or after the cutoff, otherwise it's a
+    free duplicate (rejected/hidden from students, but not counted against payable)."""
+    cutoff_iso = PYQ_DUP_DEDUCT_FROM.isoformat()
+    rejected_errors, duplicates_deducted, duplicates_free = await asyncio.gather(
+        _pyq_count({"review_status": "eq.rejected", "uploader_name": f"eq.{uploader_name}",
+                    "reject_reason": "not.ilike.Duplicate*"}),
+        _pyq_count({"review_status": "eq.rejected", "uploader_name": f"eq.{uploader_name}",
+                    "reject_reason": "ilike.Duplicate*", "created_at": f"gte.{cutoff_iso}"}),
+        _pyq_count({"review_status": "eq.rejected", "uploader_name": f"eq.{uploader_name}",
+                    "reject_reason": "ilike.Duplicate*", "created_at": f"lt.{cutoff_iso}"}),
+    )
+    return {"rejected_errors": rejected_errors, "duplicates_deducted": duplicates_deducted,
+            "duplicates_free": duplicates_free}
+
+def _pyq_payable_amount(uploaded: int, rejected_errors: int, duplicates_deducted: int) -> dict:
+    """Shared payable/amount_usd math for both the admin tally and the contractor's own totals --
+    see PYQ_PRICE_USD_PER_Q/PYQ_DUP_DEDUCT_FROM. Free duplicates are not subtracted."""
+    payable = max(0, uploaded - rejected_errors - duplicates_deducted)
+    return {"payable": payable, "amount_usd": round(payable * PYQ_PRICE_USD_PER_Q, 2)}
+
+@app.get("/admin/contractor-tally")
+async def admin_contractor_tally(_: None = Depends(verify_admin)):
+    """Per-uploader payout numbers: uploaded (pyq_upload_log, never decreases), all-time review
+    breakdown (approved/pending/needs_fix), the rejected split (_pyq_reject_breakdown), deleted
+    (pyq_delete_log), and payable/amount_usd (_pyq_payable_amount). Contractors only
+    (CONTRACTOR_UPLOADER_NAME) -- this is a payout sheet, so "Admin" or any other non-contractor
+    uploader in PYQ_UPLOADER_NAMES never belongs here even though they can legitimately upload
+    batches."""
+    try:
+        async def tally_for(name):
+            (uploaded, approved, pending, needs_fix, deleted), reject_breakdown = await asyncio.gather(
+                asyncio.gather(
+                    _pyq_uploaded_total(name),
+                    _pyq_count({"review_status": "eq.approved", "uploader_name": f"eq.{name}"}),
+                    _pyq_count({"review_status": "eq.pending", "uploader_name": f"eq.{name}"}),
+                    _pyq_count({"review_status": "eq.needs_fix", "uploader_name": f"eq.{name}"}),
+                    _pyq_delete_log_count(name),
+                ),
+                _pyq_reject_breakdown(name),
+            )
+            return {
+                "uploader_name": name, "uploaded": uploaded, "approved": approved,
+                "pending": pending, "needs_fix": needs_fix, **reject_breakdown,
+                "deleted": deleted,
+                **_pyq_payable_amount(uploaded, reject_breakdown["rejected_errors"],
+                                       reject_breakdown["duplicates_deducted"]),
+                "target": PYQ_PAYOUT_TARGET,
+            }
+        rows = await asyncio.gather(*(tally_for(name) for name in PYQ_CONTRACTOR_NAMES))
+        return {"rows": rows}
+    except Exception as e:
+        return {"error": str(e)}
+
+# ---------- PYQ auto-approve (pyq_auto_approve.sql) ----------
+# Trial mode by default: auto_check below only ever sets auto_pass/auto_reasons/auto_checked_at
+# on a pending row -- nothing leaves pending on its own, and students see no change at all
+# (PYQ_STUDENT_VISIBLE already requires review_status='approved', which nothing here touches
+# unless AUTO_APPROVE_ENABLED is on). Flip AUTO_APPROVE_ENABLED=true in Railway to let a passing
+# row approve itself; even then a random 10% of passes are deliberately held back (auto_sampled)
+# for a human spot-check rather than approved outright.
+#
+# auto_check mirrors auto-tmp/check.js's read-only feasibility check line for line, with one
+# substitution: Railway has no Node/KaTeX available, so the LaTeX-sanity rule here is a
+# balanced-braces check on every extracted $...$ / \(...\) span instead of an actual KaTeX parse
+# (see _auto_latex_ok). Everything else -- the options/text-clean/subject-chapter rules, the
+# excluded-type heuristics, and the duplicate check's tokenizer/threshold/corpus scope -- is
+# either transcribed straight from check.js or reused directly from the existing Duplicates tool
+# (_tokenize_for_dup_check/DUP_CHECK_STOPWORDS, same 0.5 overlap threshold as /admin/pyq-duplicates).
+AUTO_APPROVE_ENABLED = os.getenv("AUTO_APPROVE_ENABLED", "false").strip().lower() == "true"
+AUTO_APPROVE_DUP_THRESHOLD = 0.5
+AUTO_APPROVE_SAMPLE_RATE = 0.10
+
+_PYQ_AUTO_COLUMNS_STATE = {"exists": False}
+PYQ_AUTO_APPROVE_MIGRATION_ERROR = "pyq_auto_approve.sql hasn't been run yet -- the auto_pass/auto_reasons columns don't exist."
+
+async def _pyq_auto_columns_exist() -> bool:
+    """Whether pyq_auto_approve.sql has been run yet. Cached once true (a migration is never
+    un-run); re-checked on every call otherwise so the feature starts working the moment it's
+    applied, with no restart needed."""
+    if _PYQ_AUTO_COLUMNS_STATE["exists"]:
+        return True
+    try:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
+            params={"select": "id,auto_pass,auto_reasons,auto_checked_at,auto_approved,auto_sampled", "limit": 1}
+        )
+        _PYQ_AUTO_COLUMNS_STATE["exists"] = resp.status_code < 400
+    except Exception:
+        pass
+    return _PYQ_AUTO_COLUMNS_STATE["exists"]
+
+def _auto_row_text(row: dict) -> str:
+    return " ".join(filter(None, [row.get("question"), row.get("option_a"), row.get("option_b"),
+                                   row.get("option_c"), row.get("option_d")]))
+
+# ---- excluded types (check.js: hasDiagram/isMatchTheFollowing/hasMathOrFormula/looksChemicalFormula) ----
+_AUTO_MATCH_RE = re.compile(r"match", re.I)
+_AUTO_COLUMN_RE = re.compile(r"column", re.I)
+_AUTO_COLUMN_I_II_RE = re.compile(r"column\s*i\b.*column\s*ii", re.I | re.S)
+_AUTO_FORMULA_LATEX_RE = re.compile(r"\$[^$]+\$|\\\(|\\frac|\\sqrt|\\sum|\\int|\\[a-zA-Z]+\{")
+_AUTO_FORMULA_WORD_RE = re.compile(r"\b(formula|calculation|calculate)\b", re.I)
+_AUTO_CHEM_SUBSCRIPT_RE = re.compile(r"[A-Z][a-z]?\d+")
+_AUTO_CHEM_ARROW_RE = re.compile(r"\u2192|->|<=>|\\rightarrow|\\longrightarrow|\\rightleftharpoons")
+
+def _auto_has_diagram(row: dict) -> bool:
+    return bool(row.get("has_diagram") or row.get("diagram_url") or row.get("option_a_diagram_url") or
+                row.get("option_b_diagram_url") or row.get("option_c_diagram_url") or row.get("option_d_diagram_url"))
+
+def _auto_is_match_following(question) -> bool:
+    t = question or ""
+    if not _AUTO_MATCH_RE.search(t):
+        return False
+    return bool(_AUTO_COLUMN_RE.search(t)) or bool(_AUTO_COLUMN_I_II_RE.search(t))
+
+def _auto_has_math_or_formula(row: dict) -> bool:
+    t = _auto_row_text(row)
+    if _AUTO_FORMULA_LATEX_RE.search(t):
+        return True
+    return bool(_AUTO_FORMULA_WORD_RE.search(t))
+
+def _auto_looks_chemical_formula(row: dict) -> bool:
+    t = _auto_row_text(row)
+    subscripts = _AUTO_CHEM_SUBSCRIPT_RE.findall(t)
+    arrows = _AUTO_CHEM_ARROW_RE.findall(t)
+    return len(subscripts) >= 3 or len(arrows) >= 1
+
+# ---- rule checks (check.js: optionsOk/textCleanOk/latexOk/subjectChapterOk) ----
+_AUTO_LITERAL_BACKSLASH_N_RE = re.compile(r"\\n")
+_AUTO_STRAY_BACKSLASH_RE = re.compile(r"\\[^a-zA-Z(){}\[\]$^_\\, ]")
+_AUTO_MOJIBAKE_RE = re.compile(r"[\u00c3\u00c2\u00e2\u20ac]{2,}")
+_AUTO_DOLLAR_SPAN_RE = re.compile(r"\$([^$]+)\$")
+_AUTO_PAREN_SPAN_RE = re.compile(r"\\\(([^)]*?)\\\)")
+
+def _auto_options_ok(row: dict) -> bool:
+    opts = [row.get("option_a"), row.get("option_b"), row.get("option_c"), row.get("option_d")]
+    if any(o is None for o in opts):
+        return False
+    trimmed = [str(o).strip() for o in opts]
+    if any(len(o) == 0 for o in trimmed):
+        return False
+    return len(set(trimmed)) == 4
+
+def _auto_text_clean_ok(row: dict) -> bool:
+    fields = [row.get("question"), row.get("option_a"), row.get("option_b"), row.get("option_c"), row.get("option_d")]
+    joined = " ".join(f for f in fields if f is not None)
+    if _AUTO_LITERAL_BACKSLASH_N_RE.search(joined):
+        return False
+    if _AUTO_STRAY_BACKSLASH_RE.search(joined):
+        return False
+    if "\ufffd" in joined:
+        return False
+    if _AUTO_MOJIBAKE_RE.search(joined):
+        return False
+    return len((row.get("question") or "").strip()) >= 15
+
+def _auto_extract_latex_spans(text) -> list:
+    if not text:
+        return []
+    return _AUTO_DOLLAR_SPAN_RE.findall(text) + _AUTO_PAREN_SPAN_RE.findall(text)
+
+def _auto_braces_balanced(expr: str) -> bool:
+    depth = 0
+    for ch in expr:
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth < 0:
+                return False
+    return depth == 0
+
+def _auto_latex_ok(row: dict) -> bool:
+    for field in (row.get("question"), row.get("option_a"), row.get("option_b"), row.get("option_c"), row.get("option_d")):
+        for expr in _auto_extract_latex_spans(field):
+            if not _auto_braces_balanced(expr):
+                return False
+    return True
+
+# ---- formula/LaTeX parse-cleanliness gate ----
+# _auto_has_math_or_formula above used to be a hard exclusion -- any row it flagged stayed pending
+# forever, however clean its LaTeX actually was. This gate instead decides whether a flagged row's
+# formulas are clean enough to lift that exclusion: auto_check calls _auto_formula_check only on
+# rows _auto_has_math_or_formula already flagged, and a failure there becomes the row's reason
+# instead of a blanket "math_formula". Every failure returns one of a small fixed set of reason
+# codes (never per-row text) so admin_pyq_auto_stats's auto_reasons tally stays meaningful.
+#
+# Preferred path is a real KaTeX parse (throwOnError) via a node subprocess, matching what the
+# student-facing renderer actually does -- but Railway's web dyno (Procfile: "python server.py",
+# Railpack python builder, no katex in package.json) has no node_modules/katex, so
+# _auto_katex_node_available() is false there and every environment falls back to the conservative
+# Python validator below: balanced braces/delimiters, a whitelist of known LaTeX/KaTeX commands,
+# no leftover backslashes once known commands and escaped specials are stripped, no "\text"
+# corruption (a dropped leading backslash-t, e.g. "ext{Ans}"), no stray tab/control characters.
+_AUTO_KATEX_NODE_STATE = {"checked": False, "available": False}
+
+def _auto_katex_node_available() -> bool:
+    """True only if both `node` is on PATH and a local katex npm package is actually installed --
+    checked once and cached (neither can change without a redeploy)."""
+    if not _AUTO_KATEX_NODE_STATE["checked"]:
+        _AUTO_KATEX_NODE_STATE["checked"] = True
+        katex_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "node_modules", "katex")
+        _AUTO_KATEX_NODE_STATE["available"] = bool(shutil.which("node")) and os.path.isdir(katex_dir)
+    return _AUTO_KATEX_NODE_STATE["available"]
+
+_AUTO_KATEX_NODE_SCRIPT = (
+    "const katex=require('katex');"
+    "let ok=true,reason=null;"
+    "const exprs=JSON.parse(process.argv[1]);"
+    "for(const e of exprs){try{katex.renderToString(e,{throwOnError:true,strict:'ignore'});}"
+    "catch(err){ok=false;reason=String(err&&err.message||err).slice(0,200);break;}}"
+    "process.stdout.write(JSON.stringify({ok,reason}));"
+)
+
+def _auto_formula_exprs_ok_katex(exprs: list) -> tuple:
+    """(ok, reason_code) running a real KaTeX parse over every span via a node subprocess -- only
+    ever called when _auto_katex_node_available() is true. The underlying KaTeX error message is
+    only ever printed to the server log; the returned reason is always the same fixed code."""
+    if not exprs:
+        return True, None
+    try:
+        result = subprocess.run(
+            ["node", "-e", _AUTO_KATEX_NODE_SCRIPT, json.dumps(exprs)],
+            capture_output=True, text=True, timeout=5
+        )
+        data = json.loads(result.stdout)
+        if not data.get("ok"):
+            print(f"PYQ AUTO-CHECK KATEX PARSE FAILED: {data.get('reason')}", flush=True)
+            return False, "formula_katex_parse_error"
+        return True, None
+    except Exception as e:
+        print(f"PYQ AUTO-CHECK KATEX SUBPROCESS FAILED: {e}", flush=True)
+        return False, "formula_katex_unavailable"
+
+_AUTO_KATEX_KNOWN_COMMANDS = frozenset({
+    "frac", "dfrac", "tfrac", "sqrt", "sum", "prod", "int", "oint", "lim", "limsup", "liminf",
+    "rightarrow", "leftarrow", "Rightarrow", "Leftarrow", "leftrightarrow", "Leftrightarrow",
+    "longrightarrow", "longleftarrow", "Longrightarrow", "rightleftharpoons", "to", "mapsto",
+    "text", "mathrm", "mathbf", "mathit", "mathsf", "mathtt", "boldsymbol", "overline", "underline",
+    "overrightarrow", "overleftarrow", "vec", "hat", "bar", "dot", "ddot", "tilde", "widehat", "widetilde",
+    "alpha", "beta", "gamma", "delta", "epsilon", "varepsilon", "zeta", "eta", "theta", "vartheta", "iota",
+    "kappa", "lambda", "mu", "nu", "xi", "pi", "varpi", "rho", "varrho", "sigma", "varsigma", "tau", "upsilon",
+    "phi", "varphi", "chi", "psi", "omega",
+    "Gamma", "Delta", "Theta", "Lambda", "Xi", "Pi", "Sigma", "Upsilon", "Phi", "Psi", "Omega",
+    "times", "div", "pm", "mp", "cdot", "cdots", "ldots", "vdots", "ddots", "leq", "geq", "neq", "approx",
+    "equiv", "propto", "sim", "simeq", "cong", "parallel", "perp", "angle", "triangle", "degree", "circ",
+    "infty", "partial", "nabla", "forall", "exists", "in", "notin", "subset", "subseteq", "supset",
+    "supseteq", "cup", "cap", "emptyset", "setminus", "wedge", "vee", "neg", "implies", "iff", "therefore",
+    "because", "sin", "cos", "tan", "cot", "sec", "csc", "arcsin", "arccos", "arctan", "sinh", "cosh",
+    "tanh", "log", "ln", "exp", "left", "right", "big", "Big", "bigg", "Bigg", "quad", "qquad",
+    "hspace", "vspace", "binom", "choose", "overset", "underset", "stackrel", "prime", "dagger", "ast", "star",
+})
+_AUTO_LATEX_ESCAPED_SPECIAL_RE = re.compile(r"\\[$%&#_{}~^,:;! ]")
+_AUTO_LATEX_COMMAND_RE = re.compile(r"\\([a-zA-Z]+)")
+_AUTO_LATEX_TEXT_CORRUPTION_RE = re.compile(r"(?<!\\t)ext\{")
+_AUTO_LATEX_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+_AUTO_LATEX_WHITESPACE_RE = re.compile(r"\s+")
+
+def _auto_dollar_delims_balanced(text: str) -> bool:
+    """Unescaped $ signs must pair up (handles $$...$$ too -- it's still an even count); \\$ is an
+    escaped literal dollar, never a delimiter."""
+    return re.sub(r"\\\$", "", text or "").count("$") % 2 == 0
+
+def _auto_paren_delims_balanced(text: str) -> bool:
+    t = text or ""
+    return t.count("\\(") == t.count("\\)")
+
+def _auto_formula_expr_ok(expr: str) -> tuple:
+    """(ok, reason_code) for one extracted LaTeX span's content (the text between $...$/\\(...\\))."""
+    if not _auto_braces_balanced(expr):
+        return False, "formula_unbalanced"
+    if "\t" in expr or _AUTO_LATEX_CONTROL_CHAR_RE.search(expr):
+        return False, "formula_control_char"
+    if _AUTO_LATEX_TEXT_CORRUPTION_RE.search(expr):
+        return False, "formula_text_corruption"
+    scrubbed = _AUTO_LATEX_ESCAPED_SPECIAL_RE.sub("", expr)
+    for cmd in _AUTO_LATEX_COMMAND_RE.findall(scrubbed):
+        if cmd not in _AUTO_KATEX_KNOWN_COMMANDS:
+            return False, "formula_unknown_command"
+    if "\\" in _AUTO_LATEX_COMMAND_RE.sub("", scrubbed):
+        return False, "formula_stray_backslash"
+    return True, None
+
+def _auto_normalize_formula_text(text) -> str:
+    """Collapses whitespace outside AND inside every $...$/\\(...\\) span, so two options that only
+    differ by spacing around their math (e.g. "$H_2O$" vs "$ H_2 O $") normalize to the same string."""
+    t = _AUTO_LATEX_WHITESPACE_RE.sub(" ", (text or "").strip())
+    t = _AUTO_DOLLAR_SPAN_RE.sub(lambda m: "$" + _AUTO_LATEX_WHITESPACE_RE.sub("", m.group(1)) + "$", t)
+    t = _AUTO_PAREN_SPAN_RE.sub(lambda m: "\\(" + _AUTO_LATEX_WHITESPACE_RE.sub("", m.group(1)) + "\\)", t)
+    return t
+
+def _auto_formula_options_ok(row: dict) -> tuple:
+    opts = [row.get("option_a"), row.get("option_b"), row.get("option_c"), row.get("option_d")]
+    if any(o is None or not str(o).strip() for o in opts):
+        return False, "formula_empty_option"
+    if len({_auto_normalize_formula_text(o) for o in opts}) != 4:
+        return False, "formula_duplicate_options"
+    return True, None
+
+def _auto_formula_check(row: dict) -> tuple:
+    """(ok, reason_code) deciding whether a formula/LaTeX-flagged row (auto_check only calls this
+    when _auto_has_math_or_formula(row) is true) is clean enough to stay eligible for auto-approve
+    instead of being held outright. Options are checked first since a duplicate/empty option is
+    cheap to catch and doesn't need any LaTeX parsing."""
+    ok, reason = _auto_formula_options_ok(row)
+    if not ok:
+        return False, reason
+
+    fields = [row.get("question"), row.get("option_a"), row.get("option_b"), row.get("option_c"), row.get("option_d")]
+    for field in fields:
+        if field and (not _auto_dollar_delims_balanced(field) or not _auto_paren_delims_balanced(field)):
+            return False, "formula_unbalanced"
+
+    all_spans = [expr for field in fields for expr in _auto_extract_latex_spans(field)]
+    if _auto_katex_node_available():
+        return _auto_formula_exprs_ok_katex(all_spans)
+    for expr in all_spans:
+        ok, reason = _auto_formula_expr_ok(expr)
+        if not ok:
+            return False, reason
+    return True, None
+
+def _auto_subject_chapter_ok(row: dict) -> bool:
+    return bool((row.get("subject") or "").strip()) and bool((row.get("chapter") or "").strip())
+
+# ---- duplicate check: same tokenizer/threshold/corpus scope as /admin/pyq-duplicates ----
+_auto_dup_corpus_cache = {}
+
+async def _auto_dup_corpus(subject: str, language: str = "en"):
+    """[(id, tokens)] for every OTHER row in this (subject, language) pair, same source filter as
+    /admin/pyq-duplicates (is_active=true, review_status<>rejected) -- cached the same way
+    _pyq_dup_corpus is, since the sweep and the bulk-create hook build this once per (subject,
+    language) per batch, not once per row. None if the read fails (duplicate rule is then
+    skipped, never guessed, for that batch). Scoped by language for the same reason _pyq_dup_
+    corpus is -- see pyq_language.sql, requirement 3. Same "filter in Python, not as a REST
+    eq.X param" reasoning as _pyq_dup_corpus too -- a row with no language value reads as 'en'."""
+    cache_key = (subject, language)
+    hit = _auto_dup_corpus_cache.get(cache_key)
+    if hit and time.time() - hit[0] < PYQ_DUP_CORPUS_TTL:
+        return hit[1]
+    rows, offset, page_size = [], 0, 1000
+    while True:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
+            params={"subject": f"eq.{subject}", "select": "id,language,question,option_a,option_b,option_c,option_d",
+                    "is_active": "eq.true", "review_status": "neq.rejected",
+                    "order": "id.asc", "limit": page_size, "offset": offset}
+        )
+        page = resp.json() if resp.status_code < 400 else None
+        if not isinstance(page, list):
+            print(f"PYQ AUTO-CHECK DUP CORPUS READ FAILED (subject={subject}, language={language}): {resp.status_code}", flush=True)
+            return None
+        rows.extend([r for r in page if (r.get("language") or "en") == language])
+        if len(page) < page_size:
+            break
+        offset += page_size
+    corpus = [(r["id"], _tokenize_for_dup_check(" ".join(filter(None, [
+        r.get("question"), r.get("option_a"), r.get("option_b"), r.get("option_c"), r.get("option_d")
+    ])))) for r in rows]
+    _auto_dup_corpus_cache[cache_key] = (time.time(), corpus)
+    return corpus
+
+def _auto_is_duplicate(row_id, tokens: set, corpus: list) -> bool:
+    if not tokens or not corpus:
+        return False
+    for other_id, other_tokens in corpus:
+        if other_id == row_id or not other_tokens:
+            continue
+        shared = len(tokens & other_tokens)
+        if not shared:
+            continue
+        if shared / len(tokens | other_tokens) >= AUTO_APPROVE_DUP_THRESHOLD:
+            return True
+    return False
+
+def auto_check(row: dict, dup_corpus: list = None) -> tuple:
+    """(pass: bool, reasons: list[str]) for one pyq row. Year and answer key are deliberately
+    never checked -- neither is required for a question to be shown to students. A rejected row
+    is never checked (it's kept only as reject-reason proof, never a candidate for approval).
+
+    dup_corpus: [(other_id, other_tokens), ...] for every other row in this row's subject, from
+    _auto_dup_corpus -- the caller builds this once per subject per batch. None/empty just skips
+    the duplicate rule for this call (the sweep and the bulk-create hook always pass a real one)."""
+    if row.get("review_status") == "rejected":
+        return False, ["rejected"]
+
+    reasons = []
+    # Never auto-approve a non-English row (pyq_language.sql, requirement 4) -- still runs every
+    # other check below too, so auto_reasons stays a genuinely useful diagnostic for the human
+    # review this row needs regardless.
+    if (row.get("language") or "en") != "en":
+        reasons.append("non_english")
+    if _auto_has_diagram(row):
+        reasons.append("diagram")
+    if _auto_is_match_following(row.get("question")):
+        reasons.append("match_following")
+    if _auto_has_math_or_formula(row):
+        formula_ok, formula_reason = _auto_formula_check(row)
+        if not formula_ok:
+            reasons.append(formula_reason)
+    if _auto_looks_chemical_formula(row):
+        reasons.append("chemical_formula")
+    if not _auto_options_ok(row):
+        reasons.append("options")
+    if not _auto_text_clean_ok(row):
+        reasons.append("broken_text")
+    if not _auto_latex_ok(row):
+        reasons.append("latex")
+    if not _auto_subject_chapter_ok(row):
+        reasons.append("subject_chapter")
+    tokens = _tokenize_for_dup_check(_auto_row_text(row))
+    if dup_corpus and _auto_is_duplicate(row.get("id"), tokens, dup_corpus):
+        reasons.append("duplicate")
+
+    return (len(reasons) == 0), reasons
+
+def _auto_approve_all_count_ok(expected: int, current: int) -> bool:
+    """The guard behind /admin/pyq-auto-approve-all: only approve the exact set the admin saw and
+    confirmed, never a set that grew or shrank (another sweep, a new upload) since they looked."""
+    return expected == current
+
+async def _auto_check_row(row: dict, corpora: dict, now_iso: str, allow_approve: bool = True) -> dict:
+    """Runs auto_check on one row and returns the Supabase PATCH fields -- shared by the sweep
+    and the bulk-create hook so the real-time switch (AUTO_APPROVE_ENABLED) behaves identically
+    whichever path checked the row. allow_approve=False (the recheck sweep) skips the
+    auto-approve branch entirely, so review_status is guaranteed untouched regardless of
+    AUTO_APPROVE_ENABLED -- recheck's job is only to refresh auto_pass/auto_reasons/
+    auto_checked_at on rows that already got a verdict, never to move anything out of pending."""
+    corpus = corpora.get((row.get("subject"), row.get("language") or "en")) or []
+    ok, reasons = auto_check(row, corpus)
+    fields = {"auto_pass": ok, "auto_reasons": ",".join(reasons) if reasons else None, "auto_checked_at": now_iso}
+    if allow_approve and ok and AUTO_APPROVE_ENABLED and row.get("review_status") == "pending":
+        if random.random() < AUTO_APPROVE_SAMPLE_RATE:
+            fields["auto_sampled"] = True
+        else:
+            fields.update({"review_status": "approved", "auto_approved": True,
+                           "reviewed_by": "auto", "reviewed_at": now_iso})
+    return fields
+
+async def _auto_check_and_patch_rows(rows: list, allow_approve: bool = True) -> dict:
+    """Checks every row, PATCHes each one's own result fields, and returns per-batch counts.
+    Fields differ per row (different reasons, some approved, some not), so this is one PATCH per
+    row rather than a single bulk update -- same as every other per-row-field admin update in
+    this file (e.g. _log_pyq_upload, admin_pyq_reject)."""
+    if not rows:
+        return {"checked": 0, "passed": 0, "failed": 0, "auto_approved": 0, "auto_sampled": 0}
+    pairs = sorted({(r["subject"], r.get("language") or "en") for r in rows if r.get("subject")})
+    corpora = dict(zip(pairs, await asyncio.gather(*[_auto_dup_corpus(s, lang) for s, lang in pairs])))
+    now_iso = datetime.now(timezone.utc).isoformat()
+    counts = {"checked": 0, "passed": 0, "failed": 0, "auto_approved": 0, "auto_sampled": 0}
+
+    async def process(row):
+        fields = await _auto_check_row(row, corpora, now_iso, allow_approve)
+        counts["checked"] += 1
+        counts["passed" if fields["auto_pass"] else "failed"] += 1
+        if fields.get("auto_approved"):
+            counts["auto_approved"] += 1
+        if fields.get("auto_sampled"):
+            counts["auto_sampled"] += 1
+        try:
+            await async_client.patch(
+                f"{SUPABASE_URL}/rest/v1/pyq", headers={**ADMIN_HEADERS, "Content-Type": "application/json"},
+                params={"id": f"eq.{row['id']}"}, json=fields
+            )
+        except Exception as e:
+            print(f"PYQ AUTO-CHECK PATCH FAILED id={row.get('id')}: {e}", flush=True)
+
+    await asyncio.gather(*(process(r) for r in rows))
+    return counts
+
+async def _auto_check_new_rows_background(rows: list):
+    """Called (fire-and-forget) right after pyq-bulk-create inserts new rows, so a contractor
+    upload already has auto_pass/auto_reasons the first time it shows up in review. Must never
+    fail or slow the upload itself -- every failure here is caught and only printed, same
+    reasoning as _log_pyq_upload/_embed_pyq_row_background above."""
+    try:
+        if not rows or not await _pyq_auto_columns_exist():
+            return
+        await _auto_check_and_patch_rows(rows)
+    except Exception as e:
+        print(f"PYQ AUTO-CHECK (new rows) FAILED: {e}", flush=True)
+
+PYQ_AUTO_CHECK_SELECT = (
+    "id,subject,chapter,question,option_a,option_b,option_c,option_d,language,"
+    "has_diagram,diagram_url,option_a_diagram_url,option_b_diagram_url,"
+    "option_c_diagram_url,option_d_diagram_url,review_status"
+)
+
+def _pyq_duplicate_flagged(row: dict) -> bool:
+    """True if row's auto_reasons (the comma-joined string auto_check() writes, e.g.
+    "diagram,duplicate") currently carries the "duplicate" flag."""
+    return "duplicate" in (row.get("auto_reasons") or "").split(",")
+
+def _invalidate_pyq_dup_caches(pairs) -> None:
+    """Pops both duplicate-corpus caches for every (subject, language) pair -- synchronous,
+    in-memory, no network, no await. Callers invalidate directly with this, inline, the moment a
+    reject/delete/soft-deactivate/restore changes which rows are "live", so neither cache can
+    serve a stale corpus afterward -- this must never be deferred into the fire-and-forget
+    recheck task below, since asyncio.create_task gives no guarantee about when (or whether,
+    before the next request) that task actually runs.
+
+    _auto_dup_corpus_cache is keyed (subject, language). _pyq_dup_corpus_cache (the older
+    Duplicates-tool/cross-check-panel cache) is keyed (subject, language, include_rejected) --
+    both the True and False variant are cached separately (see _pyq_dup_corpus), so both must be
+    popped here or the include_rejected=True entry (used by /admin/pyq-matches) would keep
+    serving a corpus containing a row that's since been hard-deleted. (A plain (subject,
+    language) pop here was the pre-existing bug behind admin_pyq_delete's own cache-invalidation
+    comment never actually working -- fixed here rather than left in place, since this function
+    now owns that invalidation.)"""
+    for subject, language in pairs:
+        if not subject:
+            continue
+        language = language or "en"
+        _auto_dup_corpus_cache.pop((subject, language), None)
+        _pyq_dup_corpus_cache.pop((subject, language, False), None)
+        _pyq_dup_corpus_cache.pop((subject, language, True), None)
+
+def _pyq_rows_for_duplicate_recheck(rows: list, language: str) -> list:
+    """Pure filter used by _recheck_duplicate_flagged_rows, split out so it's testable without a
+    live Supabase read: only pending rows, in the given language, still flagged "duplicate" in
+    auto_reasons. Re-checks review_status/auto_reasons in Python even though the GET request's
+    own params already filter for them (review_status=eq.pending, auto_reasons ilike duplicate)
+    -- belt-and-suspenders the same way _auto_dup_corpus re-checks language in Python rather than
+    trusting a REST param alone -- so an approved row or a wrong-language row is never patched by
+    this path even if a caller's query params ever drift from this list."""
+    return [r for r in rows if r.get("review_status") == "pending"
+            and (r.get("language") or "en") == language and _pyq_duplicate_flagged(r)]
+
+async def _recheck_duplicate_flagged_rows(pairs) -> dict:
+    """After a reject/bulk-reject/delete/soft-deactivate/unreject changes which rows count as
+    "live" in one or more (subject, language) pairs, re-runs the full current auto_check on every
+    pending row in those same pairs that's still flagged "duplicate" in auto_reasons. A row whose
+    only match just got rejected/deleted/deactivated loses the flag here and, if nothing else is
+    holding it, becomes auto-eligible through the normal _auto_check_row path -- same
+    AUTO_APPROVE_ENABLED/10%-sample gate as every other sweep, so review_status is never touched
+    any other way. Restoring a match (unreject, or reactivating is_active) can just as easily put
+    the flag back on a row that now matches a live row again.
+
+    Bounded to already-flagged pending rows only -- never a full-table sweep -- so this stays
+    fast; every caller fires it with asyncio.create_task rather than awaiting it, so it can never
+    add noticeable latency to the reject/delete/restore response itself. Every caller sits behind
+    verify_admin, so a contractor-key request never reaches this.
+
+    Also clears both duplicate-corpus caches for every pair again (callers already do this
+    synchronously themselves before firing this as a task -- see _invalidate_pyq_dup_caches --
+    but repeating it here keeps this function correct on its own too, e.g. if ever called
+    directly instead of via create_task)."""
+    pairs = {(subject, language or "en") for subject, language in pairs if subject}
+    if not pairs:
+        return {"checked": 0}
+    _invalidate_pyq_dup_caches(pairs)
+    if not await _pyq_auto_columns_exist():
+        return {"checked": 0}
+    try:
+        rows = []
+        for subject, language in pairs:
+            resp = await async_client.get(
+                f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
+                params={"subject": f"eq.{subject}", "review_status": "eq.pending",
+                        "auto_reasons": "ilike.*duplicate*",
+                        "select": PYQ_AUTO_CHECK_SELECT, "limit": 1000}
+            )
+            if resp.status_code >= 400:
+                print(f"PYQ DUPLICATE RECHECK READ FAILED (subject={subject}): {resp.status_code}", flush=True)
+                continue
+            rows.extend(_pyq_rows_for_duplicate_recheck(resp.json(), language))
+        if not rows:
+            return {"checked": 0}
+        counts = await _auto_check_and_patch_rows(rows, allow_approve=True)
+        if counts["checked"]:
+            _invalidate_processed_pdfs_cache()
+        return counts
+    except Exception as e:
+        print(f"PYQ DUPLICATE RECHECK FAILED: {e}", flush=True)
+        return {"checked": 0}
+
+@app.post("/admin/pyq-auto-check")
+async def admin_pyq_auto_check(recheck: bool = False, offset: int = 0, _: None = Depends(verify_admin)):
+    """Sweeps up to 500 pending rows that have never been checked (auto_checked_at is null).
+    The frontend calls this repeatedly until `remaining` comes back false.
+
+    recheck=true instead re-runs the full current check on every pending English row --
+    overwriting a stale auto_pass/auto_reasons/auto_checked_at left over from before
+    _auto_formula_check existed -- paging by `offset` over review_status=pending (not
+    auto_checked_at is.null, which this mode intentionally ignores both ways: already-checked
+    rows are revisited and freshly-checked ones don't vanish from the next page). review_status
+    itself is never part of the fields _auto_check_row writes, so approved/rejected rows are
+    never touched regardless of mode, and Hindi rows are filtered out in Python before patching
+    (same "no language value reads as 'en'" rule _auto_dup_corpus uses) so they're never touched
+    either.
+
+    The duplicate rule inside auto_check always scores against live rows only (_auto_dup_corpus
+    filters is_active=true, review_status<>rejected, so a rejected or deleted match is never in
+    it) -- but that corpus is cached for PYQ_DUP_CORPUS_TTL, so a backlog recheck starting right
+    after a batch of rejects/deletes could still see a corpus cached from just before them. The
+    first page (offset==0) of a recheck clears both duplicate-corpus caches up front so this
+    sweep is guaranteed to read the current live set, not a stale one -- this is what lets one
+    "Re-check pending" pass clear a backlog of stale duplicate flags in one click."""
+    if not await _pyq_auto_columns_exist():
+        return {"error": PYQ_AUTO_APPROVE_MIGRATION_ERROR}
+    try:
+        params = {"review_status": "eq.pending", "select": PYQ_AUTO_CHECK_SELECT,
+                  "order": "id.asc", "limit": 500}
+        if recheck:
+            params["offset"] = offset
+            if offset == 0:
+                _pyq_dup_corpus_cache.clear()
+                _auto_dup_corpus_cache.clear()
+        else:
+            params["auto_checked_at"] = "is.null"
+        resp = await async_client.get(f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS, params=params)
+        if resp.status_code >= 400:
+            return {"error": resp.text}
+        page = resp.json()
+        rows = [r for r in page if (r.get("language") or "en") == "en"] if recheck else page
+        counts = await _auto_check_and_patch_rows(rows, allow_approve=not recheck)
+        if counts["checked"]:
+            _invalidate_processed_pdfs_cache()
+        if recheck:
+            counts["remaining"] = len(page) == 500
+            counts["next_offset"] = offset + len(page)
+        else:
+            counts["remaining"] = len(rows) == 500
+        return counts
+    except Exception as e:
+        return {"error": str(e)}
+
+class PyqAutoApproveAllRequest(BaseModel):
+    expected_count: int
+
+@app.post("/admin/pyq-auto-approve-all")
+async def admin_pyq_auto_approve_all(body: PyqAutoApproveAllRequest, _: None = Depends(verify_admin)):
+    if not await _pyq_auto_columns_exist():
+        return {"error": PYQ_AUTO_APPROVE_MIGRATION_ERROR}
+    try:
+        current = await _pyq_count({"review_status": "eq.pending", "auto_pass": "eq.true"})
+        if not _auto_approve_all_count_ok(body.expected_count, current):
+            return {"count_changed": True, "current_count": current}
+        if current == 0:
+            return {"approved": 0}
+        now = datetime.now(timezone.utc).isoformat()
+        resp = await async_client.patch(
+            f"{SUPABASE_URL}/rest/v1/pyq",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
+            params={"review_status": "eq.pending", "auto_pass": "eq.true", "select": "id"},
+            json={"review_status": "approved", "auto_approved": True, "reviewed_by": "auto-bulk", "reviewed_at": now}
+        )
+        if resp.status_code >= 400:
+            return {"error": resp.text}
+        _invalidate_processed_pdfs_cache()
+        return {"approved": len(resp.json())}
+    except Exception as e:
+        return {"error": str(e)}
+
+class PyqUnapproveRequest(BaseModel):
+    id: str
+
+@app.post("/admin/pyq-unapprove")
+async def admin_pyq_unapprove(body: PyqUnapproveRequest, _: None = Depends(verify_admin)):
+    """Puts an approved row back to pending, same destination a fresh upload lands on -- goes
+    through the normal Approve/Needs-fix/Reject flow again rather than silently staying live."""
+    if not await _pyq_auto_columns_exist():
+        return {"error": PYQ_AUTO_APPROVE_MIGRATION_ERROR}
+    if not _UUID_RE.match(body.id or ""):
+        return {"error": "Invalid question id"}
+    try:
+        resp = await async_client.patch(
+            f"{SUPABASE_URL}/rest/v1/pyq",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
+            params={"id": f"eq.{body.id}", "review_status": "eq.approved",
+                    "select": "id,review_status,auto_approved,auto_pass,auto_reasons"},
+            json={"review_status": "pending", "auto_approved": False, "reviewed_at": None}
+        )
+        if resp.status_code >= 400:
+            return {"error": resp.text}
+        updated = resp.json()
+        if not updated:
+            return {"error": "This question is not currently approved"}
+        _invalidate_processed_pdfs_cache()
+        return {"updated": updated[0]}
+    except Exception as e:
+        return {"error": str(e)}
+
+PYQ_AUTO_STATS_SELECT = (
+    "auto_pass,auto_reasons,question,option_a,option_b,option_c,option_d,language,"
+    "has_diagram,diagram_url,option_a_diagram_url,option_b_diagram_url,option_c_diagram_url,option_d_diagram_url"
+)
+
+@app.get("/admin/pyq-auto-stats")
+async def admin_pyq_auto_stats(_: None = Depends(verify_admin)):
+    """Numbers for the admin preview's auto-approve tile: would-auto-approve count, held counts
+    per reason, how many are still unchecked, the all-time auto-approved count, whether the real
+    switch is on, and the formula-check breakdown (eligible/passed/failed) requirement 3 asks for.
+
+    The formula counts are recomputed live from each checked pending row's own fields rather than
+    read off a stored column -- trial mode (the default) never changes review_status, so a passing
+    formula row stays pending exactly like a held one, and both still need to be told apart here."""
+    if not await _pyq_auto_columns_exist():
+        return {"error": PYQ_AUTO_APPROVE_MIGRATION_ERROR, "enabled": AUTO_APPROVE_ENABLED}
+    try:
+        would_approve, auto_approved_count, pending_unchecked = await asyncio.gather(
+            _pyq_count({"review_status": "eq.pending", "auto_pass": "eq.true"}),
+            _pyq_count({"review_status": "eq.approved", "auto_approved": "eq.true"}),
+            _pyq_count({"review_status": "eq.pending", "auto_checked_at": "is.null"}),
+        )
+        # auto_reasons is a free comma-separated string, not an array/enum column, so there's no
+        # SQL-side group-by for it -- read every checked pending row's own fields and tally/recompute
+        # in Python (also lets the formula breakdown below reuse the same single paged fetch).
+        checked_rows, offset, page_size = [], 0, 1000
+        while True:
+            resp = await async_client.get(
+                f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
+                params={"review_status": "eq.pending", "auto_checked_at": "not.is.null",
+                        "select": PYQ_AUTO_STATS_SELECT, "limit": page_size, "offset": offset}
+            )
+            if resp.status_code >= 400:
+                return {"error": resp.text}
+            page = resp.json()
+            checked_rows.extend(page)
+            if len(page) < page_size:
+                break
+            offset += page_size
+        held_by_reason = {}
+        formula_eligible = formula_passed = 0
+        for r in checked_rows:
+            if r.get("auto_pass") is False:
+                for code in (r.get("auto_reasons") or "").split(","):
+                    code = code.strip()
+                    if code:
+                        held_by_reason[code] = held_by_reason.get(code, 0) + 1
+            if (_auto_has_math_or_formula(r) and not _auto_has_diagram(r)
+                    and not _auto_is_match_following(r.get("question")) and not _auto_looks_chemical_formula(r)
+                    and (r.get("language") or "en") == "en"):
+                formula_eligible += 1
+                if _auto_formula_check(r)[0]:
+                    formula_passed += 1
+        return {
+            "enabled": AUTO_APPROVE_ENABLED,
+            "would_approve": would_approve,
+            "held_total": sum(1 for r in checked_rows if r.get("auto_pass") is False),
+            "held_by_reason": held_by_reason,
+            "auto_approved_count": auto_approved_count,
+            "pending_unchecked": pending_unchecked,
+            "formula_eligible": formula_eligible,
+            "formula_passed": formula_passed,
+            "formula_failed": formula_eligible - formula_passed,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/admin/pyq-auto-formula-sample")
+async def admin_pyq_auto_formula_sample(_: None = Depends(verify_admin)):
+    """Up to 30 random pending rows that passed the formula check and would currently be
+    auto-approved, for the admin panel's "Spot-check formula sample" button. Fetches every
+    candidate (PostgREST has no server-side RANDOM() ordering here) and samples in Python --
+    fine at this table's size, same tradeoff _auto_dup_corpus already makes for a full scan."""
+    if not await _pyq_auto_columns_exist():
+        return {"error": PYQ_AUTO_APPROVE_MIGRATION_ERROR}
+    try:
+        candidates, offset, page_size = [], 0, 1000
+        select = ("id,subject,chapter,question,option_a,option_b,option_c,option_d,language,"
+                  "has_diagram,diagram_url,option_a_diagram_url,option_b_diagram_url,"
+                  "option_c_diagram_url,option_d_diagram_url")
+        while True:
+            resp = await async_client.get(
+                f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
+                params={"review_status": "eq.pending", "auto_pass": "eq.true",
+                        "select": select, "order": "id.asc", "limit": page_size, "offset": offset}
+            )
+            if resp.status_code >= 400:
+                return {"error": resp.text}
+            page = resp.json()
+            candidates.extend(
+                r for r in page
+                if _auto_has_math_or_formula(r) and (r.get("language") or "en") == "en"
+            )
+            if len(page) < page_size:
+                break
+            offset += page_size
+        sample = random.sample(candidates, min(30, len(candidates)))
+        return {"total_eligible": len(candidates), "sample": sample}
+    except Exception as e:
+        return {"error": str(e)}
+
 # The contractor's side: only their own needs_fix rows, only through the contractor key (never
 # ADMIN_PASSWORD, same isolation as /contractor-pdf-review/verify).
 CONTRACTOR_FIX_COLUMNS = (
@@ -9394,6 +10619,44 @@ async def contractor_pyq_needs_fix(_: None = Depends(verify_contractor_pdf_revie
             return {"error": resp.text}
         pending = await _pyq_count({"uploaded_by": "eq.contractor", "review_status": "eq.pending"})
         return {"rows": resp.json(), "pending_count": pending}
+    except Exception as e:
+        return {"error": str(e)}
+
+# Read-only mirror of /admin/pyq-reject for the contractor's own rows -- never accepts a write,
+# and the filter below (uploader_name=CONTRACTOR_UPLOADER_NAME baked in server-side, never taken
+# from the request) means this can only ever return the contractor's own rejected questions.
+CONTRACTOR_REJECTED_COLUMNS = (
+    "id,subject,chapter,class,year,question,option_a,option_b,option_c,option_d,correct_answer,"
+    "reject_reason,rejected_at,created_at"
+)
+
+@app.get("/contractor/pyq-rejected")
+async def contractor_pyq_rejected(_: None = Depends(verify_contractor_pdf_review)):
+    try:
+        resp, uploaded, reject_breakdown = await asyncio.gather(
+            async_client.get(
+                f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
+                params={"review_status": "eq.rejected", "uploader_name": f"eq.{CONTRACTOR_UPLOADER_NAME}",
+                        "select": CONTRACTOR_REJECTED_COLUMNS, "order": "rejected_at.desc", "limit": 500}
+            ),
+            _pyq_uploaded_total(CONTRACTOR_UPLOADER_NAME),
+            _pyq_reject_breakdown(CONTRACTOR_UPLOADER_NAME),
+        )
+        if resp.status_code >= 400:
+            return {"error": resp.text}
+        rows = resp.json()
+        # Per-row flag so the contractor's own list can mark a free duplicate (rejected/hidden,
+        # but not deducted) without re-deriving the cutoff rule client-side.
+        for r in rows:
+            created_at = r.get("created_at")
+            created_dt = datetime.fromisoformat(created_at.replace("Z", "+00:00")) if created_at else None
+            r["duplicate_free"] = _pyq_reject_classify(r.get("reject_reason"), created_dt) == "duplicate_free"
+        return {
+            "rows": rows, "uploaded": uploaded, **reject_breakdown,
+            **_pyq_payable_amount(uploaded, reject_breakdown["rejected_errors"],
+                                   reject_breakdown["duplicates_deducted"]),
+            "target": PYQ_PAYOUT_TARGET,
+        }
     except Exception as e:
         return {"error": str(e)}
 
@@ -9507,7 +10770,8 @@ async def admin_pyq_update(pyq_id: str, body: AdminPyqUpdate, _: None = Depends(
             headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
             params={"id": f"eq.{pyq_id}", "select": "id,subject,chapter,question,option_a,option_b,option_c,"
                     "option_d,correct_answer,is_active,year,source_tag,class,has_diagram,diagram_url,"
-                    "option_a_diagram_url,option_b_diagram_url,option_c_diagram_url,option_d_diagram_url,reviewed,created_at"},
+                    "option_a_diagram_url,option_b_diagram_url,option_c_diagram_url,option_d_diagram_url,"
+                    "reviewed,created_at,language"},
             json=update_fields
         )
         if response.status_code >= 400:
@@ -9516,7 +10780,15 @@ async def admin_pyq_update(pyq_id: str, body: AdminPyqUpdate, _: None = Depends(
         if not updated:
             return {"error": "Row not found"}
         _invalidate_processed_pdfs_cache()  # an edit can change is_active/subject/diagram urls etc.
-        return {"updated": updated[0]}
+        row = updated[0]
+        if body.is_active is False:
+            # Soft-deactivating this row can clear some other pending row's stale "duplicate"
+            # flag. The cache invalidation is synchronous; the actual recheck is bounded,
+            # fire-and-forget, and never slows this response down.
+            pair = {(row.get("subject"), row.get("language"))}
+            _invalidate_pyq_dup_caches(pair)
+            asyncio.create_task(_recheck_duplicate_flagged_rows(pair))
+        return {"updated": row}
     except Exception as e:
         return {"error": str(e)}
 
@@ -9533,16 +10805,23 @@ async def admin_pyq_bulk_update(body: AdminPyqBulkUpdate, _: None = Depends(veri
         return {"error": "No fields to update"}
     try:
         id_list = ",".join(str(i) for i in body.ids)
+        select_fields = "id,subject,language" if body.is_active is False else "id"
         response = http_requests.patch(
             f"{SUPABASE_URL}/rest/v1/pyq",
             headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
-            params={"id": f"in.({id_list})", "select": "id"},
+            params={"id": f"in.({id_list})", "select": select_fields},
             json=update_fields
         )
         if response.status_code >= 400:
             return {"error": response.text}
+        updated = response.json()
         _invalidate_processed_pdfs_cache()  # chapter/is_active changes can affect per-PDF counts
-        return {"updated_count": len(response.json())}
+        if body.is_active is False:
+            pairs = {(r.get("subject"), r.get("language")) for r in updated if r.get("subject")}
+            if pairs:
+                _invalidate_pyq_dup_caches(pairs)
+                asyncio.create_task(_recheck_duplicate_flagged_rows(pairs))
+        return {"updated_count": len(updated)}
     except Exception as e:
         return {"error": str(e)}
 
@@ -9591,12 +10870,16 @@ async def admin_pyq_delete(pyq_id: str, _: None = Depends(verify_admin)):
         # i.e. before the row is gone) rather than a separate query -- same data, one round trip.
         # Fire-and-forget: never delays or risks this response.
         asyncio.create_task(_log_pyq_delete(deleted[0].get("id"), deleted[0].get("uploader_name")))
-        # Drop this subject's duplicate-corpus cache so the next duplicate check (review-page
-        # warnings or the Contractor Queue's Duplicates button) re-reads from the DB instead of
-        # still seeing the just-deleted row for up to PYQ_DUP_CORPUS_TTL more seconds -- otherwise
-        # a group whose "original" was just deleted could keep pointing at it a little longer.
+        # Drop this subject's duplicate-corpus caches synchronously (both the Duplicates-tool one
+        # and the auto-check one -- the latter used to be left stale here), then re-check any
+        # pending row still flagged "duplicate" against this row, so a group whose "original" was
+        # just deleted doesn't keep pointing at it, in either tool, for up to PYQ_DUP_CORPUS_TTL
+        # more seconds or forever. The recheck itself is bounded, fire-and-forget: never delays or
+        # risks this response.
         if deleted[0].get("subject"):
-            _pyq_dup_corpus_cache.pop(deleted[0]["subject"], None)
+            pair = {(deleted[0].get("subject"), deleted[0].get("language"))}
+            _invalidate_pyq_dup_caches(pair)
+            asyncio.create_task(_recheck_duplicate_flagged_rows(pair))
         _invalidate_processed_pdfs_cache()  # a deleted row can no longer count toward any PDF's totals
         # Returning the deleted row (not just success:true) is what lets the admin tool's
         # Ctrl+Z undo restore it -- this is a hard DELETE, so this response is the only place
@@ -10319,6 +11602,12 @@ def admin_scan_pdf(req: ScanPdfRequest, _: None = Depends(verify_admin_or_contra
         return {"error": "Invalid subject"}
     if req.layout not in ("standard", "3col_book", "scanned", "scanned_ocr"):
         return {"error": "Invalid layout"}
+    if req.language not in ("en", "hi"):
+        return {"error": "Invalid language"}
+    if req.language == "hi" and not HINDI_UPLOADS_ENABLED:
+        return {"error": "Hindi uploads are paused"}
+    if req.language == "hi" and req.layout != "scanned":
+        return {"error": "Hindi extraction only supports the scanned layout"}
     if req.uploader_name and req.uploader_name not in PYQ_UPLOADER_NAMES:
         raise HTTPException(status_code=400, detail="Invalid uploader name")
     try:
@@ -10340,7 +11629,7 @@ def admin_scan_pdf(req: ScanPdfRequest, _: None = Depends(verify_admin_or_contra
     processed_pdf_id = _create_processed_pdf_row(req.filename, req.subject) if req.filename else None
     try:
         if req.layout == "scanned":
-            result = scan_scanned_pdf_bytes(pdf_bytes, req.subject, confirm_over_cap=req.confirm_over_cap)
+            result = scan_scanned_pdf_bytes(pdf_bytes, req.subject, confirm_over_cap=req.confirm_over_cap, language=req.language)
         elif req.layout == "scanned_ocr":
             result = scan_ocr_pdf_bytes(pdf_bytes, req.subject)
         else:
@@ -10530,9 +11819,13 @@ def admin_scan_pdf_estimate(req: ScanPdfEstimateRequest, _: None = Depends(verif
     admin_scan_pdf (page rendering is CPU work)."""
     if req.subject not in ("Biology", "Physics", "Chemistry"):
         return {"error": "Invalid subject"}
+    if req.language not in ("en", "hi"):
+        return {"error": "Invalid language"}
+    if req.language == "hi" and not HINDI_UPLOADS_ENABLED:
+        return {"error": "Hindi uploads are paused"}
     try:
         pdf_bytes = base64.b64decode(req.data)
-        return estimate_scanned_pdf_cost(pdf_bytes, req.subject)
+        return estimate_scanned_pdf_cost(pdf_bytes, req.subject, language=req.language)
     except Exception as e:
         return {"error": f"Could not read PDF: {e}"}
 
@@ -11515,8 +12808,19 @@ async def _embed_pyq_row_background(row_id, question, chapter, option_a, option_
     except Exception as e:
         print(f"PYQ EMBEDDING FAILED (generation) id={row_id}: {e}", flush=True)
 
-PYQ_REVIEW_STATUSES = ("pending", "approved", "needs_fix")
+PYQ_REVIEW_STATUSES = ("pending", "approved", "needs_fix", "rejected")
 PYQ_UPLOADERS = ("admin", "contractor")
+# Kept as proof, deducted from payable -- see pyq_reject.sql. A constant here, not a DB column,
+# since it's the same number for every uploader and changes rarely enough to just edit in code.
+PYQ_PAYOUT_TARGET = 5000
+# $90 per 5,000 payable questions. A code constant, not a DB column, for the same reason as
+# PYQ_PAYOUT_TARGET above.
+PYQ_PRICE_USD_PER_Q = 0.018
+# Duplicate rejections (reject_reason starting "Duplicate") dated before this (India time) predate
+# the payout rules and stay rejected/hidden from students without being deducted from payable; on
+# or after this instant a duplicate rejection is deducted like any other rejection reason. Non-
+# duplicate rejections ("errors") are always deducted regardless of when they happened.
+PYQ_DUP_DEDUCT_FROM = datetime(2026, 11, 1, 0, 0, tzinfo=IST)
 _BATCH_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
 
 @app.post("/admin/pyq-bulk-create")
@@ -11525,6 +12829,13 @@ async def admin_pyq_bulk_create(body: PyqBulkCreate, role: str = Depends(verify_
         return {"error": "No questions provided"}
     if any(q.subject not in ("Biology", "Physics", "Chemistry") for q in body.questions):
         return {"error": "Invalid subject"}
+    if any(q.language not in (None, "en", "hi") for q in body.questions):
+        return {"error": "Invalid language"}
+    # Blocks new Hindi rows while paused, same as admin_scan_pdf -- but not a restore (q.id set,
+    # see PyqQuestionCreate's docstring), which re-inserts a row that was already extracted and
+    # paid for, not a fresh Gemini-costing upload.
+    if not HINDI_UPLOADS_ENABLED and any(q.language == "hi" and not q.id for q in body.questions):
+        return {"error": "Hindi uploads are paused"}
     if body.uploader_name is not None and body.uploader_name not in PYQ_UPLOADER_NAMES:
         raise HTTPException(status_code=400, detail="Invalid uploader name")
     # Who uploaded comes from the key that authenticated this request, never from the body.
@@ -11559,6 +12870,13 @@ async def admin_pyq_bulk_create(body: PyqBulkCreate, role: str = Depends(verify_
         # entirely keeps every save working before that migration is run, not just this feature.
         if q.source_pdf_filename:
             item["source_pdf_filename"] = q.source_pdf_filename
+        # Same reasoning again: needs pyq_language.sql's `alter table` before the column exists.
+        # Hindi rows are force-pended below (after the admin-role override block), regardless of
+        # role or any review_status the caller sent -- see requirement 4 and PyqQuestionCreate's
+        # own docstring on `language`.
+        language = q.language if q.language in ("en", "hi") else "en"
+        if q.language:
+            item["language"] = language
         # Same reasoning: uploader_name needs its own migration too, and omitting the key for a
         # row with no name (an old cached contractor-portal page, or any pre-feature caller)
         # leaves the column at its default of NULL, which is exactly "earlier upload".
@@ -11589,6 +12907,12 @@ async def admin_pyq_bulk_create(body: PyqBulkCreate, role: str = Depends(verify_
                 item["uploaded_at"] = q.uploaded_at
             if q.batch_id and _BATCH_ID_RE.match(q.batch_id):
                 item["batch_id"] = q.batch_id
+        # Final say, after every other override above: a Hindi row never leaves this endpoint as
+        # "approved", no matter who uploaded it or what review_status they sent. It still needs a
+        # real human review pass -- "rejected"/"needs_fix" (an admin's own explicit downgrade
+        # decision) are left alone, only "approved" is overridden.
+        if language == "hi" and item["review_status"] == "approved":
+            item["review_status"] = "pending"
         payload.append(item)
     try:
         response = await async_client.post(
@@ -11611,6 +12935,9 @@ async def admin_pyq_bulk_create(body: PyqBulkCreate, role: str = Depends(verify_
             # PostgREST actually stored, not the request's role or body.uploader_name.
             if row.get("uploader_name") == CONTRACTOR_UPLOADER_NAME:
                 asyncio.create_task(_log_pyq_upload(row["id"], CONTRACTOR_UPLOADER_NAME, _pyq_row_has_diagram(row)))
+        # Fire-and-forget: flags (and, if AUTO_APPROVE_ENABLED, approves) the new rows -- never
+        # allowed to fail or slow this response down, see _auto_check_new_rows_background.
+        asyncio.create_task(_auto_check_new_rows_background(created))
         return {"created": created, "batch_id": batch_id}
     except Exception as e:
         return {"error": str(e)}
@@ -11673,9 +13000,15 @@ def _processed_pdfs_gap_summary(pdfs: list) -> dict:
             continue
         subject = p.get("subject") or "Unknown"
         info = by_subject.setdefault(subject, {"found": set(), "unnumbered": []})
-        m = _CHAPTER_NUM_FROM_FILENAME_RE.search(p.get("filename") or "")
-        if m:
-            info["found"].add(int(m.group(1)))
+        # A manually-added entry (admin-pyq-preview.html's "Add file" form) carries its chapter
+        # number directly, since there's no real filename to regex-match against -- any other
+        # row falls back to the filename pattern same as before.
+        chapter_number = p.get("chapter_number")
+        if chapter_number is None:
+            m = _CHAPTER_NUM_FROM_FILENAME_RE.search(p.get("filename") or "")
+            chapter_number = int(m.group(1)) if m else None
+        if chapter_number is not None:
+            info["found"].add(chapter_number)
         else:
             info["unnumbered"].append(p["filename"])
     gaps = {}
@@ -11806,7 +13139,11 @@ async def _processed_pdfs_base_rows_and_gaps() -> tuple:
     completed PDF's filename, not just whatever page is currently being viewed)."""
     resp = await async_client.get(
         f"{SUPABASE_URL}/rest/v1/processed_pdfs", headers=ADMIN_HEADERS,
-        params={"select": "id,filename,subject,status,questions_extracted,error_message,upload_date,processed_at",
+        params={"select": "id,filename,subject,status,questions_extracted,error_message,upload_date,"
+                           "processed_at,chapter_number,processed_by",
+                "deleted_at": "is.null",  # soft-removed rows (admin-pyq-preview.html's Remove
+                                           # button) never show up, count toward the gap summary,
+                                           # or count as a processed PDF again
                 "order": "upload_date.desc", "limit": 500}
     )
     if resp.status_code >= 400:
@@ -11899,35 +13236,97 @@ async def admin_processed_pdfs(force: bool = False, offset: int = 0, limit: int 
         "updated_at": datetime.fromtimestamp(_PROCESSED_PDFS_CACHE["at"], tz=timezone.utc).isoformat(),
     }
 
-# Admin-only: the contractor key must never be able to remove a processed_pdfs record (it can
-# only ever read this list, same as the rest of its read-only access to this endpoint).
+# Admin-only: the contractor key must never be able to remove, restore or manually add a
+# processed_pdfs record (it can only ever read this list, same as the rest of its read-only
+# access to this endpoint).
 @app.delete("/admin/processed-pdfs/{pdf_id}")
 async def admin_remove_processed_pdf(pdf_id: int, role: str = Depends(verify_admin_or_contractor_pdf)):
+    """Soft delete only -- stamps deleted_at so the record (and whatever questions were extracted
+    from it) is kept forever, just no longer shown in the list, counted toward the gap summary, or
+    counted as a processed PDF. Never touches `pyq` or the contractor payout tally, and is fully
+    reversible via the restore endpoint below (admin-pyq-preview.html's Undo button)."""
     if role != "admin":
         raise HTTPException(status_code=403, detail="Only the admin key can remove a processed-PDF record")
     try:
         resp = await async_client.get(
             f"{SUPABASE_URL}/rest/v1/processed_pdfs", headers=ADMIN_HEADERS,
-            params={"id": f"eq.{pdf_id}", "select": "id,status,error_message,upload_date"}
+            params={"id": f"eq.{pdf_id}", "select": "id,deleted_at"}
         )
         if resp.status_code >= 400:
             return {"error": resp.text}
         rows = resp.json()
         if not rows:
             return {"error": "Record not found"}
-        # Guards against removing a record that's actually Completed or still genuinely
-        # Processing -- recomputed server-side rather than trusting whatever status the client
-        # last rendered, since this never re-scans or touches any question either way.
-        if _effective_pdf_status(rows[0]) not in ("interrupted", "failed"):
-            return {"error": "Only an Interrupted or Failed record can be removed."}
-        del_resp = await async_client.delete(
-            f"{SUPABASE_URL}/rest/v1/processed_pdfs", headers=ADMIN_HEADERS,
-            params={"id": f"eq.{pdf_id}"}
+        if rows[0].get("deleted_at"):
+            return {"success": True}  # already removed -- Undo/double-click safe, not an error
+        patch_resp = await async_client.patch(
+            f"{SUPABASE_URL}/rest/v1/processed_pdfs", headers={**ADMIN_HEADERS, "Content-Type": "application/json"},
+            params={"id": f"eq.{pdf_id}"}, json={"deleted_at": datetime.now(timezone.utc).isoformat()}
         )
-        if del_resp.status_code >= 400:
-            return {"error": del_resp.text}
+        if patch_resp.status_code >= 400:
+            return {"error": patch_resp.text}
         _invalidate_processed_pdfs_cache()  # next list read re-fetches instead of showing a removed row
         return {"success": True}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.post("/admin/processed-pdfs/{pdf_id}/restore")
+async def admin_restore_processed_pdf(pdf_id: int, role: str = Depends(verify_admin_or_contractor_pdf)):
+    """Reverses a soft delete -- admin-pyq-preview.html's Undo button calling this right back on
+    the id it just removed. Clearing deleted_at is all that's needed: the list, gap summary and
+    counts all read it live, nothing else about the row was ever touched."""
+    if role != "admin":
+        raise HTTPException(status_code=403, detail="Only the admin key can restore a processed-PDF record")
+    try:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/processed_pdfs", headers=ADMIN_HEADERS,
+            params={"id": f"eq.{pdf_id}", "select": "id"}
+        )
+        if resp.status_code >= 400:
+            return {"error": resp.text}
+        if not resp.json():
+            return {"error": "Record not found"}
+        patch_resp = await async_client.patch(
+            f"{SUPABASE_URL}/rest/v1/processed_pdfs", headers={**ADMIN_HEADERS, "Content-Type": "application/json"},
+            params={"id": f"eq.{pdf_id}"}, json={"deleted_at": None}
+        )
+        if patch_resp.status_code >= 400:
+            return {"error": patch_resp.text}
+        _invalidate_processed_pdfs_cache()
+        return {"success": True}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.post("/admin/processed-pdfs/manual")
+async def admin_add_manual_processed_pdf(body: ManualProcessedPdfRequest, role: str = Depends(verify_admin_or_contractor_pdf)):
+    """Admin-pyq-preview.html's "Add file" form -- a placeholder entry (no upload, no scan) that
+    marks a chapter as covered in the Processed PDFs list and chapter gap summary. processed_by
+    is set to the "manual" marker so the frontend can label it "Added manually" instead of
+    "Completed"; status stays a real 'completed' so it participates in gap detection exactly like
+    any other finished scan."""
+    if role != "admin":
+        raise HTTPException(status_code=403, detail="Only the admin key can add a manual processed-PDF record")
+    filename = body.filename.strip()
+    if not filename:
+        return {"error": "File name is required"}
+    subject = (body.subject or "").strip() or None
+    try:
+        resp = await async_client.post(
+            f"{SUPABASE_URL}/rest/v1/processed_pdfs",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
+            json={
+                "filename": filename, "subject": subject, "status": "completed",
+                "questions_extracted": 0, "processed_by": "manual", "chapter_number": body.chapter_number,
+                "processed_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        if resp.status_code >= 400:
+            return {"error": resp.text}
+        rows = resp.json()
+        if not rows:
+            return {"error": "Insert failed"}
+        _invalidate_processed_pdfs_cache()
+        return {"success": True, "pdf": rows[0]}
     except Exception as e:
         return {"error": str(e)}
 
@@ -12259,11 +13658,14 @@ def admin_pyq_duplicates(threshold: float = 0.5, _: None = Depends(verify_admin)
                 f"{SUPABASE_URL}/rest/v1/pyq",
                 headers=ADMIN_HEADERS,
                 params={
-                    "select": "id,subject,chapter,question,option_a,option_b,option_c,option_d,"
+                    "select": "id,subject,language,chapter,question,option_a,option_b,option_c,option_d,"
                               "correct_answer,is_active,year,source_tag,class,has_diagram,"
                               "diagram_url,option_a_diagram_url,option_b_diagram_url,"
                               "option_c_diagram_url,option_d_diagram_url,created_at",
                     "is_active": "eq.true",
+                    # Rejected rows are kept as proof but shouldn't flag a real question as a
+                    # duplicate of error-filled proof content.
+                    "review_status": "neq.rejected",
                     "order": "id",
                     "limit": page_size,
                     "offset": offset
@@ -12292,9 +13694,11 @@ def admin_pyq_duplicates(threshold: float = 0.5, _: None = Depends(verify_admin)
         except Exception:
             pass
 
+        # Grouped by (subject, language), not subject alone -- compare only within the same
+        # language (pyq_language.sql, requirement 3).
         by_subject = {}
         for r in all_rows:
-            by_subject.setdefault(r["subject"], []).append(r)
+            by_subject.setdefault((r["subject"], r.get("language") or "en"), []).append(r)
 
         rows_by_id = {}
         pairs = []
@@ -12355,6 +13759,118 @@ def admin_pyq_dismiss_duplicate(req: DismissDuplicateRequest, _: None = Depends(
     except Exception as e:
         return {"error": str(e)}
 
+def _pyq_match_status(other: dict) -> str:
+    """Admin-facing status label for one /admin/pyq-matches row. A soft-deactivated row
+    (is_active=False -- e.g. pulled from circulation by a student report, see
+    /question-reports above) is labelled 'deleted' regardless of review_status, since it's off
+    the bank either way; otherwise the label is just review_status itself ('pending' if unset,
+    which only happens for a pre-pyq_auto_approve.sql row)."""
+    if other.get("is_active") is False:
+        return "deleted"
+    return other.get("review_status") or "pending"
+
+def _pyq_dup_pill_flagged(row: dict) -> bool:
+    return "duplicate" in [r.strip() for r in (row.get("auto_reasons") or "").split(",")]
+
+def _pyq_build_dup_matches(target: dict, corpus: list, cap: int = 5) -> dict:
+    """Pure part of /admin/pyq-matches (split out so it's unit-testable without a network call):
+    given the target row and a (subject, language) corpus that already includes rejected and
+    soft-deactivated rows (see _pyq_dup_corpus(..., include_rejected=True)), returns the
+    {matches, total_matches, stale_flag} payload the endpoint sends.
+
+    stale_flag is True only when the row's own stored auto_reasons says 'duplicate' (the pill is
+    showing) but nothing in this now-widened corpus matches it -- i.e. whatever the pill
+    originally matched was rejected and then hard-deleted (admin_pyq_delete), not merely rejected
+    or soft-deactivated (those still come back as a match, labelled accordingly). The front end
+    uses this to offer "Clear duplicate flag" instead of just "No similar questions found"."""
+    tokens = _pyq_dup_tokens(target)
+    hits, total = _dup_matches(target["id"], tokens, corpus, AUTO_APPROVE_DUP_THRESHOLD, cap=cap, include_inactive=True)
+    matches = [{
+        "id": other["id"], "match_percent": round(overlap * 100), "status": _pyq_match_status(other),
+        "uploader_name": other.get("uploader_name"), "uploaded_at": other.get("uploaded_at"),
+        "review_status": other.get("review_status"), "is_active": other.get("is_active"),
+        "subject": other.get("subject"), "chapter": other.get("chapter"), "year": other.get("year"),
+        "question": other.get("question"), "option_a": other.get("option_a"),
+        "option_b": other.get("option_b"), "option_c": other.get("option_c"),
+        "option_d": other.get("option_d"), "correct_answer": other.get("correct_answer"),
+        "diagram_url": other.get("diagram_url"),
+        "option_a_diagram_url": other.get("option_a_diagram_url"),
+        "option_b_diagram_url": other.get("option_b_diagram_url"),
+        "option_c_diagram_url": other.get("option_c_diagram_url"),
+        "option_d_diagram_url": other.get("option_d_diagram_url"),
+    } for overlap, _other_id, other in hits]
+    return {"matches": matches, "total_matches": total, "stale_flag": _pyq_dup_pill_flagged(target) and not matches}
+
+@app.get("/admin/pyq-matches")
+async def admin_pyq_matches(id: str, _: None = Depends(verify_admin)):
+    """Top-5 most similar OTHER rows for one question, for the "Duplicate" pill's cross-check
+    panel on admin-pyq-preview.html -- same token-overlap rule and (subject, language) scope and
+    AUTO_APPROVE_DUP_THRESHOLD the pill's own auto_reasons 'duplicate' flag already used to decide
+    this row needed a look (see auto_check/_auto_is_duplicate above), just widened to include
+    rejected and soft-deactivated rows too (include_rejected=True / include_inactive=True below)
+    so the panel can always find what actually triggered the pill, not just what's still a live
+    candidate -- the pill is a one-time snapshot (auto_checked_at) that never gets un-set just
+    because the other copy was rejected afterward. Read-only -- no writes, and admin-only
+    (verify_admin, not verify_admin_or_contractor_pdf -- the contractor key must not work here)."""
+    try:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
+            params={"id": f"eq.{id}", "select": PYQ_DUP_CORPUS_SELECT, "limit": 1}
+        )
+        if resp.status_code >= 400:
+            return {"error": resp.text}
+        rows = resp.json()
+        if not rows:
+            return {"error": "not found"}
+        target = rows[0]
+        language = target.get("language") or "en"
+        corpus = await _pyq_dup_corpus(target["subject"], language, include_rejected=True)
+        if corpus is None:
+            return {"error": "could not read the duplicate corpus"}
+        return _pyq_build_dup_matches(target, corpus)
+    except Exception as e:
+        return {"error": str(e)}
+
+class PyqClearDuplicateFlagRequest(BaseModel):
+    id: str
+
+@app.post("/admin/pyq-clear-duplicate-flag")
+async def admin_pyq_clear_duplicate_flag(body: PyqClearDuplicateFlagRequest, _: None = Depends(verify_admin)):
+    """Removes a stale 'duplicate' code from one row's auto_reasons -- for when
+    /admin/pyq-matches' cross-check panel (widened above to include rejected/deactivated matches)
+    still finds nothing, because whatever the pill originally matched was hard-deleted
+    (admin_pyq_delete), not just rejected or deactivated. Touches auto_reasons only -- never
+    review_status, auto_pass, or anything payout-related -- so this is purely "this pill no
+    longer points at anything, stop showing it", not a re-review of the row. Admin-only."""
+    if not _UUID_RE.match(body.id or ""):
+        return {"error": "Invalid question id"}
+    try:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
+            params={"id": f"eq.{body.id}", "select": "id,auto_reasons", "limit": 1}
+        )
+        if resp.status_code >= 400:
+            return {"error": resp.text}
+        rows = resp.json()
+        if not rows:
+            return {"error": "Row not found"}
+        if not _pyq_dup_pill_flagged(rows[0]):
+            return {"error": "This row is not flagged as a duplicate"}
+        remaining = [r.strip() for r in (rows[0].get("auto_reasons") or "").split(",") if r.strip() and r.strip() != "duplicate"]
+        patch_resp = await async_client.patch(
+            f"{SUPABASE_URL}/rest/v1/pyq", headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
+            params={"id": f"eq.{body.id}", "select": "id,auto_pass,auto_reasons,auto_checked_at"},
+            json={"auto_reasons": ",".join(remaining) if remaining else None}
+        )
+        if patch_resp.status_code >= 400:
+            return {"error": patch_resp.text}
+        updated = patch_resp.json()
+        if not updated:
+            return {"error": "Row not found"}
+        return {"updated": updated[0]}
+    except Exception as e:
+        return {"error": str(e)}
+
 # ---------- Contractor Queue "Duplicates" button ----------
 # Checks the contractor's still-pending uploads against the whole bank AND the rest of the
 # queue, reusing /admin/pyq-duplicates' own 50% token-overlap rule and the per-subject corpus
@@ -12396,7 +13912,7 @@ async def admin_pyq_contractor_duplicates(_: None = Depends(verify_admin)):
             resp = await async_client.get(
                 f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
                 params={"review_status": "eq.pending", "uploader_name": f"eq.{CONTRACTOR_UPLOADER_NAME}",
-                        "select": "id,subject", "order": "id.asc", "limit": page_size, "offset": offset}
+                        "select": "id,subject,language", "order": "id.asc", "limit": page_size, "offset": offset}
             )
             if resp.status_code >= 400:
                 return {"error": resp.text}
@@ -12406,15 +13922,17 @@ async def admin_pyq_contractor_duplicates(_: None = Depends(verify_admin)):
                 break
             offset += page_size
 
-        subjects = sorted({r["subject"] for r in to_check_ids if r.get("subject")})
-        corpora = dict(zip(subjects, await asyncio.gather(*[_pyq_dup_corpus(s) for s in subjects])))
-        to_check = [r["id"] for r in to_check_ids if r.get("subject") in corpora and corpora[r["subject"]] is not None]
-        subject_of = {r["id"]: r["subject"] for r in to_check_ids}
+        # (subject, language) pairs -- compare only within the same language (pyq_language.sql,
+        # requirement 3): a Hindi contractor row should never be flagged against an English one.
+        pairs = sorted({(r["subject"], r.get("language") or "en") for r in to_check_ids if r.get("subject")})
+        corpora = dict(zip(pairs, await asyncio.gather(*[_pyq_dup_corpus(s, lang) for s, lang in pairs])))
+        pair_of = {r["id"]: (r["subject"], r.get("language") or "en") for r in to_check_ids}
+        to_check = [r["id"] for r in to_check_ids if pair_of.get(r["id"]) in corpora and corpora[pair_of[r["id"]]] is not None]
 
         def scan():
             flagged = {}
             meta_by_id = {}
-            for subject, corpus in corpora.items():
+            for pair, corpus in corpora.items():
                 if corpus is None:
                     continue
                 for oid, _toks, row in corpus:
@@ -12422,8 +13940,7 @@ async def admin_pyq_contractor_duplicates(_: None = Depends(verify_admin)):
             by_id = {oid: (toks, row) for corpus in corpora.values() if corpus for oid, toks, row in corpus}
 
             for qid in to_check:
-                subject = subject_of.get(qid)
-                corpus = corpora.get(subject)
+                corpus = corpora.get(pair_of.get(qid))
                 toks, q_row = by_id.get(qid, (None, None))
                 if not corpus or not toks:
                     continue

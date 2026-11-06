@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Diagram Library — NEET-AI</title>
+  <title>Diagram Library - NEET-AI</title>
   <link rel="icon" href="assets/favicon.ico" sizes="any" />
   <link rel="icon" type="image/svg+xml" href="assets/logo.svg" />
   <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
@@ -681,14 +681,14 @@ let allDiagrams = [];      // everything matching the current Subject+Class fetc
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || data.error) {
-          errEl.textContent = data.detail || data.error || 'Could not submit -- try again.';
+          errEl.textContent = data.detail || data.error || 'Could not submit - try again.';
           btnEl.disabled = false; btnEl.textContent = 'Submit';
           return;
         }
         popup.innerHTML = '<div class="report-popup-thanks">✓ Reported, thank you</div>';
         setTimeout(closeDiagramReportPopup, 1600);
       } catch (e) {
-        errEl.textContent = e.name === 'AbortError' ? 'Timed out -- try again.' : 'Could not reach server.';
+        errEl.textContent = e.name === 'AbortError' ? 'Timed out - try again.' : 'Could not reach server.';
         btnEl.disabled = false; btnEl.textContent = 'Submit';
       } finally {
         clearTimeout(timeoutId);

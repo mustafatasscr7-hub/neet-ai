@@ -10,6 +10,7 @@
   <link rel="apple-touch-icon" href="assets/apple-touch-icon.png"/>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+  <link rel="stylesheet" href="./scrollbar.css">
   <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
   <script src="./math-format.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
@@ -30,7 +31,7 @@
     .gate-box button:hover { background: #3b7de8; }
     .gate-error { font-size: 12px; color: #ef4444; margin-top: 10px; min-height: 14px; }
 
-    #dashboard { display: none; max-width: 900px; margin: 0 auto; padding: 24px; }
+    #dashboard { display: none; max-width: 1100px; margin: 0 auto; padding: 24px; }
     .db-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
     .db-header h1 { font-size: 18px; font-weight: 700; }
     .db-header h1 span { color: #4f8ef7; }
@@ -60,6 +61,17 @@
     .dup-toggle-btn { background: #1a1a1a; border: 1px solid #2a2a2a; color: #ececec; padding: 8px 14px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; white-space: nowrap; }
     .dup-toggle-btn:hover { border-color: #4f8ef7; color: #4f8ef7; }
     .dup-toggle-btn.active { background: #4f8ef7; border-color: #4f8ef7; color: white; }
+    .recheck-btn { background: #4f8ef7; border: none; color: white; padding: 8px 14px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; white-space: nowrap; }
+    .recheck-btn:hover { background: #3b7de8; }
+    .recheck-btn:disabled { opacity: 0.6; cursor: default; }
+
+    /* Auto-approve bar (pyq_auto_approve.sql) -- the "Would auto-approve N" tile, Check pending
+       sweep, Approve all, and the on/off status line, all together just below the review bar. */
+    .auto-approve-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; background: #111; border: 1px solid #1e1e1e; border-radius: 10px; padding: 8px 12px; margin-bottom: 12px; font-size: 12px; }
+    .auto-approve-bar .auto-status { color: #888; margin-left: auto; white-space: nowrap; }
+    .auto-approve-bar .auto-status.on { color: #4ade80; }
+    .q-auto-badge { font-size: 11px; padding: 3px 9px; border-radius: 20px; font-weight: 600; background: #4f8ef720; color: #4f8ef7; }
+    .q-language-badge { font-size: 11px; padding: 3px 9px; border-radius: 20px; font-weight: 600; background: #2dd4bf20; color: #2dd4bf; }
 
     /* Bulk select/action bar -- appears above the results list once 1+ question is checked via
        the corner checkbox on question-card. Only ever populated from questionCardHtml (the
@@ -102,6 +114,17 @@
     .seq-list-items { margin: 8px 0; }
     .seq-list-item { padding: 3px 0; }
     .seq-list-item p { margin: 0; display: inline; }
+    /* Inline match-the-following pairs ("(a) Pila (i) Flame cells") -- no List-I/List-II
+       header, each line already pairs one alpha marker with one roman marker. Grid with 2
+       equal columns, auto-flow places left/right cells of the same line into the same row. */
+    .match-pair-preamble { margin-bottom: 14px; }
+    .match-pair-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 24px; margin: 8px 0; }
+    .match-pair-cell { padding: 3px 0; }
+    .match-pair-cell p { margin: 0; display: inline; }
+    .match-pair-trailer { margin-top: 8px; }
+    @media (max-width: 480px) {
+      .match-pair-grid { grid-template-columns: 1fr; }
+    }
     .q-options { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
     /* Label gets its own fixed-width column so wrapped option text stays aligned under
        itself instead of under the (variable-width) letter -- without this, text starting
@@ -132,51 +155,80 @@
     .q-edit-btn:hover { border-color: #4f8ef7; color: #4f8ef7; }
     .q-approve-btn { background: #4ade80; border: none; color: white; padding: 5px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
     .q-approve-btn:hover { background: #3ecf75; }
+    /* Reject (error) -- same red family as q-delete-btn/q-flag, but outlined like q-fix-btn
+       since it's a review action on a still-existing row, not a destructive one. */
+    .q-reject-btn { background: transparent; border: 1px solid #ef444460; color: #ef4444; padding: 5px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
+    .q-reject-btn:hover { background: #ef444414; }
+    .q-reject-note { background: #ef444412; border-color: #ef444440; color: #f87171; }
+    .q-reject-note b { color: #ef4444; }
 
     /* Contractor upload review -- status badges, rule-based warnings, the needs-fix note box,
        and the "today" bar. Same badge formula as q-flag above. */
-    .review-bar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; background: #111; border: 1px solid #1e1e1e; border-radius: 10px; padding: 10px 12px; font-size: 12px; color: #888; }
-    .review-bar strong { color: #ececec; font-weight: 600; }
-    .review-bar .review-today { margin-right: auto; }
     .review-filters { display: contents; }
     .filter-bar input[type="date"] { background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 8px; padding: 7px 10px; color: #ececec; font-size: 13px; font-family: 'Inter', sans-serif; outline: none; color-scheme: dark; }
     .q-status { font-size: 11px; padding: 3px 9px; border-radius: 20px; font-weight: 600; }
     .q-status.pending { background: #f59e0b20; color: #f59e0b; }
     .q-status.needs_fix { background: #f9731620; color: #fb923c; }
+    .q-status.rejected { background: #ef444420; color: #ef4444; }
     .q-upload-meta { color: #555; }
     .q-uploader-tag { color: #555; font-style: italic; }
     .q-warn { font-size: 11px; padding: 3px 9px; border-radius: 20px; font-weight: 600; background: #f59e0b1c; color: #f5b445; text-decoration: none; }
     a.q-warn:hover { text-decoration: underline; }
 
-    /* Contractor Queue -- a compact horizontal counts bar pinned above the list, same at
-       every width (phones included: the two buttons just share the row, same as desktop).
-       Blue accent only, no emoji, matches the rest of this file's dark palette. */
-    .contractor-panel { display: none; }
-    .contractor-panel.cq-visible {
-      display: flex; gap: 8px; position: sticky; top: 0; z-index: 30;
-      background: #0d0d0d; border-bottom: 1px solid #1e1e1e; padding: 10px 0; margin-bottom: 12px;
+    /* Status filter pills (Pending/Needs fix/Approved/Rejected) in the filter row -- doubles as
+       the review-status filter. Quiet text pills, not boxes: thin border, small text, blue
+       accent only while active. The With/Without-diagram toggle and the contractor-scoped
+       Duplicates check append themselves here too, only while Contractor Queue mode is active
+       (see renderStatusPills). */
+    .status-pill-row { display: flex; gap: 6px; flex-wrap: wrap; width: 100%; }
+    .status-pill {
+      display: inline-flex; align-items: center; gap: 5px; background: transparent;
+      border: 1px solid #2a2a2a; color: #999; font-size: 11px; padding: 4px 11px;
+      border-radius: 20px; cursor: pointer; font-family: 'Inter', sans-serif; white-space: nowrap;
     }
-    .contractor-panel-main { display: flex; gap: 8px; flex: 2 1 0; }
-    .contractor-panel-secondary { display: flex; gap: 6px; flex: 1.3 1 0; }
-    .contractor-count-row { flex: 1; display: flex; justify-content: center; align-items: center; gap: 8px; padding: 10px 14px; border-radius: 8px; border: 1px solid #2a2a2a; background: #1a1a1a; cursor: pointer; }
-    .contractor-count-row:hover { border-color: #4f8ef7; }
-    .contractor-count-row.active { background: #4f8ef7; border-color: #4f8ef7; }
-    .contractor-count-row.active .contractor-count-label, .contractor-count-row.active .contractor-count-num { color: #fff; }
-    .contractor-count-label { font-size: 12px; color: #ccc; }
-    .contractor-count-num { font-size: 16px; font-weight: 700; color: #ececec; }
-    /* Secondary (display-only) boxes: quieter than the clickable diagram counts -- smaller
-       text, muted colour, thin border, no blue accent, not clickable. */
-    .contractor-count-row.secondary { padding: 6px 10px; border-color: #202020; background: #141414; cursor: default; }
-    .contractor-count-row.secondary:hover { border-color: #202020; }
-    .contractor-count-row.secondary .contractor-count-label { font-size: 10px; color: #777; }
-    .contractor-count-row.secondary .contractor-count-num { font-size: 13px; font-weight: 600; color: #999; }
-    .contractor-panel-empty { font-size: 12px; color: #666; padding: 10px 2px; flex: 2 1 0; }
-    /* "Uploaded so far" -- a third, permanent-totals group, same quiet/secondary look as
-       Approved/Needs fix/Deleted, with one shared label before its two boxes instead of
-       repeating it in each. Sits beside main/secondary on desktop; stacks under them (its own
-       compact row) at phone width via the existing flex-direction:column rule above. */
-    .contractor-panel-uploaded { display: flex; align-items: center; gap: 6px; flex: 1.6 1 0; }
-    .contractor-uploaded-label { font-size: 10px; color: #777; white-space: nowrap; }
+    .status-pill:hover { border-color: #4f8ef7; color: #ccc; }
+    .status-pill .status-pill-num { font-weight: 700; color: #ccc; }
+    .status-pill.active { background: #4f8ef715; border-color: #4f8ef7; color: #4f8ef7; }
+    .status-pill.active .status-pill-num { color: #4f8ef7; }
+    .status-pill.has-error { border-color: #ef444460; }
+
+    /* Mode tabs (Review / Contractor queue / Find duplicates / Reported / Diagram review / PDFs)
+       -- reuses dup-toggle-btn's existing active (blue) state, just arranged as its own row. */
+    .mode-tab-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+
+    /* Collapsed-by-default panels (Auto-approve / Contractor payout) -- one header line with a
+       live summary and a chevron, expanding to their full contents below. */
+    .collapse-panel { background: #111; border: 1px solid #1e1e1e; border-radius: 10px; margin-bottom: 12px; overflow: hidden; }
+    .collapse-header { display: flex; align-items: center; gap: 8px; padding: 10px 12px; cursor: pointer; font-size: 12px; font-weight: 600; color: #ccc; }
+    .collapse-header:hover { color: #4f8ef7; }
+    .collapse-header .collapse-summary { color: #888; font-weight: 400; font-size: 11px; }
+    .collapse-chevron { display: inline-block; font-size: 10px; color: #666; transition: transform 0.15s ease; }
+    .collapse-panel.open .collapse-chevron { transform: rotate(90deg); }
+    .collapse-body { display: none; padding: 0 12px 12px 12px; }
+    .collapse-panel.open .collapse-body { display: block; }
+    .contractor-counts-error { font-size: 11px; color: #ef4444; margin-bottom: 8px; }
+    /* Contractor payout tally table -- compact to match the other admin tables/cards. At desktop
+       width (>=1100px, see #dashboard's max-width) all 11 columns fit with no horizontal scroll
+       (headers wrap onto a second line rather than forcing the table wider); below that the wrap
+       scrolls horizontally instead of clipping rightmost columns, with the Uploader column
+       pinned (opaque background, so scrolled columns don't show through it). */
+    .contractor-tally-wrap { overflow-x: auto; }
+    .contractor-tally-table { border-collapse: collapse; width: 100%; font-size: 14px; color: #ececec; }
+    .contractor-tally-table td { padding: 12px 10px; white-space: nowrap; }
+    .contractor-tally-table thead th {
+      text-align: left; color: #888; font-size: 12px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.04em; border-bottom: 1px solid #262626; padding: 8px 8px;
+      white-space: normal; line-height: 1.35;
+    }
+    .contractor-tally-table tbody td { border-bottom: 1px solid #1a1a1a; }
+    .contractor-tally-table tbody tr:last-child td { border-bottom: none; }
+    .contractor-tally-table td:not(:first-child), .contractor-tally-table th:not(:first-child) {
+      text-align: right; font-variant-numeric: tabular-nums;
+    }
+    .contractor-tally-table td.payable { font-weight: 700; }
+    .contractor-tally-table th:first-child, .contractor-tally-table td:first-child {
+      position: sticky; left: 0; background: #111; text-align: left;
+    }
 
     /* "Showing: <file>" chip -- set only by tapping a row in the Processed PDFs popup below
        (pdfHistoryRowClick), narrowing the Contractor Queue to one PDF's questions. */
@@ -184,8 +236,9 @@
     .pdf-filename-chip span { word-break: break-word; overflow-wrap: anywhere; }
     .pdf-filename-chip button { background: none; border: none; color: #4f8ef7; cursor: pointer; font-size: 13px; line-height: 1; padding: 0; }
 
-    /* Processed PDFs popup -- same markup/CSS/JS as admin-pdf-review.html and
-       contractor-pdf-review.html's own copies of this block (kept byte-identical on purpose). */
+    /* Processed PDFs popup -- started as the same markup/CSS/JS as admin-pdf-review.html and
+       contractor-pdf-review.html's own copies of this block; this page's copy has since gained
+       Remove/Add file/Undo management (admin-only), the other two have not. */
     #pdfHistoryOverlay { position: fixed; inset: 0; background: #000000a0; z-index: 900; align-items: center; justify-content: center; padding: 16px; }
     .pdf-history-box { background: #111; border: 1px solid #2a2a2a; border-radius: 14px; padding: 18px; width: 100%; max-width: 560px; max-height: 85vh; display: flex; flex-direction: column; font-family: 'Inter', sans-serif; }
     .pdf-history-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
@@ -219,21 +272,14 @@
     .pdf-history-counts-unavailable { color: #e0a030; }
     .pdf-history-counts-note { font-size: 11px; color: #e0a030; padding: 6px 2px; border-bottom: 1px solid #1e1e1e; margin-bottom: 4px; }
     .pdf-history-counts-note a { color: #4f8ef7; text-decoration: none; }
+    .pdf-history-admin-note { font-size: 11px; color: #888; padding: 2px 4px 8px; }
     .pdf-history-show-more { margin-top: 8px; width: 100%; font-size: 12px; }
-    @media (max-width: 480px) {
-      .contractor-panel.cq-visible { flex-direction: column; }
-    }
-
-    /* Contractor Queue "Duplicates" button -- lives in the secondary (quiet) row alongside
-       Approved/Needs fix/Deleted, same sizing, but clickable like the main With/Without-diagram
-       rows and using the same blue-accent "active" state (the filter is on) as the rest of the
-       file. No emoji, no purple. */
-    .contractor-count-row.dup-btn { cursor: pointer; }
-    .contractor-count-row.dup-btn .contractor-count-label { font-size: 12px; color: #ccc; }
-    .contractor-count-row.dup-btn .contractor-count-num { font-size: 13px; font-weight: 600; color: #999; }
-    .contractor-count-row.dup-btn.active .contractor-count-label,
-    .contractor-count-row.dup-btn.active .contractor-count-num { color: #fff; }
-    .contractor-count-row.dup-btn.has-error { border-color: #ef444460; }
+    .pdf-history-add-form { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; padding: 10px; background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 8px; }
+    .pdf-history-add-form input, .pdf-history-add-form select { background: #111; border: 1px solid #2a2a2a; border-radius: 7px; color: #ececec; font-family: 'Inter', sans-serif; font-size: 12px; padding: 6px 8px; }
+    .pdf-history-add-form input[type="text"] { flex: 2; min-width: 140px; }
+    .pdf-history-add-form input[type="number"] { flex: 1; min-width: 110px; }
+    .pdf-history-add-form select { flex: 1; min-width: 100px; }
+    .pdf-history-add-form-actions { display: flex; gap: 6px; margin-left: auto; }
 
     /* Shared by both the global Find Duplicates clusters and the Contractor Queue's own
        Duplicates filter (which renders through the exact same renderDuplicatePairs-style
@@ -314,10 +360,17 @@
     .dup-select-delete-btn { background: #ef4444; border: none; color: #fff; padding: 7px 14px; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600; font-family: 'Inter', sans-serif; white-space: nowrap; }
     .dup-select-delete-btn:hover { filter: brightness(1.1); }
     .dup-select-delete-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+    .dup-select-reject-btn { background: #fb923c; border: none; color: #1a1a1a; padding: 7px 14px; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600; font-family: 'Inter', sans-serif; white-space: nowrap; }
+    .dup-select-reject-btn:hover { filter: brightness(1.1); }
+    .dup-select-reject-btn:disabled { opacity: 0.6; cursor: not-allowed; }
     .dup-select-clear-btn { background: transparent; border: 1px solid #2a2a2a; color: #999; padding: 7px 14px; border-radius: 6px; cursor: pointer; font-size: 12px; font-family: 'Inter', sans-serif; white-space: nowrap; }
     .dup-select-clear-btn:hover { border-color: #4a4a4a; color: #ccc; }
-    .dup-columns { display: flex; gap: 12px; flex-wrap: wrap; }
-    .dup-columns .question-card { flex: 1; min-width: 280px; margin-bottom: 0; }
+    /* Stacked full-width, not side-by-side -- side-by-side squeezed each card down to ~280px,
+       which left no room for match-the-following's two-column lists (each needs 140px+ per
+       column) and made the question stem wrap hard against the card's own padding. Full width
+       matches the normal review card exactly, so the same text renders the same way. */
+    .dup-columns { display: flex; flex-direction: column; gap: 12px; }
+    .dup-columns .question-card { margin-bottom: 0; }
 
     /* Reported Questions view */
     .report-wrap { margin-bottom: 20px; border: 1px solid #1e1e1e; border-radius: 12px; padding: 14px; background: #0a0a0a; }
@@ -334,6 +387,22 @@
     .report-approve-btn:hover { background: #3b7de8; }
     .report-approve-btn:disabled { opacity: 0.6; cursor: default; }
     .report-deleted-note { color: #ef4444; font-style: italic; font-size: 12px; padding: 10px 0; }
+
+    /* Clickable "Duplicate" pill (an auto_reasons chip, see autoReasonChipsHtml) and the
+       cross-check panel it opens under the card. Reuses .dup-columns' own stacked-full-width
+       layout -- no side-by-side columns here either, for the same reason: squeezing a question
+       and its options into a narrow column wraps text hard and hides match-the-following lists. */
+    .dup-pill-btn { background: #1a1a1a; border: 1px solid #2a2a2a; color: #888; font-size: 11px; padding: 2px 8px; border-radius: 12px; font-family: 'Inter', sans-serif; cursor: pointer; }
+    .dup-pill-btn:hover { border-color: #4f8ef7; color: #4f8ef7; }
+    .dup-pill-btn.active { background: #4f8ef715; border-color: #4f8ef7; color: #4f8ef7; }
+    .dup-match-panel { margin-top: 14px; padding-top: 14px; border-top: 1px dashed #2a2a2a; }
+    .dup-match-panel-title { font-size: 12px; color: #4f8ef7; font-weight: 600; margin-bottom: 10px; }
+    .dup-match-loading, .dup-match-empty { font-size: 12px; color: #666; }
+    .dup-match-error { font-size: 12px; color: #ef4444; }
+    .dup-match-row { border: 1px solid #1e1e1e; border-radius: 12px; padding: 14px; background: #0a0a0a; }
+    .dup-match-row .question-card { margin-bottom: 10px; }
+    .dup-match-row-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+    .dup-match-rejected-note { font-size: 12px; color: #666; }
 
     .pagination { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 16px; }
     .pagination button { background: #1a1a1a; border: 1px solid #2a2a2a; color: #ececec; padding: 6px 14px; border-radius: 6px; font-size: 12px; cursor: pointer; font-family: 'Inter', sans-serif; }
@@ -392,8 +461,25 @@
         <h2>Processed PDFs</h2>
         <div class="pdf-history-head-actions">
           <span id="pdfHistoryUpdatedAt" class="pdf-history-updated"></span>
+          <button type="button" id="pdfHistoryAddBtn" class="action-btn" onclick="openAddPdfForm()" style="display:none;">Add file</button>
+          <button type="button" id="pdfHistoryUndoBtn" class="action-btn" onclick="undoLastPdfAction()" disabled style="display:none;">Undo</button>
           <button type="button" class="action-btn" onclick="refreshPdfHistory()">Refresh</button>
           <button type="button" class="action-btn" onclick="closePdfHistory()">Close</button>
+        </div>
+      </div>
+      <div id="pdfHistoryAdminNote" class="pdf-history-admin-note" style="display:none;">Log in as admin to edit this list.</div>
+      <div id="pdfHistoryAddForm" class="pdf-history-add-form" style="display:none;">
+        <input type="text" id="pdfAddFilename" placeholder="File name">
+        <select id="pdfAddSubject">
+          <option value="">Subject...</option>
+          <option value="Biology">Biology</option>
+          <option value="Physics">Physics</option>
+          <option value="Chemistry">Chemistry</option>
+        </select>
+        <input type="number" id="pdfAddChapter" placeholder="Chapter # (optional)" min="1">
+        <div class="pdf-history-add-form-actions">
+          <button type="button" class="action-btn" onclick="cancelAddPdfForm()">Cancel</button>
+          <button type="button" id="pdfAddSaveBtn" class="action-btn" onclick="submitAddPdfForm()">Save</button>
         </div>
       </div>
       <div id="pdfHistoryGaps" class="pdf-history-gaps"></div>
@@ -421,17 +507,18 @@
     <div class="db-header">
       <div>
         <h1>NEET<span>-AI</span> PYQ Preview</h1>
-        <p>Shows questions exactly as students see them on PYQ Bank -- for checking uploads, not editing.</p>
+        <p id="reviewToday">Today: …</p>
       </div>
       <button class="logout-btn" onclick="logout()">Log out</button>
     </div>
 
-    <div class="review-bar" id="reviewBar">
-      <span class="review-today" id="reviewToday">Today: …</span>
-      <span id="reviewQueueCounts"></span>
-      <button type="button" class="dup-toggle-btn" onclick="showReviewQueue('pending')">Pending</button>
-      <button type="button" class="dup-toggle-btn" onclick="showReviewQueue('needs_fix')">Needs fix</button>
-      <button type="button" class="q-approve-btn" id="approveCleanBtn" onclick="approveCleanOnPage()" style="display:none">✅ Approve clean rows on this page</button>
+    <div class="mode-tab-row">
+      <button type="button" id="reviewToggleBtn" class="dup-toggle-btn" onclick="toggleReviewMode()">Review</button>
+      <button type="button" id="contractorToggleBtn" class="dup-toggle-btn" onclick="toggleContractorMode()">Contractor queue</button>
+      <button type="button" id="dupToggleBtn" class="dup-toggle-btn" onclick="toggleDuplicatesView()">Find duplicates</button>
+      <button type="button" id="reportsToggleBtn" class="dup-toggle-btn" onclick="toggleReportsView()">Reported</button>
+      <button type="button" id="diagramToggleBtn" class="dup-toggle-btn" onclick="toggleDiagramMode()">Diagram review</button>
+      <button type="button" id="pdfsToggleBtn" class="dup-toggle-btn" onclick="openPdfHistory()">PDFs</button>
     </div>
 
     <div class="filter-bar">
@@ -445,13 +532,14 @@
         <option value="">All Chapters</option>
       </select>
       <input type="text" id="filterSearch" placeholder="Search question text..." oninput="onSearchInput()"/>
-      <label class="check-label"><input type="checkbox" id="filterDiagram" onchange="onFilterChange()"/> Only with uploaded diagram</label>
+      <div class="status-pill-row" id="statusPillRow"></div>
       <span class="review-filters" id="reviewFilters">
-        <select id="filterReviewStatus" onchange="onFilterChange()" title="Review status">
+        <select id="filterReviewStatus" onchange="onFilterChange()" title="Review status" hidden>
           <option value="">Any status</option>
           <option value="pending">Pending review</option>
           <option value="needs_fix">Needs fix</option>
           <option value="approved">Approved</option>
+          <option value="rejected">Rejected</option>
         </select>
         <select id="filterUploadedBy" onchange="onFilterChange()" title="Uploader name">
           <option value="">Anyone</option>
@@ -459,16 +547,17 @@
           <option value="Admin">Admin</option>
           <option value="__earlier__">Earlier uploads (no name)</option>
         </select>
+        <select id="filterLanguage" onchange="onFilterChange()" title="Language">
+          <option value="">Any language</option>
+          <option value="en">English</option>
+          <option value="hi">Hindi</option>
+        </select>
         <select id="filterBatch" onchange="onFilterChange()" title="Upload batch" hidden>
           <option value="">All batches</option>
         </select>
         <input type="date" id="filterUploadedDate" onchange="onFilterChange()" title="Uploaded on (India time)" hidden/>
       </span>
-      <button type="button" id="dupToggleBtn" class="dup-toggle-btn" onclick="toggleDuplicatesView()">🔁 Find Duplicates</button>
-      <button type="button" id="reviewToggleBtn" class="dup-toggle-btn" onclick="toggleReviewMode()">📋 Review Queue</button>
-      <button type="button" id="contractorToggleBtn" class="dup-toggle-btn" onclick="toggleContractorMode()">Contractor Queue</button>
-      <button type="button" id="reportsToggleBtn" class="dup-toggle-btn" onclick="toggleReportsView()">🚩 Reported</button>
-      <button type="button" id="diagramToggleBtn" class="dup-toggle-btn" onclick="toggleDiagramMode()">🖼️ Diagram Review</button>
+      <label class="check-label"><input type="checkbox" id="filterDiagram" onchange="onFilterChange()"/> Only with uploaded diagram</label>
       <select id="reviewSortOrder" onchange="onFilterChange()" style="display:none">
         <option value="asc">Oldest uploaded first</option>
         <option value="desc">Newest uploaded first</option>
@@ -489,8 +578,40 @@
         <option value="reported">Reported</option>
         <option value="all">All</option>
       </select>
+      <button type="button" class="q-approve-btn" id="approveCleanBtn" onclick="approveCleanOnPage()" style="display:none">✅ Approve clean rows on this page</button>
       <div class="result-count" id="resultCount"></div>
       <div class="result-note" id="resultNote"></div>
+    </div>
+
+    <div class="collapse-panel" id="autoApprovePanel">
+      <div class="collapse-header" onclick="toggleAutoApprovePanelOpen()">
+        <span class="collapse-chevron">▸</span>
+        <span>Auto-approve</span>
+        <span class="collapse-summary" id="autoApproveHeaderSummary">…</span>
+      </div>
+      <div class="collapse-body">
+        <div class="auto-approve-bar" id="autoApproveBar">
+          <button type="button" class="dup-toggle-btn" id="autoApproveTileBtn" onclick="toggleAutoPassFilter()">Would auto-approve …</button>
+          <button type="button" class="dup-toggle-btn" id="autoCheckPendingBtn" onclick="runAutoCheckSweep()">Check pending</button>
+          <button type="button" class="recheck-btn" id="recheckPendingBtn" onclick="recheckPendingRows()">Re-check pending</button>
+          <button type="button" class="dup-toggle-btn" id="formulaSampleBtn" onclick="toggleFormulaSample()">Spot-check formula sample</button>
+          <button type="button" class="q-approve-btn" id="autoApproveAllBtn" onclick="approveAllAuto()" style="display:none">Approve all</button>
+          <span class="auto-status" id="autoApproveStatus">Auto-approve: …</span>
+        </div>
+        <div id="formulaSampleList" style="display:none; margin-top:10px; max-height:420px; overflow-y:auto; border:1px solid #1e1e1e; border-radius:10px; padding:10px; font-size:13px;"></div>
+      </div>
+    </div>
+
+    <div class="collapse-panel" id="contractorPayoutPanel">
+      <div class="collapse-header" onclick="toggleContractorTally()">
+        <span class="collapse-chevron">▸</span>
+        <span>Contractor payout</span>
+        <span class="collapse-summary" id="contractorPayoutHeaderSummary">…</span>
+      </div>
+      <div class="collapse-body">
+        <div id="contractorCountsError" class="contractor-counts-error"></div>
+        <div id="contractorTallyBody">Loading...</div>
+      </div>
     </div>
 
     <div class="bulk-action-bar" id="bulkActionBar">
@@ -503,7 +624,6 @@
     </div>
 
     <div class="pdf-filename-chip" id="pdfFilenameChip"></div>
-    <div class="contractor-panel" id="contractorPanel"></div>
     <div id="resultsArea"><div class="loading-text">Loading...</div></div>
 
     <div class="pagination" id="paginationBar">
@@ -568,6 +688,40 @@
     let chapterCacheBySubject = {}; // subject -> [chapter names], for the edit form's chapter datalist
     let noteOpenIds = new Set(); // cards with the "Needs fix" note box open
     let noteDrafts = {}; // id -> unsent note text, kept across re-renders
+    let rejectOpenIds = new Set(); // cards with the Reject reason/note box open
+    let rejectDrafts = {}; // id -> { preset, note }, kept across re-renders
+    const PYQ_REJECT_REASONS = ['Unfixable formatting', 'Wrong or missing options', 'Garbled text', 'Other'];
+    let dupRejectOpenIds = new Set(); // duplicate-view cards with the "Reject (duplicate)" note box open
+    let dupRejectDrafts = {}; // id -> unsent note text, kept across re-renders
+
+    // Cross-check panel opened by clicking a card's "Duplicate" pill (/admin/pyq-matches) --
+    // card id -> { loading, error, matches: [...], total_matches }. Separate from the
+    // Find-Duplicates/Contractor-Duplicates views above: this is a per-card drill-down on
+    // whichever card the pill lives on, in any mode, not its own view.
+    let dupMatchPanelOpenIds = new Set();
+    let dupMatchData = {};
+
+    // Auto-approve (pyq_auto_approve.sql) -- codes auto_check can put in a row's auto_reasons.
+    // chemical_formula/latex collapse to the same "Formula" chip on a card (autoReasonChipsHtml
+    // dedupes by label) since to an admin they mean the same thing: this question has a formula,
+    // which is why it's held. math_formula itself is no longer appended on its own -- a formula
+    // question only gets held once the formula_* parse-cleanliness gate below actually fails it.
+    const AUTO_REASON_LABELS = {
+      duplicate: 'Duplicate', diagram: 'Diagram', match_following: 'Match the following',
+      chemical_formula: 'Formula', latex: 'Formula',
+      formula_empty_option: 'Empty option', formula_duplicate_options: 'Duplicate options',
+      formula_unbalanced: 'Unbalanced formula', formula_control_char: 'Formula control characters',
+      formula_text_corruption: 'Corrupted formula text', formula_unknown_command: 'Unknown LaTeX command',
+      formula_stray_backslash: 'Stray backslash in formula', formula_katex_parse_error: 'Formula failed to parse',
+      formula_katex_unavailable: 'Formula check unavailable',
+      broken_text: 'Broken text', options: 'Options', subject_chapter: 'Subject/chapter', rejected: 'Rejected'
+    };
+    let autoPassFilterOn = false; // "Would auto-approve" tile -- narrows the list to pending+auto_pass=true
+    let autoApproveStats = null;
+    // Last successful /admin/pyq-review-summary response -- feeds the status pill row
+    // (renderStatusPills) alongside contractorCountsCache, so both can update it independently.
+    let reviewSummaryData = null;
+    let autoApprovePanelOpen = false;
 
     // Full canonical NCERT chapter list per subject (Class 11 + 12 combined, same source list
     // pyqbank.html's picker uses) -- merged into the edit form's dropdown below because the
@@ -636,6 +790,11 @@
       document.getElementById('dashboard').style.display = 'block';
       const urlId = new URLSearchParams(window.location.search).get('id');
       loadReviewSummary();
+      loadAutoApproveStats();
+      // Both feed the status pill row / Contractor payout panel/header even while collapsed,
+      // so they're fetched up front rather than only when their panel is first opened.
+      loadContractorCounts();
+      loadContractorTally();
       // Deferred to a fresh tick: on this page the `let`/`const` declarations further down the
       // file happen to run before any returning-session call to enterDashboard() can reach them,
       // but deferring here too matches the other two pages and removes any future ordering risk.
@@ -888,6 +1047,63 @@
 
     // Same math rendering as pyqbank.html -- questions/options containing $...$ KaTeX markup
     // (e.g. chemical formulas) need this to actually look right, not just show raw text.
+    // ---------------- Inline match-the-following pairs (no List-I/List-II header) ----------------
+    // Some match-the-following questions never say "List-I"/"List-II" at all -- each line
+    // already pairs one alpha marker with one roman marker directly, e.g. "(a) Pila (i) Flame
+    // cells". findListMarkers_ML above can't anchor on a header that isn't there, so without
+    // this those lines just run together with no visible gap between the two halves. Requires
+    // >=2 CONSECUTIVE matching lines so a stray "(a) ... (i) ..." inside normal prose, or the
+    // options block below the question, is never mistaken for this layout. Lines that already
+    // have the two markers on separate lines don't match this per-line pattern and fall through
+    // to this file's normal rendering untouched.
+    const MATCH_PAIR_LEFT_RE = /^\s*(?:\(\s*([a-hA-H])\s*\)|([a-hA-H])\.)\s+/;
+    const MATCH_PAIR_RIGHT_RE = /\(\s*([ivxIVX]{1,4})\s*\)|(?:^|\s)([ivxIVX]{1,4})\.(?=\s|$)/;
+
+    function parseMatchPairLine_MLP(line) {
+      const leftMatch = line.match(MATCH_PAIR_LEFT_RE);
+      if (!leftMatch) return null;
+      const rest = line.slice(leftMatch[0].length);
+      const rightMatch = rest.match(MATCH_PAIR_RIGHT_RE);
+      if (!rightMatch) return null;
+      // Keep the marker itself in the rendered text (matches how the List-I/List-II column
+      // renderer above shows "(a) Pila", not just "Pila") -- students need "(a)"/"(i)" visible
+      // to match these columns against lettered answer options like "a-iv, b-i, c-ii, d-iii".
+      const leftBody = rest.slice(0, rightMatch.index).trim();
+      const rightBody = rest.slice(rightMatch.index + rightMatch[0].length).trim();
+      if (!leftBody || !rightBody) return null;
+      return { left: leftMatch[0].trim() + ' ' + leftBody, right: rightMatch[0].trim() + ' ' + rightBody };
+    }
+
+    function findMatchPairRun_MLP(lines) {
+      const parsed = lines.map(parseMatchPairLine_MLP);
+      let bestStart = -1, bestLen = 0, curStart = -1, curLen = 0;
+      for (let i = 0; i < parsed.length; i++) {
+        if (parsed[i]) {
+          if (curLen === 0) curStart = i;
+          curLen++;
+          if (curLen > bestLen) { bestLen = curLen; bestStart = curStart; }
+        } else {
+          curLen = 0;
+        }
+      }
+      return bestLen >= 2 ? { start: bestStart, rows: parsed.slice(bestStart, bestStart + bestLen) } : null;
+    }
+
+    function renderMatchPairsHtml_MLP(text, formatFn) {
+      if (!text) return null;
+      const lines = text.split(/\n/);
+      const run = findMatchPairRun_MLP(lines);
+      if (!run) return null;
+      const before = lines.slice(0, run.start).join('\n').trim();
+      const after = lines.slice(run.start + run.rows.length).join('\n').trim();
+      const cellsHtml = run.rows.map(r =>
+        `<div class="match-pair-cell">${formatFn(r.left)}</div><div class="match-pair-cell">${formatFn(r.right)}</div>`
+      ).join('');
+      return (before ? `<div class="match-pair-preamble">${formatFn(before)}</div>` : '')
+        + `<div class="match-pair-grid">${cellsHtml}</div>`
+        + (after ? `<div class="match-pair-trailer">${formatFn(after)}</div>` : '');
+    }
+
     // ---------------- Assertion-Reason / Statement I-II formatting ----------------
     // Detects "Given below are two statements: Assertion (A): ... Reason (R): ..." (or
     // "Statement I: ... Statement II: ...") style questions and breaks them into separate
@@ -1025,6 +1241,8 @@
       if (!text) return '';
       const matchListHtml = renderMatchListHtml_ML(text, parseWithMathInner);
       if (matchListHtml !== null) return matchListHtml;
+      const matchPairHtml = renderMatchPairsHtml_MLP(text, parseWithMathInner);
+      if (matchPairHtml !== null) return matchPairHtml;
       const arHtml = renderAssertionReasonHtml_AR(text, parseWithMathInner);
       if (arHtml !== null) return arHtml;
       const seqHtml = renderSequenceListHtml_SEQ(text, parseWithMathInner);
@@ -1076,10 +1294,13 @@
       const uploaderName = document.getElementById('filterUploadedBy').value;
       const batchId = document.getElementById('filterBatch').value;
       const uploadedDate = document.getElementById('filterUploadedDate').value;
+      const language = document.getElementById('filterLanguage').value;
       if (reviewStatus) params.set('review_status', reviewStatus);
       if (uploaderName) params.set('uploader_name', uploaderName);
       if (batchId) params.set('batch_id', batchId);
       if (uploadedDate) params.set('uploaded_date', uploadedDate);
+      if (language) params.set('language', language);
+      if (autoPassFilterOn) params.set('auto_pass', 'true');
       // Processed PDFs popup -> tap a row -> narrow the Contractor Queue to that PDF's questions
       // (only ever set from pdfHistoryRowClick, so only in contractorMode -- see below).
       if (contractorMode && pdfFilenameFilter) params.set('source_pdf_filename', pdfFilenameFilter);
@@ -1131,7 +1352,9 @@
     // never reach them. Approve here makes a row live; Needs fix sends it to the contractor's
     // own list with the note, and their correction comes back here as pending.
     function awaitingReview(q) {
-      return !!q.review_status && q.review_status !== 'approved';
+      // Rejected rows aren't "awaiting" anything -- they need Restore first, not a straight
+      // approve, so they don't get the Approve-for-students button or count toward "clean rows".
+      return !!q.review_status && q.review_status !== 'approved' && q.review_status !== 'rejected';
     }
 
     async function loadReviewSummary() {
@@ -1141,13 +1364,15 @@
         const data = await res.json();
         if (!res.ok || data.error) {
           document.getElementById('reviewToday').textContent = 'Review numbers unavailable: ' + (data.error || res.status);
+          reviewSummaryData = null;
+          renderStatusPills();
           return;
         }
         const t = data.today;
         document.getElementById('reviewToday').innerHTML =
-          `Today: <strong>${t.uploaded}</strong> uploaded (${t.uploaded_by_contractor} by contractor), <strong>${t.checked}</strong> checked`;
-        document.getElementById('reviewQueueCounts').innerHTML =
-          `<strong>${data.pending}</strong> pending · <strong>${data.needs_fix}</strong> needs fix`;
+          `Today: <strong>${t.uploaded}</strong> uploaded`;
+        reviewSummaryData = data;
+        renderStatusPills();
         const sel = document.getElementById('filterBatch');
         const keep = sel.value;
         sel.innerHTML = '<option value="">All batches</option>' + (data.batches || []).map(b => {
@@ -1158,7 +1383,43 @@
         if ([...sel.options].some(o => o.value === keep)) sel.value = keep;
       } catch (e) {
         document.getElementById('reviewToday').textContent = 'Review numbers unavailable (could not reach server).';
+        reviewSummaryData = null;
+        renderStatusPills();
       }
+    }
+
+    // Status filter pills (Pending / Needs fix / Approved / Rejected) in the filter row --
+    // doubles as the review-status filter via showReviewQueue, same click behavior (and the
+    // same "leaves Contractor Queue mode" fix) as the tiles they replaced. Deleted isn't shown
+    // here -- it has no filter to show it for, and its count already lives in the Contractor
+    // payout table. While Contractor Queue mode is active, the contractor's own
+    // With/Without-diagram toggle and Duplicates check append themselves to this same row
+    // instead of living in a separate panel.
+    function renderStatusPills() {
+      const row = document.getElementById('statusPillRow');
+      if (!row) return;
+      const rs = reviewSummaryData || {};
+      const cc = contractorCountsCache || {};
+      const curStatus = document.getElementById('filterReviewStatus').value;
+      const activeStatus = (!duplicatesMode && !reportsMode && !diagramMode && !contractorMode) ? curStatus : '';
+      const pill = (status, label, count) => `
+        <span class="status-pill${activeStatus === status ? ' active' : ''}" onclick="showReviewQueue('${status}')">
+          ${label} <span class="status-pill-num">${count}</span>
+        </span>`;
+      let html = pill('pending', 'Pending', rs.pending != null ? rs.pending : 0)
+        + pill('needs_fix', 'Needs fix', rs.needs_fix != null ? rs.needs_fix : 0)
+        + pill('approved', 'Approved', cc.approved != null ? cc.approved : 0)
+        + pill('rejected', 'Rejected', rs.rejected != null ? rs.rejected : 0);
+      if (contractorMode) {
+        html += `
+          <span class="status-pill${contractorDiagramFilter === 'with' ? ' active' : ''}" onclick="toggleContractorDiagramFilter('with')">
+            With diagram <span class="status-pill-num">${cc.with_diagram || 0}</span>
+          </span>
+          <span class="status-pill${contractorDiagramFilter === 'without' ? ' active' : ''}" onclick="toggleContractorDiagramFilter('without')">
+            Without diagram <span class="status-pill-num">${cc.without_diagram || 0}</span>
+          </span>` + contractorDupButtonHtml();
+      }
+      row.innerHTML = html;
     }
 
     // Set the filter first: switching another view off reloads the list itself, and that reload
@@ -1166,11 +1427,238 @@
     function showReviewQueue(status) {
       document.getElementById('filterReviewStatus').value = status;
       currentPage = 1;
+      // Pending/Needs fix/Rejected are plain status tiles, not "modes" -- but they should still
+      // drop the "Would auto-approve" narrowing, same as every other tile here.
+      autoPassFilterOn = false;
+      document.getElementById('autoApproveTileBtn').classList.remove('active');
+      renderStatusPills();
       if (duplicatesMode) return toggleDuplicatesView();
       if (reportsMode) return toggleReportsView();
       if (diagramMode) return toggleDiagramMode();
+      // Contractor Queue forces review_status=pending in loadResults() -- leaving it on would
+      // silently clobber the status we just set above, making the Rejected/Pending/Needs fix
+      // tiles look like they do nothing.
+      if (contractorMode) return toggleContractorMode();
       if (reviewMode) return toggleReviewMode();
       loadResults();
+    }
+
+    // "Would auto-approve N" tile -- narrows the list to pending rows with auto_pass=true,
+    // reusing the normal list/pagination/card machinery rather than a separate view.
+    function toggleAutoPassFilter() {
+      autoPassFilterOn = !autoPassFilterOn;
+      document.getElementById('autoApproveTileBtn').classList.toggle('active', autoPassFilterOn);
+      if (autoPassFilterOn) {
+        document.getElementById('filterReviewStatus').value = 'pending';
+        currentPage = 1;
+        if (duplicatesMode) return toggleDuplicatesView();
+        if (reportsMode) return toggleReportsView();
+        if (diagramMode) return toggleDiagramMode();
+        if (contractorMode) return toggleContractorMode();
+        if (reviewMode) return toggleReviewMode();
+      }
+      loadResults();
+    }
+
+    async function loadAutoApproveStats() {
+      try {
+        const res = await fetch(`${API_BASE}/admin/pyq-auto-stats`, { headers: authHeaders() });
+        if (res.status === 401) return logout();
+        const data = await res.json();
+        const tileBtn = document.getElementById('autoApproveTileBtn');
+        const approveBtn = document.getElementById('autoApproveAllBtn');
+        const status = document.getElementById('autoApproveStatus');
+        const headerSummary = document.getElementById('autoApproveHeaderSummary');
+        if (data.error) {
+          autoApproveStats = null;
+          tileBtn.textContent = 'Would auto-approve …';
+          approveBtn.style.display = 'none';
+          status.textContent = 'unavailable (' + data.error + ')';
+          status.className = 'auto-status';
+          if (headerSummary) headerSummary.textContent = 'unavailable';
+          return;
+        }
+        autoApproveStats = data;
+        tileBtn.textContent = `Would auto-approve ${data.would_approve}`;
+        approveBtn.style.display = data.would_approve > 0 ? 'inline-block' : 'none';
+        approveBtn.textContent = `Approve all ${data.would_approve}`;
+        const statusParts = [];
+        if (data.pending_unchecked) statusParts.push(`${data.pending_unchecked} not yet checked`);
+        if (data.formula_eligible) statusParts.push(`formula: ${data.formula_passed}/${data.formula_eligible} passed`);
+        status.textContent = statusParts.join(' · ');
+        status.className = 'auto-status' + (data.enabled ? ' on' : '');
+        if (headerSummary) headerSummary.textContent = data.enabled ? 'on' : 'off';
+      } catch (e) {
+        document.getElementById('autoApproveStatus').textContent = 'could not reach server.';
+        const headerSummary = document.getElementById('autoApproveHeaderSummary');
+        if (headerSummary) headerSummary.textContent = 'unavailable';
+      }
+    }
+
+    function toggleAutoApprovePanelOpen() {
+      autoApprovePanelOpen = !autoApprovePanelOpen;
+      document.getElementById('autoApprovePanel').classList.toggle('open', autoApprovePanelOpen);
+    }
+
+    async function runAutoCheckSweep() {
+      const btn = document.getElementById('autoCheckPendingBtn');
+      btn.disabled = true;
+      let totalChecked = 0;
+      try {
+        while (true) {
+          btn.textContent = totalChecked ? `Checking... (${totalChecked} done)` : 'Checking...';
+          const res = await fetch(`${API_BASE}/admin/pyq-auto-check`, { method: 'POST', headers: authHeaders() });
+          if (res.status === 401) return logout();
+          const data = await res.json();
+          if (data.error) { alert('Check pending failed: ' + data.error); break; }
+          totalChecked += data.checked || 0;
+          if (!data.remaining) break;
+        }
+      } catch (e) {
+        alert('Check pending failed: could not reach server.');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Check pending';
+        loadAutoApproveStats();
+        loadResults();
+      }
+    }
+
+    async function recheckPendingRows() {
+      const btn = document.getElementById('recheckPendingBtn');
+      btn.disabled = true;
+      let totalChecked = 0;
+      let offset = 0;
+      try {
+        while (true) {
+          btn.textContent = totalChecked ? `Re-checking... (${totalChecked} done)` : 'Re-checking...';
+          const res = await fetch(`${API_BASE}/admin/pyq-auto-check?recheck=true&offset=${offset}`, { method: 'POST', headers: authHeaders() });
+          if (res.status === 401) return logout();
+          const data = await res.json();
+          if (data.error) { alert('Re-check pending failed: ' + data.error); break; }
+          totalChecked += data.checked || 0;
+          offset = data.next_offset;
+          if (!data.remaining) break;
+        }
+        await loadAutoApproveStats();
+        const stats = autoApproveStats;
+        alert(stats
+          ? `Re-checked ${totalChecked} rows.\nFormula eligible: ${stats.formula_eligible}, passed: ${stats.formula_passed}, failed: ${stats.formula_failed}.`
+          : `Re-checked ${totalChecked} rows.`);
+      } catch (e) {
+        alert('Re-check pending failed: could not reach server.');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Re-check pending';
+        loadResults();
+      }
+    }
+
+    async function approveAllAuto() {
+      if (!autoApproveStats || !autoApproveStats.would_approve) return;
+      const n = autoApproveStats.would_approve;
+      if (!(await showConfirmModal(`Approve all ${n} question${n === 1 ? '' : 's'} that passed auto-check? They go live for students straight away.`, { confirmLabel: 'Approve all' }))) return;
+      const btn = document.getElementById('autoApproveAllBtn');
+      btn.disabled = true;
+      btn.textContent = 'Approving...';
+      try {
+        const res = await fetch(`${API_BASE}/admin/pyq-auto-approve-all`, {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ expected_count: n })
+        });
+        if (res.status === 401) return logout();
+        const data = await res.json();
+        if (data.error) { alert('Approve all failed: ' + data.error); return; }
+        if (data.count_changed) { alert(`The count changed (now ${data.current_count}) -- check again before approving.`); return; }
+        loadAutoApproveStats();
+        loadResults();
+        loadReviewSummary();
+      } catch (e) {
+        alert('Approve all failed: could not reach server.');
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    let formulaSampleOpen = false; // "Spot-check formula sample" panel toggle
+
+    async function toggleFormulaSample() {
+      formulaSampleOpen = !formulaSampleOpen;
+      const panel = document.getElementById('formulaSampleList');
+      const btn = document.getElementById('formulaSampleBtn');
+      btn.classList.toggle('active', formulaSampleOpen);
+      if (!formulaSampleOpen) { panel.style.display = 'none'; return; }
+      panel.style.display = 'block';
+      panel.innerHTML = 'Loading...';
+      try {
+        const res = await fetch(`${API_BASE}/admin/pyq-auto-formula-sample`, { headers: authHeaders() });
+        if (res.status === 401) return logout();
+        const data = await res.json();
+        if (data.error) { panel.innerHTML = escapeHtml('Could not load sample: ' + data.error); return; }
+        if (!data.sample || !data.sample.length) {
+          panel.innerHTML = 'No formula questions are currently eligible for auto-approve.';
+          return;
+        }
+        panel.innerHTML = `<div style="font-size:11px;color:#666;margin-bottom:8px;">Showing ${data.sample.length} of ${data.total_eligible} eligible formula questions</div>` +
+          data.sample.map(q => `
+            <div style="padding:10px 0;border-bottom:1px solid #1e1e1e;">
+              <div style="font-size:11px;color:#666;margin-bottom:4px;">${escapeHtml(q.subject || '')}${q.chapter ? ' · ' + escapeHtml(q.chapter) : ''}</div>
+              <div style="margin-bottom:6px;">${parseWithMath(q.question)}</div>
+              <div style="font-size:13px;color:#ccc;">
+                <div>A. ${parseWithMath(q.option_a)}</div>
+                <div>B. ${parseWithMath(q.option_b)}</div>
+                <div>C. ${parseWithMath(q.option_c)}</div>
+                <div>D. ${parseWithMath(q.option_d)}</div>
+              </div>
+            </div>
+          `).join('');
+      } catch (e) {
+        panel.innerHTML = 'Could not reach server.';
+      }
+    }
+
+    async function unapproveQuestion(id, btnEl) {
+      btnEl.disabled = true;
+      btnEl.textContent = 'Unapproving...';
+      try {
+        const res = await fetch(`${API_BASE}/admin/pyq-unapprove`, {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ id })
+        });
+        if (res.status === 401) return logout();
+        const data = await res.json();
+        if (data.error) {
+          alert('Unapprove failed: ' + data.error);
+          btnEl.disabled = false;
+          btnEl.textContent = 'Unapprove';
+          return;
+        }
+        applyReviewResult([data.updated]);
+      } catch (e) {
+        alert('Unapprove failed: could not reach server.');
+        btnEl.disabled = false;
+        btnEl.textContent = 'Unapprove';
+      }
+    }
+
+    function autoReasonChipsHtml(q) {
+      if (q.auto_pass !== false || !q.auto_reasons) return '';
+      const seen = new Set();
+      return q.auto_reasons.split(',').map(c => c.trim()).filter(Boolean).map(code => {
+        const label = AUTO_REASON_LABELS[code] || code;
+        if (seen.has(label)) return '';
+        seen.add(label);
+        // The "Duplicate" pill specifically: clickable, opens the cross-check panel for this
+        // card (dupMatchPanelHtml) so the admin can compare it against its actual matches
+        // instead of just trusting the auto-check's yes/no.
+        if (code === 'duplicate') {
+          const open = dupMatchPanelOpenIds.has(q.id);
+          return `<button type="button" class="dup-pill-btn${open ? ' active' : ''}" onclick="toggleDupMatchPanel('${q.id}')">${escapeHtml(label)}</button>`;
+        }
+        return `<span class="report-reason-chip">${escapeHtml(label)}</span>`;
+      }).join('');
     }
 
     function updateApproveCleanBtn() {
@@ -1206,7 +1694,10 @@
         if (!u) return;
         Object.assign(q, u);
         if (q.review_status === 'approved') q.reviewed = true;
-        if ((filter && q.review_status !== filter) || (reviewMode && q.reviewed) ||
+        // With no explicit status filter ("Any status"), the view still excludes rejected --
+        // the Rejected tab (filter === 'rejected') is the only place a rejected row belongs.
+        if ((filter ? q.review_status !== filter : q.review_status === 'rejected') ||
+            (reviewMode && q.reviewed) ||
             (contractorMode && q.review_status !== 'pending')) removed.add(q.id);
       });
       currentRows = currentRows.filter(q => !removed.has(q.id));
@@ -1218,7 +1709,10 @@
       updateBulkBar();
       updateApproveCleanBtn();
       loadReviewSummary();
-      if (contractorMode) loadContractorCounts();
+      loadAutoApproveStats();
+      // Always (not just in Contractor Queue mode) -- the Approved/Deleted tiles in the
+      // consolidated status row are fed by this cache regardless of which mode is active.
+      loadContractorCounts();
     }
 
     async function reviewApprove(id, btnEl) {
@@ -1246,6 +1740,401 @@
       noteOpenIds.delete(id);
       delete noteDrafts[id];
       renderResults();
+    }
+
+    // ---------------- Reject (error) ----------------
+    function openReject(id) {
+      rejectOpenIds.add(id);
+      renderResults();
+    }
+
+    function closeReject(id) {
+      rejectOpenIds.delete(id);
+      delete rejectDrafts[id];
+      renderResults();
+    }
+
+    async function postReject(id, reason) {
+      try {
+        const res = await fetch(`${API_BASE}/admin/pyq-reject`, {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ id, reason })
+        });
+        if (res.status === 401) return { error: 'unauthorized' };
+        if (!res.ok) return { error: await describeHttpError(res) };
+        const data = await res.json();
+        return data.error ? { error: data.error } : { updated: data.updated };
+      } catch (e) {
+        return { error: 'Could not reach server.' };
+      }
+    }
+
+    async function sendReject(id, btnEl) {
+      const preset = document.getElementById('reject-preset-' + id).value;
+      const note = (document.getElementById('reject-note-' + id).value || '').trim();
+      rejectDrafts[id] = { preset, note };
+      const reason = note ? `${preset}: ${note}` : preset;
+      btnEl.disabled = true;
+      btnEl.textContent = 'Rejecting...';
+      const result = await postReject(id, reason);
+      if (result.error === 'unauthorized') return logout();
+      if (result.error) {
+        alert('Reject failed: ' + result.error);
+        btnEl.disabled = false;
+        btnEl.textContent = 'Confirm';
+        return;
+      }
+      rejectOpenIds.delete(id);
+      delete rejectDrafts[id];
+      applyReviewResult([result.updated]);
+    }
+
+    // ---------------- Reject (duplicate) -- Find Duplicates + Contractor Queue Duplicates ----------------
+    // Fixed reason ("Duplicate"), optional note, no preset chooser -- reuses the same
+    // /admin/pyq-reject endpoint and the same review_status='rejected' + reject_reason record
+    // as "Reject (error)" above, just a simpler box since the reason is never in question here.
+    function rerenderDupView() {
+      if (duplicatesMode) renderDuplicatePairs(document.getElementById('filterSubject').value);
+      else if (contractorMode && contractorDupFilterOn) renderContractorDuplicatesList();
+    }
+
+    // Same per-view count/panel refresh bulkDeleteDupSelected already does once after its loop --
+    // shared here so a reject (single or bulk) keeps the Contractor Queue's tile numbers (and the
+    // "Duplicates" button's own count) in sync without re-fetching them on every single card.
+    function refreshContractorDupCounts() {
+      if (!(contractorMode && contractorDupFilterOn)) return;
+      loadContractorCounts();
+      renderContractorPanel(contractorCountsCache);
+    }
+
+    function openDupReject(id) {
+      dupRejectOpenIds.add(id);
+      rerenderDupView();
+    }
+
+    function closeDupReject(id) {
+      dupRejectOpenIds.delete(id);
+      delete dupRejectDrafts[id];
+      rerenderDupView();
+    }
+
+    function dupRejectBoxHtml(q) {
+      if (!dupRejectOpenIds.has(q.id)) return '';
+      const note = dupRejectDrafts[q.id] || '';
+      return `
+        <div class="q-note-box">
+          <div style="font-size:12px;color:#999;margin-bottom:4px;">Reason: Duplicate</div>
+          <textarea id="dup-reject-note-${q.id}" placeholder="Optional note">${escapeHtml(note)}</textarea>
+          <div class="q-note-actions">
+            <button type="button" class="q-reject-btn" onclick="sendDupReject('${q.id}', this)">Confirm</button>
+            <button type="button" class="q-edit-btn" style="margin-left:0" onclick="closeDupReject('${q.id}')">Cancel</button>
+          </div>
+        </div>`;
+    }
+
+    // Removes `id` from whichever duplicate-view state it lives in (global scan's
+    // duplicateRowsMap/duplicatePairs, or the Contractor Queue's contractorDupData via the
+    // existing purgeContractorDupId) -- the same per-view cleanup deleteQuestion already does,
+    // just without the hard-delete undo toast since a reject keeps the row, not removes it.
+    function removeDuplicateCardFromView(id) {
+      dupSelectedIds.delete(id);
+      clearDupDeleteError(id);
+      if (contractorMode && contractorDupFilterOn) {
+        purgeContractorDupId(id);
+      } else if (duplicatesMode) {
+        delete duplicateRowsMap[id];
+        duplicatePairs = duplicatePairs.filter(p => p.a !== id && p.b !== id);
+      }
+    }
+
+    async function sendDupReject(id, btnEl) {
+      const note = (document.getElementById('dup-reject-note-' + id).value || '').trim();
+      dupRejectDrafts[id] = note;
+      const reason = note ? `Duplicate: ${note}` : 'Duplicate';
+      btnEl.disabled = true;
+      btnEl.textContent = 'Rejecting...';
+      const result = await postReject(id, reason);
+      if (result.error === 'unauthorized') return logout();
+      if (result.error) {
+        alert('Reject failed: ' + result.error);
+        btnEl.disabled = false;
+        btnEl.textContent = 'Confirm';
+        return;
+      }
+      dupRejectOpenIds.delete(id);
+      delete dupRejectDrafts[id];
+      const scrollY = window.scrollY;
+      removeDuplicateCardFromView(id);
+      refreshContractorDupCounts();
+      rerenderDupView();
+      window.scrollTo(0, scrollY);
+    }
+
+    // ---------------- "Duplicate" pill cross-check panel (/admin/pyq-matches) ----------------
+    // Lets the admin open the top-5 most similar rows for one card and compare them in place,
+    // instead of just trusting the auto-check's yes/no "Duplicate" pill. Works wherever
+    // questionCardHtml renders that pill (plain list, Contractor Queue, Find Duplicates,
+    // Reported) since the panel is rendered inside questionCardHtml itself.
+    function toggleDupMatchPanel(id) {
+      if (dupMatchPanelOpenIds.has(id)) {
+        dupMatchPanelOpenIds.delete(id);
+        rerenderCurrentMode();
+        return;
+      }
+      dupMatchPanelOpenIds.add(id);
+      rerenderCurrentMode();
+      if (!dupMatchData[id]) loadDupMatches(id);
+    }
+
+    async function loadDupMatches(id) {
+      dupMatchData[id] = { loading: true, error: null, matches: [], total_matches: 0 };
+      rerenderCurrentMode();
+      try {
+        const res = await fetch(`${API_BASE}/admin/pyq-matches?id=${encodeURIComponent(id)}`, { headers: authHeaders() });
+        if (res.status === 401) return logout();
+        if (!res.ok) {
+          dupMatchData[id] = { loading: false, error: await describeHttpError(res), matches: [], total_matches: 0 };
+          rerenderCurrentMode();
+          return;
+        }
+        const data = await res.json();
+        dupMatchData[id] = data.error
+          ? { loading: false, error: data.error, matches: [], total_matches: 0, stale_flag: false }
+          : { loading: false, error: null, matches: data.matches || [], total_matches: data.total_matches || 0,
+              stale_flag: !!data.stale_flag };
+      } catch (e) {
+        dupMatchData[id] = { loading: false, error: 'Could not reach server.', matches: [], total_matches: 0 };
+      }
+      rerenderCurrentMode();
+    }
+
+    // Patches a review-status update wherever the row happens to be cached, not just
+    // currentRows -- the card and the match in this panel can each live in a different view's
+    // own map (duplicateRowsMap, reportedRowsMap, the Contractor Duplicates view's own rows).
+    // Mirrors applyReviewResult's "update the card and counts" behaviour for whichever map
+    // actually holds this id.
+    function applyReviewResultAnywhere(updated) {
+      if (currentRows.some(r => r.id === updated.id)) {
+        applyReviewResult([updated]);
+        return;
+      }
+      if (duplicateRowsMap[updated.id]) Object.assign(duplicateRowsMap[updated.id], updated);
+      if (reportedRowsMap[updated.id]) Object.assign(reportedRowsMap[updated.id], updated);
+      if (contractorDupData && contractorDupData.rows && contractorDupData.rows[updated.id]) {
+        Object.assign(contractorDupData.rows[updated.id], updated);
+      }
+      loadContractorCounts();
+    }
+
+    async function dupMatchReject(cardId, targetId, btnEl) {
+      const rejectingCard = targetId === cardId;
+      if (!(await showConfirmModal(
+        rejectingCard ? 'Reject this question as a duplicate? It stays in the database but is hidden from students.'
+                      : 'Reject the other question as a duplicate? It stays in the database but is hidden from students.',
+        { confirmLabel: 'Reject', danger: true }
+      ))) return;
+      const originalLabel = btnEl.textContent;
+      btnEl.disabled = true;
+      btnEl.textContent = 'Rejecting...';
+      const result = await postReject(targetId, 'Duplicate');
+      if (result.error === 'unauthorized') return logout();
+      if (result.error) {
+        alert('Reject failed: ' + result.error);
+        btnEl.disabled = false;
+        btnEl.textContent = originalLabel;
+        return;
+      }
+      if (rejectingCard) {
+        dupMatchPanelOpenIds.delete(cardId);
+        delete dupMatchData[cardId];
+      } else {
+        const state = dupMatchData[cardId];
+        const match = state && state.matches.find(m => m.id === targetId);
+        if (match) match.review_status = 'rejected';
+      }
+      applyReviewResultAnywhere(result.updated);
+      rerenderCurrentMode();
+    }
+
+    // "Clear duplicate flag" -- only ever offered once the panel's own widened search (rejected
+    // + deactivated rows included) still finds nothing, i.e. whatever the pill matched was
+    // hard-deleted. Touches auto_reasons only (/admin/pyq-clear-duplicate-flag); review_status
+    // and payout are never part of this.
+    async function clearDuplicateFlag(id, btnEl) {
+      btnEl.disabled = true;
+      btnEl.textContent = 'Clearing...';
+      try {
+        const res = await fetch(`${API_BASE}/admin/pyq-clear-duplicate-flag`, {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ id })
+        });
+        if (res.status === 401) return logout();
+        const data = await res.json();
+        if (!res.ok || data.error) {
+          alert('Could not clear the duplicate flag: ' + (data.error || res.status));
+          btnEl.disabled = false;
+          btnEl.textContent = 'Clear duplicate flag';
+          return;
+        }
+        dupMatchPanelOpenIds.delete(id);
+        delete dupMatchData[id];
+        applyReviewResultAnywhere(data.updated);
+        rerenderCurrentMode();
+      } catch (e) {
+        alert('Could not reach server.');
+        btnEl.disabled = false;
+        btnEl.textContent = 'Clear duplicate flag';
+      }
+    }
+
+    // m.status (from /admin/pyq-matches) is 'deleted' (soft is_active=false, takes priority),
+    // else m.review_status itself -- see _pyq_match_status in server.py.
+    function dupMatchStatusLabel(status) {
+      return { pending: 'Pending review', needs_fix: 'Needs fix', approved: 'Approved',
+                rejected: 'Rejected', deleted: 'Removed from bank' }[status] || '';
+    }
+
+    function dupMatchRowHtml(cardId, m) {
+      const statusLabel = dupMatchStatusLabel(m.status);
+      const actionsHtml = (m.status === 'rejected' || m.status === 'deleted')
+        ? `<span class="dup-match-rejected-note">${m.status === 'deleted' ? 'Already removed from the bank' : 'Already rejected'}</span>`
+        : `<button type="button" class="q-reject-btn" onclick="dupMatchReject('${cardId}', '${cardId}', this)">Reject this one (duplicate)</button>
+           <button type="button" class="q-reject-btn" onclick="dupMatchReject('${cardId}', '${m.id}', this)">Reject the other (duplicate)</button>`;
+      return `
+        <div class="dup-match-row">
+          <div class="dup-match-row-head">
+            <span class="dup-badge ${m.match_percent >= 90 ? 'exact' : (m.match_percent >= 75 ? 'high' : 'moderate')}">${m.match_percent}% match</span>
+            ${statusLabel ? `<span class="report-reason-chip">${escapeHtml(statusLabel)}</span>` : ''}
+          </div>
+          ${questionCardHtml(m, { minimalActions: true })}
+          <div class="dup-card-actions">
+            ${actionsHtml}
+            <button type="button" class="q-edit-btn" style="margin-left:0" onclick="toggleDupMatchPanel('${cardId}')">Keep both</button>
+          </div>
+        </div>`;
+    }
+
+    function dupMatchPanelHtml(cardId) {
+      if (!dupMatchPanelOpenIds.has(cardId)) return '';
+      const state = dupMatchData[cardId];
+      if (!state || state.loading) {
+        return '<div class="dup-match-panel"><div class="dup-match-loading">Checking for matches...</div></div>';
+      }
+      if (state.error) {
+        return `<div class="dup-match-panel"><div class="dup-match-error">Could not load matches: ${escapeHtml(state.error)}</div></div>`;
+      }
+      if (!state.matches.length) {
+        if (state.stale_flag) {
+          return `<div class="dup-match-panel">
+            <div class="dup-match-empty">Match no longer exists (the other copy was rejected or deleted).</div>
+            <button type="button" class="q-edit-btn" onclick="clearDuplicateFlag('${cardId}', this)">Clear duplicate flag</button>
+          </div>`;
+        }
+        return '<div class="dup-match-panel"><div class="dup-match-empty">No similar questions found right now.</div></div>';
+      }
+      const moreNote = state.total_matches > state.matches.length
+        ? ` (and ${state.total_matches - state.matches.length} more)` : '';
+      return `
+        <div class="dup-match-panel">
+          <div class="dup-match-panel-title">${state.matches.length} similar question${state.matches.length === 1 ? '' : 's'}${moreNote}</div>
+          <div class="dup-columns">
+            ${state.matches.map(m => dupMatchRowHtml(cardId, m)).join('')}
+          </div>
+        </div>`;
+    }
+
+    async function restoreQuestion(id, btnEl) {
+      btnEl.disabled = true;
+      btnEl.textContent = 'Restoring...';
+      try {
+        const res = await fetch(`${API_BASE}/admin/pyq-unreject`, {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ id })
+        });
+        if (res.status === 401) return logout();
+        const data = await res.json();
+        if (!res.ok || data.error) {
+          alert('Restore failed: ' + (data.error || res.status));
+          btnEl.disabled = false;
+          btnEl.textContent = 'Restore';
+          return;
+        }
+        applyReviewResult([data.updated]);
+      } catch (e) {
+        alert('Could not reach server.');
+        btnEl.disabled = false;
+        btnEl.textContent = 'Restore';
+      }
+    }
+
+    let contractorTallyOpen = false;
+
+    // With/without-diagram are lifetime uploaded counts for the contractor, from the same
+    // /admin/pyq-contractor-queue-counts response the status pill row uses -- the former
+    // status tiles showed these only while Contractor Queue mode was active, so they live
+    // here now instead of being shown twice.
+    function contractorTallyRowHtml(r) {
+      const warn = (r.rejected_errors > 0 || r.duplicates_deducted > 0) ? ' style="color:#ef4444;"' : '';
+      const cc = contractorCountsCache || {};
+      const isContractor = r.uploader_name === CONTRACTOR_UPLOADER_NAME;
+      return `<tr>
+        <td>${escapeHtml(r.uploader_name || '—')}</td>
+        <td>${r.uploaded}</td>
+        <td>${isContractor ? (cc.uploaded_with_diagram ?? 0) : '-'}</td>
+        <td>${isContractor ? (cc.uploaded_without_diagram ?? 0) : '-'}</td>
+        <td>${r.approved}</td>
+        <td>${r.pending}</td>
+        <td${warn}>${r.rejected_errors}</td>
+        <td${warn}>${r.duplicates_deducted}</td>
+        <td>${r.duplicates_free}</td>
+        <td>${r.deleted}</td>
+        <td class="payable">${r.payable} / ${r.target}</td>
+      </tr>`;
+    }
+
+    async function loadContractorTally() {
+      const body = document.getElementById('contractorTallyBody');
+      body.textContent = 'Loading...';
+      try {
+        const res = await fetch(`${API_BASE}/admin/contractor-tally`, { headers: authHeaders() });
+        if (res.status === 401) return logout();
+        const data = await res.json();
+        if (!res.ok || data.error) { body.textContent = 'Could not load: ' + (data.error || res.status); return; }
+        const rows = data.rows || [];
+        // Also drives the Contractor payout panel's own header summary ("Payable X, $Y"),
+        // visible even while the panel stays collapsed -- fetched up front in enterDashboard()
+        // for that reason, not just when the panel is first opened.
+        const headerSummary = document.getElementById('contractorPayoutHeaderSummary');
+        if (headerSummary) {
+          const mainRow = rows.find(r => r.uploader_name === CONTRACTOR_UPLOADER_NAME) || rows[0];
+          headerSummary.textContent = mainRow ? `Payable ${mainRow.payable}, $${Number(mainRow.amount_usd ?? 0).toFixed(2)}` : '';
+        }
+        body.innerHTML = `<div class="contractor-tally-wrap"><table class="contractor-tally-table">
+          <thead><tr>
+            <th>Uploader</th><th>Uploaded</th>
+            <th>With diagram</th><th>Without diagram</th>
+            <th>Approved</th><th>Pending</th>
+            <th title="Errors (deducted)">Errors</th>
+            <th title="Duplicates (deducted, from 1 Nov)">Duplicates (deducted)</th>
+            <th title="Duplicates before 1 Nov (free)">Duplicates (free, pre-Nov)</th>
+            <th>Deleted</th><th>Payable</th>
+          </tr></thead>
+          <tbody>${rows.map(contractorTallyRowHtml).join('')}</tbody>
+        </table></div>`;
+      } catch (e) {
+        body.textContent = 'Could not reach server.';
+        const headerSummary = document.getElementById('contractorPayoutHeaderSummary');
+        if (headerSummary) headerSummary.textContent = 'unavailable';
+      }
+    }
+
+    function toggleContractorTally() {
+      contractorTallyOpen = !contractorTallyOpen;
+      document.getElementById('contractorPayoutPanel').classList.toggle('open', contractorTallyOpen);
+      if (contractorTallyOpen) loadContractorTally();
     }
 
     // After an edit, the warnings shown are the ones from before it -- re-ask the server.
@@ -1316,6 +2205,7 @@
     function reviewStatusHtml(q) {
       if (q.review_status === 'pending') return '<span class="q-status pending">Pending review</span>';
       if (q.review_status === 'needs_fix') return '<span class="q-status needs_fix">Needs fix</span>';
+      if (q.review_status === 'rejected') return '<span class="q-status rejected">Rejected</span>';
       return '';
     }
 
@@ -1330,9 +2220,31 @@
     }
 
     function reviewNoteHtml(q) {
+      if (q.review_status === 'rejected' && q.reject_reason) {
+        const when = q.rejected_at ? new Date(q.rejected_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
+        return `<div class="q-review-note q-reject-note"><b>Rejected${when ? ' · ' + escapeHtml(when) : ''}:</b> ${escapeHtml(q.reject_reason)}</div>`;
+      }
       if (!q.review_note || q.review_status === 'approved') return '';
       const label = q.review_status === 'pending' ? 'Fixed by contractor -- your note was:' : 'Sent back:';
       return `<div class="q-review-note"><b>${label}</b> ${escapeHtml(q.review_note)}</div>`;
+    }
+
+    function rejectBoxHtml(q) {
+      if (!rejectOpenIds.has(q.id)) return '';
+      const draft = rejectDrafts[q.id] || {};
+      const preset = draft.preset || PYQ_REJECT_REASONS[0];
+      const note = draft.note || '';
+      return `
+        <div class="q-note-box">
+          <select id="reject-preset-${q.id}">
+            ${PYQ_REJECT_REASONS.map(r => `<option value="${escapeHtml(r)}" ${r === preset ? 'selected' : ''}>${escapeHtml(r)}</option>`).join('')}
+          </select>
+          <textarea id="reject-note-${q.id}" placeholder="Optional note">${escapeHtml(note)}</textarea>
+          <div class="q-note-actions">
+            <button type="button" class="q-reject-btn" onclick="sendReject('${q.id}', this)">Confirm</button>
+            <button type="button" class="q-edit-btn" style="margin-left:0" onclick="closeReject('${q.id}')">Cancel</button>
+          </div>
+        </div>`;
     }
 
     function needsFixBoxHtml(q) {
@@ -1500,7 +2412,7 @@
         renderResults();
         renderPagination();
         updateResultCountText();
-        if (contractorMode) loadContractorCounts();
+        loadContractorCounts();
       }
       pushUndoEntry(deletedRows);
       updateBulkBar();
@@ -1912,6 +2824,8 @@
               ${q.source_tag ? `<span>${escapeHtml(q.source_tag)}</span>` : ''}
               ${!q.is_active ? '<span class="q-inactive-flag">Inactive</span>' : ''}
               ${reviewStatusHtml(q)}
+              ${q.auto_approved ? '<span class="q-auto-badge">Auto</span>' : ''}
+              ${q.language === 'hi' ? '<span class="q-language-badge">Hindi</span>' : ''}
             </div>
             ${reviewUploadMetaHtml(q) ? `<div class="q-meta-secondary">${reviewUploadMetaHtml(q)}</div>` : ''}
           </div>
@@ -1923,13 +2837,21 @@
             <span class="q-admin-id">${escapeHtml(q.id)}</span>
             ${flags.map(f => `<span class="q-flag">${escapeHtml(f)}</span>`).join('')}
             ${reviewWarningsHtml(q)}
-            ${minimalActions ? '' : `<button class="q-edit-btn" onclick="startEdit('${q.id}')">✏️ Edit</button>`}
+            ${autoReasonChipsHtml(q)}
+            ${minimalActions || q.review_status === 'rejected' ? '' : `<button class="q-edit-btn" onclick="startEdit('${q.id}')">✏️ Edit</button>`}
             ${waiting ? `<button class="q-approve-btn" onclick="reviewApprove('${q.id}', this)">✅ Approve for students</button>` : ''}
             ${reviewMode && !waiting ? `<button class="q-approve-btn" onclick="approveQuestion('${q.id}', this)">✅ Approve</button>` : ''}
-            ${reviewActions && q.review_status && !noteOpenIds.has(q.id) ? `<button class="q-fix-btn" onclick="openNeedsFix('${q.id}')">🔧 Needs fix</button>` : ''}
-            ${minimalActions ? '' : `<button class="q-delete-btn" onclick="deleteQuestion('${q.id}', this)">🗑 Delete</button>`}
+            ${reviewActions && q.review_status === 'rejected' ? `<button class="q-approve-btn" onclick="restoreQuestion('${q.id}', this)">Restore</button>` : ''}
+            ${reviewActions && q.review_status === 'approved' && q.auto_approved ? `<button class="q-edit-btn" onclick="unapproveQuestion('${q.id}', this)">Unapprove</button>` : ''}
+            ${reviewActions && q.review_status && q.review_status !== 'rejected' && !noteOpenIds.has(q.id) && !rejectOpenIds.has(q.id) ? `<button class="q-fix-btn" onclick="openNeedsFix('${q.id}')">🔧 Needs fix</button>` : ''}
+            ${reviewActions && q.review_status !== 'rejected' && !noteOpenIds.has(q.id) && !rejectOpenIds.has(q.id) ? `<button class="q-reject-btn" onclick="openReject('${q.id}')">Reject (error)</button>` : ''}
+            ${dupSelect && q.review_status !== 'rejected' && !dupRejectOpenIds.has(q.id) ? `<button class="q-reject-btn" onclick="openDupReject('${q.id}')">Reject (duplicate)</button>` : ''}
+            ${minimalActions || q.review_status === 'rejected' ? '' : `<button class="q-delete-btn" onclick="deleteQuestion('${q.id}', this)">🗑 Delete</button>`}
           </div>
           ${reviewActions ? needsFixBoxHtml(q) : ''}
+          ${reviewActions ? rejectBoxHtml(q) : ''}
+          ${dupSelect ? dupRejectBoxHtml(q) : ''}
+          ${minimalActions ? '' : dupMatchPanelHtml(q.id)}
         </div>`;
     }
 
@@ -1964,7 +2886,8 @@
       document.getElementById('reportsToggleBtn').classList.remove('active');
       document.getElementById('diagramToggleBtn').classList.remove('active');
       document.getElementById('contractorToggleBtn').classList.remove('active');
-      document.getElementById('contractorPanel').classList.remove('cq-visible');
+      autoPassFilterOn = false;
+      document.getElementById('autoApproveTileBtn').classList.remove('active');
       document.getElementById('reviewSortOrder').style.display = 'none';
       document.getElementById('filterChapter').disabled = false;
       document.getElementById('filterSearch').disabled = false;
@@ -1980,6 +2903,7 @@
       document.getElementById('diagramFilterStatus').style.display = 'none';
       document.getElementById('reviewFilters').style.display = '';
       document.getElementById('approveCleanBtn').style.display = 'none';
+      renderStatusPills();
     }
 
     async function toggleDuplicatesView() {
@@ -2037,7 +2961,6 @@
       renderPdfFilenameChip();
       resetModeToggleUi();
       document.getElementById('contractorToggleBtn').classList.toggle('active', contractorMode);
-      document.getElementById('contractorPanel').classList.toggle('cq-visible', contractorMode);
       document.getElementById('reviewFilters').style.display = contractorMode ? 'none' : '';
       document.querySelector('.filter-bar label.check-label').style.display = contractorMode ? 'none' : '';
       document.getElementById('resultNote').textContent = contractorMode
@@ -2065,56 +2988,17 @@
       }
     }
 
+    // contractorCountsCache feeds the status pill row (Approved/With-diagram/
+    // Without-diagram/Duplicates while Contractor Queue mode is active -- see renderStatusPills).
     function renderContractorPanelError(msg) {
-      document.getElementById('contractorPanel').innerHTML =
-        `<div class="contractor-panel-empty">Counts unavailable: ${escapeHtml(msg)}</div>`;
+      const el = document.getElementById('contractorCountsError');
+      if (el) el.textContent = 'Counts unavailable: ' + msg;
     }
 
     function renderContractorPanel(data) {
-      const panel = document.getElementById('contractorPanel');
-      const withCount = data.with_diagram || 0;
-      const withoutCount = data.without_diagram || 0;
-      const secondaryRow = (label, count) => `
-        <div class="contractor-count-row secondary">
-          <span class="contractor-count-label">${label}</span>
-          <span class="contractor-count-num">${count}</span>
-        </div>`;
-      // Permanent totals -- unlike every other box here, these never go down (not scoped to
-      // "pending" or any filter), so they're rendered the same way whether or not the pending
-      // queue is currently empty.
-      const uploadedHtml = `<div class="contractor-panel-uploaded">
-          <span class="contractor-uploaded-label">Uploaded so far</span>
-          ${secondaryRow('With diagram', data.uploaded_with_diagram || 0)}
-          ${secondaryRow('Without diagram', data.uploaded_without_diagram || 0)}
-        </div>`;
-      if (withCount + withoutCount === 0) {
-        const emptySecondaryHtml = `<div class="contractor-panel-secondary">`
-          + secondaryRow('Approved', data.approved || 0)
-          + secondaryRow('Needs fix', data.needs_fix || 0)
-          + secondaryRow('Deleted', data.deleted || 0)
-          + pdfsButtonHtml()
-          + `</div>`;
-        panel.innerHTML = '<div class="contractor-panel-empty">Nothing waiting in the contractor queue.</div>' + emptySecondaryHtml + uploadedHtml;
-        return;
-      }
-      const row = (key, label, count) => `
-        <div class="contractor-count-row${contractorDiagramFilter === key ? ' active' : ''}" onclick="toggleContractorDiagramFilter('${key}')">
-          <span class="contractor-count-label">${label}</span>
-          <span class="contractor-count-num">${count}</span>
-        </div>`;
-      const mainHtml = `<div class="contractor-panel-main">` + row('with', 'With diagram', withCount)
-        + row('without', 'Without diagram', withoutCount) + `</div>`;
-      // The "Duplicates" button sits beside the other (display-only) counts here, in the second
-      // row -- same quiet style, just clickable, with the file's one blue accent only once the
-      // filter it drives is actually on.
-      const secondaryHtml = `<div class="contractor-panel-secondary">`
-        + secondaryRow('Approved', data.approved || 0)
-        + secondaryRow('Needs fix', data.needs_fix || 0)
-        + secondaryRow('Deleted', data.deleted || 0)
-        + contractorDupButtonHtml()
-        + pdfsButtonHtml()
-        + `</div>`;
-      panel.innerHTML = mainHtml + secondaryHtml + uploadedHtml;
+      const err = document.getElementById('contractorCountsError');
+      if (err) err.textContent = '';
+      renderStatusPills();
     }
 
     function toggleContractorDiagramFilter(key) {
@@ -2140,19 +3024,13 @@
         ? contractorDupError
         : 'Check the pending queue for possible duplicates against the question bank and itself';
       return `
-        <div class="contractor-count-row dup-btn${contractorDupFilterOn ? ' active' : ''}${errorClass}" onclick="onContractorDuplicatesClick()" title="${escapeHtml(title)}">
-          <span class="contractor-count-label">${escapeHtml(label)}</span>
-        </div>`;
+        <span class="status-pill${contractorDupFilterOn ? ' active' : ''}${errorClass}" onclick="onContractorDuplicatesClick()" title="${escapeHtml(title)}">
+          ${escapeHtml(label)}
+        </span>`;
     }
 
-    // ---------------- Contractor Queue "PDFs" button -> shared Processed PDFs popup ----------------
-    function pdfsButtonHtml() {
-      return `
-        <div class="contractor-count-row" onclick="openPdfHistory()" title="View every PDF processed through the scan pipeline, with live question counts">
-          <span class="contractor-count-label">PDFs</span>
-        </div>`;
-    }
-
+    // "PDFs" is now its own tab in the mode-tab row (static markup, onclick="openPdfHistory()")
+    // rather than a dynamically-rendered button here.
     let pdfFilenameFilter = null; // set when a Processed PDFs row is tapped -- narrows the Contractor Queue to that PDF's questions
 
     // The Processed PDFs renderer's own extension point (see pdfHistoryRowHtml's canClickThrough
@@ -2181,8 +3059,10 @@
       el.innerHTML = `<span>Showing: ${escapeHtml(pdfFilenameFilter)}</span><button type="button" onclick="clearPdfFilenameFilter()">✕</button>`;
     }
 
-    // ---------------- Processed PDFs popup -- same markup/JS as admin-pdf-review.html and
-    // contractor-pdf-review.html's own copies of this block (kept byte-identical on purpose). ----------------
+    // ---------------- Processed PDFs popup -- started as the same markup/JS as
+    // admin-pdf-review.html and contractor-pdf-review.html's own copies of this block, but this
+    // page's copy now also has Remove/Add file/Undo management (admin-only); the other two pages
+    // still have their original, unmanaged copy. ----------------
     const PDF_STATUS_META = {
       completed: { label: 'Completed', color: '#4caf50' },
       processing: { label: 'Processing', color: '#4f8ef7' },
@@ -2196,6 +3076,10 @@
     let pdfHistoryData = null; // last /admin/processed-pdfs response: {pdfs, total, offset, limit, has_more, counts_unavailable, gap_summary, can_remove, updated_at}
     let pdfHistoryCacheSavedAt = 0; // ms epoch pdfHistoryData was actually fetched (not just read from localStorage)
     let pdfHistoryInflight = null; // in-flight loadPdfHistory() promise -- so preload and a manual open never both fire
+    // Last 10 Remove/Add actions taken on this page load, most recent last -- Undo pops the end
+    // and reverses it (restore for a remove, soft-remove for an add). Not persisted across a
+    // page reload; admin-pyq-preview.html only, by design (see processed_pdfs_soft_delete.sql).
+    let pdfHistoryUndoStack = [];
 
     function readPdfHistoryCache() {
       try {
@@ -2365,9 +3249,102 @@
         .sort((a, b) => new Date(b.upload_date) - new Date(a.upload_date));
     }
 
+    // Add file / Undo are admin-only (same role the backend's can_remove already reflects) --
+    // hidden rather than merely disabled so a contractor key never even sees them offered.
+    function renderPdfHistoryAdminControls() {
+      const canAdmin = !!(pdfHistoryData && pdfHistoryData.can_remove);
+      const addBtn = document.getElementById('pdfHistoryAddBtn');
+      const undoBtn = document.getElementById('pdfHistoryUndoBtn');
+      const note = document.getElementById('pdfHistoryAdminNote');
+      if (addBtn) addBtn.style.display = canAdmin ? '' : 'none';
+      if (undoBtn) undoBtn.style.display = canAdmin ? '' : 'none';
+      if (note) note.style.display = canAdmin ? 'none' : '';
+      if (!canAdmin) cancelAddPdfForm();
+      renderPdfHistoryUndoButton();
+    }
+
+    function renderPdfHistoryUndoButton() {
+      const btn = document.getElementById('pdfHistoryUndoBtn');
+      if (!btn) return;
+      const last = pdfHistoryUndoStack[pdfHistoryUndoStack.length - 1];
+      btn.disabled = !last;
+      btn.title = last ? (last.type === 'remove' ? `Undo: restore ${last.filename}` : `Undo: remove ${last.filename}`) : 'Nothing to undo';
+    }
+
+    function pushPdfUndo(action) {
+      pdfHistoryUndoStack.push(action);
+      if (pdfHistoryUndoStack.length > 10) pdfHistoryUndoStack.shift();
+      renderPdfHistoryUndoButton();
+    }
+
+    async function undoLastPdfAction() {
+      const action = pdfHistoryUndoStack[pdfHistoryUndoStack.length - 1];
+      if (!action) return;
+      const btn = document.getElementById('pdfHistoryUndoBtn');
+      if (btn) btn.disabled = true;
+      try {
+        const res = action.type === 'remove'
+          ? await fetch(`${API_BASE}/admin/processed-pdfs/${action.id}/restore`, { method: 'POST', headers: authHeaders() })
+          : await fetch(`${API_BASE}/admin/processed-pdfs/${action.id}`, { method: 'DELETE', headers: authHeaders() });
+        if (res.status === 401) return logout();
+        const data = await res.json();
+        if (data.error) { alert(data.error); return; }
+        pdfHistoryUndoStack.pop();
+        await loadPdfHistory(true, {});
+      } catch (e) {
+        alert('Could not reach server.');
+      } finally {
+        renderPdfHistoryUndoButton();
+      }
+    }
+
+    function openAddPdfForm() {
+      document.getElementById('pdfHistoryAddForm').style.display = 'flex';
+      document.getElementById('pdfAddFilename').value = '';
+      document.getElementById('pdfAddSubject').value = '';
+      document.getElementById('pdfAddChapter').value = '';
+      document.getElementById('pdfAddFilename').focus();
+    }
+
+    function cancelAddPdfForm() {
+      const form = document.getElementById('pdfHistoryAddForm');
+      if (form) form.style.display = 'none';
+    }
+
+    async function submitAddPdfForm() {
+      const filename = document.getElementById('pdfAddFilename').value.trim();
+      const subject = document.getElementById('pdfAddSubject').value;
+      const chapterRaw = document.getElementById('pdfAddChapter').value.trim();
+      if (!filename) { alert('File name is required.'); return; }
+      let chapter_number = null;
+      if (chapterRaw) {
+        chapter_number = parseInt(chapterRaw, 10);
+        if (!Number.isInteger(chapter_number) || chapter_number < 1) { alert('Chapter number must be a positive whole number.'); return; }
+      }
+      const btn = document.getElementById('pdfAddSaveBtn');
+      if (btn) { btn.disabled = true; btn.textContent = 'Saving...'; }
+      try {
+        const res = await fetch(`${API_BASE}/admin/processed-pdfs/manual`, {
+          method: 'POST', headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filename, subject: subject || null, chapter_number })
+        });
+        if (res.status === 401) return logout();
+        const data = await res.json();
+        if (data.error) { alert(data.error); return; }
+        pushPdfUndo({ type: 'add', id: data.pdf.id, filename: data.pdf.filename });
+        cancelAddPdfForm();
+        await loadPdfHistory(true, {});
+      } catch (e) {
+        alert('Could not reach server.');
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
+      }
+    }
+
     function renderPdfHistoryList() {
       const listEl = document.getElementById('pdfHistoryList');
       if (!pdfHistoryData) return;
+      renderPdfHistoryAdminControls();
       const rows = pdfHistoryFilteredRows();
       const unavailableNote = pdfHistoryData.counts_unavailable
         ? '<div class="pdf-history-counts-note">Counts unavailable right now. <a href="#" onclick="refreshPdfHistory(); return false;">Refresh</a></div>'
@@ -2379,17 +3356,22 @@
       listEl.innerHTML = unavailableNote + rows.map(pdfHistoryRowHtml).join('') + showMoreHtml;
     }
 
-    // Shared by admin-pdf-review.html, contractor-pdf-review.html and admin-pyq-preview.html --
-    // identical in all three. canClickThrough is admin-pyq-preview.html's own extension point
-    // (pdfHistoryRowClick, defined only there) for the Contractor Queue's "tap a PDF to filter"
-    // behavior -- the other two pages simply never define that function, so rows render inert.
+    // Was identical to admin-pdf-review.html and contractor-pdf-review.html's own copies of this
+    // block; this page's copy has since diverged (Remove/Add file/Undo management, admin-only --
+    // see processed_pdfs_soft_delete.sql), the other two have not. canClickThrough is
+    // admin-pyq-preview.html's own extension point (pdfHistoryRowClick, defined only there) for
+    // the Contractor Queue's "tap a PDF to filter" behavior -- the other two pages simply never
+    // define that function, so rows render inert.
     function pdfHistoryRowHtml(p) {
       const meta = PDF_STATUS_META[p.status] || { label: p.status, color: '#888' };
+      const isManual = p.processed_by === 'manual';
+      const badgeLabel = isManual ? 'Added manually' : meta.label;
+      const badgeColor = isManual ? '#4f8ef7' : meta.color;
       const c = p.counts;
       const uploader = p.uploader_name || 'Earlier upload';
       const reason = p.interrupted_reason || (p.status === 'failed' ? p.error_message : null);
       const canClickThrough = typeof pdfHistoryRowClick === 'function';
-      const canRemove = pdfHistoryData.can_remove && (p.status === 'interrupted' || p.status === 'failed');
+      const canRemove = pdfHistoryData.can_remove;
       let countsHtml;
       if (c) {
         const deletedText = c.deleted == null ? 'unknown' : c.deleted;
@@ -2401,7 +3383,7 @@
         <div class="pdf-history-row${canClickThrough ? ' clickable' : ''}" ${canClickThrough ? `onclick="pdfHistoryRowClick(${JSON.stringify(p.filename)})"` : ''}>
           <div class="pdf-history-row-top">
             <span class="pdf-history-filename">${escapeHtml(p.filename)}</span>
-            <span class="pdf-history-badge" style="color:${meta.color};border-color:${meta.color};">${escapeHtml(meta.label)}</span>
+            <span class="pdf-history-badge" style="color:${badgeColor};border-color:${badgeColor};">${escapeHtml(badgeLabel)}</span>
           </div>
           <div class="pdf-history-row-meta">${escapeHtml(p.subject || '—')} · ${new Date(p.upload_date).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })} · ${escapeHtml(uploader)}</div>
           ${countsHtml}
@@ -2411,13 +3393,15 @@
     }
 
     async function removeProcessedPdf(id) {
-      const ok = await showConfirmModal('Remove this processed-PDF tracking record? This never deletes any question -- only the record of this scan.', { confirmLabel: 'Remove', danger: true });
+      const ok = await showConfirmModal('Remove this processed-PDF tracking record? This never deletes any question -- only the record of this scan. You can Undo right after.', { confirmLabel: 'Remove', danger: true });
       if (!ok) return;
+      const existing = (pdfHistoryData && pdfHistoryData.pdfs || []).find(p => p.id === id);
       try {
         const res = await fetch(`${API_BASE}/admin/processed-pdfs/${id}`, { method: 'DELETE', headers: authHeaders() });
         if (res.status === 401) return logout();
         const data = await res.json();
         if (data.error) { alert(data.error); return; }
+        pushPdfUndo({ type: 'remove', id, filename: existing ? existing.filename : '' });
         await loadPdfHistory(true, {});
       } catch (e) {
         alert('Could not reach server.');
@@ -3381,9 +4365,11 @@
         bar.innerHTML = `
           <span class="dup-select-count" id="dupSelectCount"></span>
           <button type="button" class="dup-select-delete-btn" id="dupSelectDeleteBtn">Delete selected</button>
+          <button type="button" class="dup-select-reject-btn" id="dupSelectRejectBtn">Reject selected</button>
           <button type="button" class="dup-select-clear-btn" id="dupSelectClearBtn">Clear</button>`;
         document.body.appendChild(bar);
         document.getElementById('dupSelectDeleteBtn').onclick = bulkDeleteDupSelected;
+        document.getElementById('dupSelectRejectBtn').onclick = bulkRejectDupSelected;
         document.getElementById('dupSelectClearBtn').onclick = clearDupSelection;
       }
       document.getElementById('dupSelectCount').textContent = `${count} selected`;
@@ -3454,6 +4440,68 @@
         // very first bulk delete of a session.
         if (deleteBtn) { deleteBtn.disabled = false; deleteBtn.textContent = 'Delete selected'; }
         if (clearBtn) clearBtn.disabled = false;
+      }
+    }
+
+    async function postRejectBulk(ids, reason) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 20000);
+      try {
+        const res = await fetch(`${API_BASE}/admin/pyq-reject-bulk`, {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ ids, reason }),
+          signal: controller.signal
+        });
+        if (res.status === 401) return { error: 'unauthorized' };
+        if (!res.ok) return { error: await describeHttpError(res) };
+        const data = await res.json();
+        return data.error ? { error: data.error } : data;
+      } catch (e) {
+        if (e.name === 'AbortError') return { error: 'Timed out waiting for the server -- check your connection and try again.' };
+        return { error: 'Could not reach server.' };
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    }
+
+    // Rejects every ticked question in one server batch (/admin/pyq-reject-bulk), reason fixed
+    // to "Duplicate" same as the per-card Reject (duplicate) button above. Unlike bulk delete,
+    // never confirms past a group-wipe warning -- the server itself refuses to let a batch
+    // reject every copy of a duplicate group, holding one id back (kept_for_safety) instead, so
+    // the only thing to tell the admin afterwards is which id(s) that happened to.
+    async function bulkRejectDupSelected() {
+      const ids = Array.from(dupSelectedIds);
+      if (ids.length === 0) return;
+      const countMsg = `Reject ${ids.length} question${ids.length === 1 ? '' : 's'} as duplicates? They stay saved (hidden from students) as proof.`;
+      if (!(await showConfirmModal(countMsg, { confirmLabel: 'Reject', danger: true }))) return;
+
+      const rejectBtn = document.getElementById('dupSelectRejectBtn');
+      const deleteBtn = document.getElementById('dupSelectDeleteBtn');
+      const clearBtn = document.getElementById('dupSelectClearBtn');
+      if (deleteBtn) deleteBtn.disabled = true;
+      if (clearBtn) clearBtn.disabled = true;
+      if (rejectBtn) { rejectBtn.disabled = true; rejectBtn.textContent = 'Rejecting...'; }
+      const scrollY = window.scrollY;
+      try {
+        const result = await postRejectBulk(ids, 'Duplicate');
+        if (result.error === 'unauthorized') { logout(); return; }
+        if (result.error) {
+          alert('Bulk reject failed: ' + result.error);
+          return;
+        }
+        const keptIds = new Set(result.kept_for_safety || []);
+        ids.filter(id => !keptIds.has(id)).forEach(removeDuplicateCardFromView);
+        refreshContractorDupCounts();
+        rerenderDupView();
+        window.scrollTo(0, scrollY);
+        if (keptIds.size) {
+          alert(`Kept ${keptIds.size} question${keptIds.size === 1 ? '' : 's'} unrejected so a duplicate group isn't left with zero copies.`);
+        }
+      } finally {
+        if (deleteBtn) deleteBtn.disabled = false;
+        if (clearBtn) clearBtn.disabled = false;
+        if (rejectBtn) { rejectBtn.disabled = false; rejectBtn.textContent = 'Reject selected'; }
       }
     }
 
@@ -3676,7 +4724,7 @@
         renderPagination();
         updateResultCountText();
         updateBulkBar();
-        if (contractorMode) loadContractorCounts();
+        loadContractorCounts();
       }
     }
 

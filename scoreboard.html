@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Scoreboard — NEET-AI</title>
+  <title>Scoreboard - NEET-AI</title>
   <link rel="icon" href="assets/favicon.ico" sizes="any" />
   <link rel="icon" type="image/svg+xml" href="assets/logo.svg" />
   <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
@@ -173,7 +173,7 @@
     .thinking-orb { position: relative; width: 18px; height: 18px; flex-shrink: 0; }
     .thinking-orb::before, .thinking-orb::after { content: ''; position: absolute; inset: 0; border-radius: 50%; border: 2px solid transparent; }
     .thinking-orb::before { border-top-color: #4f8ef7; border-right-color: #4f8ef7; animation: thinkingSpin 1.6s linear infinite; }
-    .thinking-orb::after { border-bottom-color: #38bdf8; border-left-color: #38bdf8; animation: thinkingSpin 2.2s linear infinite reverse; }
+    .thinking-orb::after { border-bottom-color: #4f8ef7; border-left-color: #4f8ef7; animation: thinkingSpin 2.2s linear infinite reverse; }
     @keyframes thinkingSpin { to { transform: rotate(360deg); } }
     @keyframes thinkingFade { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
 
@@ -789,7 +789,7 @@
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || data.error) {
-          errEl.textContent = data.detail || data.error || 'Could not submit -- try again.';
+          errEl.textContent = data.detail || data.error || 'Could not submit - try again.';
           btnEl.disabled = false; btnEl.textContent = 'Submit';
           return;
         }
@@ -797,7 +797,7 @@
         setTimeout(closeReportPopup, 1600);
         removeReportedQuestionFromView();
       } catch (e) {
-        errEl.textContent = e.name === 'AbortError' ? 'Timed out -- try again.' : 'Could not reach server.';
+        errEl.textContent = e.name === 'AbortError' ? 'Timed out - try again.' : 'Could not reach server.';
         btnEl.disabled = false; btnEl.textContent = 'Submit';
       } finally {
         clearTimeout(timeoutId);

@@ -1425,14 +1425,13 @@
     @keyframes bounce { 0%, 100% { transform: translateY(0); opacity: 0.6; } 50% { transform: translateY(-5px); opacity: 1; } }
 
     /* "Thinking" indicator -- shown from the moment a message is sent until the first real
-       token streams in. Two counter-rotating rings in NEET-AI's own brand pair (blue #4f8ef7 /
-       violet #7c3aed, the same gradient the Upgrade button already uses) rather than a generic
-       spinner or dot-ellipsis. */
+       token streams in. Two counter-rotating rings, both the site's blue accent (#4f8ef7,
+       same as the send button) rather than a generic spinner or dot-ellipsis. */
     .thinking-indicator { display: flex; align-items: center; gap: 10px; padding: 12px 4px; }
     .thinking-orb { position: relative; width: 18px; height: 18px; flex-shrink: 0; }
     .thinking-orb::before, .thinking-orb::after { content: ''; position: absolute; inset: 0; border-radius: 50%; border: 2px solid transparent; }
     .thinking-orb::before { border-top-color: #4f8ef7; border-right-color: #4f8ef7; animation: thinkingSpin 1.6s linear infinite; }
-    .thinking-orb::after { border-bottom-color: #7c3aed; border-left-color: #7c3aed; animation: thinkingSpin 2.2s linear infinite reverse; }
+    .thinking-orb::after { border-bottom-color: #4f8ef7; border-left-color: #4f8ef7; animation: thinkingSpin 2.2s linear infinite reverse; }
     @keyframes thinkingSpin { to { transform: rotate(360deg); } }
     .thinking-text { font-size: var(--chat-font-size, 14px); color: #888; animation: thinkingFade 2.2s ease-in-out infinite; }
     @keyframes thinkingFade { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
@@ -1744,6 +1743,16 @@
     .seq-list-preamble { margin-bottom: 14px; }
     .seq-list-items { margin: 8px 0; }
     .seq-list-item { padding: 3px 0; }
+    /* Inline match-the-following pairs ("(a) Pila (i) Flame cells") -- no List-I/List-II
+       header, each line already pairs one alpha marker with one roman marker. Grid with 2
+       equal columns, auto-flow places left/right cells of the same line into the same row. */
+    .match-pair-preamble { margin-bottom: 14px; }
+    .match-pair-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 24px; margin: 8px 0; }
+    .match-pair-cell { padding: 3px 0; }
+    .match-pair-trailer { margin-top: 8px; }
+    @media (max-width: 480px) {
+      .match-pair-grid { grid-template-columns: 1fr; }
+    }
 
     /* Settings dropdowns (Theme / Font Size / Answer Style / Language) */
     .settings-dropdown { position: relative; }
@@ -2063,7 +2072,7 @@
           <svg id="todoLockIcon" class="todo-btn-lock" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:none;"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
         </button>
 <div style="position:relative;" id="countdownWrapper">
-          <div style="box-sizing:border-box;min-height:30px;display:flex;align-items:center;font-size:12px;font-weight:600;color:#4f8ef7;background:#4f8ef710;border:1px solid #4f8ef730;padding:4px 12px;border-radius:15px;cursor:default;"><span><span id="countdownPrefix">NEET <span data-i18n-num>2027</span> — </span><span id="countdownDays">--</span><span id="countdownSuffixFull" data-i18n="chat.daysLeft"> days left</span><span id="countdownSuffixCompact" data-i18n="chat.daysLeftShort">d left</span></span></div>
+          <div style="box-sizing:border-box;min-height:30px;display:flex;align-items:center;font-size:12px;font-weight:600;color:#4f8ef7;background:#4f8ef710;border:1px solid #4f8ef730;padding:4px 12px;border-radius:15px;cursor:default;"><span><span id="countdownPrefix">NEET <span data-i18n-num>2027</span> - </span><span id="countdownDays">--</span><span id="countdownSuffixFull" data-i18n="chat.daysLeft"> days left</span><span id="countdownSuffixCompact" data-i18n="chat.daysLeftShort">d left</span></span></div>
           <div id="countdownTooltip" style="display:none;position:absolute;top:36px;right:0;background:#111;border:1px solid #4f8ef730;border-radius:10px;padding:16px 20px;min-width:200px;z-index:999;box-shadow:0 8px 24px rgba(0,0,0,0.6);">
             <div style="font-size:10px;color:#4f8ef7;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:10px;" data-i18n="chat.timeUntilNeet">Time until NEET 2027</div>
             <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;text-align:center;">
@@ -2153,7 +2162,7 @@
           </div>
         </div>
        <div id="limitBanner" style="display:none;border-bottom:1px solid #1e1e1e;padding:10px 6px;margin-bottom:6px;align-items:center;justify-content:space-between;gap:12px;">
-          <span id="limitBannerText" style="font-size:12px;color:#666;" data-i18n="chat.dailyLimitReached">⚡ Daily limit reached — resets at midnight</span>
+          <span id="limitBannerText" style="font-size:12px;color:#666;" data-i18n="chat.dailyLimitReached">⚡ Daily limit reached - resets at midnight</span>
           <button id="limitBannerBtn" onclick="window.location.href='./pricing.html'" style="background:linear-gradient(135deg,#4f8ef7,#7c3aed);border:none;color:white;padding:5px 14px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;font-family:Inter,sans-serif;white-space:nowrap;flex-shrink:0;" data-i18n="chat.upgradeToPro">Upgrade to Pro →</button>
         </div>
         <div id="longChatNudge" style="display:none;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px 10px;padding:8px 12px;margin-bottom:8px;border-radius:10px;background:#141c26;border:1px solid #1d3550;">
@@ -2236,6 +2245,36 @@
     const chatWindow = document.getElementById('chatWindow');
     const sendBtn = document.getElementById('sendBtn');
     const inputArea = document.getElementById('inputArea');
+
+    // Clicking/tapping anywhere inside a message-box container focuses its textarea and puts
+    // the caret at the end -- previously only a click exactly on the text line did anything.
+    // "Anywhere inside" means the whole container, not just .input-wrapper's own rounded box:
+    // on the open-chat composer, #inputArea (not .input-wrapper) is what's matched, because
+    // .input-wrapper is inset inside #inputArea's own 16/24px padding and capped at an 820px
+    // max-width with auto side margins -- that surrounding strip is still the same flat dark
+    // background with nothing else in it, so a click there reads as "inside the box" even
+    // though it's outside .input-wrapper's border. Matching #inputArea covers that strip (and
+    // .input-wrapper, nested inside it, same as before) in one go. The welcome screen has no
+    // such strip around .welcome-search -- it sits in the open welcome-page background instead
+    // -- so it's matched on its own. Buttons (plus/mic/send/sfb), attachment/quote chips, the
+    // disclaimer hint and the session-feedback banner keep their own behavior, so they're
+    // excluded; clicking the textarea itself is left alone so the native
+    // caret-at-click-position behavior still applies. Delegated on document rather than bound
+    // to these elements directly, because showWelcome() tears down and rebuilds #welcome from
+    // scratch on every "New chat" (#inputArea/.input-wrapper are never replaced, but delegating
+    // both from one handler is simplest). Plain click (not pointerdown/mousedown) so a
+    // drag-to-scroll doesn't pop the mobile keyboard and so button clicks aren't pre-empted.
+    function handleComposerContainerClick(e) {
+      const container = e.target.closest('#inputArea, .welcome-search');
+      if (!container) return;
+      if (e.target.closest('button, a, input, textarea, select, .input-hint, #sessionFeedback, #attachment-preview-inner, #welcome-attachment-preview-inner, #quotedContextPreview')) return;
+      const textarea = container.querySelector('textarea');
+      if (!textarea) return;
+      textarea.focus();
+      const len = textarea.value.length;
+      try { textarea.setSelectionRange(len, len); } catch (err) {}
+    }
+    document.addEventListener('click', handleComposerContainerClick);
 
     // ---------------- Embed mode (?embed=1): hosts just the conversation inside pyqbank.html's
     // Ask AI slide-in panel. Chrome that assumes a full tab (sidebar/header/welcome) is hidden via
@@ -2382,15 +2421,23 @@
       target.focus();
     }
 
-    // The one place caret-hidden ever comes off. Delegated on document (not addEventListener'd
+    // The two places caret-hidden ever comes off. Delegated on document (not addEventListener'd
     // directly on #welcomeInput/#userInput) specifically because #welcomeInput is rebuilt from
     // scratch by showWelcome() every "New Chat" -- a listener bound to today's element would be
     // gone with it; this one keeps working regardless of how many times that happens.
-    document.addEventListener('keydown', function(e) {
+    // keydown covers typing into an already-focused input (e.g. right after page load, before
+    // any click). pointerdown covers a mouse/touch click landing on an input that's ALREADY
+    // focused from focusMessageInput()'s programmatic auto-focus: the browser fires no new focus
+    // event in that case (focus doesn't change), so without this a real click left the caret
+    // invisible even though the input had been focused the whole time -- exactly the "click does
+    // nothing" bug this exists to fix. One shared handler for both events.
+    function unhideCaretOnInteraction(e) {
       if (e.target && e.target.classList && e.target.classList.contains('caret-hidden')) {
         e.target.classList.remove('caret-hidden');
       }
-    });
+    }
+    document.addEventListener('keydown', unhideCaretOnInteraction);
+    document.addEventListener('pointerdown', unhideCaretOnInteraction);
 
     let isStreaming = false;
     // Set the instant sendMessage() is entered for a real send (text/image/PDF), BEFORE any of
@@ -2496,12 +2543,12 @@
       en: {
         generic: ["What's confusing you today?", "Where do you want to start?", "What's the doubt today?", "Ready when you are."],
         name: name => [`${name}, what's on your mind?`, `Hey ${name}, what are we studying today?`],
-        countdown: days => [`${days} days left — what are we tackling?`, `${days} days to go. Let's make today count.`]
+        countdown: days => [`${days} days left - what are we tackling?`, `${days} days to go. Let's make today count.`]
       },
       hi: {
         generic: ["आज क्या समझ नहीं आ रहा?", "कहाँ से शुरू करना चाहेंगे?", "आज का संदेह क्या है?", "जब आप तैयार हों।"],
         name: name => [`${name}, आपके मन में क्या है?`, `नमस्ते ${name}, आज क्या पढ़ेंगे?`],
-        countdown: days => [`${days} दिन बचे हैं — आज क्या करें?`, `${days} दिन बाकी हैं। आज को सार्थक बनाते हैं।`]
+        countdown: days => [`${days} दिन बचे हैं - आज क्या करें?`, `${days} दिन बाकी हैं। आज को सार्थक बनाते हैं।`]
       }
     };
 
@@ -3324,7 +3371,7 @@ let selectedImages = [];
       const activeBtn = onWelcome ? document.getElementById('welcomeVoiceBtn') : document.getElementById('voiceBtn');
 
       if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-        showVoiceMessage('Voice input needs Chrome or Edge — not supported in this browser.', activeBtn);
+        showVoiceMessage('Voice input needs Chrome or Edge - not supported in this browser.', activeBtn);
         return;
       }
 
@@ -4124,6 +4171,63 @@ let selectedImages = [];
         + (parsed.trailer ? `<div class="match-list-trailer">${formatFn(parsed.trailer)}</div>` : '');
     }
 
+    // ---------------- Inline match-the-following pairs (no List-I/List-II header) ----------------
+    // Some match-the-following questions never say "List-I"/"List-II" at all -- each line
+    // already pairs one alpha marker with one roman marker directly, e.g. "(a) Pila (i) Flame
+    // cells". findListMarkers_ML above can't anchor on a header that isn't there, so without
+    // this those lines just run together with no visible gap between the two halves. Requires
+    // >=2 CONSECUTIVE matching lines so a stray "(a) ... (i) ..." inside normal prose, or the
+    // options block below the question, is never mistaken for this layout. Lines that already
+    // have the two markers on separate lines don't match this per-line pattern and fall through
+    // to this file's normal rendering untouched.
+    const MATCH_PAIR_LEFT_RE = /^\s*(?:\(\s*([a-hA-H])\s*\)|([a-hA-H])\.)\s+/;
+    const MATCH_PAIR_RIGHT_RE = /\(\s*([ivxIVX]{1,4})\s*\)|(?:^|\s)([ivxIVX]{1,4})\.(?=\s|$)/;
+
+    function parseMatchPairLine_MLP(line) {
+      const leftMatch = line.match(MATCH_PAIR_LEFT_RE);
+      if (!leftMatch) return null;
+      const rest = line.slice(leftMatch[0].length);
+      const rightMatch = rest.match(MATCH_PAIR_RIGHT_RE);
+      if (!rightMatch) return null;
+      // Keep the marker itself in the rendered text (matches how the List-I/List-II column
+      // renderer above shows "(a) Pila", not just "Pila") -- students need "(a)"/"(i)" visible
+      // to match these columns against lettered answer options like "a-iv, b-i, c-ii, d-iii".
+      const leftBody = rest.slice(0, rightMatch.index).trim();
+      const rightBody = rest.slice(rightMatch.index + rightMatch[0].length).trim();
+      if (!leftBody || !rightBody) return null;
+      return { left: leftMatch[0].trim() + ' ' + leftBody, right: rightMatch[0].trim() + ' ' + rightBody };
+    }
+
+    function findMatchPairRun_MLP(lines) {
+      const parsed = lines.map(parseMatchPairLine_MLP);
+      let bestStart = -1, bestLen = 0, curStart = -1, curLen = 0;
+      for (let i = 0; i < parsed.length; i++) {
+        if (parsed[i]) {
+          if (curLen === 0) curStart = i;
+          curLen++;
+          if (curLen > bestLen) { bestLen = curLen; bestStart = curStart; }
+        } else {
+          curLen = 0;
+        }
+      }
+      return bestLen >= 2 ? { start: bestStart, rows: parsed.slice(bestStart, bestStart + bestLen) } : null;
+    }
+
+    function renderMatchPairsHtml_MLP(text, formatFn) {
+      if (!text) return null;
+      const lines = text.split(/\n/);
+      const run = findMatchPairRun_MLP(lines);
+      if (!run) return null;
+      const before = lines.slice(0, run.start).join('\n').trim();
+      const after = lines.slice(run.start + run.rows.length).join('\n').trim();
+      const cellsHtml = run.rows.map(r =>
+        `<div class="match-pair-cell">${formatFn(r.left)}</div><div class="match-pair-cell">${formatFn(r.right)}</div>`
+      ).join('');
+      return (before ? `<div class="match-pair-preamble">${formatFn(before)}</div>` : '')
+        + `<div class="match-pair-grid">${cellsHtml}</div>`
+        + (after ? `<div class="match-pair-trailer">${formatFn(after)}</div>` : '');
+    }
+
     // ---------------- Assertion-Reason / Statement I-II formatting ----------------
     // Detects "Given below are two statements: Assertion (A): ... Reason (R): ..." (or
     // "Statement I: ... Statement II: ...") style questions and breaks them into separate
@@ -4488,7 +4592,7 @@ let selectedImages = [];
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || data.error) {
-          errEl.textContent = data.detail || data.error || 'Could not submit -- try again.';
+          errEl.textContent = data.detail || data.error || 'Could not submit - try again.';
           btnEl.disabled = false; btnEl.textContent = 'Submit';
           return;
         }
@@ -4496,7 +4600,7 @@ let selectedImages = [];
         setTimeout(closeReportPopup, 1600);
         removeReportedQuestionFromView(pyqId);
       } catch (e) {
-        errEl.textContent = e.name === 'AbortError' ? 'Timed out -- try again.' : 'Could not reach server.';
+        errEl.textContent = e.name === 'AbortError' ? 'Timed out - try again.' : 'Could not reach server.';
         btnEl.disabled = false; btnEl.textContent = 'Submit';
       } finally {
         clearTimeout(timeoutId);
@@ -4611,14 +4715,14 @@ let selectedImages = [];
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || data.error) {
-          errEl.textContent = data.detail || data.error || 'Could not submit -- try again.';
+          errEl.textContent = data.detail || data.error || 'Could not submit - try again.';
           btnEl.disabled = false; btnEl.textContent = 'Submit';
           return;
         }
         popup.innerHTML = '<div class="report-popup-thanks">✓ Reported, thank you</div>';
         setTimeout(closeDiagramReportPopup, 1600);
       } catch (e) {
-        errEl.textContent = e.name === 'AbortError' ? 'Timed out -- try again.' : 'Could not reach server.';
+        errEl.textContent = e.name === 'AbortError' ? 'Timed out - try again.' : 'Could not reach server.';
         btnEl.disabled = false; btnEl.textContent = 'Submit';
       } finally {
         clearTimeout(timeoutId);
@@ -4689,12 +4793,12 @@ let selectedImages = [];
       if (matchType === 'related') {
         const subtitle = document.createElement('div');
         subtitle.style.cssText = 'font-size:12px;color:#888;';
-        subtitle.textContent = `No exact match for this doubt — here are related ${subjectName(dominantSubject) || dominantSubject} questions instead.`;
+        subtitle.textContent = `No exact match for this doubt - here are related ${subjectName(dominantSubject) || dominantSubject} questions instead.`;
         header.appendChild(subtitle);
       } else if (matchType === 'chapter') {
         const subtitle = document.createElement('div');
         subtitle.style.cssText = 'font-size:12px;color:#888;';
-        subtitle.textContent = `No closely related PYQs found for this doubt — here are other questions from the same chapter instead.`;
+        subtitle.textContent = `No closely related PYQs found for this doubt - here are other questions from the same chapter instead.`;
         header.appendChild(subtitle);
       }
 
@@ -4751,9 +4855,11 @@ let selectedImages = [];
           question.className = 'pyq-q-text';
           question.style.cssText = 'line-height:1.6;margin-bottom:12px;color:#e2e8f0;font-size:14px;';
           const matchListHtml = renderMatchListHtml_ML(q.question, escapeHtml);
-          const arHtml = matchListHtml === null ? renderAssertionReasonHtml_AR(q.question, escapeHtml) : null;
-          const seqHtml = (matchListHtml === null && arHtml === null) ? renderSequenceListHtml_SEQ(q.question, escapeHtml) : null;
+          const matchPairHtml = matchListHtml === null ? renderMatchPairsHtml_MLP(q.question, escapeHtml) : null;
+          const arHtml = (matchListHtml === null && matchPairHtml === null) ? renderAssertionReasonHtml_AR(q.question, escapeHtml) : null;
+          const seqHtml = (matchListHtml === null && matchPairHtml === null && arHtml === null) ? renderSequenceListHtml_SEQ(q.question, escapeHtml) : null;
           if (matchListHtml !== null) question.innerHTML = matchListHtml;
+          else if (matchPairHtml !== null) question.innerHTML = matchPairHtml;
           else if (arHtml !== null) question.innerHTML = arHtml;
           else if (seqHtml !== null) question.innerHTML = seqHtml;
           else question.textContent = q.question;
@@ -5414,6 +5520,68 @@ let selectedImages = [];
       }
     }
 
+    // Asks /reply-availability whether the Diagram/PYQ buttons would actually find anything for
+    // this reply -- the server runs the exact same lookups (_diagram_match_rows, search_pyq) the
+    // buttons themselves run on click, with the exact same inputs (pyq_text mirrors
+    // buildPyqSearchQuery's own "{searchText} — {chapterText}" string), so a button this says is
+    // available for can never open to an empty result.
+    async function fetchReplyAvailability(searchText, answerText, chapterText) {
+      try {
+        const res = await fetch(`${API_BASE}/reply-availability`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text: searchText,
+            answer: answerText,
+            pyq_text: buildPyqSearchQuery(searchText, chapterText),
+            chapter: chapterText || ''
+          })
+        });
+        const data = await res.json();
+        return { has_diagram: !!(data && data.has_diagram), pyq_count: (data && data.pyq_count) || 0 };
+      } catch (e) {
+        return { has_diagram: false, pyq_count: 0 };
+      }
+    }
+
+    // Builds the Diagram/PYQ action row for a real academic answer -- but only once
+    // fetchReplyAvailability confirms each button would actually find something, so neither ever
+    // shows for a topic with nothing behind it. Fire-and-forget from every call site (never
+    // awaited inline with the rest of the render), so the row simply appears a moment after the
+    // rest of the bubble instead of reserving empty space up front -- there's nothing to show
+    // before the check resolves anyway. Result is cached on msgObj (keyed by version index) so a
+    // version-switch or a later re-render within the same session reuses it instead of re-asking.
+    async function attachAnswerActions(bubble, opts) {
+      const { searchText, chapterText, answerText, isAutoEmbed, diagramPrefetch, msgObj, versionIndex } = opts;
+      const cacheKey = (typeof versionIndex === 'number') ? versionIndex : 0;
+      let availability = msgObj && msgObj._availabilityCache && msgObj._availabilityCache[cacheKey];
+      if (!availability) {
+        availability = await fetchReplyAvailability(searchText, answerText, chapterText);
+        if (msgObj) {
+          msgObj._availabilityCache = msgObj._availabilityCache || {};
+          msgObj._availabilityCache[cacheKey] = availability;
+        }
+      }
+
+      const showDiagramBtn = !isAutoEmbed && availability.has_diagram;
+      const showPyqBtn = availability.pyq_count > 0;
+      if (!showDiagramBtn && !showPyqBtn) return;
+
+      const actionsRow = document.createElement('div');
+      actionsRow.className = 'answer-actions-row';
+      if (showDiagramBtn) {
+        const diagramBtn = document.createElement('button');
+        diagramBtn.className = 'diagram-btn';
+        diagramBtn.innerHTML = '🖼️ Show Diagram';
+        diagramBtn.onclick = () => handleShowDiagramClick(diagramBtn, searchText, answerText, diagramPrefetch);
+        actionsRow.appendChild(diagramBtn);
+      }
+      if (showPyqBtn) {
+        actionsRow.appendChild(createPyqButton(searchText, chapterText));
+      }
+      bubble.appendChild(actionsRow);
+    }
+
     // ---------------- Read Aloud (Web Speech API, entirely client-side, zero API cost) ----------------
     const SPEAK_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>';
     const STOP_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>';
@@ -5668,21 +5836,14 @@ let selectedImages = [];
         // gets Diagram/PYQ buttons either, instead of just hiding metadata and leaving buttons
         // that would still trigger a real (wasted) lookup on click.
         if (userQuestion && metaHtml) {
-          const actionsRow = document.createElement('div');
-          actionsRow.className = 'answer-actions-row';
-
-          if (!diagram) {
-            const diagramBtn = document.createElement('button');
-            diagramBtn.className = 'diagram-btn';
-            diagramBtn.innerHTML = '🖼️ Show Diagram';
-            diagramBtn.onclick = () => handleShowDiagramClick(diagramBtn, userQuestion, text);
-            actionsRow.appendChild(diagramBtn);
-          }
-
-          const pyqBtn = createPyqButton(userQuestion, chapterText);
-          actionsRow.appendChild(pyqBtn);
-
-          bubble.appendChild(actionsRow);
+          attachAnswerActions(bubble, {
+            searchText: userQuestion,
+            chapterText,
+            answerText: text,
+            isAutoEmbed: !!diagram,
+            msgObj,
+            versionIndex: msgObj ? msgObj.activeVersionIndex : undefined
+          });
         }
 
         contentWrapper.appendChild(bubble);
@@ -6268,18 +6429,14 @@ function plainTextFromMarkdown(text) {
         // metaHtml gate as the other two render paths -- a version with no NEET Importance/
         // Chapter line (a conversational reply) never gets Diagram/PYQ buttons either.
         if (metaHtml) {
-        const actionsRow = document.createElement('div');
-        actionsRow.className = 'answer-actions-row';
-        if (!v.diagram) {
-          const diagramBtn = document.createElement('button');
-          diagramBtn.className = 'diagram-btn';
-          diagramBtn.innerHTML = '🖼️ Show Diagram';
-          diagramBtn.onclick = () => handleShowDiagramClick(diagramBtn, pyqSearchText, v.text);
-          actionsRow.appendChild(diagramBtn);
-        }
-        const pyqBtn = createPyqButton(pyqSearchText, chapterText);
-        actionsRow.appendChild(pyqBtn);
-        bubble.appendChild(actionsRow);
+          attachAnswerActions(bubble, {
+            searchText: pyqSearchText,
+            chapterText,
+            answerText: v.text,
+            isAutoEmbed: !!v.diagram,
+            msgObj: msg,
+            versionIndex: newIndex
+          });
         }
 
         bubble.style.opacity = '1';
@@ -6559,13 +6716,13 @@ function plainTextFromMarkdown(text) {
       if (quote.mode === 'explain') {
         const label = document.createElement('span');
         label.className = 'quote-mode-label';
-        label.textContent = 'Explain simply — ';
+        label.textContent = 'Explain simply - ';
         textEl.appendChild(label);
       }
       if (quote.mode === 'pyq_doubt') {
         const label = document.createElement('span');
         label.className = 'quote-mode-label';
-        label.textContent = 'From Question Bank — ';
+        label.textContent = 'From Question Bank - ';
         textEl.appendChild(label);
       }
       textEl.appendChild(document.createTextNode(quote.text));
@@ -6807,7 +6964,7 @@ function plainTextFromMarkdown(text) {
     function submitPyqModalSelectionAsk() {
       const question = document.getElementById('pyqModalSelectionAskInput').value.trim();
       if (!question || !pyqModalSelectedText) return;
-      sendPyqModalSelection(`${pyqModalSelectedText} — ${question}`);
+      sendPyqModalSelection(`${pyqModalSelectedText} - ${question}`);
     }
     document.getElementById('pyqModalSelectionAskSend').addEventListener('click', submitPyqModalSelectionAsk);
     document.getElementById('pyqModalSelectionAskInput').addEventListener('keydown', function(e) {
@@ -6991,7 +7148,7 @@ function plainTextFromMarkdown(text) {
       inputArea.style.display = 'block';
       const last = getLastAiTurn();
       if (!last) {
-        addMessageRow('ai', 'Ask a doubt first — then I can look up its diagram.');
+        addMessageRow('ai', 'Ask a doubt first - then I can look up its diagram.');
         return;
       }
       const loadingRow = document.createElement('div');
@@ -7049,7 +7206,7 @@ function plainTextFromMarkdown(text) {
       inputArea.style.display = 'block';
       const last = getLastAiTurn();
       if (!last) {
-        addMessageRow('ai', 'Ask a doubt first — then I can pull the formula out of the answer.');
+        addMessageRow('ai', 'Ask a doubt first - then I can pull the formula out of the answer.');
         return;
       }
       const formulas = extractFormulas(last.aiText);
@@ -7070,7 +7227,7 @@ function plainTextFromMarkdown(text) {
       inputArea.style.display = 'block';
       const last = getLastAiTurn();
       if (!last) {
-        addMessageRow('ai', 'Ask a doubt first — then I can summarize the answer for you.');
+        addMessageRow('ai', 'Ask a doubt first - then I can summarize the answer for you.');
         return;
       }
       const loadingRow = document.createElement('div');
@@ -7090,11 +7247,11 @@ function plainTextFromMarkdown(text) {
         if (data && data.summary) {
           addMessageRow('ai', data.summary);
         } else {
-          addMessageRow('ai', 'Could not generate a summary right now — please try again.');
+          addMessageRow('ai', 'Could not generate a summary right now - please try again.');
         }
       } catch (e) {
         loadingRow.remove();
-        addMessageRow('ai', 'Could not generate a summary right now — please try again.');
+        addMessageRow('ai', 'Could not generate a summary right now - please try again.');
       }
     }
 
@@ -7117,7 +7274,7 @@ function plainTextFromMarkdown(text) {
           addMessageRow('ai', `No matching PYQs found for "${topic}".`);
         }
       } catch (e) {
-        addMessageRow('ai', 'Could not search PYQs right now — please try again.');
+        addMessageRow('ai', 'Could not search PYQs right now - please try again.');
       }
     }
 
@@ -8304,7 +8461,7 @@ function plainTextFromMarkdown(text) {
       if (cooldownDeadlineMs !== null) {
         const remainingMs = Math.max(0, cooldownDeadlineMs - Date.now());
         const countdown = t('chat', 'resetsIn').replace('{time}', formatCountdown(remainingMs));
-        limitText.textContent = t('chat', tier === 'guest' ? 'guestLimitReached' : 'dailyLimitReached') + ' — ' + countdown;
+        limitText.textContent = t('chat', tier === 'guest' ? 'guestLimitReached' : 'dailyLimitReached') + ' - ' + countdown;
         // Max is the top tier -- there's nowhere to send an "Upgrade" click, so the CTA is hidden
         // entirely rather than showing a nonsense "Upgrade to Pro" (a downgrade) or relabeling it
         // to something that still has no real destination.
@@ -8908,6 +9065,7 @@ function plainTextFromMarkdown(text) {
           language: getLang(),
           user_id: session?.user?.id || '',
           personalize: localStorage.getItem('personalize') !== 'false',
+          key_points: localStorage.getItem('keyPoints') !== 'false',
           skip_cache: !!options.skipCache,
           running_summary: runningSummary,
           dropped_question: droppedQ,
@@ -9536,23 +9694,9 @@ function plainTextFromMarkdown(text) {
         // same signal means a greeting/small-talk reply never gets Diagram/PYQ buttons, instead
         // of just hiding metadata and leaving buttons that would still trigger a real (wasted)
         // lookup on click.
-        if (metaHtml) {
-        const actionsRow = document.createElement('div');
-        actionsRow.className = 'answer-actions-row';
-
-        if (!isAutoEmbed) {
-          const diagramBtn = document.createElement('button');
-          diagramBtn.className = 'diagram-btn';
-          diagramBtn.innerHTML = '🖼️ Show Diagram';
-          diagramBtn.onclick = () => handleShowDiagramClick(diagramBtn, pyqSearchText, fullText, diagramPrefetch);
-          actionsRow.appendChild(diagramBtn);
-        }
-
-        const pyqBtn = createPyqButton(pyqSearchText, chapterText);
-        actionsRow.appendChild(pyqBtn);
-
-        bubble.appendChild(actionsRow);
-        }
+        // The actual attachAnswerActions(...) call is deferred to just after aiMsg exists below
+        // (same metaHtml gate) -- it caches its result onto aiMsg keyed by version index, and
+        // aiMsg isn't constructed yet at this point in a fresh (non-retry) generation.
 
         // Fire-and-forget, deliberately not awaited -- must never delay the primary answer's
         // own finish (usage banner refresh, scroll settle, send button re-enable, etc.). Skipped
@@ -9619,6 +9763,24 @@ function plainTextFromMarkdown(text) {
           currentConversation.push(aiMsg);
           aiRow.querySelector('.message-content').appendChild(buildActionsDiv('ai', aiTimeStr, aiMsg));
         }
+
+        // Same metaHtml gate the diagram/PYQ row has always used -- a conversational reply
+        // never gets either button. isAutoEmbed already covers the high-confidence auto-embed
+        // case; diagramPrefetch (set, non-null, for the medium-confidence VISUAL_INTENT: yes
+        // case) is passed through purely so a click reuses it instead of re-fetching, same as
+        // before -- whether the button itself shows is decided by the fresh availability check.
+        if (metaHtml) {
+          attachAnswerActions(bubble, {
+            searchText: pyqSearchText,
+            chapterText,
+            answerText: fullText,
+            isAutoEmbed,
+            diagramPrefetch,
+            msgObj: aiMsg,
+            versionIndex: aiMsg.activeVersionIndex
+          });
+        }
+
         // Only overwrites when this turn actually produced a new summary -- a turn where nothing
         // fell out of the sliding-2 window (or the background call failed/timed out) leaves
         // whatever this message already had untouched, same fail-safe carry-forward as the
@@ -11802,6 +11964,16 @@ function openSettings() {
               </div>
               ${renderSettingsDropdown('answerStyle')}
             </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid #1e1e1e;">
+              <div>
+                <div style="font-size:14px;color:#ececec;margin-bottom:2px;" data-i18n="chat.keyPoints">Show key points</div>
+                <div style="font-size:12px;color:#555;" data-i18n="chat.keyPointsDesc">Turn off for shorter answers</div>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="keyPointsToggle" ${localStorage.getItem('keyPoints') !== 'false' ? 'checked' : ''} onchange="setKeyPoints(this.checked)"/>
+                <span class="toggle-track"><span class="toggle-thumb"></span></span>
+              </label>
+            </div>
             ${isLoggedIn ? `
             <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid #1e1e1e;">
               <div>
@@ -12003,11 +12175,16 @@ function openSettings() {
       pushSettingToServer('personalize', enabled);
     }
 
+    function setKeyPoints(enabled) {
+      localStorage.setItem('keyPoints', enabled ? 'true' : 'false');
+      pushSettingToServer('keyPoints', enabled);
+    }
+
     // ---------- Settings cross-device sync (GET/PUT /me/settings) ----------
     // localStorage stays the fast local copy and the only source of truth whenever the server is
     // unreachable or not yet migrated (available:false) -- this block only ever upgrades it, never
     // blocks on it, and never shows an error for a failed sync. See user_settings.sql.
-    const SETTINGS_SYNC_KEYS = { personalize: 'personalize', answerStyle: 'answer_style' };
+    const SETTINGS_SYNC_KEYS = { personalize: 'personalize', answerStyle: 'answer_style', keyPoints: 'key_points' };
     const _settingsSyncTimers = {};
 
     function _applySyncedSetting(localKey, value) {
@@ -12018,6 +12195,10 @@ function openSettings() {
       } else if (localKey === 'answerStyle') {
         localStorage.setItem('answerStyle', value);
         refreshSettingsDropdown('answerStyle');
+      } else if (localKey === 'keyPoints') {
+        localStorage.setItem('keyPoints', value ? 'true' : 'false');
+        const toggle = document.getElementById('keyPointsToggle');
+        if (toggle) toggle.checked = value;
       }
     }
 
@@ -12039,6 +12220,11 @@ function openSettings() {
           _applySyncedSetting('answerStyle', data.answer_style);
         } else if (localStorage.getItem('answerStyle')) {
           _putSettingsOnce({ answer_style: localStorage.getItem('answerStyle') });
+        }
+        if (data.key_points !== null && data.key_points !== undefined) {
+          _applySyncedSetting('keyPoints', data.key_points);
+        } else if (localStorage.getItem('keyPoints') !== null) {
+          _putSettingsOnce({ key_points: localStorage.getItem('keyPoints') !== 'false' });
         }
       } catch (e) { /* stay on the local copy, exactly like today */ }
     }

@@ -149,6 +149,16 @@ async function showSettingsSection(section, clickedEl) {
           </div>
           ${renderSettingsDropdown('answerStyle')}
         </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid #1e1e1e;">
+          <div>
+            <div style="font-size:14px;color:#ececec;margin-bottom:2px;" data-i18n="chat.keyPoints">Show key points</div>
+            <div style="font-size:12px;color:#555;" data-i18n="chat.keyPointsDesc">Turn off for shorter answers</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="keyPointsToggle" ${localStorage.getItem('keyPoints') !== 'false' ? 'checked' : ''} onchange="setKeyPoints(this.checked)"/>
+            <span class="toggle-track"><span class="toggle-thumb"></span></span>
+          </label>
+        </div>
         ${isLoggedIn ? `
         <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid #1e1e1e;">
           <div>
@@ -352,11 +362,16 @@ function setPersonalize(enabled) {
   pushSettingToServer('personalize', enabled);
 }
 
+function setKeyPoints(enabled) {
+  localStorage.setItem('keyPoints', enabled ? 'true' : 'false');
+  pushSettingToServer('keyPoints', enabled);
+}
+
 // ---------- Settings cross-device sync (GET/PUT /me/settings) ----------
 // localStorage stays the fast local copy and the only source of truth whenever the server is
 // unreachable or not yet migrated (available:false) -- this block only ever upgrades it, never
 // blocks on it, and never shows an error for a failed sync. See user_settings.sql.
-const SETTINGS_SYNC_KEYS = { personalize: 'personalize', answerStyle: 'answer_style' };
+const SETTINGS_SYNC_KEYS = { personalize: 'personalize', answerStyle: 'answer_style', keyPoints: 'key_points' };
 const _settingsSyncTimers = {};
 
 function _applySyncedSetting(localKey, value) {
@@ -367,6 +382,10 @@ function _applySyncedSetting(localKey, value) {
   } else if (localKey === 'answerStyle') {
     localStorage.setItem('answerStyle', value);
     refreshSettingsDropdown('answerStyle');
+  } else if (localKey === 'keyPoints') {
+    localStorage.setItem('keyPoints', value ? 'true' : 'false');
+    const toggle = document.getElementById('keyPointsToggle');
+    if (toggle) toggle.checked = value;
   }
 }
 
@@ -388,6 +407,11 @@ async function syncSettingsFromServer(session) {
       _applySyncedSetting('answerStyle', data.answer_style);
     } else if (localStorage.getItem('answerStyle')) {
       _putSettingsOnce({ answer_style: localStorage.getItem('answerStyle') });
+    }
+    if (data.key_points !== null && data.key_points !== undefined) {
+      _applySyncedSetting('keyPoints', data.key_points);
+    } else if (localStorage.getItem('keyPoints') !== null) {
+      _putSettingsOnce({ key_points: localStorage.getItem('keyPoints') !== 'false' });
     }
   } catch (e) { /* stay on the local copy, exactly like today */ }
 }

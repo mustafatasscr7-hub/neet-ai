@@ -135,6 +135,70 @@ text is illegible or cut off at the page edge, transcribe what you can and add
 Return ONLY the JSON array, no other text."""
 
 
+def build_scanned_page_prompt_hindi(subject):
+    """Hindi-language variant of build_scanned_page_prompt. Deliberately drops the "answer_key"/
+    "solutions_start" item kinds entirely -- the task this was built for wants the answer key
+    ignored outright (never transcribed, never used to fill correct_answer), so the model is
+    simply never told that kind exists. merge_document_items/finalize_segments handle that fine
+    unchanged: with no answer_key items ever produced, every question's own `key.get(number)`
+    lookup in finalize_segments is just always empty, which is exactly "correct_answer always
+    comes back ''" with no extra code needed -- see scan_scanned_pdf_bytes's language=="hi"
+    branch for the one place this does need an explicit guard (suppressing the "no answer key
+    found" flag, which only makes sense when a key was ever expected)."""
+    return f"""You are reading ONE scanned page of a Hindi-language NEET {subject} previous-year-
+questions book or paper. The scan may be slightly tilted, unevenly lit, or cropped at an edge. The
+question text is in Hindi (Devanagari script), though option values may legitimately include
+English/Latin letters, numerals, or chemical/mathematical notation.
+
+Question text is normally laid out in TWO columns. Some blocks span the full page width (chapter
+title banners, weightage/trend-analysis tables, tracker tables, section banners, footnotes,
+running headers/footers, or an answer-key block). SKIP all of those entirely -- do not transcribe
+them, including any answer-key block. Never report or guess an answer for any question; that is
+left entirely to a human reviewer.
+
+Extract EVERY complete, numbered MCQ visible on this page. Read the LEFT column fully, top to
+bottom, before the RIGHT column.
+
+Return a JSON array. Every item MUST have "kind" and "box_2d": [ymin, xmin, ymax, xmax], the
+item's own region on the page, normalized to 0-1000. Item kinds:
+
+1. "question" -- a question whose own printed number (e.g. "12.") is visible on this page:
+   {{"kind": "question", "number": 12, "question": "Hindi stem text, Devanagari preserved exactly
+     as printed", "options": {{"a": "...", "b": "...", "c": "...", "d": "..."}}, "year_tag":
+     "2019", "question_type": "mcq", "has_diagram": false, "box_2d": [...]}}
+   - Include ONLY options whose marker is printed inside this item's own region. If the question
+     runs off the bottom of the column and its remaining options continue at the top of the next
+     column or next page, leave those letters OUT -- never invent them.
+   - box_2d covers the question's region within ONE column only.
+   - question_type: one of "mcq", "match_column", "assertion_reason", "statement_based".
+   - has_diagram: true only if the question shows or refers to a figure/diagram/structure.
+
+2. "continuation" -- text at the TOP of a column that has NO question number of its own because it
+   continues a question from the previous column or the previous page (a question may genuinely
+   start in one column and finish in the next -- this is how that gets stitched back together):
+   {{"kind": "continuation", "text": "unmarked leading text, if any", "options": {{"b": "...", "c":
+     "..."}}, "box_2d": [...]}}
+
+3. "chapter_start" -- a large chapter-OPENING title banner. NOT a running header/footer.
+   {{"kind": "chapter_start", "title": "...", "box_2d": [...]}}
+
+Keep all Devanagari text exactly as printed -- do not transliterate, translate, or normalize it.
+
+A year tag sits in brackets at the end of a question (e.g. "[2019]", "[Mains 2010]",
+"[RE-EXAM 2026]") -- copy the bracket's contents verbatim into year_tag (null if none) and REMOVE
+it from the question text itself; it does not belong in the question. Keep the full tag text
+(e.g. "Mains 2010"), not just the digits.
+
+Math and chemistry notation: wrap ONLY the mathematical part in single dollar signs using LaTeX,
+e.g. "$CO_{{2}}$", "$10^{{-3}}$". Plain Hindi/English words stay outside $...$.
+
+Transcribe exactly what is printed: do not correct wording, do not solve anything, and never
+supply an answer. Use "" for an option you cannot read. If text is illegible or cut off at the
+page edge, transcribe what you can and add "legibility_issue": "<short description>" to that item.
+
+Return ONLY the JSON array, no other text."""
+
+
 # ---------------------------------------------------------------- page rendering + cache
 
 def render_page_jpeg(page, dpi=SCANNED_DPI):
@@ -145,9 +209,12 @@ def render_page_jpeg(page, dpi=SCANNED_DPI):
     return pix.tobytes("jpg", jpg_quality=SCANNED_JPEG_QUALITY)
 
 
-def page_cache_key(image_bytes, subject):
+def page_cache_key(image_bytes, subject, language="en", tag=""):
+    """tag distinguishes cache entries that share the same page image, subject and language but
+    aren't interchangeable -- e.g. Hindi mode's two independent extraction passes over the same
+    page (see extract_page_items_two_pass), which must never read back each other's cached result."""
     h = hashlib.sha256()
-    for part in (SCANNED_PROMPT_VERSION, SCANNED_MODEL, subject, str(SCANNED_DPI)):
+    for part in (SCANNED_PROMPT_VERSION, SCANNED_MODEL, subject, language, tag, str(SCANNED_DPI)):
         h.update(part.encode("utf-8"))
         h.update(b"\x00")
     h.update(image_bytes)
@@ -181,14 +248,18 @@ def cache_put(key, value, cache_dir=None):
         print(f"    Scanned mode: could not write page cache ({e}) -- non-fatal")
 
 
-def render_pdf_pages(pdf_bytes, subject):
-    """Returns [(image_bytes, cache_key), ...], one per page."""
+def render_pdf_pages(pdf_bytes, subject, language="en"):
+    """Returns [(image_bytes, cache_key), ...], one per page. For language="hi", cache_key is
+    just pass 1's key (a representative, not the whole story -- Hindi mode caches its two passes
+    independently, see extract_page_items_two_pass/page_cache_key's own docstring); good enough
+    for estimate_scanned_pdf_cost's "how many pages are already cached" approximation."""
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     try:
         out = []
         for page in doc:
             img = render_page_jpeg(page)
-            out.append((img, page_cache_key(img, subject)))
+            tag = "two_pass" if language == "hi" else ""
+            out.append((img, page_cache_key(img, subject, language, tag)))
         return out
     finally:
         doc.close()
@@ -243,17 +314,20 @@ def tokens_to_usd(input_tokens, output_tokens):
     return (input_tokens * GEMINI_RATE_PER_M["input"] + output_tokens * GEMINI_RATE_PER_M["output"]) / 1_000_000
 
 
-def estimate_scanned_pdf_cost(pdf_bytes, subject, cache_dir=None):
+def estimate_scanned_pdf_cost(pdf_bytes, subject, cache_dir=None, language="en"):
     """Pre-run estimate for the admin UI. Pages already in the cache cost nothing, so they're
-    counted separately rather than folded into the estimate."""
-    rendered = render_pdf_pages(pdf_bytes, subject)
+    counted separately rather than folded into the estimate. Hindi mode runs TWO independent
+    passes per page (see extract_page_items_two_pass), so its per-page token estimate is doubled."""
+    rendered = render_pdf_pages(pdf_bytes, subject, language)
     cached = sum(1 for _, key in rendered if cache_get(key, cache_dir) is not None)
     uncached = len(rendered) - cached
+    multiplier = 2 if language == "hi" else 1
     return {
         "pages": len(rendered),
         "cached_pages": cached,
         "uncached_pages": uncached,
-        "estimated_usd": round(tokens_to_usd(uncached * EST_INPUT_TOKENS_PER_PAGE, uncached * EST_OUTPUT_TOKENS_PER_PAGE), 4),
+        "estimated_usd": round(tokens_to_usd(uncached * EST_INPUT_TOKENS_PER_PAGE * multiplier,
+                                              uncached * EST_OUTPUT_TOKENS_PER_PAGE * multiplier), 4),
         "max_pages": DEFAULT_MAX_PAGES,
         "model": SCANNED_MODEL,
     }
@@ -285,14 +359,15 @@ def parse_page_response(text):
     return [it for it in items if isinstance(it, dict)]
 
 
-def extract_page_items(image_bytes, subject, model=SCANNED_MODEL):
+def extract_page_items(image_bytes, subject, model=SCANNED_MODEL, language="en"):
     """One Gemini call for one page. Returns (items, usage) where usage has input/output tokens
     (thinking tokens count as output, which is how Gemini bills them)."""
+    prompt = build_scanned_page_prompt_hindi(subject) if language == "hi" else build_scanned_page_prompt(subject)
     response = gemini_client.models.generate_content(
         model=model,
         contents=[
             genai_types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"),
-            build_scanned_page_prompt(subject),
+            prompt,
         ],
         config=genai_types.GenerateContentConfig(max_output_tokens=16384, response_mime_type="application/json"),
     )
@@ -302,6 +377,60 @@ def extract_page_items(image_bytes, subject, model=SCANNED_MODEL):
         "output_tokens": ((um.candidates_token_count or 0) + (getattr(um, "thoughts_token_count", 0) or 0)) if um else 0,
     }
     return parse_page_response(response.text), usage
+
+
+def _compare_hindi_passes(items1, items2):
+    """Hindi-only, per page: question numbers whose transcribed text disagrees between two
+    independent extraction passes over the SAME page image -- a two-pass check can't silently
+    average two different transcriptions away, so a genuine disagreement is left for a human to
+    settle instead (see scan_scanned_pdf_bytes's language=="hi" branch for where this feeds into
+    needs_review/review_reason)."""
+    by_num_1 = {it.get("number"): it for it in items1 if it.get("kind") == "question" and it.get("number") is not None}
+    by_num_2 = {it.get("number"): it for it in items2 if it.get("kind") == "question" and it.get("number") is not None}
+    disagreements = []
+    for num in sorted(by_num_1.keys() & by_num_2.keys()):
+        a, b = by_num_1[num], by_num_2[num]
+        if _normalize_ws(_clean(a.get("question"))) != _normalize_ws(_clean(b.get("question"))):
+            disagreements.append(num)
+            continue
+        if _norm_options(a.get("options")) != _norm_options(b.get("options")):
+            disagreements.append(num)
+    return disagreements
+
+
+def extract_page_items_two_pass(image_bytes, subject, model=SCANNED_MODEL):
+    """Hindi-only entry point: runs extract_page_items TWICE over the same page image
+    (independent model calls) and reports any question number whose text disagrees between the
+    two. Returns (items, usage, disagreements, pass_failed): items is the usable pass's result
+    (pass 1, when both succeed), usage is every call actually made combined, disagreements is a
+    sorted list of question numbers to flag, pass_failed is True when exactly one of the two
+    calls raised (a transient model/parse error on just one of them -- confirmed live: Gemini
+    occasionally returns truncated/invalid JSON on one call of a pair with no retry) -- the page
+    still gets the OTHER pass's result instead of losing the whole page, but with no partner to
+    cross-check against, so the comparison is skipped for this page.
+
+    Raises only if BOTH calls fail -- same contract as extract_page_items, so the caller (scan_
+    scanned_pdf_bytes) flags the whole page exactly as it already does for the English path.
+
+    No caching of its own -- scan_scanned_pdf_bytes caches this function's whole combined result
+    under one page-level key, the same way it already caches a single English pass."""
+    results = []
+    for _ in range(2):
+        try:
+            results.append(extract_page_items(image_bytes, subject, model=model, language="hi"))
+        except Exception as e:
+            results.append(e)
+    successes = [r for r in results if not isinstance(r, Exception)]
+    if not successes:
+        raise results[0]
+    usage = {
+        "input_tokens": sum(r[1].get("input_tokens", 0) for r in successes),
+        "output_tokens": sum(r[1].get("output_tokens", 0) for r in successes),
+    }
+    if len(successes) == 1:
+        return successes[0][0], usage, [], True
+    items1, items2 = successes[0][0], successes[1][0]
+    return items1, usage, _compare_hindi_passes(items1, items2), False
 
 
 # ---------------------------------------------------------------- reading order (deterministic)
@@ -589,10 +718,16 @@ def _expand_match_grid_options(q):
             q["options"][l] = ", ".join(f"({c})-({r})" for c, r in zip("ABCD", m.groups()))
 
 
-def finalize_segments(segments):
+def finalize_segments(segments, track_answer_key=True):
     """Segments -> (questions in the existing scan output shape, flags). Applies the same text
     post-processing the Standard pipeline does (bare-LaTeX wrapping, numbered sub-statements,
-    the identical/empty-option check), then every review flag this mode knows about."""
+    the identical/empty-option check), then every review flag this mode knows about.
+
+    track_answer_key=False (Hindi mode): the model is never asked for an answer key at all (see
+    build_scanned_page_prompt_hindi), so `key` is always empty and every question would otherwise
+    get flagged as "no answer key found" -- a false positive, since correct_answer="" is the
+    INTENDED result here, not a defect. key_conflicts/unmatched_keys never fire either way (both
+    require an answer_key item to exist), so only the no_key flag below needs the guard."""
     questions, flags = [], []
     no_key = []
     for seg in segments:
@@ -659,7 +794,7 @@ def finalize_segments(segments):
             # note, not a per-number flag, and never attached to anything.
             flags.append({"page": seg["questions"][-1]["page"], "reason": f"Answer key has entries for {len(unmatched_keys)} question number(s) not in this scan (e.g. Q{unmatched_keys[0]}) -- not attached to anything."})
 
-    if no_key:
+    if track_answer_key and no_key:
         nums = ", ".join(f"Q{q['number']}" if q["number"] is not None else "?" for q in no_key[:15])
         more = f" and {len(no_key) - 15} more" if len(no_key) > 15 else ""
         flags.append({"page": no_key[0]["page"], "reason": f"No answer key found for {len(no_key)} question(s) ({nums}{more}) -- left blank, set them manually. Keys are only ever taken from a printed answer key, matched by question number."})
@@ -680,28 +815,70 @@ def cropped_edge_flags(cropped_by_page, pages_items):
     return flags
 
 
+# ---------------------------------------------------------------- Hindi-only review flags
+
+# Devanagari block (includes the ।/॥ dandas and Devanagari digits), Latin letters/digits (English
+# terms, chemical formulae, numerals legitimately mixed into Hindi text), whitespace, and the
+# punctuation/LaTeX syntax characters this pipeline's own text already uses elsewhere (wrap_bare_
+# latex_notation, _fix_unescaped_json_backslashes). Anything outside this -- e.g. Arabic script --
+# is almost certainly an OCR/transcription slip, not real content.
+_HINDI_ALLOWED_CHAR_RE = re.compile(
+    r'[ऀ-ॿ]|[A-Za-z0-9]|[\s.,;:!?()\[\]{}/\\$^_%+=<>|\'"-]|[°πμΩ×÷≤≥≈]'
+)
+_HINDI_STEM_TERMINATORS = set('?:.।॥')
+
+
+def hindi_review_flags(q):
+    """Review-flag reasons specific to Hindi scanned-PDF extraction (task requirement: flag non-
+    Devanagari/non-Latin characters, a missing year, and a stem that doesn't end on a real
+    sentence boundary). Duplicate options are already covered by _flag_suspicious_mcq_options,
+    which finalize_segments runs on every question regardless of language -- not duplicated here.
+    Returns a list of human-readable reason strings, empty when nothing looks off."""
+    issues = []
+    all_text = " ".join(filter(None, [
+        q.get("question"), q.get("option_a"), q.get("option_b"), q.get("option_c"), q.get("option_d"),
+    ]))
+    bad_chars = sorted({ch for ch in all_text if ch.strip() and not _HINDI_ALLOWED_CHAR_RE.match(ch)})
+    if bad_chars:
+        issues.append(f"unexpected script/characters found ({' '.join(bad_chars[:10])}) -- check against the scan")
+    if q.get("year") is None:
+        issues.append("no exam year tag found")
+    stem = (q.get("question") or "").rstrip()
+    stem = stem.rstrip('"\')’” ')  # trailing quote/paren wrappers don't count as the real ending
+    if stem and stem[-1] not in _HINDI_STEM_TERMINATORS:
+        issues.append("question stem doesn't end in ?, :, . or । -- may be cut off mid-sentence")
+    return issues
+
+
 # ---------------------------------------------------------------- entry point
 
 def scan_scanned_pdf_bytes(pdf_bytes, subject, max_pages=DEFAULT_MAX_PAGES, confirm_over_cap=False,
-                           max_workers=4, cache_dir=None, extract_fn=None):
+                           max_workers=4, cache_dir=None, extract_fn=None, language="en"):
     """Entry point for /admin/scan-pdf with layout="scanned". Same return shape as
     process_pyq_vision.scan_pdf_bytes ({"questions", "pages_scanned", "flagged_pages"}) plus a
     "cost" summary, so it drops into the existing review UI unchanged.
 
-    extract_fn exists for tests (a fake model); production always uses extract_page_items."""
-    extract_fn = extract_fn or extract_page_items
-    rendered = render_pdf_pages(pdf_bytes, subject)
+    language="hi" switches to the two-pass Hindi pipeline (build_scanned_page_prompt_hindi,
+    extract_page_items_two_pass) and layers on hindi_review_flags + two-pass-disagreement flags
+    per question, on top of everything the English path already checks.
+
+    extract_fn exists for tests (a fake model); production always uses extract_page_items (English)
+    or extract_page_items_two_pass (Hindi)."""
+    extract_fn = extract_fn or (extract_page_items_two_pass if language == "hi" else extract_page_items)
+    rendered = render_pdf_pages(pdf_bytes, subject, language)
     if len(rendered) > max_pages and not confirm_over_cap:
         return {"error": f"This PDF has {len(rendered)} pages, over the {max_pages}-page cap for one scanned-mode run. Confirm to run it anyway.",
                 "needs_confirmation": True, "pages": len(rendered)}
 
     flagged = []
     page_results = {}
+    page_disagreements = {}  # Hindi only: idx -> [question numbers two passes disagreed on]
     to_call = {}
     for idx, (img, key) in enumerate(rendered):
         hit = cache_get(key, cache_dir)
         if hit is not None:
             page_results[idx] = hit["items"]
+            page_disagreements[idx] = hit.get("disagreements", [])
         else:
             to_call[idx] = (img, key)
 
@@ -711,16 +888,30 @@ def scan_scanned_pdf_bytes(pdf_bytes, subject, max_pages=DEFAULT_MAX_PAGES, conf
         for fut in concurrent.futures.as_completed(futures):
             idx, key = futures[fut]
             try:
-                items, usage = fut.result()
+                result = fut.result()
             except Exception as e:
                 print(f"    Scanned mode: error on page {idx + 1}: {e}")
                 flagged.append({"page": idx + 1, "reason": f"Reading this scanned page failed: {e}. Nothing from this page is below -- re-run to retry it (other pages are cached and won't be charged again)."})
                 page_results[idx] = []
+                page_disagreements[idx] = []
                 continue
+            # extract_page_items returns (items, usage); extract_page_items_two_pass (Hindi) adds
+            # a disagreements list and a pass_failed flag (one of its two calls raised, so this
+            # page's result is only a single, uncross-checked pass).
+            items, usage = result[0], result[1]
+            disagreements = result[2] if len(result) > 2 else []
+            pass_failed = len(result) > 3 and result[3]
+            if pass_failed:
+                flagged.append({"page": idx + 1, "reason": "One of the two extraction passes over this page failed (a transient model error) -- only a single, uncross-checked pass is below. Re-run to retry both passes for this page."})
             in_tok += usage.get("input_tokens", 0)
             out_tok += usage.get("output_tokens", 0)
             page_results[idx] = items
-            cache_put(key, {"items": items, "usage": usage}, cache_dir)
+            page_disagreements[idx] = disagreements
+            # Not cached when a pass failed -- caching it would make "re-run to retry" a lie (the
+            # retry would just load this same single-pass result back out of the cache instead of
+            # actually calling the model again for the missing pass).
+            if not pass_failed:
+                cache_put(key, {"items": items, "usage": usage, "disagreements": disagreements}, cache_dir)
 
     pages_items = []
     for idx in range(len(rendered)):
@@ -733,10 +924,25 @@ def scan_scanned_pdf_bytes(pdf_bytes, subject, max_pages=DEFAULT_MAX_PAGES, conf
             flagged.append({"page": idx + 1, "reason": "No questions, continuations or answer key were found on this scanned page. If it does have questions, check it manually."})
 
     segments, page_flags = merge_document_items(pages_items)
-    questions, q_flags = finalize_segments(segments)
+    questions, q_flags = finalize_segments(segments, track_answer_key=(language != "hi"))
     flagged.extend(page_flags)
     flagged.extend(cropped_edge_flags(pdf_cropped_edges(pdf_bytes), pages_items))
     flagged.extend(q_flags)
+
+    if language == "hi":
+        disagree_at = {(idx + 1, num) for idx, nums in page_disagreements.items() for num in nums}
+        for q in questions:
+            issues = hindi_review_flags(q)
+            if (q.get("source_page"), q.get("question_number")) in disagree_at:
+                issues.append("the two independent extraction passes disagree on this question's text -- please verify against the scan")
+            if not issues:
+                continue
+            combined = "; ".join(issues)
+            q["review_reason"] = f"{q['review_reason']}; {combined}" if q.get("needs_review") else combined
+            q["needs_review"] = True
+            label = f"Q{q['question_number']}" if q.get("question_number") is not None else "Unnumbered question"
+            flagged.append({"page": q.get("source_page", 1), "reason": f"{label}: {combined}"})
+
     flagged.sort(key=lambda f: f["page"])
 
     cost = {

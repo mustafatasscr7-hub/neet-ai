@@ -7,6 +7,7 @@
 <title>PDF Review Tool</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<link rel="stylesheet" href="./scrollbar.css">
 <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
 <script src="./math-format.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/mathlive@0.110.0/mathlive.min.js"></script>
@@ -82,6 +83,7 @@
   .q-number { font-size: 13px; font-weight: 700; color: #4f8ef7; }
   .q-diagram-badge { font-size: 11px; background: #f9731620; color: #f97316; padding: 2px 8px; border-radius: 20px; font-weight: 600; }
   .q-saved-badge { font-size: 11px; background: #4ade8020; color: #4ade80; padding: 2px 8px; border-radius: 20px; font-weight: 600; }
+  .q-language-badge { font-size: 11px; background: #2dd4bf20; color: #2dd4bf; padding: 2px 8px; border-radius: 20px; font-weight: 600; }
   /* Paste-mode parse confidence -- only "fallback" gets a loud warning color since that's the
      tier that needs real scrutiny; "delimiter" is informational (unusual but reliable format). */
   .q-confidence-badge { font-size: 11px; padding: 2px 8px; border-radius: 20px; font-weight: 600; }
@@ -140,6 +142,14 @@
   /* Needs-fix list: the reviewer's note sits above each question's editable fields. */
   .fix-note { font-size: 12px; line-height: 1.5; padding: 10px 12px; border-radius: 8px; background: #f9731614; border: 1px solid #f9731650; color: #fdba74; margin-bottom: 12px; white-space: pre-wrap; }
   .fix-note b { color: #fb923c; }
+  /* Rejected by admin -- read-only, same block shell as a fix card, red family like the gate error. */
+  .rejected-note { font-size: 12px; line-height: 1.5; padding: 10px 12px; border-radius: 8px; background: #ef444414; border: 1px solid #ef444450; color: #f87171; margin-bottom: 12px; white-space: pre-wrap; }
+  .rejected-note b { color: #ef4444; }
+  .rejected-summary { display: flex; gap: 14px; flex-wrap: wrap; }
+  .rejected-summary b { color: #ececec; }
+  .rejected-q-text { font-size: 13px; color: #ececec; margin-bottom: 8px; white-space: pre-wrap; }
+  .rejected-options { font-size: 12px; color: #bbb; display: grid; gap: 4px; }
+  .rejected-options .correct { color: #4ade80; font-weight: 600; }
   .fix-images { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; margin-top: 4px; }
   .fix-image-slot { border: 1px dashed #2a2a2a; border-radius: 8px; padding: 8px; font-size: 11px; color: #888; }
   .fix-image-slot img { max-width: 100%; max-height: 110px; border-radius: 6px; display: block; margin: 6px 0; cursor: zoom-in; }
@@ -192,6 +202,7 @@
     <h1>PDF Review Tool</h1>
     <div style="display:flex;gap:8px;">
       <button class="logout-btn" id="fixListBtn" onclick="openFixList()">Needs fix</button>
+      <button class="logout-btn" id="rejectedListBtn" onclick="openRejectedList()">Rejected by admin</button>
       <button class="logout-btn" onclick="openPdfHistory()">Processed PDFs</button>
       <button class="logout-btn" onclick="logout()">Log out</button>
     </div>
@@ -205,6 +216,17 @@
       </div>
       <div id="fixListSummary" style="font-size:12px;color:#888;margin-bottom:14px;"></div>
       <div id="fixList">Loading...</div>
+    </div>
+  </div>
+
+  <div id="rejectedListOverlay" style="display:none;position:fixed;inset:0;background:#000000a0;z-index:900;align-items:flex-start;justify-content:center;overflow-y:auto;padding:24px 16px;">
+    <div style="background:#0d0d0d;border:1px solid #2a2a2a;border-radius:14px;padding:20px;width:100%;max-width:820px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px;">
+        <h2 style="font-size:15px;">Rejected by admin</h2>
+        <button type="button" class="action-btn" onclick="closeRejectedList()">Close</button>
+      </div>
+      <div id="rejectedListSummary" style="font-size:12px;color:#888;margin-bottom:14px;"></div>
+      <div id="rejectedList">Loading...</div>
     </div>
   </div>
 
@@ -321,6 +343,13 @@
       <button type="button" class="subject-btn" data-subject="Chemistry" onclick="selectSubject('Chemistry')">Chemistry</button>
     </div>
 
+    <h2>Language</h2>
+    <div class="subject-picker" id="languagePicker">
+      <button type="button" class="subject-btn active" data-language="en" onclick="selectLanguage('en')">English</button>
+      <button type="button" class="subject-btn" data-language="hi" onclick="selectLanguage('hi')" id="hindiLangBtn">Hindi</button>
+    </div>
+    <div id="hindiPausedNote" style="display:none;font-size:11px;color:#888;margin-top:-6px;margin-bottom:10px;">Hindi uploads paused</div>
+
     <div id="pdfModeSection">
       <h2>2. Upload PDF</h2>
       <div style="margin-bottom:10px;">
@@ -329,7 +358,10 @@
           <option value="standard">Standard (official question papers)</option>
           <option value="3col_book">3-column book (coaching-book PYQ chapters)</option>
           <option value="scanned_ocr">Scanned pages (free OCR)</option>
-          <!-- Gemini scanned mode kept hidden here too, matching admin-pdf-review.html (2026-10-14) -->
+          <!-- Hidden from English's default choices in favour of free OCR (2026-10-14) -- still
+               selectable there. Hindi (selectLanguage) forces and locks this to "scanned" itself,
+               matching admin-pdf-review.html: Hindi has no free-OCR path. -->
+          <option value="scanned">Scanned pages (image-only)</option>
         </select>
       </div>
       <div class="upload-row">
@@ -386,6 +418,7 @@
   let ALLOWED_UPLOADER_NAMES = ['Mr. Md Moniruzzaman', 'Admin']; // overwritten from /contractor-pdf-review/verify once logged in, so a future name change doesn't need a redeploy of this page
   let currentUploaderName = (function() { try { return localStorage.getItem(UPLOADER_STORAGE_KEY) || null; } catch (e) { return null; } })();
   let currentSubject = null;
+  let currentLanguage = 'en'; // 'en' or 'hi' -- picked once per PDF, saved on every question from it (pyq_language.sql)
   let currentPdfFilename = null; // filename of the last-scanned PDF, attached to saves so it shows up in Processed PDFs
   let currentBatchId = null; // one upload batch per scanned PDF / parsed paste -- saved as pyq.batch_id for the review filters
   let currentProcessedPdfId = null;  // id of this scan's processed_pdfs row, for the completion/failure update
@@ -603,15 +636,36 @@
     // calling preloadPdfHistory() directly here throws (temporal dead zone) and aborts the rest
     // of the script. setTimeout(..., 0) runs it after the whole script has finished once.
     setTimeout(preloadPdfHistory, 0);
+    loadPdfReviewConfig();
   }
 
   if (adminKey) enterDashboard();
+
+  // Greys out the Hindi language button while HINDI_UPLOADS_ENABLED is off on the server, so a
+  // contractor finds out before picking a subject/PDF rather than from a rejected scan request.
+  async function loadPdfReviewConfig() {
+    try {
+      const res = await fetch(`${API_BASE}/admin/pdf-review-config`, { headers: authHeaders() });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (!data.hindi_uploads_enabled) {
+        const btn = document.getElementById('hindiLangBtn');
+        btn.disabled = true;
+        btn.title = 'Hindi uploads paused';
+        btn.style.opacity = '0.4';
+        btn.style.cursor = 'not-allowed';
+        document.getElementById('hindiPausedNote').style.display = 'block';
+      }
+    } catch (e) {
+      // Config read failing is non-fatal - the server itself still enforces the pause either way.
+    }
+  }
 
   // ---------------- Subject selection + data loading ----------------
 
   async function selectSubject(subject) {
     currentSubject = subject;
-    document.querySelectorAll('.subject-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.subject === subject));
+    document.querySelectorAll('.subject-btn[data-subject]').forEach(btn => btn.classList.toggle('active', btn.dataset.subject === subject));
     blocks = [];
     scanFilenameMatch = null;
     renderAllBlocks();
@@ -620,6 +674,22 @@
     updateScanButton();
     clearDraft(); // a fresh subject pick discards whatever in-progress blocks it just reset
     await loadSubjectData(subject);
+  }
+
+  // Hindi has no free-OCR path (process_pyq_scanned_ocr is English-only) -- only the Gemini
+  // vision "scanned" layout (process_pyq_scanned's two-pass Hindi mode). Locking the layout
+  // dropdown to it when Hindi is picked, rather than just leaving it to a server-side 400, saves
+  // the contractor a failed scan attempt. Switching back to English restores free choice of layout.
+  function selectLanguage(language) {
+    currentLanguage = language;
+    document.querySelectorAll('.subject-btn[data-language]').forEach(btn => btn.classList.toggle('active', btn.dataset.language === language));
+    const layoutSelect = document.getElementById('pdfLayoutSelect');
+    if (language === 'hi') {
+      layoutSelect.value = 'scanned';
+      layoutSelect.disabled = true;
+    } else {
+      layoutSelect.disabled = false;
+    }
   }
 
   // Split out of selectSubject so resumeDraft() can load a subject's chapter/classifier data
@@ -682,6 +752,7 @@
         version: 1,
         savedAt: Date.now(),
         subject: currentSubject,
+        language: currentLanguage,
         pdfFilename: currentPdfFilename,
         processedPdfId: currentProcessedPdfId,
         pdfQuestionsExtracted: currentPdfQuestionsExtracted,
@@ -753,6 +824,7 @@
     document.getElementById('draftBanner').style.display = 'none';
 
     currentSubject = draft.subject || null;
+    selectLanguage(draft.language || 'en'); // also re-locks the layout dropdown if the draft was Hindi
     currentPdfFilename = draft.pdfFilename || null;
     currentBatchId = newBatchId(currentPdfFilename);
     currentProcessedPdfId = draft.processedPdfId || null;
@@ -762,7 +834,7 @@
     blocks = draft.blocks;
 
     if (currentSubject) {
-      document.querySelectorAll('.subject-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.subject === currentSubject));
+      document.querySelectorAll('.subject-btn[data-subject]').forEach(btn => btn.classList.toggle('active', btn.dataset.subject === currentSubject));
     }
     selectInputMode(draft.inputMode || 'pdf'); // absent on v1 drafts saved before Paste LaTeX mode existed -- default to the only mode that existed then
     renderAllBlocks();
@@ -1739,7 +1811,7 @@
     const res = await fetch(`${API_BASE}/admin/scan-pdf/estimate`, {
       method: 'POST',
       headers: authHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ subject: currentSubject, data: b64 })
+      body: JSON.stringify({ subject: currentSubject, data: b64, language: currentLanguage })
     });
     if (res.status === 401) { logout(); return null; }
     if (!res.ok) throw new Error(await describeHttpError(res));
@@ -1788,7 +1860,7 @@
     document.getElementById('scanModeHint').style.display = 'none';
     try {
       const b64 = await fileToBase64(file);
-      const body = { subject: currentSubject, data: b64, filename: file.name, uploader_name: currentUploaderName, layout };
+      const body = { subject: currentSubject, data: b64, filename: file.name, uploader_name: currentUploaderName, layout, language: currentLanguage };
       if (layout === 'scanned') body.confirm_over_cap = confirmOverCap;
       let data;
       if (layout === 'scanned_ocr') {
@@ -2223,6 +2295,61 @@
     document.getElementById('fixListOverlay').style.display = 'none';
   }
 
+  // ---------------- Rejected by admin (read-only) ----------------
+  function rejectedCardHtml(r) {
+    const letters = ['a', 'b', 'c', 'd'];
+    const correct = String(r.correct_answer || '').trim().toUpperCase();
+    const optsHtml = letters.map(l => {
+      const text = r['option_' + l];
+      if (!text) return '';
+      const isCorrect = l.toUpperCase() === correct;
+      return `<div${isCorrect ? ' class="correct"' : ''}>${l.toUpperCase()}) ${escapeHtml(text)}</div>`;
+    }).join('');
+    const when = r.rejected_at ? new Date(r.rejected_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+    // A duplicate rejected before the 1 Nov cutoff stays rejected/hidden from students but is
+    // never deducted from payable -- see PYQ_DUP_DEDUCT_FROM in server.py.
+    const reasonText = r.duplicate_free ? 'Duplicate (not deducted)' : (r.reject_reason || '(no reason given)');
+    return `
+      <div class="q-block">
+        <div class="rejected-note"><b>Reason${when ? ' · ' + escapeHtml(when) : ''}:</b> ${escapeHtml(reasonText)}</div>
+        <div class="rejected-q-text">${escapeHtml(r.question || '')}</div>
+        <div class="rejected-options">${optsHtml}</div>
+      </div>`;
+  }
+
+  async function loadRejectedList() {
+    const listEl = document.getElementById('rejectedList');
+    try {
+      const res = await fetch(`${API_BASE}/contractor/pyq-rejected`, { headers: authHeaders() });
+      if (res.status === 401) return logout();
+      if (!res.ok) { listEl.textContent = 'Could not load: ' + await describeHttpError(res); return; }
+      const data = await res.json();
+      if (data.error) { listEl.textContent = 'Could not load: ' + data.error; return; }
+      const rows = data.rows || [];
+      document.getElementById('rejectedListSummary').innerHTML =
+        `<div class="rejected-summary">`
+        + `<span>Uploaded: <b>${data.uploaded ?? 0}</b></span>`
+        + `<span>Deducted: <b>${data.rejected_errors ?? 0}</b> errors, <b>${data.duplicates_deducted ?? 0}</b> duplicates</span>`
+        + `<span>Payable: <b>${data.payable ?? 0}</b> / ${data.target ?? 0}</span>`
+        + `<span>Amount: <b>$${Number(data.amount_usd ?? 0).toFixed(2)}</b></span>`
+        + `</div>`;
+      listEl.innerHTML = rows.length ? rows.map(rejectedCardHtml).join('') : '<div class="empty-hint">No rejected questions.</div>';
+      document.getElementById('rejectedListBtn').textContent = rows.length ? `Rejected by admin (${rows.length})` : 'Rejected by admin';
+    } catch (e) {
+      listEl.textContent = 'Could not reach server.';
+    }
+  }
+
+  function openRejectedList() {
+    document.getElementById('rejectedListOverlay').style.display = 'flex';
+    document.getElementById('rejectedList').textContent = 'Loading...';
+    loadRejectedList();
+  }
+
+  function closeRejectedList() {
+    document.getElementById('rejectedListOverlay').style.display = 'none';
+  }
+
   function fixChapterOptionsHtml(subject, selected) {
     const names = NEET_SYLLABUS[subject] ? Array.from(new Set([...NEET_SYLLABUS[subject][11], ...NEET_SYLLABUS[subject][12]])) : [];
     if (selected && !names.includes(selected)) names.unshift(selected);
@@ -2451,6 +2578,7 @@
       <div class="q-block-header">
         <span class="q-number">Q<input type="text" id="qnum-${b.id}" value="${escapeHtml(b.display_number != null ? b.display_number : String(displayIndex))}" onchange="setQNumber('${b.id}')" title="Edit to match the actual question number in the PDF, if it drifted from the auto count" style="width:34px;background:transparent;border:none;border-bottom:1px dashed #4f8ef780;color:#4f8ef7;font-weight:700;font-size:13px;font-family:'Inter',sans-serif;padding:0 0 1px 2px;"/></span>
         ${b.has_diagram ? '<span class="q-diagram-badge">Diagram</span>' : ''}
+        ${currentLanguage === 'hi' ? '<span class="q-language-badge">Hindi</span>' : ''}
         <span id="confidence-badge-${b.id}" style="display:${b.saved ? 'none' : 'inline'}">
           ${b.parse_confidence === 'fallback' ? `<span class="q-confidence-badge fallback" title="${escapeHtml(describeDetectedPattern(b.detected_pattern, true))}">⚠ Needs review</span>` : ''}
           ${b.parse_confidence === 'delimiter' ? `<span class="q-confidence-badge delimiter" title="${escapeHtml(describeDetectedPattern(b.detected_pattern, false))}">${b.detected_pattern === 'table' ? 'Table row' : 'Pipe-delimited'}</span>` : ''}
@@ -3083,7 +3211,7 @@
 
   function buildCreatePayload(id) {
     const fields = readBlockFromDom(id);
-    return Object.assign({ subject: currentSubject, source_pdf_filename: currentPdfFilename }, fields);
+    return Object.assign({ subject: currentSubject, language: currentLanguage, source_pdf_filename: currentPdfFilename }, fields);
   }
 
   async function saveBlock(id) {
@@ -3199,7 +3327,7 @@
         const result = checkDuplicates(existingRows, fields.question, fields.chapter);
         if (result.exactMatch) dupCount++;
         else if (result.similar.length > 0) warnedCount++;
-        const payload = Object.assign({ subject: currentSubject, source_pdf_filename: currentPdfFilename }, fields);
+        const payload = Object.assign({ subject: currentSubject, language: currentLanguage, source_pdf_filename: currentPdfFilename }, fields);
         payload.diagram_url = b.diagram_url;
         payload.option_a_diagram_url = b.option_a_diagram_url;
         payload.option_b_diagram_url = b.option_b_diagram_url;
