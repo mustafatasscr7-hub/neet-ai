@@ -526,13 +526,17 @@
       /* Fluid sizing for the mobile Settings list/sub-screen views -- same clamp() approach as
          the rest of the page (e.g. .welcome h2, .header padding above), scaled down for this
          denser UI so nothing is oversized at 320px or cramped at 428px+. */
-      .settings-mobile-list-title { font-size: clamp(10px, 2.8vw, 11px); }
+      /* +env(safe-area-inset-top) on the header row (title padding, back-header padding, close
+         button offset) only adds space where a device actually reports a notch/status-bar inset
+         (PWA/WebView contexts) -- it resolves to 0 in a normal browser tab, so this is a no-op
+         there and only pushes the SETTINGS text + X below real hardware cutouts elsewhere. */
+      .settings-mobile-list-title { font-size: clamp(10px, 2.8vw, 11px); padding-top: calc(28px + env(safe-area-inset-top, 0px)); }
       .settings-mobile-row { font-size: clamp(13px, 3.4vw, 14px); padding: clamp(13px, 3.4vw, 15px) clamp(12px, 3.5vw, 14px); }
       .settings-mobile-row-left { gap: clamp(10px, 3vw, 12px); }
       .settings-mobile-row-left svg { width: clamp(15px, 4.5vw, 17px); height: clamp(15px, 4.5vw, 17px); flex-shrink: 0; }
       .settings-mobile-row-chevron { width: clamp(14px, 4vw, 16px) !important; height: clamp(14px, 4vw, 16px) !important; }
-      .settings-modal-close { width: clamp(40px, 10.5vw, 44px) !important; height: clamp(40px, 10.5vw, 44px) !important; top: clamp(8px, 2.3vw, 12px) !important; right: clamp(8px, 2.3vw, 12px) !important; font-size: clamp(17px, 4.7vw, 20px) !important; }
-      .settings-mobile-back-header { padding: clamp(12px, 3.3vw, 14px) clamp(48px, 14vw, 56px) clamp(10px, 2.8vw, 12px) clamp(5px, 1.5vw, 6px); }
+      .settings-modal-close { width: clamp(40px, 10.5vw, 44px) !important; height: clamp(40px, 10.5vw, 44px) !important; top: calc(clamp(8px, 2.3vw, 12px) + env(safe-area-inset-top, 0px)) !important; right: clamp(8px, 2.3vw, 12px) !important; font-size: clamp(17px, 4.7vw, 20px) !important; }
+      .settings-mobile-back-header { padding: clamp(12px, 3.3vw, 14px) clamp(48px, 14vw, 56px) clamp(10px, 2.8vw, 12px) clamp(5px, 1.5vw, 6px); padding-top: calc(clamp(12px, 3.3vw, 14px) + env(safe-area-inset-top, 0px)); }
       .settings-mobile-back-btn { width: clamp(40px, 10.5vw, 44px); height: clamp(40px, 10.5vw, 44px); }
       .settings-mobile-back-btn svg { width: clamp(18px, 5vw, 20px); height: clamp(18px, 5vw, 20px); }
       .settings-mobile-back-title { font-size: clamp(14px, 3.9vw, 15px); }
