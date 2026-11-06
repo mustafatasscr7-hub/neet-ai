@@ -211,6 +211,11 @@
     .spinner { width: 32px; height: 32px; border: 3px solid #1e1e1e; border-top-color: #4f8ef7; border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 16px; }
     @keyframes spin { to { transform: rotate(360deg); } }
     .empty { text-align: center; padding: 60px; color: #555; font-size: 14px; }
+    /* Shown instead of the question card only while the NEXT page a student has reached is still
+       in flight in the background -- deliberately small/inline, not the big centered .loading
+       block used for the initial chapter open. */
+    .loading-more-inline { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 28px 0; color: #555; font-size: 13px; }
+    .spinner-sm { width: 16px; height: 16px; border: 2px solid #1e1e1e; border-top-color: #4f8ef7; border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0; flex-shrink: 0; }
     .page-title { font-size: 22px; font-weight: 700; color: #fff; margin-bottom: 4px; }
     .page-subtitle { font-size: 13px; color: #555; margin-bottom: 32px; }
 
@@ -295,6 +300,8 @@
     body.light-mode .loading { color: #7a7a85 !important; }
     body.light-mode .spinner { border-color: #e3e3ea !important; border-top-color: #4f8ef7 !important; }
     body.light-mode .empty { color: #7a7a85 !important; }
+    body.light-mode .loading-more-inline { color: #7a7a85 !important; }
+    body.light-mode .spinner-sm { border-color: #e3e3ea !important; border-top-color: #4f8ef7 !important; }
   
     /* Smooth fade-in on page load */
     body { animation: pageFadeIn 0.22s ease; }
@@ -519,6 +526,21 @@
     let currentChapterAllYears = [];
     let currentYearFilter = '';
     let currentQuestionIndex = 0;
+    // Pagination state for the currently open chapter+filter: total_count/has_more always come
+    // from the server (never derived from currentChapterQuestions.length), since the whole point
+    // of paging is that the loaded array is routinely a strict subset of the real chapter.
+    let currentChapterTotalCount = 0;
+    let currentChapterHasMore = false;
+    // Bumped on every showQuestions/filterByYear call -- the one still-running background page
+    // loop (loadRemainingPyqPages) and any in-flight fetch compare their captured token against
+    // this on return and silently drop their result if the student has since switched chapter or
+    // filter, instead of corrupting whatever chapter/filter is now actually on screen. Paired with
+    // an AbortController so a fast chapter/filter switch also cancels the superseded network
+    // requests outright rather than just ignoring their eventual response.
+    let pyqLoadToken = 0;
+    let pyqLoadAbortController = null;
+    const PYQ_FIRST_PAGE_SIZE = 30;
+    const PYQ_BACKGROUND_PAGE_SIZE = 50;
     // Per-chapter, per-year-filter "last viewed question index" memory, session-only (resets on
     // page reload, like every other piece of state on this screen). Keyed by subject+chapter so
     // switching chapters never bleeds one chapter's positions into another's; within a chapter,
@@ -1134,11 +1156,16 @@
       const idx = currentChapterQuestions.findIndex(q => q.id === pyqId);
       if (idx === -1) return;
       currentChapterQuestions.splice(idx, 1);
-      if (currentChapterQuestions.length === 0) {
+      currentChapterTotalCount = Math.max(0, currentChapterTotalCount - 1);
+      if (currentChapterQuestions.length === 0 && !currentChapterHasMore) {
         document.getElementById('mainContent').innerHTML = `<div class="empty">${t('pyqbank','noQuestionsFound')}</div>`;
         return;
       }
-      if (currentQuestionIndex >= currentChapterQuestions.length) currentQuestionIndex--;
+      // Only step back when there's truly nothing after this slot (no more pages coming) -- if
+      // more is still loading in the background, leave currentQuestionIndex as-is so
+      // renderSingleQuestion's "loading more" card (not an off-by-one jump backward) is what
+      // shows next, same as reaching the end via Next.
+      if (currentQuestionIndex >= currentChapterQuestions.length && !currentChapterHasMore) currentQuestionIndex--;
       // classNum here is only ever used to rebuild Prev/Next/year-filter onclick strings (never
       // to filter/query anything -- currentChapterQuestions/currentQuestionIndex already do
       // that), so the module-level selectedClass set by showQuestions() is exactly what those
@@ -1399,21 +1426,53 @@ function handleBack() {
    
 
     // SCREEN 4 — Questions
-    // Shared by showQuestions and filterByYear -- both fetch the exact same shape (a chapter's
-    // full question list, optionally narrowed to one year). Routed through /pyq-browse (scraping
-    // audit, 2026-09-19 -> 09-20) instead of querying pyq directly from the browser; returns null
-    // on any failure so both callers can fall back to their existing empty-state handling.
-    async function fetchPyqQuestions(subject, chapter, year) {
+    // Shared by showQuestions/filterByYear/loadRemainingPyqPages -- fetches one page of a chapter
+    // (optionally narrowed to one year). Routed through /pyq-browse (scraping audit, 2026-09-19 ->
+    // 09-20) instead of querying pyq directly from the browser; returns null on any failure
+    // (including an aborted request -- see startNewPyqLoad) so callers all fall back the same way.
+    async function fetchPyqPage(subject, chapter, year, limit, offset, signal) {
       try {
-        let url = `${API_BASE}/pyq-browse?subject=${encodeURIComponent(subject)}&chapter=${encodeURIComponent(chapter)}`;
+        let url = `${API_BASE}/pyq-browse?subject=${encodeURIComponent(subject)}&chapter=${encodeURIComponent(chapter)}&limit=${limit}&offset=${offset}`;
         if (year) url += `&year=${encodeURIComponent(year)}`;
-        const res = await fetch(url);
+        const res = await fetch(url, { signal });
         const data = await res.json();
-        return (data && data.questions) || null;
+        if (!data || !Array.isArray(data.questions) || data.error) return null;
+        return data; // { questions, total_count, has_more }
       } catch (e) {
-        console.error('fetchPyqQuestions failed:', e);
+        if (e.name !== 'AbortError') console.error('fetchPyqPage failed:', e);
         return null;
       }
+    }
+
+    // Bumps the staleness token and swaps in a fresh AbortController, aborting whatever load
+    // (first page + any still-running background pages) was previously in flight. Called once at
+    // the top of showQuestions and filterByYear so a fast chapter/filter switch actually cancels
+    // the superseded network requests instead of just letting their results be ignored later.
+    function startNewPyqLoad() {
+      if (pyqLoadAbortController) pyqLoadAbortController.abort();
+      pyqLoadAbortController = new AbortController();
+      return { token: ++pyqLoadToken, signal: pyqLoadAbortController.signal };
+    }
+
+    function pyqYearOptionsHtml() {
+      return `<option value="" ${currentYearFilter === '' ? 'selected' : ''}>${t('pyqbank','allYears')}</option>` +
+        currentChapterAllYears.map(y => `<option value="${y}" ${String(y) === String(currentYearFilter) ? 'selected' : ''}>${localizeNum(y)}</option>`).join('');
+    }
+
+    // Recomputes the year list from whatever's loaded so far and patches the dropdown in place --
+    // called every time a background page lands, so years only present in a later page appear as
+    // soon as that page arrives instead of only on the next full re-render.
+    function refreshYearDropdownOptions() {
+      currentChapterAllYears = [...new Set(currentChapterQuestions.map(q => q.year).filter(Boolean))].sort((a, b) => b - a);
+      const select = document.getElementById('pyqYearFilterSelect');
+      if (select) select.innerHTML = pyqYearOptionsHtml();
+    }
+
+    // Patches "Question {i} of {n}" in place (n always from the server's total_count) -- called
+    // when a background page updates the total without the currently-viewed question moving.
+    function refreshQuestionCountText() {
+      const el = document.getElementById('pyqQuestionOfText');
+      if (el) el.textContent = t('pyqbank','questionOf').replace('{i}', localizeNum(currentQuestionIndex + 1)).replace('{n}', localizeNum(currentChapterTotalCount));
     }
 
     async function showQuestions(subject, classNum, chapter, yearFilter = null) {
@@ -1425,9 +1484,11 @@ function handleBack() {
         <div class="loading"><div class="spinner"></div>${t('pyqbank','loadingQuestions')}</div>
       `;
 
-      const data = await fetchPyqQuestions(subject, chapter, yearFilter);
+      const { token, signal } = startNewPyqLoad();
+      const firstPage = await fetchPyqPage(subject, chapter, yearFilter, PYQ_FIRST_PAGE_SIZE, 0, signal);
+      if (token !== pyqLoadToken) return; // superseded by another chapter/filter switch meanwhile
 
-      if (!data || data.length === 0) {
+      if (!firstPage || firstPage.questions.length === 0) {
         document.getElementById('mainContent').innerHTML = `
           ${buildPyqBreadcrumb(subject, classNum, chapter)}
           <div class="empty">${t('pyqbank','noQuestionsFound')}</div>
@@ -1435,34 +1496,105 @@ function handleBack() {
         return;
       }
 
-      currentChapterQuestions = data;
-      currentChapterAllYears = [...new Set(data.map(q => q.year).filter(Boolean))].sort((a, b) => b - a);
+      currentChapterQuestions = firstPage.questions;
+      currentChapterTotalCount = firstPage.total_count;
+      currentChapterHasMore = firstPage.has_more;
+      currentChapterAllYears = [...new Set(currentChapterQuestions.map(q => q.year).filter(Boolean))].sort((a, b) => b - a);
       currentYearFilter = '';
       currentQuestionIndex = 0;
       // Render the first question immediately rather than waiting on ensureDifficulties --
       // for a chapter where some questions have never been classified, that call makes real
       // DeepSeek requests server-side and could otherwise hold "Loading questions..." for a
       // long time even after the question data itself is back. ensureDifficulties mutates
-      // `data` in place, so Next/Prev and year-filter switches pick up the real difficulty as
+      // the array in place, so Next/Prev and year-filter switches pick up the real difficulty as
       // soon as it resolves regardless; this only patches the badge for whichever question is
       // still on screen when it finishes.
       renderSingleQuestion(subject, classNum, chapter);
-      ensureDifficulties(data, 'pyq').then(() => {
+      ensureDifficulties(currentChapterQuestions, 'pyq').then(() => {
         const current = currentChapterQuestions[currentQuestionIndex];
         if (current) refreshVisibleDifficultyBadge(current.id, current.difficulty);
       });
+      loadRemainingPyqPages(subject, chapter, yearFilter, token, signal, firstPage.questions.length);
+    }
+
+    // Keeps fetching the rest of the chapter 30-50 questions at a time after the first page has
+    // already rendered, so Next never blocks on a network round trip for any chapter size. Runs
+    // unattended -- Next/Prev/renderSingleQuestion don't poll or wait on it; when the student's
+    // current position lands inside a page this appends, it re-renders (or just refreshes the
+    // count/year dropdown when they're looking at an earlier question) itself.
+    async function loadRemainingPyqPages(subject, chapter, year, token, signal, startOffset) {
+      let offset = startOffset;
+      while (token === pyqLoadToken && currentChapterHasMore) {
+        const page = await fetchPyqPage(subject, chapter, year, PYQ_BACKGROUND_PAGE_SIZE, offset, signal);
+        if (token !== pyqLoadToken) return; // chapter/filter changed under us -- drop this silently
+        if (!page || page.questions.length === 0) {
+          // A real failure (or the server now reports fewer rows, e.g. one got reported/removed
+          // elsewhere) -- stop rather than looping forever; has_more=false is exactly what the
+          // loading-more card and Next/Prev already treat as "nothing more is coming".
+          currentChapterHasMore = false;
+          break;
+        }
+        const coveredFrom = currentChapterQuestions.length;
+        currentChapterQuestions.push(...page.questions);
+        currentChapterTotalCount = page.total_count;
+        currentChapterHasMore = page.has_more;
+        offset += page.questions.length;
+        refreshYearDropdownOptions();
+        if (currentQuestionIndex >= coveredFrom) {
+          // The student was sitting on the "loading more" placeholder waiting for exactly this
+          // page (or landed there via the year-filter's remembered index) -- bring it on screen now.
+          renderSingleQuestion(subject, selectedClass, chapter);
+        } else {
+          refreshQuestionCountText();
+        }
+        ensureDifficulties(page.questions, 'pyq').then(() => {
+          const current = currentChapterQuestions[currentQuestionIndex];
+          if (current) refreshVisibleDifficultyBadge(current.id, current.difficulty);
+        });
+      }
+      // If the loop gave up (has_more went false) while the student's position was still past the
+      // real end -- shouldn't normally happen since total_count comes straight from the server,
+      // but defend against it -- snap back to the last real question instead of leaving the
+      // loading card on screen forever.
+      if (token === pyqLoadToken && currentQuestionIndex >= currentChapterQuestions.length) {
+        currentQuestionIndex = Math.max(0, currentChapterQuestions.length - 1);
+        renderSingleQuestion(subject, selectedClass, chapter);
+      }
+    }
+
+    // Small, inline "loading more" state (not a full-screen spinner) shown only when the student
+    // has reached the last page currently loaded but the server says there's more to come.
+    function renderPyqLoadingMoreCard(subject, classNum, chapter) {
+      const chapterEscaped = chapter.replace(/'/g, "\\'");
+      document.getElementById('mainContent').innerHTML = `
+        ${buildPyqBreadcrumb(subject, classNum, chapter)}
+        <div class="page-title">${chapterName(chapter)}</div>
+        <div class="question-card">
+          <div class="loading-more-inline"><div class="spinner-sm"></div>${t('pyqbank','loadingMore')}</div>
+          <div style="display:flex;justify-content:flex-start;margin-top:4px;">
+            <button class="sol-btn sol-btn-neutral" onclick="prevQuestion('${subject}', ${classNum}, '${chapterEscaped}')">${t('pyqbank','prev')}</button>
+          </div>
+        </div>
+      `;
     }
 
     function renderSingleQuestion(subject, classNum, chapter) {
       const data = currentChapterQuestions;
       const i = currentQuestionIndex;
-      const q = data[i];
 
       // Single choke point for every way currentQuestionIndex can change (Next/Prev, year-filter
       // switch, initial chapter load, a reported question getting spliced out) -- record it here
       // rather than at each call site, so the year filter's memory always reflects what's actually
-      // on screen.
+      // on screen (or about to be, while a later page is still loading).
       getYearMemory(subject, chapter)[currentYearFilter || 'all'] = i;
+
+      if (i >= data.length) {
+        // Reached the end of what's loaded so far but the server says more exists -- the
+        // background loop (loadRemainingPyqPages) re-renders this on its own once that page lands.
+        renderPyqLoadingMoreCard(subject, classNum, chapter);
+        return;
+      }
+      const q = data[i];
 
      const opts = ['a','b','c','d'].map(opt => {
         // Some questions have diagram-only options (no text at all, e.g. "which diagram is
@@ -1473,17 +1605,15 @@ function handleBack() {
         return `<div class="q-option" id="opt-${opt}" onclick="selectPyqOption('${opt}', '${q.correct_answer.toLowerCase().trim()}', '${q.id}')"><strong>${opt.toUpperCase()})</strong> ${parseWithMath(q['option_' + opt])}${optImg}</div>`;
       }).join('');
 
-     
 
-     const years = currentChapterAllYears;
+
 const chapterEscaped = chapter.replace(/'/g, "\\'");
-const yearOptions = `<option value="" ${currentYearFilter === '' ? 'selected' : ''}>${t('pyqbank','allYears')}</option>` + years.map(y => `<option value="${y}" ${String(y) === String(currentYearFilter) ? 'selected' : ''}>${localizeNum(y)}</option>`).join('');
 
 document.getElementById('mainContent').innerHTML = `
         ${buildPyqBreadcrumb(subject, classNum, chapter)}
         <div class="page-title">${chapterName(chapter)}</div>
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;gap:12px;flex-wrap:wrap;">
-          <div class="page-subtitle">${t('pyqbank','questionOf').replace('{i}', localizeNum(i + 1)).replace('{n}', localizeNum(data.length))}</div>
+          <div class="page-subtitle" id="pyqQuestionOfText">${t('pyqbank','questionOf').replace('{i}', localizeNum(i + 1)).replace('{n}', localizeNum(currentChapterTotalCount))}</div>
           <div style="display:flex;align-items:center;gap:16px;">
             <label class="timer-toggle-row">
               <span>${t('pyqbank','showTimer')}</span>
@@ -1492,8 +1622,8 @@ document.getElementById('mainContent').innerHTML = `
                 <span class="toggle-track"><span class="toggle-thumb"></span></span>
               </span>
             </label>
-            <select class="year-filter-select" onchange="filterByYear(this.value, '${subject}', ${classNum}, '${chapterEscaped}')">
-              ${yearOptions}
+            <select class="year-filter-select" id="pyqYearFilterSelect" onchange="filterByYear(this.value, '${subject}', ${classNum}, '${chapterEscaped}')">
+              ${pyqYearOptionsHtml()}
             </select>
           </div>
         </div>
@@ -1515,7 +1645,7 @@ ${q.diagram_url ? `<img class="q-diagram-img q-img" src="${q.diagram_url}">` : '
           <div class="sol-div" id="sol-${q.id}"></div>
           <div style="display:flex;justify-content:space-between;margin-top:20px;">
             <button class="sol-btn sol-btn-neutral" ${i === 0 ? 'disabled' : ''} onclick="prevQuestion('${subject}', ${classNum}, '${chapterEscaped}')">${t('pyqbank','prev')}</button>
-            <button class="sol-btn sol-btn-neutral" ${i === data.length - 1 ? 'disabled' : ''} onclick="nextQuestion('${subject}', ${classNum}, '${chapterEscaped}')">${t('pyqbank','next')}</button>
+            <button class="sol-btn sol-btn-neutral" ${(i === data.length - 1 && !currentChapterHasMore) ? 'disabled' : ''} onclick="nextQuestion('${subject}', ${classNum}, '${chapterEscaped}')">${t('pyqbank','next')}</button>
           </div>
         </div>
       `;
@@ -1523,7 +1653,7 @@ ${q.diagram_url ? `<img class="q-diagram-img q-img" src="${q.diagram_url}">` : '
     }
 
     function nextQuestion(subject, classNum, chapter) {
-      if (currentQuestionIndex < currentChapterQuestions.length - 1) {
+      if (currentQuestionIndex < currentChapterQuestions.length - 1 || currentChapterHasMore) {
         currentQuestionIndex++;
         renderSingleQuestion(subject, classNum, chapter);
       }
@@ -1631,18 +1761,29 @@ ${q.diagram_url ? `<img class="q-diagram-img q-img" src="${q.diagram_url}">` : '
       
 
      async function filterByYear(year, subject, classNum, chapter) {
-  const data = await fetchPyqQuestions(subject, chapter, year ? parseInt(year) : null);
-  if (data && data.length > 0) {
-    currentChapterQuestions = data;
-    currentYearFilter = year;
-    // Resume wherever this filter was last left off in this chapter this session (defaulting to
-    // Q1 the first time a filter is opened), independently per filter -- not derived from matching
-    // the previously-shown question's id into the new list, which only worked when that exact
-    // question happened to also exist in the new filter.
-    const saved = getYearMemory(subject, chapter)[year || 'all'];
-    currentQuestionIndex = (typeof saved === 'number') ? Math.min(saved, data.length - 1) : 0;
-    renderSingleQuestion(subject, classNum, chapter);
-  }
+  const yearNum = year ? parseInt(year) : null;
+  const { token, signal } = startNewPyqLoad();
+  const firstPage = await fetchPyqPage(subject, chapter, yearNum, PYQ_FIRST_PAGE_SIZE, 0, signal);
+  if (token !== pyqLoadToken) return; // superseded by another chapter/filter switch meanwhile
+  if (!firstPage || firstPage.questions.length === 0) return; // same guard as before: leave the current view untouched
+  currentChapterQuestions = firstPage.questions;
+  currentChapterTotalCount = firstPage.total_count;
+  currentChapterHasMore = firstPage.has_more;
+  currentYearFilter = year;
+  // Resume wherever this filter was last left off in this chapter this session (defaulting to
+  // Q1 the first time a filter is opened), independently per filter -- not derived from matching
+  // the previously-shown question's id into the new list, which only worked when that exact
+  // question happened to also exist in the new filter. Clamped against the real total, not just
+  // what's loaded on this first page -- renderSingleQuestion shows the "loading more" card and
+  // loadRemainingPyqPages brings the right page in if the remembered index is further out.
+  const saved = getYearMemory(subject, chapter)[year || 'all'];
+  currentQuestionIndex = (typeof saved === 'number') ? Math.min(saved, firstPage.total_count - 1) : 0;
+  renderSingleQuestion(subject, classNum, chapter);
+  ensureDifficulties(currentChapterQuestions, 'pyq').then(() => {
+    const current = currentChapterQuestions[currentQuestionIndex];
+    if (current) refreshVisibleDifficultyBadge(current.id, current.difficulty);
+  });
+  loadRemainingPyqPages(subject, chapter, yearNum, token, signal, firstPage.questions.length);
 }
 
 

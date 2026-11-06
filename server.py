@@ -8239,12 +8239,19 @@ async def get_pyq_chapters(subject: str, _: None = Depends(rate_limit(30, 60))):
 # already always has a specific chapter in hand by the time it needs actual question rows, so this
 # costs nothing for genuine use and closes off this endpoint ever becoming a fresh bulk-read path
 # itself. year is optional, matching the year-filter dropdown on the chapter's own question view.
+PYQ_BROWSE_MAX_PAGE_SIZE = 200
+
 @app.get("/pyq-browse")
-async def pyq_browse(subject: str, chapter: str, year: int = None, _: None = Depends(rate_limit(30, 60))):
+async def pyq_browse(subject: str, chapter: str, year: int = None, limit: int = None, offset: int = 0,
+                      _: None = Depends(rate_limit(30, 60))):
     if subject not in ("Biology", "Physics", "Chemistry"):
         return {"error": "Invalid subject"}
     if not chapter.strip():
         return {"error": "chapter is required"}
+    if limit is not None and not (1 <= limit <= PYQ_BROWSE_MAX_PAGE_SIZE):
+        return {"error": f"limit must be between 1 and {PYQ_BROWSE_MAX_PAGE_SIZE}"}
+    if offset < 0:
+        return {"error": "offset must be >= 0"}
     try:
         headers = {
             "apikey": SUPABASE_SERVICE_KEY,
@@ -8258,12 +8265,31 @@ async def pyq_browse(subject: str, chapter: str, year: int = None, _: None = Dep
         }
         if year is not None:
             params["year"] = f"eq.{year}"
-        response = await async_client.get(f"{SUPABASE_URL}/rest/v1/pyq", headers=headers, params=params)
+        # Paging is opt-in: a caller that never passes limit (savedquestions, tests, chat, the app)
+        # gets the exact same single-shot response as before, byte for byte. Only when limit is
+        # given do we add an explicit order -- without one, Postgres gives no cross-request
+        # ordering guarantee for LIMIT/OFFSET, so two consecutive pages could repeat or skip rows.
+        # id.asc is a stand-in for "today's" order (there was never an explicit ORDER BY to match).
+        if limit is None:
+            response = await async_client.get(f"{SUPABASE_URL}/rest/v1/pyq", headers=headers, params=params)
+            if response.status_code >= 400:
+                return {"error": response.text}
+            return {"questions": response.json()}
+        params["order"] = "id.asc"
+        params["limit"] = limit
+        params["offset"] = offset
+        response = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/pyq", headers={**headers, "Prefer": "count=exact"}, params=params
+        )
         if response.status_code >= 400:
             return {"error": response.text}
-        return {"questions": response.json()}
+        content_range = response.headers.get("content-range", "")
+        tail = content_range.split("/")[-1] if "/" in content_range else ""
+        total_count = int(tail) if tail.isdigit() else 0
+        questions = response.json()
+        return {"questions": questions, "total_count": total_count, "has_more": offset + len(questions) < total_count}
     except Exception as e:
-        print(f"PYQ BROWSE ERROR (subject={subject}, chapter={chapter}, year={year}): {e}", flush=True)
+        print(f"PYQ BROWSE ERROR (subject={subject}, chapter={chapter}, year={year}, limit={limit}, offset={offset}): {e}", flush=True)
         return {"error": "Something went wrong. Please try again."}
 
 async def _sample_personalised_questions(selections: list, requested_count) -> tuple:
