@@ -5451,6 +5451,68 @@ let selectedImages = [];
       }
     }
 
+    // Asks /reply-availability whether the Diagram/PYQ buttons would actually find anything for
+    // this reply -- the server runs the exact same lookups (_diagram_match_rows, search_pyq) the
+    // buttons themselves run on click, with the exact same inputs (pyq_text mirrors
+    // buildPyqSearchQuery's own "{searchText} — {chapterText}" string), so a button this says is
+    // available for can never open to an empty result.
+    async function fetchReplyAvailability(searchText, answerText, chapterText) {
+      try {
+        const res = await fetch(`${API_BASE}/reply-availability`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text: searchText,
+            answer: answerText,
+            pyq_text: buildPyqSearchQuery(searchText, chapterText),
+            chapter: chapterText || ''
+          })
+        });
+        const data = await res.json();
+        return { has_diagram: !!(data && data.has_diagram), pyq_count: (data && data.pyq_count) || 0 };
+      } catch (e) {
+        return { has_diagram: false, pyq_count: 0 };
+      }
+    }
+
+    // Builds the Diagram/PYQ action row for a real academic answer -- but only once
+    // fetchReplyAvailability confirms each button would actually find something, so neither ever
+    // shows for a topic with nothing behind it. Fire-and-forget from every call site (never
+    // awaited inline with the rest of the render), so the row simply appears a moment after the
+    // rest of the bubble instead of reserving empty space up front -- there's nothing to show
+    // before the check resolves anyway. Result is cached on msgObj (keyed by version index) so a
+    // version-switch or a later re-render within the same session reuses it instead of re-asking.
+    async function attachAnswerActions(bubble, opts) {
+      const { searchText, chapterText, answerText, isAutoEmbed, diagramPrefetch, msgObj, versionIndex } = opts;
+      const cacheKey = (typeof versionIndex === 'number') ? versionIndex : 0;
+      let availability = msgObj && msgObj._availabilityCache && msgObj._availabilityCache[cacheKey];
+      if (!availability) {
+        availability = await fetchReplyAvailability(searchText, answerText, chapterText);
+        if (msgObj) {
+          msgObj._availabilityCache = msgObj._availabilityCache || {};
+          msgObj._availabilityCache[cacheKey] = availability;
+        }
+      }
+
+      const showDiagramBtn = !isAutoEmbed && availability.has_diagram;
+      const showPyqBtn = availability.pyq_count > 0;
+      if (!showDiagramBtn && !showPyqBtn) return;
+
+      const actionsRow = document.createElement('div');
+      actionsRow.className = 'answer-actions-row';
+      if (showDiagramBtn) {
+        const diagramBtn = document.createElement('button');
+        diagramBtn.className = 'diagram-btn';
+        diagramBtn.innerHTML = '🖼️ Show Diagram';
+        diagramBtn.onclick = () => handleShowDiagramClick(diagramBtn, searchText, answerText, diagramPrefetch);
+        actionsRow.appendChild(diagramBtn);
+      }
+      if (showPyqBtn) {
+        actionsRow.appendChild(createPyqButton(searchText, chapterText));
+      }
+      bubble.appendChild(actionsRow);
+    }
+
     // ---------------- Read Aloud (Web Speech API, entirely client-side, zero API cost) ----------------
     const SPEAK_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>';
     const STOP_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>';
@@ -5705,21 +5767,14 @@ let selectedImages = [];
         // gets Diagram/PYQ buttons either, instead of just hiding metadata and leaving buttons
         // that would still trigger a real (wasted) lookup on click.
         if (userQuestion && metaHtml) {
-          const actionsRow = document.createElement('div');
-          actionsRow.className = 'answer-actions-row';
-
-          if (!diagram) {
-            const diagramBtn = document.createElement('button');
-            diagramBtn.className = 'diagram-btn';
-            diagramBtn.innerHTML = '🖼️ Show Diagram';
-            diagramBtn.onclick = () => handleShowDiagramClick(diagramBtn, userQuestion, text);
-            actionsRow.appendChild(diagramBtn);
-          }
-
-          const pyqBtn = createPyqButton(userQuestion, chapterText);
-          actionsRow.appendChild(pyqBtn);
-
-          bubble.appendChild(actionsRow);
+          attachAnswerActions(bubble, {
+            searchText: userQuestion,
+            chapterText,
+            answerText: text,
+            isAutoEmbed: !!diagram,
+            msgObj,
+            versionIndex: msgObj ? msgObj.activeVersionIndex : undefined
+          });
         }
 
         contentWrapper.appendChild(bubble);
@@ -6305,18 +6360,14 @@ function plainTextFromMarkdown(text) {
         // metaHtml gate as the other two render paths -- a version with no NEET Importance/
         // Chapter line (a conversational reply) never gets Diagram/PYQ buttons either.
         if (metaHtml) {
-        const actionsRow = document.createElement('div');
-        actionsRow.className = 'answer-actions-row';
-        if (!v.diagram) {
-          const diagramBtn = document.createElement('button');
-          diagramBtn.className = 'diagram-btn';
-          diagramBtn.innerHTML = '🖼️ Show Diagram';
-          diagramBtn.onclick = () => handleShowDiagramClick(diagramBtn, pyqSearchText, v.text);
-          actionsRow.appendChild(diagramBtn);
-        }
-        const pyqBtn = createPyqButton(pyqSearchText, chapterText);
-        actionsRow.appendChild(pyqBtn);
-        bubble.appendChild(actionsRow);
+          attachAnswerActions(bubble, {
+            searchText: pyqSearchText,
+            chapterText,
+            answerText: v.text,
+            isAutoEmbed: !!v.diagram,
+            msgObj: msg,
+            versionIndex: newIndex
+          });
         }
 
         bubble.style.opacity = '1';
@@ -9574,23 +9625,9 @@ function plainTextFromMarkdown(text) {
         // same signal means a greeting/small-talk reply never gets Diagram/PYQ buttons, instead
         // of just hiding metadata and leaving buttons that would still trigger a real (wasted)
         // lookup on click.
-        if (metaHtml) {
-        const actionsRow = document.createElement('div');
-        actionsRow.className = 'answer-actions-row';
-
-        if (!isAutoEmbed) {
-          const diagramBtn = document.createElement('button');
-          diagramBtn.className = 'diagram-btn';
-          diagramBtn.innerHTML = '🖼️ Show Diagram';
-          diagramBtn.onclick = () => handleShowDiagramClick(diagramBtn, pyqSearchText, fullText, diagramPrefetch);
-          actionsRow.appendChild(diagramBtn);
-        }
-
-        const pyqBtn = createPyqButton(pyqSearchText, chapterText);
-        actionsRow.appendChild(pyqBtn);
-
-        bubble.appendChild(actionsRow);
-        }
+        // The actual attachAnswerActions(...) call is deferred to just after aiMsg exists below
+        // (same metaHtml gate) -- it caches its result onto aiMsg keyed by version index, and
+        // aiMsg isn't constructed yet at this point in a fresh (non-retry) generation.
 
         // Fire-and-forget, deliberately not awaited -- must never delay the primary answer's
         // own finish (usage banner refresh, scroll settle, send button re-enable, etc.). Skipped
@@ -9657,6 +9694,24 @@ function plainTextFromMarkdown(text) {
           currentConversation.push(aiMsg);
           aiRow.querySelector('.message-content').appendChild(buildActionsDiv('ai', aiTimeStr, aiMsg));
         }
+
+        // Same metaHtml gate the diagram/PYQ row has always used -- a conversational reply
+        // never gets either button. isAutoEmbed already covers the high-confidence auto-embed
+        // case; diagramPrefetch (set, non-null, for the medium-confidence VISUAL_INTENT: yes
+        // case) is passed through purely so a click reuses it instead of re-fetching, same as
+        // before -- whether the button itself shows is decided by the fresh availability check.
+        if (metaHtml) {
+          attachAnswerActions(bubble, {
+            searchText: pyqSearchText,
+            chapterText,
+            answerText: fullText,
+            isAutoEmbed,
+            diagramPrefetch,
+            msgObj: aiMsg,
+            versionIndex: aiMsg.activeVersionIndex
+          });
+        }
+
         // Only overwrites when this turn actually produced a new summary -- a turn where nothing
         // fell out of the sliding-2 window (or the background call failed/timed out) leaves
         // whatever this message already had untouched, same fail-safe carry-forward as the

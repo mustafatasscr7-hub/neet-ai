@@ -1084,6 +1084,16 @@ class DiagramMatchRequest(BaseModel):
     text: str   # the student's doubt text (same text /chat embeds for NCERT RAG)
     answer: str = ""  # the AI's full answer, for chapter-line extraction
 
+# Same text/answer pair DiagramMatchRequest takes (diagram leg), plus the PYQ leg's own inputs
+# (pyq_text is chat.html's buildPyqSearchQuery(text, chapter) string, chapter the raw chapter
+# name) -- both exactly what the Diagram/PYQ buttons themselves send on click, so /reply-
+# availability's answer always matches what clicking the button would actually find.
+class ReplyAvailabilityRequest(BaseModel):
+    text: str
+    answer: str = ""
+    pyq_text: str = ""
+    chapter: str = ""
+
 class SummarizeAnswerRequest(BaseModel):
     text: str   # the AI's last full answer, to condense
     language: str = "en"
@@ -7904,37 +7914,44 @@ DIAGRAM_MATCH_THRESHOLD = 0.5
 # before /chat's fire-and-forget cache write (asyncio.create_task, not awaited) has completed;
 # that's a same-second race with negligible cost (one extra ~$0.00002 embedding call), not a
 # correctness issue.
+async def _diagram_match_rows(text: str, answer: str):
+    """The chapter-extraction + embedding + match_diagrams lookup /diagram-match itself runs,
+    factored out so /reply-availability can ask "would this find anything" with the exact same
+    inputs/logic the button's own click uses -- never a looser check that could call a button
+    available for a diagram the real click then finds nothing for."""
+    chapter = None
+    candidate = extract_chapter_candidate(answer)
+    if candidate:
+        chapters_resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/diagrams",
+            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+            params={"select": "chapter", "reviewed": "eq.true"}
+        )
+        known_chapters = sorted(set(r["chapter"] for r in chapters_resp.json() if r.get("chapter"))) if chapters_resp.status_code == 200 else []
+        chapter = fuzzy_match_chapter(candidate, known_chapters)
+        # Falls through to filter_chapter=None (search all reviewed diagrams) when
+        # extraction/fuzzy-match fails or is ambiguous, per spec.
+
+    async def _search(embedding):
+        response = await async_client.post(
+            f"{SUPABASE_URL}/rest/v1/rpc/match_diagrams",
+            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"},
+            json={"query_embedding": embedding, "match_threshold": DIAGRAM_MATCH_THRESHOLD, "match_count": 1, "filter_chapter": chapter}
+        )
+        # Out of scope for the off-topic gate (no gate threshold passed below -- this RPC is
+        # still called at the real threshold directly, so there's no raw/unfiltered score to
+        # report). _match_with_merge_fallback's contract just needs SOME second tuple element.
+        # None (not []) on a failed lookup, so it's retried once rather than fanned out.
+        return (response.json() if response.status_code == 200 else None), None
+    # Merge-variant fallback matters most here: diagram reference embeddings are built from
+    # very short text (often just a bare name), which measured as the most typo/spacing-
+    # fragile of the three matching systems this covers -- see _match_with_merge_fallback.
+    return await _match_with_merge_fallback(text, get_embedding, _search)
+
 @app.post("/diagram-match")
 async def diagram_match(req: DiagramMatchRequest, _: None = Depends(rate_limit(15, 60))):
     try:
-        chapter = None
-        candidate = extract_chapter_candidate(req.answer)
-        if candidate:
-            chapters_resp = await async_client.get(
-                f"{SUPABASE_URL}/rest/v1/diagrams",
-                headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
-                params={"select": "chapter", "reviewed": "eq.true"}
-            )
-            known_chapters = sorted(set(r["chapter"] for r in chapters_resp.json() if r.get("chapter"))) if chapters_resp.status_code == 200 else []
-            chapter = fuzzy_match_chapter(candidate, known_chapters)
-            # Falls through to filter_chapter=None (search all reviewed diagrams) when
-            # extraction/fuzzy-match fails or is ambiguous, per spec.
-
-        async def _search(embedding):
-            response = await async_client.post(
-                f"{SUPABASE_URL}/rest/v1/rpc/match_diagrams",
-                headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"},
-                json={"query_embedding": embedding, "match_threshold": DIAGRAM_MATCH_THRESHOLD, "match_count": 1, "filter_chapter": chapter}
-            )
-            # Out of scope for the off-topic gate (no gate threshold passed below -- this RPC is
-            # still called at the real threshold directly, so there's no raw/unfiltered score to
-            # report). _match_with_merge_fallback's contract just needs SOME second tuple element.
-            # None (not []) on a failed lookup, so it's retried once rather than fanned out.
-            return (response.json() if response.status_code == 200 else None), None
-        # Merge-variant fallback matters most here: diagram reference embeddings are built from
-        # very short text (often just a bare name), which measured as the most typo/spacing-
-        # fragile of the three matching systems this covers -- see _match_with_merge_fallback.
-        rows = await _match_with_merge_fallback(req.text, get_embedding, _search)
+        rows = await _diagram_match_rows(req.text, req.answer)
         if not rows:
             return {"matched": False}
         top = rows[0]
@@ -7948,6 +7965,25 @@ async def diagram_match(req: DiagramMatchRequest, _: None = Depends(rate_limit(1
         return {"matched": True, "diagram_id": top["id"], "image_url": top["image_url"], "name": top.get("name"), "description": top.get("description"), "name_hi": top.get("name_hi"), "description_hi": top.get("description_hi"), "importance_rating": top.get("importance_rating"), "similarity": top.get("similarity")}
     except Exception:
         return {"matched": False}
+
+# Powers chat.html's "only show a button when it would actually find something" rule for the
+# Diagram/PYQ action row under a finished AI reply -- called once per reply, after streaming
+# ends (fire-and-forget; never on the /chat critical path, so it cannot slow a reply down).
+# Deliberately calls _diagram_match_rows and search_pyq UNCHANGED -- the exact same lookups the
+# two buttons themselves run on click -- so a button this reports available for can never open
+# to an empty result. The two legs are independent of each other, hence gather rather than
+# sequential awaits.
+@app.post("/reply-availability")
+async def reply_availability(req: ReplyAvailabilityRequest, _: None = Depends(rate_limit(40, 60))):
+    try:
+        diagram_rows, pyq_result = await asyncio.gather(
+            _diagram_match_rows(req.text, req.answer),
+            search_pyq(req.pyq_text or req.text, chapter=req.chapter),
+        )
+        pyq_rows, _match_type = pyq_result
+        return {"has_diagram": bool(diagram_rows), "pyq_count": len(pyq_rows)}
+    except Exception:
+        return {"has_diagram": False, "pyq_count": 0}
 
 # Powers diagram-library.html's browsable gallery -- the student-facing counterpart to
 # /admin/diagrams-list, which requires the admin password. Uses the anon key (not
