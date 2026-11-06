@@ -3113,6 +3113,39 @@ async def search_ncert(query: str, limit: int = 3, stats: dict = None):
         # _OFFTOPIC_GATE_MARGIN's own comment for the real 107-query validation behind this one.
         return await _match_with_merge_fallback(query, get_embedding, _search, threshold - _OFFTOPIC_GATE_MARGIN)
 
+# ---------- Stage 1 of the English NCERT retrieval rework (ncert_content_v2) ----------
+# New table, new hybrid (vector + keyword, reciprocal rank fusion) RPC -- see ncert_chunks_v2.sql
+# and ncert_rechunk_v2.py for the table/chunks this reads. Purely additive: search_ncert above is
+# completely unchanged, and nothing calls search_ncert_v2 yet -- it's gated behind
+# NCERT_V2_ENABLED (default off) so it can be compared against search_ncert (see
+# ncert_v2_compare.py) before anything switches over.
+NCERT_V2_ENABLED = os.getenv("NCERT_V2_ENABLED", "false").strip().lower() == "true"
+
+async def search_ncert_v2(query: str, limit: int = 5):
+    """Same return shape as search_ncert (list of dicts with id/subject/class/chapter_name/
+    chapter_name_en/language/content/similarity), plus heading/page/chunk_index from the new
+    table. Returns [] immediately (no embedding call, no RPC call) when NCERT_V2_ENABLED is off."""
+    if not NCERT_V2_ENABLED:
+        return []
+    headers = {
+        "apikey": SUPABASE_SERVICE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+        "Content-Type": "application/json"
+    }
+    embedding = await get_embedding(query)
+    try:
+        response = await async_client.post(
+            f"{SUPABASE_URL}/rest/v1/rpc/match_ncert_v2_hybrid",
+            headers=headers,
+            json={"query_embedding": embedding, "query_text": query, "match_count": limit}
+        )
+    except Exception:
+        return []
+    if response.status_code != 200:
+        return []
+    rows = response.json()
+    return rows if isinstance(rows, list) else []
+
 def _ncert_chapter_citation(subject: str, class_num, chapter_name: str, lookup_name: str = None) -> str:
     """Builds an authoritative citation string like 'NCERT Class 12, Chapter 3 -- Current
     Electricity' for one retrieved ncert_content row, by looking it up against NEET_SYLLABUS --
