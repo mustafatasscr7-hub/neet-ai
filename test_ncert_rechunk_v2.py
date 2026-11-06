@@ -168,6 +168,17 @@ def test_progress_checkpoint_resume():
         rechunk._save_samples(samples)
         check("samples round-trip through an atomic write", rechunk._load_samples() == samples,
               rechunk._load_samples())
+
+        # --load uses its own checkpoint file via an explicit `path` arg, same functions, so a
+        # dry run and a --load run never share or clobber each other's checkpoint.
+        load_path = os.path.join(tmp_dir, "load_progress.jsonl")
+        rec3 = {"pdf": "a.pdf", "subject": "Biology", "class": 11, "chapter_name": "X",
+                "chunk_count": 2, "inserted": 2, "warnings": {}}
+        rechunk._append_progress(rec3, load_path)
+        check("explicit path is a separate checkpoint from PROGRESS_FILE",
+              rechunk._load_progress(load_path) == {"a.pdf": rec3} and
+              rechunk._load_progress() == {"a.pdf": rec1, "b.pdf": rec2},
+              (rechunk._load_progress(load_path), rechunk._load_progress()))
     finally:
         rechunk.PROGRESS_FILE, rechunk.SAMPLES_FILE = real_progress_file, real_samples_file
 
@@ -241,6 +252,60 @@ def test_search_ncert_v2_shape_parity():
         server.async_client, server.get_embedding, server.NCERT_V2_ENABLED = saved
 
 
+def test_search_ncert_v2_falls_back_when_v2_has_no_rows():
+    print("\n11. search_ncert_v2 falls back to search_ncert when v2 has nothing for the query")
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import server
+
+    class FakeResp:
+        def __init__(self, status, body):
+            self.status_code = status
+            self._body = body
+
+        def json(self):
+            return self._body
+
+    class FakeClient:
+        async def post(self, url, headers=None, json=None):
+            assert url.endswith("/rpc/match_ncert_v2_hybrid"), url
+            return FakeResp(200, [])  # v2 has no rows for this chapter yet
+
+    async def fake_embed(text, user_id=""):
+        return [0.0] * 1536
+
+    fallback_calls = []
+
+    async def fake_search_ncert(query, limit=3, stats=None):
+        fallback_calls.append((query, limit))
+        return [{"id": "old1", "content": "old-path content"}]
+
+    saved = (server.async_client, server.get_embedding, server.search_ncert, server.NCERT_V2_ENABLED)
+    server.async_client = FakeClient()
+    server.get_embedding = fake_embed
+    server.search_ncert = fake_search_ncert
+    try:
+        server.NCERT_V2_ENABLED = True
+        import asyncio
+        results = asyncio.run(server.search_ncert_v2("a topic not yet in v2", limit=5))
+        check("falls back to search_ncert with the same query and limit",
+              fallback_calls == [("a topic not yet in v2", 5)], fallback_calls)
+        check("returns the fallback's rows", results == [{"id": "old1", "content": "old-path content"}], results)
+
+        # And when the v2 RPC call itself fails outright (not just empty), same fallback.
+        fallback_calls.clear()
+
+        class FailingClient:
+            async def post(self, url, headers=None, json=None):
+                raise ConnectionError("boom")
+
+        server.async_client = FailingClient()
+        results2 = asyncio.run(server.search_ncert_v2("a topic not yet in v2", limit=5))
+        check("RPC failure also falls back, doesn't raise", fallback_calls == [("a topic not yet in v2", 5)]
+              and results2 == [{"id": "old1", "content": "old-path content"}], (fallback_calls, results2))
+    finally:
+        server.async_client, server.get_embedding, server.search_ncert, server.NCERT_V2_ENABLED = saved
+
+
 if __name__ == "__main__":
     test_sentence_boundaries_respected()
     test_chunk_size_range()
@@ -252,5 +317,6 @@ if __name__ == "__main__":
     test_progress_checkpoint_resume()
     test_chapter_groups_cover_known_counts()
     test_search_ncert_v2_shape_parity()
+    test_search_ncert_v2_falls_back_when_v2_has_no_rows()
     print(f"\n{len(_passed)} passed, {len(_failed)} failed")
     sys.exit(1 if _failed else 0)

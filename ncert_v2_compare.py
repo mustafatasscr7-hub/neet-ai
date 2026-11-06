@@ -10,6 +10,10 @@ Forces NCERT_V2_ENABLED on for this process only (env var set before importing s
 written back to .env) so search_ncert_v2 runs regardless of the live flag's value. Requires
 ncert_chunks_v2.sql to have been run and ncert_rechunk_v2.py --load to have populated
 ncert_content_v2 -- otherwise the new side will just come back empty, not error.
+
+server.async_client is normally created by server.py's FastAPI lifespan handler (app startup),
+which never runs for a plain import -- this script creates its own httpx.AsyncClient and assigns
+it to server.async_client directly, closed again after the query runs.
 """
 import asyncio
 import io
@@ -19,6 +23,7 @@ import sys
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 os.environ["NCERT_V2_ENABLED"] = "true"
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import httpx
 import server
 
 
@@ -35,10 +40,14 @@ def _print_rows(label, rows):
 
 
 async def main(query: str):
-    old_rows, new_rows = await asyncio.gather(
-        server.search_ncert(query, limit=5),
-        server.search_ncert_v2(query, limit=5),
-    )
+    server.async_client = httpx.AsyncClient(timeout=httpx.Timeout(connect=5, read=60, write=30, pool=10))
+    try:
+        old_rows, new_rows = await asyncio.gather(
+            server.search_ncert(query, limit=5),
+            server.search_ncert_v2(query, limit=5),
+        )
+    finally:
+        await server.async_client.aclose()
     print(f"Query: {query!r}")
     _print_rows("search_ncert (old, live)", old_rows)
     _print_rows("search_ncert_v2 (new, ncert_content_v2)", new_rows)

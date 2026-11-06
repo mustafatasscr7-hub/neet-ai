@@ -3124,7 +3124,13 @@ NCERT_V2_ENABLED = os.getenv("NCERT_V2_ENABLED", "false").strip().lower() == "tr
 async def search_ncert_v2(query: str, limit: int = 5):
     """Same return shape as search_ncert (list of dicts with id/subject/class/chapter_name/
     chapter_name_en/language/content/similarity), plus heading/page/chunk_index from the new
-    table. Returns [] immediately (no embedding call, no RPC call) when NCERT_V2_ENABLED is off."""
+    table. Returns [] immediately (no embedding call, no RPC call) when NCERT_V2_ENABLED is off.
+
+    Falls back to the old search_ncert() whenever ncert_content_v2 has nothing for this query
+    (empty RPC result, or the RPC call itself failing) -- the rebuild can land one subject/chapter
+    at a time (see ncert_rechunk_v2.py's per-chapter checkpointing), so a chapter not loaded into
+    v2 yet must not mean "no NCERT match" for a real student question. No chapter is known to be
+    fully missing as of the 2026-11-06 load, but this is defensive either way."""
     if not NCERT_V2_ENABLED:
         return []
     headers = {
@@ -3140,11 +3146,13 @@ async def search_ncert_v2(query: str, limit: int = 5):
             json={"query_embedding": embedding, "query_text": query, "match_count": limit}
         )
     except Exception:
-        return []
+        return await search_ncert(query, limit)
     if response.status_code != 200:
-        return []
+        return await search_ncert(query, limit)
     rows = response.json()
-    return rows if isinstance(rows, list) else []
+    if not isinstance(rows, list) or not rows:
+        return await search_ncert(query, limit)
+    return rows
 
 def _ncert_chapter_citation(subject: str, class_num, chapter_name: str, lookup_name: str = None) -> str:
     """Builds an authoritative citation string like 'NCERT Class 12, Chapter 3 -- Current

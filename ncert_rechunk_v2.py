@@ -23,10 +23,15 @@ of GROUP_SIZE with a short pause between groups, printing one summary line per g
 one line per chapter or per page. The dry run checkpoints after every chapter to
 ncert_rechunk_v2_progress.jsonl (one small JSON line per chapter: chunk count, chunk sizes, any
 extraction-artifact warnings -- never the full chunk text) and to ncert_rechunk_v2_samples.json
-(the keyword-sample matches found so far). If the run is interrupted for any reason, just re-run
-the same command: it skips every chapter already in the progress file and continues from there
---no-resume starts over. Final stats/samples are built by reading those two files, not by holding
-every chapter's chunks in memory at once.
+(the keyword-sample matches found so far). --load checkpoints the same way to its own file,
+ncert_rechunk_v2_load_progress.jsonl (chunk count, rows actually inserted, warnings) -- an
+interrupted --load resumes without re-embedding (real OpenAI cost, not just time) any chapter
+already fully inserted; the DB-side upsert (unique constraint in ncert_chunks_v2.sql) is the
+second layer of protection, so even a chapter interrupted mid-way is safe to reprocess, never
+duplicated. If a run is interrupted for any reason, just re-run the same command: it skips every
+chapter already in its checkpoint file and continues from there -- --no-resume starts over. Final
+stats/samples are built by reading those files, not by holding every chapter's chunks in memory
+at once.
 
 ---- Why PDFs instead of the old chunks ----
 The source PDFs (ncert-pdfs/, 100 files) are still in the repo, so chunks are rebuilt from the
@@ -404,17 +409,22 @@ GROUP_SIZE = 10
 GROUP_PAUSE_SECONDS = 3
 
 PROGRESS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ncert_rechunk_v2_progress.jsonl")
+LOAD_PROGRESS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ncert_rechunk_v2_load_progress.jsonl")
 SAMPLES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ncert_rechunk_v2_samples.json")
 
 
-def _load_progress() -> dict:
+def _load_progress(path: str = None) -> dict:
     """pdf basename -> progress record, read from PROGRESS_FILE. Tolerant of one truncated last
     line -- a kill/hang mid-write leaves at most one partial JSON line, which is just skipped
-    rather than treated as a fatal corruption of the whole file."""
+    rather than treated as a fatal corruption of the whole file. `path` defaults to PROGRESS_FILE
+    (the dry run's checkpoint) -- --load uses its own separate file, LOAD_PROGRESS_FILE, via the
+    same function, so an interrupted --load resumes without re-embedding (cost, not just time)
+    chapters already inserted, the same way an interrupted dry run resumes without re-extracting."""
+    path = path or PROGRESS_FILE
     progress = {}
-    if not os.path.exists(PROGRESS_FILE):
+    if not os.path.exists(path):
         return progress
-    with open(PROGRESS_FILE, encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -427,10 +437,11 @@ def _load_progress() -> dict:
     return progress
 
 
-def _append_progress(record: dict):
+def _append_progress(record: dict, path: str = None):
     """fsync's immediately -- this is the checkpoint a resume relies on, so it must actually be on
     disk before this returns, not sitting in an OS write buffer a hang could lose."""
-    with open(PROGRESS_FILE, "a", encoding="utf-8") as f:
+    path = path or PROGRESS_FILE
+    with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(record) + "\n")
         f.flush()
         os.fsync(f.fileno())
@@ -545,11 +556,20 @@ def _env_or_die(name: str) -> str:
     return value
 
 
+_NCERT_V2_ON_CONFLICT = "subject,class,chapter_name,chunk_index"
+
+
 def _load_chunks(chunks, client, headers, supabase_url) -> int:
-    """Embeds + upserts one chapter's chunks (merge-duplicates on the unique constraint, so
-    re-running --load after an interruption just harmlessly re-embeds/re-upserts whatever chapter
-    was in flight, not anything already committed in an earlier batch within this chapter).
-    Returns how many rows were actually inserted/updated."""
+    """Embeds + upserts one chapter's chunks. `Prefer: resolution=merge-duplicates` alone does
+    NOT make PostgREST do a real upsert -- without an explicit `on_conflict` query param naming
+    the constraint columns, it issues a plain INSERT, which 409s on any row that already exists.
+    Confirmed the hard way: a batch whose first POST attempt times out client-side but actually
+    commits server-side makes every retry of that same batch 409 instead of harmlessly re-upserting,
+    permanently undercounting `inserted` even though the data IS there -- and, without
+    `on_conflict`, makes re-running an already-loaded chapter (e.g. to backfill one failed chunk)
+    fail outright on every row that already exists instead of upserting it. `on_conflict` here
+    makes both cases genuinely idempotent: re-sending an existing row updates it in place instead
+    of erroring. Returns how many rows were actually inserted/updated."""
     import requests
 
     BATCH_SIZE = 20
@@ -586,30 +606,51 @@ def _load_chunks(chunks, client, headers, supabase_url) -> int:
             continue
         for attempt in range(3):
             try:
-                resp = requests.post(f"{supabase_url}/rest/v1/ncert_content_v2", headers=headers,
-                                      json=rows, timeout=30)
+                resp = requests.post(
+                    f"{supabase_url}/rest/v1/ncert_content_v2",
+                    headers=headers, params={"on_conflict": _NCERT_V2_ON_CONFLICT},
+                    json=rows, timeout=30)
                 if resp.status_code < 300:
                     inserted += len(rows)
                     break
                 print(f"  insert failed (status {resp.status_code}): {resp.text[:300]}")
+                time.sleep(3)
             except Exception as e:
                 print(f"  insert retry {attempt + 1}/3: {e}")
                 time.sleep(3)
     return inserted
 
 
-def _process_and_load_one_chapter(subject, class_num, chapter_name, pdf_path, client, headers, supabase_url):
-    chunks = build_chapter_chunks(subject, class_num, chapter_name, pdf_path)
+def _process_and_load_one_chapter(subject, class_num, chapter_name, pdf_path, client, headers, supabase_url) -> dict:
+    """Mirrors _process_one_chapter's shape (same warnings tracking, same small JSON-serialisable
+    record) but embeds + upserts instead of just chunking -- so --load gets the same checkpoint
+    file discipline as the dry run: an interrupted run resumes without re-embedding (real OpenAI
+    cost, not just time) any chapter already fully inserted. The DB-side upsert (unique constraint
+    on subject/class/chapter_name/chunk_index, see ncert_chunks_v2.sql) is the second layer of
+    protection -- it means even a chapter that WASN'T checkpointed (interrupted mid-chapter) is
+    safe to reprocess from scratch: re-embedding/re-inserting the same chunk just overwrites it,
+    never duplicates it."""
+    warnings = {}
+    chunks = build_chapter_chunks(subject, class_num, chapter_name, pdf_path, warnings)
     inserted = _load_chunks(chunks, client, headers, supabase_url)
-    chunk_count = len(chunks)
+    record = {
+        "pdf": os.path.basename(pdf_path),
+        "subject": subject,
+        "class": class_num,
+        "chapter_name": chapter_name,
+        "chunk_count": len(chunks),
+        "inserted": inserted,
+        "warnings": warnings,
+    }
     del chunks
-    return chunk_count, inserted
+    return record
 
 
 # ---------------- 8. Main driver: strictly sequential, grouped, resumable ----------------
 def run_chapters(load: bool, resume: bool = True):
     groups = _chapter_groups()
-    progress = _load_progress() if (not load and resume) else {}
+    checkpoint_path = LOAD_PROGRESS_FILE if load else PROGRESS_FILE
+    progress = _load_progress(checkpoint_path) if resume else {}
     samples = _load_samples() if not load else {}
     todo = [g for g in groups if os.path.basename(g[3]) not in progress]
 
@@ -639,27 +680,34 @@ def run_chapters(load: bool, resume: bool = True):
         batch_chunk_counts = []
         for subject, class_num, chapter_name, path in batch:
             if load:
-                chunk_count, inserted = _process_and_load_one_chapter(
+                record = _process_and_load_one_chapter(
                     subject, class_num, chapter_name, path, client, headers, supabase_url)
-                total_inserted += inserted
+                total_inserted += record["inserted"]
             else:
                 record = _process_one_chapter(subject, class_num, chapter_name, path, samples)
-                _append_progress(record)
-                progress[record["pdf"]] = record
-                chunk_count = record["chunk_count"]
-            batch_chunk_counts.append(chunk_count)
+            _append_progress(record, checkpoint_path)
+            progress[record["pdf"]] = record
+            batch_chunk_counts.append(record["chunk_count"])
             gc.collect()  # release this PDF's pdfplumber/pdfminer caches before the next one opens
 
         if not load:
             _save_samples(samples)
-        done_so_far = len(progress) if not load else (g_idx + len(batch))
         print(f"Group {g_idx // GROUP_SIZE + 1}/{num_groups}: {len(batch)} chapters done "
-              f"(chunks this group: {sum(batch_chunk_counts)}) -- {done_so_far}/{len(groups)} total so far")
+              f"(chunks this group: {sum(batch_chunk_counts)}) -- {len(progress)}/{len(groups)} total so far")
         if g_idx + GROUP_SIZE < len(todo):
             time.sleep(GROUP_PAUSE_SECONDS)
 
     if load:
-        print(f"\nDone. {total_inserted} chunks loaded into ncert_content_v2.")
+        total_warnings = defaultdict(int)
+        for r in progress.values():
+            for k, v in r.get("warnings", {}).items():
+                total_warnings[k] += v
+        print(f"\nDone. {sum(r['inserted'] for r in progress.values())} chunks loaded into ncert_content_v2 "
+              f"across {len(progress)} chapters.")
+        if total_warnings:
+            print("Extraction-artifact warnings across the whole load:")
+            for k, v in sorted(total_warnings.items()):
+                print(f"  {k}: {v}")
     else:
         _print_stats_from_progress(progress)
         _print_samples(samples)
@@ -674,8 +722,9 @@ def main():
                          help="Embed and insert into ncert_content_v2 (run ncert_chunks_v2.sql first). "
                               "Default is a dry run: no embedding calls, no DB writes.")
     parser.add_argument("--no-resume", action="store_true",
-                         help="Ignore any existing dry-run progress file (ncert_rechunk_v2_progress.jsonl) "
-                              "and start over from scratch. Only affects the dry run.")
+                         help="Ignore any existing checkpoint file (ncert_rechunk_v2_progress.jsonl for the "
+                              "dry run, ncert_rechunk_v2_load_progress.jsonl for --load) and start over from "
+                              "scratch -- for --load this means re-embedding/re-upserting every chapter.")
     args = parser.parse_args()
     run_chapters(load=args.load, resume=not args.no_resume)
 
