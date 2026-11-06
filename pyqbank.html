@@ -22,6 +22,18 @@
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: 'Inter', sans-serif; background: #0d0d0d; color: #ececec; min-height: 100vh; user-select: none; -webkit-user-select: none; }
+    /* sidebar.css sizes .page-with-sidebar-layout/.page-main-content with the static `100vh` unit,
+       which on mobile Safari/Chrome is measured against the viewport with the address/tab bar
+       collapsed (its tallest possible state) rather than whatever is actually visible right now.
+       When the bar is showing, that makes the scroll container's own box taller than the real
+       visible screen, so scrolling it to its max still leaves the last ~50-100px -- exactly where
+       Prev/Next sit -- rendered behind the browser chrome. `100dvh` tracks the real, currently-
+       visible viewport instead, so scrolling to max always lines the container's bottom up with
+       the screen's bottom. Scoped to this page only (not sidebar.css) so savedquestions.html/
+       diagram-library.html/mocktest.html/scoreboard.html are untouched; kept as a second
+       declaration after the vh one so browsers without dvh support silently keep using vh. */
+    .page-with-sidebar-layout { height: 100vh; height: 100dvh; }
+    .page-main-content { height: 100vh; height: 100dvh; }
     /* Div/span-based controls (sidebar nav, tabs, cards) don't get the browser's implicit
        user-select:none that a native <button> has, so clicking their label text was dropping a
        text caret into it instead of just registering the click. Disabled site-wide above, then
