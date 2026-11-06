@@ -162,6 +162,17 @@
     .seq-list-items { margin: 8px 0; }
     .seq-list-item { padding: 3px 0; }
     .seq-list-item p { margin: 0; display: inline; }
+    /* Inline match-the-following pairs ("(a) Pila (i) Flame cells") -- no List-I/List-II
+       header, each line already pairs one alpha marker with one roman marker. Grid with 2
+       equal columns, auto-flow places left/right cells of the same line into the same row. */
+    .match-pair-preamble { margin-bottom: 14px; }
+    .match-pair-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 24px; margin: 8px 0; }
+    .match-pair-cell { padding: 3px 0; }
+    .match-pair-cell p { margin: 0; display: inline; }
+    .match-pair-trailer { margin-top: 8px; }
+    @media (max-width: 480px) {
+      .match-pair-grid { grid-template-columns: 1fr; }
+    }
     .q-options { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
     .q-option { padding: 10px 14px; border-radius: 8px; font-size: 13px; background: #1a1a1a; color: #888; border: 1px solid #2a2a2a; display: flex; gap: 10px; }
     .q-option.correct { background: #4ade8020; border-color: #4ade80; color: #4ade80; }
@@ -484,6 +495,63 @@
         + (parsed.trailer ? `<div class="match-list-trailer">${formatFn(parsed.trailer)}</div>` : '');
     }
 
+    // ---------------- Inline match-the-following pairs (no List-I/List-II header) ----------------
+    // Some match-the-following questions never say "List-I"/"List-II" at all -- each line
+    // already pairs one alpha marker with one roman marker directly, e.g. "(a) Pila (i) Flame
+    // cells". findListMarkers_ML above can't anchor on a header that isn't there, so without
+    // this those lines just run together with no visible gap between the two halves. Requires
+    // >=2 CONSECUTIVE matching lines so a stray "(a) ... (i) ..." inside normal prose, or the
+    // options block below the question, is never mistaken for this layout. Lines that already
+    // have the two markers on separate lines don't match this per-line pattern and fall through
+    // to this file's normal rendering untouched.
+    const MATCH_PAIR_LEFT_RE = /^\s*(?:\(\s*([a-hA-H])\s*\)|([a-hA-H])\.)\s+/;
+    const MATCH_PAIR_RIGHT_RE = /\(\s*([ivxIVX]{1,4})\s*\)|(?:^|\s)([ivxIVX]{1,4})\.(?=\s|$)/;
+
+    function parseMatchPairLine_MLP(line) {
+      const leftMatch = line.match(MATCH_PAIR_LEFT_RE);
+      if (!leftMatch) return null;
+      const rest = line.slice(leftMatch[0].length);
+      const rightMatch = rest.match(MATCH_PAIR_RIGHT_RE);
+      if (!rightMatch) return null;
+      // Keep the marker itself in the rendered text (matches how the List-I/List-II column
+      // renderer above shows "(a) Pila", not just "Pila") -- students need "(a)"/"(i)" visible
+      // to match these columns against lettered answer options like "a-iv, b-i, c-ii, d-iii".
+      const leftBody = rest.slice(0, rightMatch.index).trim();
+      const rightBody = rest.slice(rightMatch.index + rightMatch[0].length).trim();
+      if (!leftBody || !rightBody) return null;
+      return { left: leftMatch[0].trim() + ' ' + leftBody, right: rightMatch[0].trim() + ' ' + rightBody };
+    }
+
+    function findMatchPairRun_MLP(lines) {
+      const parsed = lines.map(parseMatchPairLine_MLP);
+      let bestStart = -1, bestLen = 0, curStart = -1, curLen = 0;
+      for (let i = 0; i < parsed.length; i++) {
+        if (parsed[i]) {
+          if (curLen === 0) curStart = i;
+          curLen++;
+          if (curLen > bestLen) { bestLen = curLen; bestStart = curStart; }
+        } else {
+          curLen = 0;
+        }
+      }
+      return bestLen >= 2 ? { start: bestStart, rows: parsed.slice(bestStart, bestStart + bestLen) } : null;
+    }
+
+    function renderMatchPairsHtml_MLP(text, formatFn) {
+      if (!text) return null;
+      const lines = text.split(/\n/);
+      const run = findMatchPairRun_MLP(lines);
+      if (!run) return null;
+      const before = lines.slice(0, run.start).join('\n').trim();
+      const after = lines.slice(run.start + run.rows.length).join('\n').trim();
+      const cellsHtml = run.rows.map(r =>
+        `<div class="match-pair-cell">${formatFn(r.left)}</div><div class="match-pair-cell">${formatFn(r.right)}</div>`
+      ).join('');
+      return (before ? `<div class="match-pair-preamble">${formatFn(before)}</div>` : '')
+        + `<div class="match-pair-grid">${cellsHtml}</div>`
+        + (after ? `<div class="match-pair-trailer">${formatFn(after)}</div>` : '');
+    }
+
     // ---------------- Assertion-Reason / Statement I-II formatting ----------------
     // Detects "Given below are two statements: Assertion (A): ... Reason (R): ..." (or
     // "Statement I: ... Statement II: ...") style questions and breaks them into separate
@@ -627,6 +695,8 @@
       if (!text) return '';
       const matchListHtml = renderMatchListHtml_ML(text, parseWithMathInner);
       if (matchListHtml !== null) return matchListHtml;
+      const matchPairHtml = renderMatchPairsHtml_MLP(text, parseWithMathInner);
+      if (matchPairHtml !== null) return matchPairHtml;
       const arHtml = renderAssertionReasonHtml_AR(text, parseWithMathInner);
       if (arHtml !== null) return arHtml;
       const seqHtml = renderSequenceListHtml_SEQ(text, parseWithMathInner);
