@@ -901,7 +901,18 @@
       // so switching the setting on/off mid-question just needs to show/hide + start/stop the
       // existing element instead of forcing a full re-render of the question card.
       const timerHtml = `<span class="q-timer" id="questionTimer" style="display:${getShowQuestionTimer() ? 'inline' : 'none'};">0s</span>`;
-      return `<span style="margin-left:auto;display:inline-flex;align-items:center;gap:10px;flex-shrink:0;">${timerHtml}${difficultyBadgeHtml(difficulty)}${reportFlagBtnHtml(pyqId)}</span>`;
+      // Difficulty badge wrapped in its own stable id, even when empty -- lets
+      // refreshVisibleDifficultyBadge patch it in place once a background classify-difficulty
+      // call resolves, without touching the timer or report button next to it.
+      return `<span style="margin-left:auto;display:inline-flex;align-items:center;gap:10px;flex-shrink:0;">${timerHtml}<span id="diffBadge-${pyqId}">${difficultyBadgeHtml(difficulty)}</span>${reportFlagBtnHtml(pyqId)}</span>`;
+    }
+
+    // Patches the difficulty badge of whichever question is currently on screen, after a
+    // background ensureDifficulties call resolves -- a no-op if the student has already
+    // navigated away (the id just won't be found).
+    function refreshVisibleDifficultyBadge(pyqId, difficulty) {
+      const el = document.getElementById('diffBadge-' + pyqId);
+      if (el) el.innerHTML = difficultyBadgeHtml(difficulty);
     }
 
     // ---------------- Per-question timer ----------------
@@ -1428,8 +1439,18 @@ function handleBack() {
       currentChapterAllYears = [...new Set(data.map(q => q.year).filter(Boolean))].sort((a, b) => b - a);
       currentYearFilter = '';
       currentQuestionIndex = 0;
-      await ensureDifficulties(data, 'pyq');
+      // Render the first question immediately rather than waiting on ensureDifficulties --
+      // for a chapter where some questions have never been classified, that call makes real
+      // DeepSeek requests server-side and could otherwise hold "Loading questions..." for a
+      // long time even after the question data itself is back. ensureDifficulties mutates
+      // `data` in place, so Next/Prev and year-filter switches pick up the real difficulty as
+      // soon as it resolves regardless; this only patches the badge for whichever question is
+      // still on screen when it finishes.
       renderSingleQuestion(subject, classNum, chapter);
+      ensureDifficulties(data, 'pyq').then(() => {
+        const current = currentChapterQuestions[currentQuestionIndex];
+        if (current) refreshVisibleDifficultyBadge(current.id, current.difficulty);
+      });
     }
 
     function renderSingleQuestion(subject, classNum, chapter) {
