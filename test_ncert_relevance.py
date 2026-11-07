@@ -123,7 +123,7 @@ PHY_UNITS = row("p1", "Physics", 11, "Units and Measurement", 0.55, "The SI unit
 PHY_OHM = row("p2", "Physics", 12, "Current Electricity", 0.71, "Ohm's law: V = IR ...")
 PHY_LAWS = row("p3", "Physics", 11, "Laws of Motion", 0.57, "Force is the rate of change of momentum ...")
 
-ANSWER_WITH_CITATION = ("VISUAL_INTENT: no\n\nNEET Importance: 4/5\n\n📚 Chapter: NCERT Class 11, Chapter 1 — Some Basic Concepts of Chemistry\n\n"
+ANSWER_WITH_CITATION = ("VISUAL_INTENT: no\n\nNEET Importance: 4/5\n\nChapter: NCERT Class 11, Chapter 1 — Some Basic Concepts of Chemistry\n\n"
                         "Answer:\n- The SI unit of force is the newton (N) = kg m s⁻².\n\nKey Points:\n- 1 N = 10⁵ dyne.")
 
 
@@ -145,7 +145,7 @@ def test_wrong_subject_no_citation():
         check("chunk content not sent", "SI base units" not in msg and "NCERT Content" not in msg)
         check("no 'Retrieved from:' list", "Retrieved from" not in msg)
         check("model told to set aside and answer", "set aside" in msg and "do not refuse" in msg)
-        check("Chapter line stripped from the answer", "📚 Chapter" not in out and "Some Basic Concepts" not in out, out)
+        check("Chapter line stripped from the answer", "Chapter:" not in out and "Some Basic Concepts" not in out, out)
         check("answer itself still streams", "newton (N)" in out)
         log = h.client.posts_to("ncert_retrieval_log")
         check("logged as set_aside", len(log) == 1 and log[0][1]["outcome"] == "set_aside", log)

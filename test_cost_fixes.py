@@ -645,7 +645,7 @@ def test_hindi_cap():
         chat("what is osmosis", language="en")
         check("English /chat -> 1024", h.calls[0].max_tokens == 1024)
 
-    solution = "✅ उत्तर: B — 20 m\n\n📝 हल:\n- $h = u^2/2g$"
+    solution = "उत्तर: B — 20 m\n\nहल:\n- $h = u^2/2g$"
     req = dict(pyq_id="p1", question="Q?", option_a="1", option_b="2", option_c="3", option_d="4", correct_answer="b")
     with Harness(deepseek_outputs=[solution]) as h:
         asyncio.run(_drain(server.stream_solve_response(server.SolveRequest(**req, language="hi"), None, "1.2.3.4")))
@@ -660,7 +660,7 @@ def test_hindi_cap():
 
 # ---------- 7. history: earlier AI answers capped at ~600 characters (batch 2) ----------
 
-LONG_ANSWER = ("NEET Importance: 4/5\n\n📚 Chapter: NCERT Class 11, Chapter 11 — Transport in Plants\n\nAnswer:\n"
+LONG_ANSWER = ("NEET Importance: 4/5\n\nChapter: NCERT Class 11, Chapter 11 — Transport in Plants\n\nAnswer:\n"
                + "\n".join(f"- Point {i}: osmosis moves water from higher to lower water potential across a membrane." for i in range(1, 15))
                + "\n\nKey Points:\n- The last key point about turgor pressure.")
 

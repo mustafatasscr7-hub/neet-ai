@@ -192,7 +192,7 @@
       <div class="late-note" id="lateNote" hidden data-i18n="mockresults.lateSubmission">Submitted after the time limit.</div>
       <!-- HIDDEN 2026-08-30: Rank Predictor parked for later re-enable, code untouched. Uncomment to restore (the null-safe `if (rankBtn)` guard below already handles this element being absent).
       <div style="text-align:center;margin:16px 0;">
-        <a id="rankPredictorBtn" href="./rank-predictor.html" style="display:inline-block;padding:10px 24px;background:linear-gradient(135deg,#7c5cff,#4f8ef7);color:#fff;border-radius:8px;font-size:13px;font-weight:600;text-decoration:none;font-family:Inter,sans-serif;" data-i18n="mockresults.predictRank">🎯 Predict My NEET Rank →</a>
+        <a id="rankPredictorBtn" href="./rank-predictor.html" style="display:inline-block;padding:10px 24px;background:linear-gradient(135deg,#7c5cff,#4f8ef7);color:#fff;border-radius:8px;font-size:13px;font-weight:600;text-decoration:none;font-family:Inter,sans-serif;" data-i18n="mockresults.predictRank">Predict My NEET Rank →</a>
       </div>
       -->
       <div class="score-stats">
@@ -384,10 +384,10 @@ if (rankBtn) rankBtn.href = `./rank-predictor.html?score=${Math.max(0, data.scor
         source: 'Mock Test Results'
       });
       if (error) {
-        if (btn) { btn.textContent = '❌ Failed, retry'; btn.style.borderColor = '#ef4444'; btn.style.color = '#ef4444'; btn.disabled = false; }
+        if (btn) { btn.textContent = 'Failed, retry'; btn.style.borderColor = '#ef4444'; btn.style.color = '#ef4444'; btn.disabled = false; }
         return;
       }
-      if (btn) { btn.textContent = '✅ Saved'; btn.style.borderColor = '#4ade80'; btn.style.color = '#4ade80'; btn.disabled = true; }
+      if (btn) { btn.textContent = 'Saved'; btn.style.borderColor = '#4ade80'; btn.style.color = '#4ade80'; btn.disabled = true; }
     }
 
 function generateScorecard() {

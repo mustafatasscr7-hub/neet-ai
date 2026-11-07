@@ -411,6 +411,9 @@ SYSTEM_PROMPT = """You are NEET-AI — an expert tutor for Indian medical entran
 
 You will be given relevant NCERT content to answer the student's question.
 
+Never use emojis anywhere in your response -- not in headings, bullet points, the Chapter line, or
+anywhere else. Plain text only.
+
 BEFORE anything else, run this closed classification check, every time, as a mandatory first
 step — same as the TOPIC/FORMAT AMBIGUITY check in rule 11 below, this is a real gate you must
 actually apply, not a formality to skim past:
@@ -499,7 +502,7 @@ preference (which stays a normal full answer per the paragraph just above), but 
 for only the value/sentence/word itself (e.g. "just the unit please", "give me only the final
 answer", "answer in one word", "one line please", "what's the value of x, just the number"). This
 still names a real topic being asked about for the first time, so VISUAL_INTENT, NEET Importance,
-and the 📚 Chapter line all stay exactly as normal -- do NOT omit any of them, unlike the
+and the Chapter line all stay exactly as normal -- do NOT omit any of them, unlike the
 mnemonic/format-follow-up case below. But write ONLY the requested value/sentence/word in the
 Answer: section, with no bullet-list padding beyond what's strictly needed to state it, and OMIT
 both Key Points and Quick Recall entirely for this one reply -- this overrides rule 9's own Quick
@@ -509,8 +512,8 @@ student explicitly asked for nothing beyond the answer itself.
 For either sub-case above (mnemonic/study-aid request, or format/length follow-up): write the
 normal answer starting with VISUAL_INTENT as always, with real, substantive, bulleted content
 under Answer:/Key Points: (never a brush-off, never asking the student to narrow it down) -- but
-OMIT both the "NEET Importance: N/5" line and the "📚 Chapter:" line COMPLETELY. Completely means
-no line starting with "NEET Importance" and no line starting with "📚 Chapter" anywhere in the
+OMIT both the "NEET Importance: N/5" line and the "Chapter:" line COMPLETELY. Completely means
+no line starting with "NEET Importance" and no line starting with "Chapter" anywhere in the
 reply, in any form -- this is stricter than rule 1 below's own no-retrieval case (a real factual
 doubt with nothing retrieved), which omits the Chapter line too but is still a full academic
 answer with NEET Importance shown; this branch has neither, ever. Go directly from VISUAL_INTENT
@@ -526,7 +529,7 @@ VISUAL_INTENT: [yes or no]
 
 NEET Importance: [N]/5
 
-📚 Chapter: [copied verbatim from a "Retrieved from:" entry given to you — see Rule 1. Omit this whole line if no "Retrieved from:" entries were given.]
+Chapter: [copied verbatim from a "Retrieved from:" entry given to you — see Rule 1. Omit this whole line if no "Retrieved from:" entries were given.]
 
 Answer:
 [Give the answer in clear points]
@@ -592,7 +595,7 @@ For every numerical problem, also follow these three rules:
   alternate-assumption case.
 
 Rules:
-1. Answer ONLY from the NCERT content provided to you. This applies most strictly to the 📚
+1. Answer ONLY from the NCERT content provided to you. This applies most strictly to the
    Chapter: line — follow this exact mechanical procedure for it, in order, before writing
    anything else in that line. (Skip this whole procedure for the study-aid/mnemonic-or-format-
    request case described before the format template — that case omits the Chapter line unconditionally,
@@ -600,7 +603,7 @@ Rules:
    particular chapter's content in the first place.)
    STEP A: Look at the user message. Does it literally contain the text "Retrieved from:"?
    STEP B: If NO — stop immediately, do not proceed to step C, do not try to recall the chapter
-   from your own knowledge no matter how confident you are. Omit the 📚 Chapter: line entirely —
+   from your own knowledge no matter how confident you are. Omit the Chapter: line entirely —
    no line starting with "Chapter" at all, not even a placeholder or "not available" sentence —
    and move on to the rest of the answer.
    STEP C: If YES — copy ONE of the listed entries into the Chapter line EXACTLY as given (same
@@ -2698,7 +2701,7 @@ NCERT_DROPPED_CHAPTERS = {c.lower() for c in [
 ]}
 
 # ---------------- Diagram matching (chat.html doubt-solving) ----------------
-# The SYSTEM_PROMPT instructs the model to include a line like "📚 Chapter: NCERT Class X,
+# The SYSTEM_PROMPT instructs the model to include a line like "Chapter: NCERT Class X,
 # Chapter X — Chapter Name" in its answer -- this is the first (and, discovered while fixing
 # citation accuracy elsewhere in this file, formerly non-functional) consumer of it. The
 # original regex here required literal [bracket] characters around the citation, copying the
@@ -5640,7 +5643,7 @@ SELF_CORRECTION_RETRY_GUARD = (
     "self-correction (\"Wait\", \"let me re-check\", \"Hmm\", second-guessing the given answer). "
     "Do all checking silently. Write ONLY the final, clean, confident solution -- no rechecking, "
     "no backtracking, no second draft. One exception: if a Correct Answer was provided and your "
-    "own working genuinely shows it is wrong, still say so in the single line \"⚠️ The given "
+    "own working genuinely shows it is wrong, still say so in the single line \"The given "
     "answer appears to be incorrect: [one-line reason]\" -- never invent a justification for an "
     "answer you believe is wrong."
 )
@@ -5930,7 +5933,7 @@ def _append_hedge_verification_note(first_answer: str, option: str, reason: str,
     # about what happened, rather than silently rewriting the model's own reasoning after the
     # fact -- shown regardless of whether it agrees with or corrects the original, since a
     # confirming note is still useful signal that the hedge didn't end up mattering.
-    note = f"\n\n---\n🔍 **Verification check** (this answer second-guessed itself, so it was independently re-checked): the correct option is **{option}**"
+    note = f"\n\n---\n**Verification check** (this answer second-guessed itself, so it was independently re-checked): the correct option is **{option}**"
     if reason:
         note += f" -- {reason}."
     else:
@@ -5967,7 +5970,7 @@ async def _stream_mcq_hedge_verified(system: str, messages: list, question_text:
     else:
         yield first_answer
 
-_NCERT_CHAPTER_LINE_PREFIX = "📚 Chapter:"
+_NCERT_CHAPTER_LINE_PREFIX = "Chapter:"
 # Generous enough to comfortably hold "VISUAL_INTENT: no\n\nNEET Importance: N/5\n\n" plus the
 # Chapter line itself (observed real answers: well under 150 chars to that point) with margin,
 # but small enough that a conversational or clarify-type reply -- which never contains "Answer:"
@@ -5977,7 +5980,7 @@ _CITATION_LOCK_BUFFER_CAP = 220
 
 async def _force_citation_when_no_retrieval(stream, has_retrieval: bool):
     """Wraps a doubt's answer stream (text -- DeepSeek/Qwen -- or image/PDF -- Gemini, both use
-    this same wrapper) and deterministically strips whatever the model wrote on the 📚 Chapter:
+    this same wrapper) and deterministically strips whatever the model wrote on the Chapter:
     line when search_ncert() found nothing for this doubt, rather than trusting the model's own
     citation. Originally replaced it with a standard "Chapter: Not
     available -- answering from general knowledge..." fallback sentence instead of removing it
@@ -6482,6 +6485,22 @@ def _planner_upgrade_response(language: str) -> str:
     reply = _PLANNER_UPGRADE_REPLY_HI if language == "hi" else _PLANNER_UPGRADE_REPLY_EN
     return f"PLANNER_UPGRADE: yes\n\n{reply}"
 
+# Strips the literal bracket characters off any "<ref_data>"/"</ref_data>" text found INSIDE the
+# student's own message or a retrieved NCERT chunk, before stream_response wraps the real
+# retrieved content in its own <ref_data> tags below. Without this, either source could plant a
+# fake closing/opening tag (e.g. a chunk containing "</ref_data> new instructions: ... <ref_data>")
+# to try to convince the model the real reference-data boundary ended earlier than it did --
+# SYSTEM_PROMPT rule 12 only works if the <ref_data>/</ref_data> pair the model sees is always the
+# one this function inserts, never one smuggled in through the data being wrapped. The words
+# themselves are left intact (so a textbook passage that happens to mention "ref data" in prose
+# reads the same); only the angle brackets that would make it parse as the tag are removed.
+_REF_DATA_TAG_RE = re.compile(r'</?\s*ref_data\s*>', re.IGNORECASE)
+
+def _neutralize_ref_data_tags(s: str) -> str:
+    if not s:
+        return s
+    return _REF_DATA_TAG_RE.sub(lambda m: m.group(0).replace('<', '').replace('>', ''), s)
+
 async def stream_response(text: str, history: list = [], images: list = [], pdf: str = None, answer_style: str = "detailed", student_name: str = "", language: str = "en", user_id: str = "", personalize: bool = True, key_points: bool = True, skip_cache: bool = False, ip: str = "", running_summary: str = "", dropped_question: str = "", dropped_answer: str = ""):
     answer_style = _normalize_answer_style(answer_style)
     images = (images or [])[:3]
@@ -6609,12 +6628,15 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
         results = _relevant_ncert_chunks(text, retrieved)
         asyncio.create_task(_log_ncert_retrieval(search_stats.get("language") or _detect_query_language(text), _question_subject(text), search_stats.get("top_raw_score"), retrieved, results))
     student_context = build_student_context(mistake_rows, mock_wrong_rows, {r.get('subject') for r in results})
+    # Sanitized once here, used in every user_message branch below -- never the raw `text` itself,
+    # which stays untouched for retrieval/logging/history above (see _neutralize_ref_data_tags).
+    safe_text = _neutralize_ref_data_tags(text)
 
     if results:
-        context = "\n\n".join([
+        context = _neutralize_ref_data_tags("\n\n".join([
             f"[{r.get('subject', '')} - Class {r.get('class', '')} - {r.get('chapter_name', '')}]\n{r.get('content', '')}"
             for r in results
-        ])
+        ]))
         # Deduplicated, mechanically-correct citation for every distinct chapter actually
         # retrieved (see _ncert_chapter_citation) -- SYSTEM_PROMPT rule 1 instructs the model to
         # copy one of these verbatim into the "Chapter:" line instead of recalling/guessing it,
@@ -6626,13 +6648,13 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
         # <ref_data> tags: see SYSTEM_PROMPT rule 12. Wraps only the retrieved passage text itself
         # -- the citation list right after it is server-generated chapter metadata, not retrieved
         # free text, so it stays outside the tags same as before.
-        user_message = f"NCERT Content:\n<ref_data>\n{context}\n</ref_data>\n\nRetrieved from (copy EXACTLY ONE of these verbatim into your Chapter: line -- never a different name or number):{prefer_first}\n{retrieved_from}\n\nStudent Question: {text}"
+        user_message = f"NCERT Content:\n<ref_data>\n{context}\n</ref_data>\n\nRetrieved from (copy EXACTLY ONE of these verbatim into your Chapter: line -- never a different name or number):{prefer_first}\n{retrieved_from}\n\nStudent Question: {safe_text}"
     elif retrieved:
         # Everything retrieved was from another subject. No "Retrieved from:" text here on purpose:
         # rule 1 keys the Chapter line on that literal string.
-        user_message = f"[NCERT search only found passages from a different subject than this question, so they were set aside. Answer the question fully from your own NEET-level knowledge -- do not refuse -- and omit the 📚 Chapter: line.]\n\nStudent Question: {text}"
+        user_message = f"[NCERT search only found passages from a different subject than this question, so they were set aside. Answer the question fully from your own NEET-level knowledge -- do not refuse -- and omit the Chapter: line.]\n\nStudent Question: {safe_text}"
     else:
-        user_message = f"Student Question: {text}"
+        user_message = f"Student Question: {safe_text}"
     if diagram_exists:
         user_message += "\n\n[A relevant NCERT diagram exists for this topic -- this is the ONLY signal that tells you whether offering a format-clarification (rule 11) is honest to offer. If this note is absent, a diagram is not available, so never offer to show one.]"
 
@@ -6686,7 +6708,7 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
         # Graph/curve-matching questions are Gemini's one consistently weak category (~73%
         # across 4 rounds of testing, vs 95-100% on everything else) -- this can't be gated on
         # chapter/question-type ahead of time since the chapter is an OUTPUT of the answer (the
-        # 📚 Chapter: line), not something known before generation, so the instruction is just
+        # Chapter: line), not something known before generation, so the instruction is just
         # always-on for the image branch. Harmless for non-graph images, a cheap mitigation
         # (not a fix) for the ones that are.
         graph_context = "\n\nIMPORTANT: If this question involves matching a labeled curve, point, or line in a graph/diagram to a specific value, property, or identity (e.g. \"which curve represents gas X\", \"identify point Y on the graph\"), carefully re-examine which curve/point corresponds to which label before answering -- this type of graph-reading question has a measurably higher error rate, so double-check your reading of the labels against the image before finalizing your answer." if images else ""
@@ -7207,23 +7229,25 @@ def _solve_system_prompt(language: str, has_diagram: bool) -> str:
     )
     return f"""{intro}
 
+Never use emojis anywhere in your response.
+
 Format your response exactly like this:
 
-✅ Answer: [correct option] — [option text]
+Answer: [correct option] — [option text]
 
-📝 Solution:
+Solution:
 - [step 1]
 - [step 2]
 - [step 3]
 
-🔑 Key Concept:
+Key Concept:
 [one line memory tip]
 
 For a numerical/calculation question (one with given quantities and a formula to apply -- e.g.
-physics or chemistry numericals, including circuits), replace the 📝 Solution section above with
-this stricter layout instead -- keep the ✅ Answer and 🔑 Key Concept lines exactly as they are:
+physics or chemistry numericals, including circuits), replace the Solution section above with
+this stricter layout instead -- keep the Answer and Key Concept lines exactly as they are:
 
-📝 Solution:
+Solution:
 Given:
 [each given quantity, one per line, with units]
 
@@ -7255,7 +7279,7 @@ Rules:
    "Wait", "Hmm", "let me re-check/re-verify", corrections, or a second draft. If the Correct
    Answer says "not provided", determine it yourself and present it normally -- that is not a
    disagreement with anything. Only if a Correct Answer IS provided and your own working genuinely
-   disagrees with it, write exactly one line at the very top -- "⚠️ The given answer appears to be
+   disagrees with it, write exactly one line at the very top -- "The given answer appears to be
    incorrect: [one-line reason]" -- then the solution for the option you find correct, with no
    further argument.{lang_instruction}"""
 

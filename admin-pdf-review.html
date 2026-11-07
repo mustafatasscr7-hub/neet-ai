@@ -298,8 +298,8 @@
 
   <div class="panel">
     <div class="mode-tabs" id="inputModeTabs">
-      <button type="button" class="mode-btn active" data-mode="pdf" onclick="selectInputMode('pdf')">📄 PDF Scan</button>
-      <button type="button" class="mode-btn" data-mode="paste" onclick="selectInputMode('paste')">📋 Paste LaTeX (Mathpix/SimpleTex)</button>
+      <button type="button" class="mode-btn active" data-mode="pdf" onclick="selectInputMode('pdf')">PDF Scan</button>
+      <button type="button" class="mode-btn" data-mode="paste" onclick="selectInputMode('paste')">Paste LaTeX (Mathpix/SimpleTex)</button>
     </div>
 
     <h2>1. Choose subject</h2>
@@ -1573,7 +1573,7 @@
       .join(', ');
     hintEl.style.color = fallbackCount ? '#f97316' : '#4ade80';
     hintEl.textContent = `Parsed ${blocks.length} question(s) as ${formatLabel} format` + (patternSummary ? ` — ${patternSummary}` : '') + '.'
-      + (fallbackCount ? ` ${fallbackCount} flagged ⚠ Needs review -- check those first.` : '')
+      + (fallbackCount ? ` ${fallbackCount} flagged - Needs review -- check those first.` : '')
       + (missingOptions ? ` ${missingOptions} had no options detected -- fill those in manually.` : '');
     saveDraftNow(); // a fresh parse just replaced the whole batch -- worth persisting right away, same as scanPdf()
   }
@@ -2234,7 +2234,7 @@
         ${b.has_diagram ? '<span class="q-diagram-badge">Diagram</span>' : ''}
         ${currentLanguage === 'hi' ? '<span class="q-language-badge">Hindi</span>' : ''}
         <span id="confidence-badge-${b.id}" style="display:${b.saved ? 'none' : 'inline'}">
-          ${b.parse_confidence === 'fallback' ? `<span class="q-confidence-badge fallback" title="${escapeHtml(describeDetectedPattern(b.detected_pattern, true))}">⚠ Needs review</span>` : ''}
+          ${b.parse_confidence === 'fallback' ? `<span class="q-confidence-badge fallback" title="${escapeHtml(describeDetectedPattern(b.detected_pattern, true))}">Needs review</span>` : ''}
           ${b.parse_confidence === 'delimiter' ? `<span class="q-confidence-badge delimiter" title="${escapeHtml(describeDetectedPattern(b.detected_pattern, false))}">${b.detected_pattern === 'table' ? 'Table row' : 'Pipe-delimited'}</span>` : ''}
         </span>
         <span class="q-saved-badge" id="saved-badge-${b.id}" style="display:${b.saved ? 'inline-flex' : 'none'}">Saved</span>
@@ -2538,7 +2538,7 @@
   // listener right below). removeOnclickJs is inlined as-is into the button's onclick, same as
   // every call site already did before this was factored out.
   function diagramPreviewHtml(url, removeOnclickJs) {
-    return `<span class="diag-thumb-wrap"><img src="${escapeHtml(url)}" title="Click to enlarge"><span class="diag-thumb-hint">🔍 Click to enlarge</span></span><br><button type="button" class="danger-link" onclick="${removeOnclickJs}">✕ Remove photo</button>`;
+    return `<span class="diag-thumb-wrap"><img src="${escapeHtml(url)}" title="Click to enlarge"><span class="diag-thumb-hint">Click to enlarge</span></span><br><button type="button" class="danger-link" onclick="${removeOnclickJs}">✕ Remove photo</button>`;
   }
 
   // Event delegation (not a listener per thumbnail) so this keeps working for every diagram
