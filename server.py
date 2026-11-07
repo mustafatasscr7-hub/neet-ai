@@ -3121,7 +3121,7 @@ async def search_ncert(query: str, limit: int = 3, stats: dict = None):
 # ncert_v2_compare.py) before anything switches over.
 NCERT_V2_ENABLED = os.getenv("NCERT_V2_ENABLED", "false").strip().lower() == "true"
 
-async def search_ncert_v2(query: str, limit: int = 5):
+async def search_ncert_v2(query: str, limit: int = 3):
     """Same return shape as search_ncert (list of dicts with id/subject/class/chapter_name/
     chapter_name_en/language/content/similarity), plus heading/page/chunk_index from the new
     table. Returns [] immediately (no embedding call, no RPC call) when NCERT_V2_ENABLED is off.
