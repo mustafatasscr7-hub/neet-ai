@@ -6646,28 +6646,34 @@ function plainTextFromMarkdown(text) {
     // context for whatever was quoted -- one shared builder instead of three near-identical
     // copies, so the per-mode wording only ever has to change in one place. 'explain' quotes get
     // an instruction to simplify; 'ask' quotes keep the original neutral framing.
+    // Every quoted span (PYQ stem/options/answer, selected text) is wrapped in <ref_data> tags --
+    // see server.py SYSTEM_PROMPT rule 12: this is quoted/retrieved reference content, not a
+    // fresh instruction, so it's marked the same way NCERT retrieval is, in case the quoted text
+    // itself contains something that reads like an instruction. The framing text around each tag
+    // ("Please explain this part...", "Question:", etc.) stays outside the tags -- that framing
+    // is the real instruction.
     function buildQuotedPreamble(quotes) {
       return quotes.map(function(q) {
         if (q.mode === 'pyq_doubt') {
           const parts = [];
-          if (q.stem) parts.push('Question: ' + q.stem + '.');
-          if (q.correct) parts.push('Correct answer: ' + q.correct + '.');
-          parts.push('Selected line: "' + q.text + '"');
+          if (q.stem) parts.push('Question: <ref_data>' + q.stem + '</ref_data>.');
+          if (q.correct) parts.push('Correct answer: <ref_data>' + q.correct + '</ref_data>.');
+          parts.push('Selected line: <ref_data>' + q.text + '</ref_data>');
           return parts.join(' ');
         }
         if (q.mode === 'pyq_question') {
           const parts = [];
-          if (q.text) parts.push('Question: ' + q.text + '.');
+          if (q.text) parts.push('Question: <ref_data>' + q.text + '</ref_data>.');
           if (q.options) {
             const optParts = ['a', 'b', 'c', 'd'].filter(function(l) { return q.options[l]; }).map(function(l) { return l.toUpperCase() + ') ' + q.options[l]; });
-            if (optParts.length) parts.push('Options: ' + optParts.join(' ') + '.');
+            if (optParts.length) parts.push('Options: <ref_data>' + optParts.join(' ') + '</ref_data>.');
           }
-          if (q.correct) parts.push('Correct answer: ' + q.correct + '.');
+          if (q.correct) parts.push('Correct answer: <ref_data>' + q.correct + '</ref_data>.');
           return parts.join(' ');
         }
         return q.mode === 'explain'
-          ? 'Please explain this part in simple, easy-to-understand terms: "' + q.text + '"'
-          : 'Regarding this part: "' + q.text + '"';
+          ? 'Please explain this part in simple, easy-to-understand terms: <ref_data>' + q.text + '</ref_data>'
+          : 'Regarding this part: <ref_data>' + q.text + '</ref_data>';
       }).join('\n\n');
     }
     function buildQuestionWithQuotes(quotes, text) {
