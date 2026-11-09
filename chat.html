@@ -24,18 +24,24 @@
        load, even for Pro/Max accounts. This reads 'lastKnownPlan' (cached by applyProUIState
        itself each time it resolves the real plan) and optimistically adds the same classes to
        <html> before first paint, matched by the CSS right below and by the existing
-       .countdown-compact-capable rule further down. No cached value (first-ever visit) means
-       neither class is added, i.e. the current Free-by-default look -- not a guess at Pro. The
+       .countdown-compact-capable rule further down. No cached value (first-ever visit, or any
+       account on a fresh device/browser with nothing cached yet) now also defaults to the
+       compact-pill guess rather than neither class: on mobile, the header's hamburger+title+
+       pill+Upgrade row is nowrap (see that @media block), and Upgrade-visible + the pill's full
+       "NEET 2027 - N days left" text is the one combination wide enough to overflow it -- a
+       combination no *steady-state* account ever actually shows (Free gets the compact pill,
+       Pro/Max never gets Upgrade), so it's only ever live during this guess window anyway. The
        real check in applyProUIState() still runs after and is the one that corrects a wrong or
        missing guess; it also clears these two classes itself once it does, so a stale guess can
-       never outlive it. -->
+       never outlive it -- worst case a genuinely new Pro/Max device briefly sees the compact pill
+       before Upgrade disappears, which beats the alternative of briefly overflowing the header. -->
   <script>
   (function () {
     try {
       var plan = localStorage.getItem('lastKnownPlan');
       if (plan === 'pro' || plan === 'max') {
         document.documentElement.classList.add('plan-cached-pro');
-      } else if (plan === 'free') {
+      } else {
         document.documentElement.classList.add('countdown-compact-capable');
       }
     } catch (e) {}
@@ -1936,7 +1942,14 @@
          width of its non-shrinking children instead of refusing to, and they spill out past the
          header's right edge instead of the title (the one thing meant to give) taking the hit. */
       .header > div:last-child { gap: 6px !important; flex-shrink: 0; }
-      .sidebar-hamburger-btn, .todo-btn, #countdownWrapper, #headerUpgradeBtn { flex-shrink: 0; }
+      /* #headerBrand (the "NEET-AI" wordmark) sits where #chatTitleBtn does once a chat has a
+         title -- the two are mutually exclusive (one's display:none while the other shows), but
+         on a brand-new visit (no cached plan yet, see the plan-flash-fix script in <head>) the
+         countdown pill briefly renders in its full, uncompacted form before the real per-account
+         check lands, and without this the brand text -- unlike the title, which has its own
+         ellipsis handling -- would get squeezed by that transient overflow and visibly wrap at
+         its hyphen ("NEET-" / "AI") instead of just staying put. */
+      .sidebar-hamburger-btn, #headerBrand, .todo-btn, #countdownWrapper, #headerUpgradeBtn { flex-shrink: 0; }
 
       /* .chat-title-btn and the controls below all carry an inline style="..." in the markup
          (see the buttons right after <body>) -- an element's own inline style always beats a
@@ -1954,7 +1967,13 @@
       .message-content { max-width: calc(100vw - 100px); }
       .message-bubble.user { max-width: calc(100vw - 100px); }
 
-      .input-area { padding: clamp(8px, 2.5vw, 10px) clamp(8px, 2.5vw, 10px) calc(clamp(10px, 3.5vw, 14px) + env(safe-area-inset-bottom, 0px)); }
+      /* The +16px flat addition (on top of env(safe-area-inset-bottom), which stays 0 in a plain
+         browser tab -- see the .input-area rule above) mirrors the settings-modal top-bar fix's
+         own flat +18px: many Android phones default Chrome's address bar to the BOTTOM of the
+         screen, sitting directly above the system gesture-nav area, and that bar can visually
+         crowd/overlap a composer with no buffer of its own even though it's Chrome's own
+         retractable UI, not a safe-area inset env() ever reports. */
+      .input-area { padding: clamp(8px, 2.5vw, 10px) clamp(8px, 2.5vw, 10px) calc(clamp(10px, 3.5vw, 14px) + 16px + env(safe-area-inset-bottom, 0px)); }
       .input-wrapper { padding: clamp(8px, 2.5vw, 10px) clamp(10px, 3vw, 12px); }
       .welcome { padding: clamp(16px, 6vw, 24px) clamp(12px, 4vw, 16px); }
       /* Landing heading only (not the main composer) -- scales from 22px at the narrowest
