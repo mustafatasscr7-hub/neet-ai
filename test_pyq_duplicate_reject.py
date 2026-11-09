@@ -1,7 +1,7 @@
 """Small, targeted unit tests for the Duplicates "Reject (duplicate)" bulk action and the
 contractor-tally uploader filter -- no network, no Supabase.
 Run with dummy credentials, e.g.:
-  OPENAI_KEY=dummy ANTHROPIC_KEY=dummy SUPABASE_URL=https://example.supabase.co SUPABASE_KEY=dummy \
+  OPENAI_KEY=dummy SUPABASE_URL=https://example.supabase.co SUPABASE_KEY=dummy \
   SUPABASE_SERVICE_KEY=dummy DEEPSEEK_KEY=dummy QWEN_API_KEY=dummy GEMINI_API_KEY=dummy \
   ADMIN_PASSWORD=dummy python -m pytest test_pyq_duplicate_reject.py
 """

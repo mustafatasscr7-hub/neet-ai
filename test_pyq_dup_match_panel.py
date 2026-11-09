@@ -3,7 +3,7 @@
 Covers the bug where /admin/pyq-matches' corpus excluded rejected/deactivated rows while the
 "Duplicate" pill (auto_reasons) is a stale, point-in-time snapshot that doesn't un-set itself.
 Run with dummy credentials, e.g.:
-  OPENAI_KEY=dummy ANTHROPIC_KEY=dummy SUPABASE_URL=https://example.supabase.co SUPABASE_KEY=dummy \
+  OPENAI_KEY=dummy SUPABASE_URL=https://example.supabase.co SUPABASE_KEY=dummy \
   SUPABASE_SERVICE_KEY=dummy DEEPSEEK_KEY=dummy QWEN_API_KEY=dummy GEMINI_API_KEY=dummy \
   ADMIN_PASSWORD=dummy python -m pytest test_pyq_dup_match_panel.py
 """

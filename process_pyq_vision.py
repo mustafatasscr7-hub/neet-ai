@@ -5,7 +5,6 @@ import io
 import base64
 import concurrent.futures
 import fitz
-from anthropic import Anthropic
 from google import genai
 from google.genai import types as genai_types
 from dotenv import load_dotenv
@@ -13,17 +12,13 @@ import requests as http_requests
 
 load_dotenv()
 
-ANTHROPIC_KEY = os.getenv("ANTHROPIC_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-client = Anthropic(api_key=ANTHROPIC_KEY)
 # Text-only extraction (extract_questions_from_text, below) runs on Gemini 3.5 Flash-Lite --
 # moved off DeepSeek V4 Flash, which wasn't extracting accurately enough for this task (real
-# comparison on 3 PDF pages, see the migration commit). The vision path
-# (extract_questions_from_page, image bytes sent to Claude) stays on `client` above -- it's a
-# genuine vision task and the actual scanned-PDF path, untouched by this swap.
+# comparison on 3 PDF pages, see the migration commit).
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
 VISION_MODEL = "claude-haiku-4-5-20251001"
