@@ -3769,13 +3769,16 @@ let selectedImages = [];
 
     function parseWithMath(text) {
       let html = stripAnswerEmojiMarkers(text);
-      // Terminator covers both real "Solution:" templates in this codebase: server.py's chat
-      // numeric-answer format ends the block at "Final Answer:", the /solve endpoint's PYQ
-      // template (reused by the PYQ-modal solve box, also rendered through this function) has
-      // no Final Answer line and ends it at "Key Concept:" instead -- falls back to end of
-      // string if neither shows up. Hindi answers use server.py's fixed Hindi labels for the
-      // same template (HINDI_LANG_CONTEXT): "हल:" ... "अंतिम उत्तर:".
-      html = html.replace(/(Solution|हल):\n([\s\S]*?)(?=\n\n(?:Final Answer|अंतिम उत्तर):|\n\nKey Concept:|$)/, function(_, label, stepsText) {
+      // Terminator covers every real "Solution:" shape in this codebase. server.py's /solve PYQ
+      // template (reused by the PYQ-modal solve box) has no Final Answer line and ends the block
+      // at "Key Concept:". server.py's /chat numeric-answer format moved its "Final Answer:" line
+      // BEFORE Given/Formula/Solution (answer-first rewrite) so Solution now ends at "Key
+      // Points:" instead -- but "Final Answer:"/"अंतिम उत्तर:" is kept as a terminator too so an
+      // OLD saved chat answer (generated before that rewrite, where Final Answer still follows
+      // Solution) still renders exactly as it did before. Falls back to end of string if none of
+      // these show up. Hindi answers use server.py's fixed Hindi labels for the same templates
+      // (HINDI_LANG_CONTEXT): "हल:" ... "अंतिम उत्तर:" ... "मुख्य बिंदु:".
+      html = html.replace(/(Solution|हल):\n([\s\S]*?)(?=\n\n(?:Final Answer|अंतिम उत्तर):|\n\nKey Concept:|\n\n(?:Key Points|मुख्य बिंदु):|$)/, function(_, label, stepsText) {
         return label + ':\n' + renderSolutionStepsHtml(stepsText);
       });
       html = html.replace(/\$\$([^$]+)\$\$/g, function(_, math) {

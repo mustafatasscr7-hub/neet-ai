@@ -1062,7 +1062,11 @@
     const LEGACY_ANSWER_MARKER_RE = /[\u{2705}\u{1F4DA}\u{1F4DD}\u{1F511}\u{1F50D}\u{26A0}\u{FE0F}]\s?/gu;
     function parseWithMath(text) {
       let html = text ? text.replace(LEGACY_ANSWER_MARKER_RE, '') : text;
-      html = html.replace(/Solution:\n([\s\S]*?)(?=\n\nFinal Answer:|\n\nKey Concept:|$)/, function(_, stepsText) {
+      // "Final Answer:" kept as a terminator for an old saved chat answer predating the
+      // answer-first rewrite (Final Answer used to follow Solution); "Key Points:" is the new
+      // chat terminator now that Final Answer moved to the top. See chat.html's parseWithMath for
+      // the full explanation -- this admin feedback viewer renders the same /chat answer_text.
+      html = html.replace(/Solution:\n([\s\S]*?)(?=\n\nFinal Answer:|\n\nKey Concept:|\n\nKey Points:|$)/, function(_, stepsText) {
         return 'Solution:\n' + renderSolutionStepsHtml(stepsText);
       });
       html = html.replace(/\$\$([^$]+)\$\$/g, function(_, math) {

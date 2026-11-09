@@ -414,6 +414,10 @@ You will be given relevant NCERT content to answer the student's question.
 Never use emojis anywhere in your response -- not in headings, bullet points, the Chapter line, or
 anywhere else. Plain text only.
 
+Never use an em dash (—) anywhere in your response either. Where you would naturally reach for
+one, use a plain hyphen with a space on each side instead -- e.g. "osmosis - the movement of
+water across a membrane" not "osmosis — the movement of water across a membrane".
+
 BEFORE anything else, run this closed classification check, every time, as a mandatory first
 step — same as the TOPIC/FORMAT AMBIGUITY check in rule 11 below, this is a real gate you must
 actually apply, not a formality to skim past:
@@ -532,7 +536,28 @@ NEET Importance: [N]/5
 Chapter: [copied verbatim from a "Retrieved from:" entry given to you — see Rule 1. Omit this whole line if no "Retrieved from:" entries were given.]
 
 Answer:
-[Give the answer in clear points]
+Always lead with the direct answer FIRST, before any explanation -- never build up to it at the
+end. The exact shape of that first line depends on the question:
+- If the question presents its own lettered/numbered options (A/B/C/D, 1/2/3/4, or similar), the
+  very first line under "Answer:" states the correct option in bold, in this exact shape --
+  "**Correct option: <letter>) <the option's own text>**" (e.g. "**Correct option: D) Brinjal**").
+  If you genuinely cannot determine the correct option with confidence, say so plainly on that same
+  first line instead of silently guessing -- "**Not sure - best answer: <letter>) <text>**". Then,
+  immediately after that line, give the explanation: why that option is correct, then briefly why
+  each of the other options is wrong. When explaining why an option is wrong, state only facts you
+  are genuinely confident are well-established -- if NCERT content was given to you for this
+  question, ground that reasoning in it rather than in unverified recollection.
+- If the question is a numerical/calculation problem, the very first line under "Answer:" is
+  "Final Answer: <value> <unit>" -- work out and silently verify the value first (see the
+  numerical-problem rules further below), then state it here before anything else. Follow it with
+  Given:/Formula:/Solution: as laid out further below; do NOT restate the Final Answer again at
+  the end, it was already given here.
+- Otherwise (a normal conceptual doubt -- no options, no calculation), the first one or two
+  sentences under "Answer:" are a direct, plain-language statement of the answer itself -- no
+  bullet points yet, no preamble, no restating the question. Then continue with the fuller
+  explanation in clear points exactly as before.
+In every case, the explanation that follows must add real content, never just reword the opening
+line a second time.
 
 Key Points:
 - [Point 1]
@@ -560,9 +585,13 @@ For numerical problems, lay out Given/Formula/Solution VERTICALLY, one item per 
 NEVER merge values, the formula, or algebra steps into a running paragraph. A paragraph like
 "Given u = 20 m/s and g = 10 m/s², using v² = u² - 2gh we get..." is exactly what NOT to do, even
 though the same numbers and formula are technically present — each given value, the formula, and
-each algebra step must each start on their own new line, not be woven into sentence prose. Follow
-this exact worked example's layout (content differs per problem, the one-item-per-line shape does
-not):
+each algebra step must each start on their own new line, not be woven into sentence prose. The
+Final Answer line comes FIRST, right under "Answer:" per the answer-first rule above, with
+Given/Formula/Solution shown afterward as the supporting work -- never state the Final Answer a
+second time once you reach the end. Follow this exact worked example's layout (content differs per
+problem, the one-item-per-line shape does not):
+
+Final Answer: Maximum height = 20 m
 
 Given:
 $u = 20$ m/s (initial velocity)
@@ -578,21 +607,20 @@ $0 = 400 - 20h$
 $h = 400 / 20$
 $h = 20$ m
 
-Final Answer: Maximum height = 20 m
-
 For every numerical problem, also follow these three rules:
 - State the convention or value you're using for anything that has more than one commonly
   accepted value — e.g. $g = 10$ m/s$^2$ unless the problem gives its own value, or NCERT's own
   bioenergetics convention of 3 ATP per NADH and 2 ATP per FADH2 in aerobic respiration. Say which
   one you used, right in the Given: section (as in the worked example above), not silently.
-- Before writing the Final Answer, verify it by substituting it back into the formula/relation
-  used — do this silently as part of your own solving, but if the check reveals a problem, show
-  the corrected Solution rather than a wrong Final Answer.
+- Work out the Solution and verify the result by substituting it back into the formula/relation
+  used BEFORE writing anything down -- do this silently as part of your own solving. Only once it
+  checks out do you write the Final Answer line at the top; if the check reveals a problem, fix
+  the working first so the Final Answer line and the Solution that follows it agree.
 - If the problem's setup is genuinely ambiguous (e.g. unclear whether a given length is measured
   along a slope or vertically), state plainly which reading you're assuming in the Given: section,
   solve on that assumption, and — only if the other reading is also a reasonable interpretation —
-  briefly give that alternative result too after the Final Answer line, clearly labeled as the
-  alternate-assumption case.
+  briefly give that alternative result too at the end, after the Solution steps, clearly labeled
+  as the alternate-assumption case.
 
 Rules:
 1. Answer ONLY from the NCERT content provided to you. This applies most strictly to the
@@ -5083,7 +5111,10 @@ HINDI_LANG_CONTEXT = (
     "\"Answer:\" becomes \"उत्तर:\", \"Key Points:\" becomes \"मुख्य बिंदु:\", \"Quick "
     "Recall:\" becomes \"त्वरित याद:\", and in numerical answers \"Given:\" becomes "
     "\"दिया गया है:\", \"Formula:\" becomes \"सूत्र:\", \"Solution:\" becomes \"हल:\", "
-    "\"Final Answer:\" becomes \"अंतिम उत्तर:\". \"NEET Importance:\" and \"Chapter:\" stay in "
+    "\"Final Answer:\" becomes \"अंतिम उत्तर:\", and in an MCQ's answer-first line \"Correct "
+    "option:\" becomes \"सही विकल्प:\" and \"Not sure - best answer:\" becomes \"पक्का नहीं - "
+    "सबसे उपयुक्त उत्तर:\" (still bolded, still the first line under the answer heading). "
+    "\"NEET Importance:\" and \"Chapter:\" stay in "
     "English exactly as given in the format above -- never translate those two labels. Any memory "
     "trick or mnemonic must itself be in Devanagari -- never an acronym or phrase made of English/Latin "
     "letters (e.g. not \"OIL RIG\" or \"VIBGYOR\"); if no good Devanagari one exists, leave the memory trick out."
@@ -6785,13 +6816,15 @@ IMPORTANT -- BE CONCISE:
 IMPORTANT -- MULTIPLE-CHOICE QUESTION ANSWER-FIRST RULE:
 If the question shown includes multiple-choice options (e.g. labeled A/B/C/D, 1/2/3/4, or similar),
 follow the exact same format as always (VISUAL_INTENT, NEET Importance, Chapter, Key Points, Quick
-Recall all still required, same length and depth as any other answer) with ONE change: the Answer:
-section must open with the correct option stated inline in its own heading line, in this exact
-shape, instead of a bare "Answer:" header:
-Answer: <letter>) <the option's text or value>
-Then continue directly into the full explanation on the lines after it, exactly as you normally
-would -- do not shorten, skip, or omit anything else. If there are no multiple-choice options in
-the question, ignore this instruction entirely and use the plain "Answer:" header as usual.""" if (images or pdf) else ""
+Recall all still required, same length and depth as any other answer). The one thing to watch is
+the Answer: section's own first line -- state the correct option there FIRST, in bold, exactly as
+the format rules above already specify ("**Correct option: <letter>) <text>**", or "**Not sure -
+best answer: <letter>) <text>**" if you are not confident), BEFORE any explanation. Do not describe
+the options or build up to the answer first and only reveal which one is correct at the end -- the
+bolded option line must be the very first thing under "Answer:". Then continue directly into the
+full explanation (including why each other option is wrong) on the lines after it, exactly as you
+normally would -- do not shorten, skip, or omit anything else. If there are no multiple-choice
+options in the question, ignore this instruction entirely.""" if (images or pdf) else ""
         full_system = SYSTEM_PROMPT + name_context + style_context + student_context + graph_context + conciseness_context + mcq_context
         if _is_mnemonic_request(text):
             # Applied here (before the images/pdf/else branch split) so it reaches whichever
@@ -7260,11 +7293,13 @@ def _solve_system_prompt(language: str, has_diagram: bool) -> str:
     )
     return f"""{intro}
 
-Never use emojis anywhere in your response.
+Never use emojis anywhere in your response. Never use an em dash (—) either -- use a plain hyphen
+with a space on each side instead (e.g. "osmosis - movement of water" not "osmosis — movement of
+water").
 
 Format your response exactly like this:
 
-Answer: [correct option] — [option text]
+Answer: [correct option] - [option text]
 
 Solution:
 - [step 1]

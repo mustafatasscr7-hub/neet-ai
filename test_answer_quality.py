@@ -10,6 +10,10 @@ test_student_name_sanitization.py. Fully offline: every network/model call is mo
    "Pb(II) is a reducing agent" into an Ohm's Law answer) -- only appended for doubts about it.
 3. Weak-chapter personalisation only uses chapters from the retrieved subject, and the
    mock-test average line is gone.
+4. Answer-first rewrite (2026-11-09): every answer leads with its conclusion -- the bolded
+   correct option for an MCQ, "Final Answer:" before Given/Formula/Solution for a numerical, a
+   direct sentence for a plain doubt -- and em dashes are banned from model output (chat and
+   /solve), replaced by a spaced hyphen.
 """
 import asyncio
 import io
@@ -278,11 +282,39 @@ def test_personalisation():
         check("wrong mock answers combine with saved mistakes to qualify a chapter", "Laws of Motion" in h.systems[0])
 
 
+# ---------- 4. answer-first rewrite ----------
+
+def test_answer_first_order():
+    print("\n[4] answer-first rewrite")
+    check("em dash banned in chat prompt", "Never use an em dash" in server.SYSTEM_PROMPT)
+    check("MCQ answer-first: bolded correct-option line", "**Correct option:" in server.SYSTEM_PROMPT)
+    check("MCQ answer-first: uncertain fallback", "**Not sure - best answer:" in server.SYSTEM_PROMPT)
+    check("MCQ answer-first: explain wrong options", "each of the other options is wrong" in server.SYSTEM_PROMPT)
+    check("numerical: Final Answer line comes first", "Final Answer: Maximum height = 20 m" in server.SYSTEM_PROMPT)
+    final_idx = server.SYSTEM_PROMPT.index("Final Answer: Maximum height = 20 m")
+    given_idx = server.SYSTEM_PROMPT.index("Given:\n$u = 20$")
+    check("worked example: Final Answer precedes Given", final_idx < given_idx)
+    check("worked example: no trailing restated Final Answer", server.SYSTEM_PROMPT.count("Final Answer: Maximum height = 20 m") == 1)
+    check("Hindi labels cover the new MCQ answer-first lines",
+          '"Correct option:" becomes "सही विकल्प:"' in server.HINDI_LANG_CONTEXT
+          and '"Not sure - best answer:" becomes' in server.HINDI_LANG_CONTEXT)
+
+    solve_prompt = server._solve_system_prompt("en", False)
+    check("solve prompt bans em dash too", "Never use an em dash" in solve_prompt)
+    check("solve prompt's Answer line uses a hyphen, not an em dash", "Answer: [correct option] - [option text]" in solve_prompt)
+
+    with Harness([GOOD_CHAT]) as h:
+        asyncio.run(drain(server.stream_response("What is the SI unit of force? A) Newton B) Joule C) Watt D) Pascal", personalize=False, skip_cache=True)))
+        check("MCQ-shaped text doubt still gets MCQ_AMBIGUOUS_GUARD appended", server.MCQ_AMBIGUOUS_GUARD in h.systems[0])
+        check("MCQ-shaped text doubt prompt still carries the bolded answer-first rule", "**Correct option:" in h.systems[0])
+
+
 if __name__ == "__main__":
     test_detector()
     test_solve_cache_gating()
     test_chat_cache_gating()
     test_inert_pair_scoping()
     test_personalisation()
+    test_answer_first_order()
     print(f"\n{len(_passed)} passed, {len(_failed)} failed")
     sys.exit(1 if _failed else 0)
