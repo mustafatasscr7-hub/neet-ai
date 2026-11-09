@@ -2027,7 +2027,10 @@
         <div class="profile-menu-item" onclick="event.stopPropagation(); openProfileSubmenu('language', this)">
           <span class="item-menu-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></span>
           <span data-i18n="chat.language">Language</span>
-          <span class="profile-menu-chevron"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></span>
+          <span style="margin-left:auto;display:flex;align-items:center;gap:4px;">
+            <span class="profile-menu-current-lang" id="profileMenuCurrentLang" style="color:#4f8ef7;font-size:12px;font-weight:500;"></span>
+            <span class="profile-menu-chevron"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></span>
+          </span>
         </div>
         <div class="profile-menu-item" onclick="event.stopPropagation(); openProfileSubmenu('learnMore', this)">
           <span class="item-menu-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg></span>
@@ -12400,10 +12403,15 @@ function openSettings() {
     // so the click bubbles to the existing document-level listener that already hides both
     // #profileMenu and every .item-menu on any outside click, closing everything in one place
     // once the actual action (setLang / window.open) has run.
+    const LANG_OPTION_CHECK = '<span style="color:#4f8ef7;display:flex;align-items:center;">' + LANG_CHECK_SVG + '</span>';
     const PROFILE_SUBMENU_CONTENT = {
-      language: () =>
-        `<div class="item-menu-option" onclick="setLang('en')">English</div>` +
-        `<div class="item-menu-option" onclick="setLang('hi')">हिंदी</div>`,
+      language: () => {
+        const current = getLang();
+        return (
+          `<div class="item-menu-option" style="justify-content:space-between;" onclick="setLang('en')"><span>English</span>${current === 'en' ? LANG_OPTION_CHECK : ''}</div>` +
+          `<div class="item-menu-option" style="justify-content:space-between;" onclick="setLang('hi')"><span>हिंदी</span>${current === 'hi' ? LANG_OPTION_CHECK : ''}</div>`
+        );
+      },
       learnMore: () =>
         `<div class="item-menu-option" onclick="window.open('./index.html','_blank')">${t('chat', 'learnMoreNeetAi')}</div>` +
         `<div class="item-menu-option" onclick="window.open('./privacy.html','_blank')">${t('chat', 'learnMorePrivacy')}</div>` +

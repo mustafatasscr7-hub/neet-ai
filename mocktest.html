@@ -336,7 +336,10 @@
           <div class="profile-menu-item" onclick="event.stopPropagation(); openProfileSubmenu('language', this)">
             <span class="item-menu-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></span>
             <span data-i18n="chat.language">Language</span>
-            <span class="profile-menu-chevron"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></span>
+            <span style="margin-left:auto;display:flex;align-items:center;gap:4px;">
+              <span class="profile-menu-current-lang" id="profileMenuCurrentLang" style="color:#4f8ef7;font-size:12px;font-weight:500;"></span>
+              <span class="profile-menu-chevron"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></span>
+            </span>
           </div>
           <div class="profile-menu-item" onclick="event.stopPropagation(); openProfileSubmenu('learnMore', this)">
             <span class="item-menu-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg></span>

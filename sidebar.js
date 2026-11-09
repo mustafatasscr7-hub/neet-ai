@@ -179,10 +179,15 @@ function positionProfileMenu() {
   menu.style.bottom = bottom + 'px';
 }
 
+const LANG_OPTION_CHECK = '<span style="color:#4f8ef7;display:flex;align-items:center;">' + LANG_CHECK_SVG + '</span>';
 const PROFILE_SUBMENU_CONTENT = {
-  language: () =>
-    `<div class="item-menu-option" onclick="setLang('en')">English</div>` +
-    `<div class="item-menu-option" onclick="setLang('hi')">हिंदी</div>`,
+  language: () => {
+    const current = getLang();
+    return (
+      `<div class="item-menu-option" style="justify-content:space-between;" onclick="setLang('en')"><span>English</span>${current === 'en' ? LANG_OPTION_CHECK : ''}</div>` +
+      `<div class="item-menu-option" style="justify-content:space-between;" onclick="setLang('hi')"><span>हिंदी</span>${current === 'hi' ? LANG_OPTION_CHECK : ''}</div>`
+    );
+  },
   learnMore: () =>
     `<div class="item-menu-option" onclick="window.open('./index.html','_blank')">${typeof t === 'function' ? t('chat', 'learnMoreNeetAi') : 'About NEET-AI'}</div>` +
     `<div class="item-menu-option" onclick="window.open('./privacy.html','_blank')">${typeof t === 'function' ? t('chat', 'learnMorePrivacy') : 'Privacy Policy'}</div>` +
@@ -204,14 +209,17 @@ function openProfileSubmenu(key, anchorEl) {
   positionItemMenu(menu, anchorEl.getBoundingClientRect());
 }
 
-document.addEventListener('click', function(e) {
-  if (!e.target.closest('#profileSection') && !e.target.closest('#profileMenu')) {
-    const m = document.getElementById('profileMenu');
-    if (m) m.style.display = 'none';
-  }
-  if (!e.target.closest('.profile-menu-item') && !e.target.closest('.item-menu')) {
-    document.querySelectorAll('[id^="profileSubmenu-"]').forEach(m => m.style.display = 'none');
-  }
+// Unconditional close on ANY click that reaches here -- the two openers (profileSection's own
+// click handler, and each submenu trigger row's onclick) both call event.stopPropagation(), so
+// this only ever runs for genuine outside clicks *or* a click on an option inside an open
+// flyout (setLang/window.open), which deliberately don't stop propagation so selecting an
+// option closes everything in one place. Matches chat.html's own copy of this listener -- the
+// previous closest()-gated version here never closed `.item-menu` because the option's own
+// click target always matched `.closest('.item-menu')`.
+document.addEventListener('click', function() {
+  const m = document.getElementById('profileMenu');
+  if (m) m.style.display = 'none';
+  document.querySelectorAll('.item-menu').forEach(m => m.style.display = 'none');
 });
 
 function initSidebar() {
