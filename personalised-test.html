@@ -160,6 +160,7 @@
     .timer.danger { color: #ef4444; background: #ef444410; border-color: #ef444430; }
     .submit-btn { background: #4f8ef7; border: none; color: white; padding: 8px 20px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600; font-family: 'Inter', sans-serif; transition: all 0.2s; }
     .submit-btn:hover { background: #3b7de8; }
+    .exam-footer-actions { display: none; }
 
     .body { display: flex; flex: 1; overflow: hidden; }
     .question-area { flex: 1; overflow-y: auto; padding: 32px; }
@@ -328,6 +329,15 @@
       .prev-btn, .next-btn { flex: 1; }
       .sidebar { width: 100%; height: auto; overflow: visible; border-left: none; border-top: 1px solid #1e1e1e; }
       .sidebar .question-grid { overflow-y: visible; flex: none; min-height: auto; }
+
+      /* Exit/Submit move out of the cramped header row into a footer below the navigator;
+         the header keeps just title + timer. Buttons are duplicated (same onclick handlers)
+         rather than relocated in the DOM, so desktop's single-row header is untouched. */
+      .header-left button[onclick="confirmExit()"] { display: none; }
+      .header > .submit-btn { display: none; }
+      .exam-footer-actions { display: flex; gap: 12px; margin-top: 16px; padding-top: 16px; border-top: 1px solid #1e1e1e; }
+      .exam-footer-actions button { flex: 1; margin: 0 !important; text-align: center; }
+      body.light-mode .exam-footer-actions { border-color: #e3e3ea !important; }
     }
 
     /* ===== LIGHT MODE ===== */
@@ -395,7 +405,7 @@
     /* Test-taking screen (shared pattern with mocktest.html) */
     body.light-mode .header { background: #ffffff !important; border-color: #e3e3ea !important; }
     body.light-mode .header-title { color: #0d0d0d !important; }
-    body.light-mode .header button[onclick="confirmExit()"] { background: #ffffff !important; border-color: #d5d5dd !important; color: #55555f !important; }
+    body.light-mode button[onclick="confirmExit()"] { background: #ffffff !important; border-color: #d5d5dd !important; color: #55555f !important; }
 
     body.light-mode .timer { background: #4f8ef714 !important; border-color: #4f8ef740 !important; }
     body.light-mode .timer.warning { background: #f9731614 !important; border-color: #f9731640 !important; }
@@ -672,6 +682,10 @@
           <div class="stat"><div class="stat-dot" style="background:#4f8ef7;"></div><span class="stat-count" id="answeredCount">0</span><span class="stat-label" data-i18n="mocktest.answered">Answered</span></div>
           <div class="stat"><div class="stat-dot" style="background:#f97316;"></div><span class="stat-count" id="markedCount">0</span><span class="stat-label" data-i18n="mocktest.marked">Marked</span></div>
           <div class="stat"><div class="stat-dot" style="background:#555;"></div><span class="stat-count" id="skippedCount">0</span><span class="stat-label" data-i18n="mocktest.skipped">Skipped</span></div>
+        </div>
+        <div class="exam-footer-actions">
+          <button onclick="confirmExit()" style="background:transparent;border:1px solid #2a2a2a;color:#888;padding:6px 14px;border-radius:8px;cursor:pointer;font-size:13px;font-family:Inter,sans-serif;" data-i18n="personalisedTest.exit">← Exit</button>
+          <button class="submit-btn" onclick="confirmSubmit()" data-i18n="personalisedTest.submitTest">Submit Test</button>
         </div>
       </div>
     </div>
