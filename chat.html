@@ -1525,7 +1525,11 @@
     body.light-mode .diagram-stars .star-filled { color: #a08a4a !important; }
     body.light-mode .diagram-stars .star-empty { color: #d5d5dd !important; }
 
-    .input-area { padding: 16px 24px 24px; background: #0d0d0d; }
+    /* Bottom padding adds env(safe-area-inset-bottom) on top of the flat 24px so the composer
+       never sits under a device's gesture-nav bar -- a no-op in a plain browser tab (inset is 0
+       there, see the settings-modal safe-area fix above for why) but real once this page runs
+       under viewport-fit=cover, e.g. a PWA or a WebView. */
+    .input-area { padding: 16px 24px calc(24px + env(safe-area-inset-bottom, 0px)); background: #0d0d0d; }
     .input-wrapper { max-width: 820px; margin: 0 auto; background: #111111; border: 1px solid #2a2a2a; border-radius: 14px; display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; transition: border-color 0.2s; }
     .input-row { display: flex; align-items: flex-end; gap: 8px; width: 100%; }
     @keyframes inputShake { 10%, 90% { transform: translateX(-1px); } 20%, 80% { transform: translateX(2px); } 30%, 50%, 70% { transform: translateX(-4px); } 40%, 60% { transform: translateX(4px); } }
@@ -1918,21 +1922,39 @@
          pill ballooning sideways next to its label. */
       .dropdown-trigger { padding: clamp(13px, 3.5vw, 15px) 12px; }
 
-      .header { flex-wrap: wrap; row-gap: 8px; padding: clamp(8px, 2.5vw, 10px) clamp(10px, 3.5vw, 14px); }
-      .header > div { flex-wrap: wrap; row-gap: 6px; }
+      /* Keep hamburger + title + countdown pill + Upgrade on one row instead of wrapping --
+         wrapping used to leave the pill/Upgrade stranded on an orphan second line. Both direct
+         children (left: hamburger+title, right: planner/countdown/Upgrade) stay nowrap too, and
+         everything except the title text is pinned to its intrinsic size (flex-shrink: 0) below,
+         so the title is the only thing that gives when space is tight. */
+      .header { flex-wrap: nowrap; padding: clamp(8px, 2.5vw, 10px) clamp(10px, 3.5vw, 14px); }
+      .header > div { flex-wrap: nowrap; min-width: 0; }
+      .header > div:first-child { gap: 8px !important; min-width: 0; }
+      /* flex-shrink: 0 on the row itself, not just the icons/pill/button inside it -- a flex
+         container whose own overflow is visible (the default, true here) gets an automatic
+         minimum size of 0, so without this the row happily shrinks itself below the combined
+         width of its non-shrinking children instead of refusing to, and they spill out past the
+         header's right edge instead of the title (the one thing meant to give) taking the hit. */
+      .header > div:last-child { gap: 6px !important; flex-shrink: 0; }
+      .sidebar-hamburger-btn, .todo-btn, #countdownWrapper, #headerUpgradeBtn { flex-shrink: 0; }
 
       /* .chat-title-btn and the controls below all carry an inline style="..." in the markup
          (see the buttons right after <body>) -- an element's own inline style always beats a
          stylesheet rule for the same property regardless of @media, so every override of one
          of those properties here needs !important, matching this file's existing precedent for
-         the same situation (see the body.light-mode rules earlier in this block). */
-      .chat-title-btn { max-width: 55vw !important; }
+         the same situation (see the body.light-mode rules earlier in this block). Dropped from a
+         flat 55vw max-width to an actual flex-shrink target (min-width: 0 so the browser can
+         shrink it below its text's intrinsic width instead of refusing to and forcing overflow)
+         with tighter own padding/gap so the "Casual Chat ▾" chevron survives the squeeze and only
+         the title text truncates with an ellipsis. */
+      .chat-title-btn { max-width: 55vw !important; flex-shrink: 1; min-width: 0; padding: 6px 4px !important; gap: 4px !important; }
+      #chatTitleText { min-width: 0; }
 
       .message-row { padding: clamp(8px, 3vw, 12px); gap: 10px; }
       .message-content { max-width: calc(100vw - 100px); }
       .message-bubble.user { max-width: calc(100vw - 100px); }
 
-      .input-area { padding: clamp(8px, 2.5vw, 10px) clamp(8px, 2.5vw, 10px) clamp(10px, 3.5vw, 14px); }
+      .input-area { padding: clamp(8px, 2.5vw, 10px) clamp(8px, 2.5vw, 10px) calc(clamp(10px, 3.5vw, 14px) + env(safe-area-inset-bottom, 0px)); }
       .input-wrapper { padding: clamp(8px, 2.5vw, 10px) clamp(10px, 3vw, 12px); }
       .welcome { padding: clamp(16px, 6vw, 24px) clamp(12px, 4vw, 16px); }
       /* Landing heading only (not the main composer) -- scales from 22px at the narrowest
@@ -1955,7 +1977,13 @@
          can no longer run off a narrow screen regardless of where the button that opened it sits. */
       #plusMenu { max-width: calc(100vw - 24px); }
 
-      #countdownWrapper > div { padding: 4px 9px !important; }
+      #countdownWrapper > div { padding: 4px 7px !important; }
+
+      /* Tighter than the >620px .upgrade-btn padding (13px) -- every extra px here is one more
+         the chat title gets to keep as visible text before it has to ellipsis. Wins over that
+         rule at this narrower breakpoint on source order alone (same specificity, declared
+         later), no !important needed. */
+      .upgrade-btn { padding: 0 10px; }
 
       /* Free plan's header row also carries #headerUpgradeBtn, which crowds this breakpoint --
          swap the countdown pill to its compact "185d left" form (dropping the "NEET 2027 —"
