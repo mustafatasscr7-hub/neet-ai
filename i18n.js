@@ -83,6 +83,12 @@ function applyTranslations() {
 
   const openMenu = document.getElementById('langDropdownMenu');
   if (openMenu) openMenu.remove();
+
+  // Account menu's compact "Language" row (chat.html + every standalone page's sidebar) shows
+  // the current language next to its chevron instead of a bare label -- kept in sync here since
+  // this runs on load and on every setLang(), covering both without a separate listener.
+  const currentLangEl = document.getElementById('profileMenuCurrentLang');
+  if (currentLangEl) currentLangEl.textContent = lang === 'hi' ? 'हिंदी' : 'English';
 }
 
 function toggleLang() {
