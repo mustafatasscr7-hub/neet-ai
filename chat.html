@@ -18,6 +18,29 @@
     } catch (e) {}
   })();
   </script>
+  <!-- Plan-flash fix: applyProUIState() (hides #headerUpgradeBtn and compacts the countdown pill
+       for Pro/Max) only runs once refreshUsageBanner's async auth -> DB round trip resolves, so
+       the Free-layout header -- Upgrade button, full-text pill -- visibly shows first on every
+       load, even for Pro/Max accounts. This reads 'lastKnownPlan' (cached by applyProUIState
+       itself each time it resolves the real plan) and optimistically adds the same classes to
+       <html> before first paint, matched by the CSS right below and by the existing
+       .countdown-compact-capable rule further down. No cached value (first-ever visit) means
+       neither class is added, i.e. the current Free-by-default look -- not a guess at Pro. The
+       real check in applyProUIState() still runs after and is the one that corrects a wrong or
+       missing guess; it also clears these two classes itself once it does, so a stale guess can
+       never outlive it. -->
+  <script>
+  (function () {
+    try {
+      var plan = localStorage.getItem('lastKnownPlan');
+      if (plan === 'pro' || plan === 'max') {
+        document.documentElement.classList.add('plan-cached-pro');
+      } else if (plan === 'free') {
+        document.documentElement.classList.add('countdown-compact-capable');
+      }
+    } catch (e) {}
+  })();
+  </script>
   <!-- interactive-widget=resizes-content (additive -- ignored by browsers that don't support it,
        falling back to the old behavior) makes 100vh-based layout actually shrink when the on-
        screen keyboard opens, instead of staying pinned to the pre-keyboard viewport height. That
@@ -72,6 +95,13 @@
     :root { --chat-bg: #0d0d0d; --chat-fg: #ececec; }
     :root.light-mode { --chat-bg: #f5f5f5; --chat-fg: #0d0d0d; }
     body { font-family: 'Inter', sans-serif; background: var(--chat-bg); color: var(--chat-fg); height: 100vh; display: flex; overflow: hidden; user-select: none; -webkit-user-select: none; }
+    /* Plan-flash fix: .plan-cached-pro is the pre-paint guess the head script above adds to
+       <html> from a cached plan -- #headerUpgradeBtn itself has no default inline style, so
+       without this it stays visible (the Free look) until applyProUIState()'s real async check
+       runs and sets display:none directly on the element. That later inline style always wins
+       over this class-based rule regardless of order, which is what lets the real check correct
+       a wrong guess. */
+    html.plan-cached-pro #headerUpgradeBtn { display: none; }
     /* Div/span-based controls (nav items, buttons, badges) don't get the browser's implicit
        user-select:none that a native <button> has, so clicking their text was dropping a text
        caret into them instead of just registering the click. Disabled site-wide above, then
@@ -8588,6 +8618,12 @@ function plainTextFromMarkdown(text) {
     // source of truth instead of each caller re-deciding what "upgraded" should hide or show.
     function applyProUIState() {
       const pro = isPro();
+      // Cached for the plan-flash-fix inline script in <head>, which optimistically pre-applies
+      // this same header state before first paint on the NEXT load -- see that script's comment.
+      // Also clears the pre-paint classes it uses, since from here on the real per-element state
+      // below (inline style / the wrapper's own class) is the single source of truth.
+      try { localStorage.setItem('lastKnownPlan', userPlan); } catch (e) {}
+      document.documentElement.classList.remove('plan-cached-pro', 'countdown-compact-capable');
       const headerBtn = document.getElementById('headerUpgradeBtn');
       if (headerBtn) headerBtn.style.display = pro ? 'none' : '';
       // Only Free plan carries #headerUpgradeBtn alongside the countdown pill -- this class is
