@@ -226,10 +226,10 @@
     body.light-mode .selection-toolbar-btn { color: #333338 !important; }
     body.light-mode .selection-toolbar-btn:hover { background: #f0f0f3 !important; color: #0d0d0d !important; }
     body.light-mode .selection-toolbar-divider { background: #e5e5ea !important; }
-    body.light-mode .pyq-modal-selection-popup { background: #ffffff !important; border-color: rgba(124,58,237,0.18) !important; box-shadow: 0 10px 30px rgba(0,0,0,0.10), 0 4px 16px rgba(124,58,237,0.08) !important; }
-    body.light-mode .pyq-modal-selection-popup:focus-within { border-color: #7c3aed !important; box-shadow: 0 10px 30px rgba(0,0,0,0.10), 0 0 0 3px rgba(124,58,237,0.14) !important; }
-    body.light-mode .pmsp-explain-btn { background: #a78bfa1a !important; color: #7c3aed !important; }
-    body.light-mode .pmsp-explain-btn:hover { background: #a78bfa33 !important; }
+    body.light-mode .pyq-modal-selection-popup { background: #ffffff !important; border-color: rgba(79,142,247,0.18) !important; box-shadow: 0 10px 30px rgba(0,0,0,0.10), 0 4px 16px rgba(79,142,247,0.08) !important; }
+    body.light-mode .pyq-modal-selection-popup:focus-within { border-color: #4f8ef7 !important; box-shadow: 0 10px 30px rgba(0,0,0,0.10), 0 0 0 3px rgba(79,142,247,0.14) !important; }
+    body.light-mode .pmsp-explain-btn { background: #4f8ef71a !important; color: #2f6fe0 !important; }
+    body.light-mode .pmsp-explain-btn:hover { background: #4f8ef733 !important; }
     body.light-mode .pmsp-divider { background: rgba(0,0,0,0.08) !important; }
     body.light-mode .pmsp-input { color: #16161d !important; }
     body.light-mode .pmsp-input::placeholder { color: #9a9aa5 !important; }
@@ -304,11 +304,10 @@
     /* Loading orb inside a PYQ card (solution panel + diagram skeleton): blue instead of the
        global blue/violet pair -- the card itself carries no purple. */
     .pyq-q-card .thinking-orb::after { border-bottom-color: var(--tint-blue); border-left-color: var(--tint-blue); }
-    .pyq-save-btn { background: #f973161c; border: none; color: #f97316; padding: 7px 16px; border-radius: 9px; cursor: pointer; font-size: 12px; font-weight: 600; font-family: 'Inter', sans-serif; margin-left: 8px; transition: filter 0.15s ease, transform 0.1s ease; }
-    .pyq-save-btn:hover { filter: brightness(1.15); }
-    .pyq-save-btn:active { transform: scale(0.97); }
+    /* Colour comes from the shared .btn-tint-blue (tint-buttons.css, same source as .sol-btn) --
+       this rule is geometry only now. */
+    .pyq-save-btn { padding: 7px 16px; border-radius: 9px; cursor: pointer; font-size: 12px; font-weight: 600; font-family: 'Inter', sans-serif; margin-left: 8px; }
     .pyq-save-btn:disabled { cursor: default; opacity: 0.6; }
-    body.light-mode .pyq-save-btn { background: #f973161a !important; color: #c2540a !important; }
     /* Header "Upgrade" pill -- deliberately quiet: a translucent neutral capsule, text only, no
        fill/shadow/glow. It's sized and rounded to pair with the countdown pill beside it
        (#countdownWrapper > div: same 30px height, 15px radius, 1px border). Tunables are custom
@@ -1206,21 +1205,21 @@
        .pyq-selection-popup (Explain button + free-type question), just renamed to avoid any
        confusion with this file's own .selection-toolbar, which is a different, AI-bubble-only
        mechanism (see the JS block that builds this popup for why they don't reuse one element). */
-    /* Single-row pill: icon-only Explain + inline input + gradient send button, one floating
-       card instead of two stacked boxes. Purple-tinted border/glow (accent already used for
-       "Related Past Year Questions" and the Upgrade gradient) reads as a premium tooltip rather
-       than a flat utility box; :focus-within lights up the whole pill when the input is active,
-       not just the input itself. */
-    .pyq-modal-selection-popup { position: fixed; display: none; align-items: center; gap: 4px; background: #1c1c1f; border: 1px solid rgba(167,139,250,0.25); border-radius: 999px; padding: 5px; z-index: 10000; width: 290px; max-width: calc(100vw - 16px); box-shadow: 0 10px 30px rgba(0,0,0,0.45), 0 4px 16px rgba(124,58,237,0.12); transition: box-shadow 0.15s ease, border-color 0.15s ease; }
+    /* Single-row pill: icon-only Explain + inline input + accent send button, one floating
+       card instead of two stacked boxes. Blue-tinted border/glow (the same #4f8ef7 accent used
+       for "Related Past Year Questions") reads as a premium tooltip rather than a flat utility
+       box; :focus-within lights up the whole pill when the input is active, not just the input
+       itself. */
+    .pyq-modal-selection-popup { position: fixed; display: none; align-items: center; gap: 4px; background: #1c1c1f; border: 1px solid rgba(79,142,247,0.25); border-radius: 999px; padding: 5px; z-index: 10000; width: 290px; max-width: calc(100vw - 16px); box-shadow: 0 10px 30px rgba(0,0,0,0.45), 0 4px 16px rgba(79,142,247,0.12); transition: box-shadow 0.15s ease, border-color 0.15s ease; }
     .pyq-modal-selection-popup.visible { display: flex; }
-    .pyq-modal-selection-popup:focus-within { border-color: #7c3aed; box-shadow: 0 10px 30px rgba(0,0,0,0.45), 0 0 0 3px rgba(124,58,237,0.18), 0 4px 16px rgba(124,58,237,0.18); }
-    .pmsp-explain-btn { flex-shrink: 0; width: 30px; height: 30px; border-radius: 50%; background: rgba(167,139,250,0.14); border: none; color: #a78bfa; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: background 0.15s, color 0.15s; }
-    .pmsp-explain-btn:hover { background: rgba(167,139,250,0.24); color: #c4b1fb; }
+    .pyq-modal-selection-popup:focus-within { border-color: #4f8ef7; box-shadow: 0 10px 30px rgba(0,0,0,0.45), 0 0 0 3px rgba(79,142,247,0.18), 0 4px 16px rgba(79,142,247,0.18); }
+    .pmsp-explain-btn { flex-shrink: 0; width: 30px; height: 30px; border-radius: 50%; background: rgba(79,142,247,0.14); border: none; color: #4f8ef7; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: background 0.15s, color 0.15s; }
+    .pmsp-explain-btn:hover { background: rgba(79,142,247,0.24); color: #7ab0fa; }
     .pmsp-explain-btn svg { width: 15px; height: 15px; }
     .pmsp-divider { width: 1px; height: 18px; background: rgba(255,255,255,0.08); flex-shrink: 0; }
     .pmsp-input { flex: 1; min-width: 0; background: transparent; border: none; outline: none; color: #ececec; font-size: 12.5px; font-family: 'Inter', sans-serif; padding: 6px 4px; }
     .pmsp-input::placeholder { color: #71717a; }
-    .pmsp-send-btn { flex-shrink: 0; width: 28px; height: 28px; border-radius: 50%; background: linear-gradient(135deg, #4f8ef7, #7c3aed); border: none; color: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: opacity 0.15s, transform 0.1s; }
+    .pmsp-send-btn { flex-shrink: 0; width: 28px; height: 28px; border-radius: 50%; background: linear-gradient(135deg, #6aa3f9, #4f8ef7); border: none; color: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: opacity 0.15s, transform 0.1s; }
     .pmsp-send-btn:hover { opacity: 0.88; }
     .pmsp-send-btn:active { transform: scale(0.92); }
 
@@ -4907,7 +4906,7 @@ let selectedImages = [];
       const titleRow = document.createElement('div');
       titleRow.style.cssText = 'display:flex;justify-content:space-between;align-items:center;';
       const titleByType = {
-        exact: `<h3 style="margin:0;color:#a78bfa;">Related Past Year Questions</h3>`,
+        exact: `<h3 style="margin:0;color:#4f8ef7;">Related Past Year Questions</h3>`,
         related: `<h3 style="margin:0;color:#f59e0b;">Related Questions</h3>`,
         chapter: `<h3 style="margin:0;color:#60a5fa;">Questions From This Chapter</h3>`,
       };
@@ -4948,7 +4947,10 @@ let selectedImages = [];
       const tabsDiv = document.createElement('div');
       tabsDiv.style.cssText = 'display:flex;gap:8px;margin-bottom:16px;';
       const subjects = ['Biology', 'Physics', 'Chemistry'];
-      const subjectColors = { Biology: '#4ade80', Physics: '#4f8ef7', Chemistry: '#f97316' };
+      // One shared blue accent for all subjects -- the modal previously colored each subject
+      // tab/card differently (green/blue/orange), which clashed with the site's single-accent
+      // design elsewhere.
+      const PYQ_ACCENT = '#4f8ef7';
 
       function renderPYQQuestions(subject) {
         activeSubject = subject;
@@ -4956,9 +4958,9 @@ let selectedImages = [];
         const isLight = getTheme() === 'light';
         tabsDiv.querySelectorAll('button').forEach(btn => {
           const isActive = btn.dataset.subject === subject;
-          btn.style.background = isActive ? subjectColors[subject] + '20' : 'transparent';
-          btn.style.borderColor = isActive ? subjectColors[subject] : (isLight ? '#d5d5dd' : '#2a2a2a');
-          btn.style.color = isActive ? subjectColors[subject] : (isLight ? '#55555f' : '#666');
+          btn.style.background = isActive ? PYQ_ACCENT + '20' : 'transparent';
+          btn.style.borderColor = isActive ? PYQ_ACCENT : (isLight ? '#d5d5dd' : '#2a2a2a');
+          btn.style.color = isActive ? PYQ_ACCENT : (isLight ? '#55555f' : '#666');
         });
         // Clear and render questions
         questionsDiv.innerHTML = '';
@@ -4970,9 +4972,9 @@ let selectedImages = [];
         filtered.forEach(function(q) {
           const card = document.createElement('div');
           card.className = 'pyq-q-card';
-          card.style.cssText = 'background:#2a2a3e;border-radius:8px;padding:16px;margin-bottom:12px;border-left:3px solid ' + (subjectColors[subject] || 'var(--tint-blue)') + ';overflow:hidden;';
+          card.style.cssText = 'background:#2a2a3e;border-radius:8px;padding:16px;margin-bottom:12px;border-left:3px solid ' + PYQ_ACCENT + ';overflow:hidden;';
           const meta = document.createElement('div');
-          meta.style.cssText = 'color:' + (subjectColors[subject] || 'var(--tint-blue)') + ';font-size:12px;margin-bottom:8px;display:flex;align-items:center;';
+          meta.style.cssText = 'color:' + PYQ_ACCENT + ';font-size:12px;margin-bottom:8px;display:flex;align-items:center;';
           meta.innerHTML = `<span>${escapeHtml('NEET ' + localizeNum(q.year || '') + ' • ' + (subjectName(q.subject) || ''))}</span>${q.id ? metaActionsHtml(q.difficulty, q.id) : ''}`;
           const question = document.createElement('div');
           question.className = 'pyq-q-text';
@@ -5051,7 +5053,7 @@ let selectedImages = [];
           solBtn.className = 'sol-btn btn-tint-blue';
           solBtn.textContent = 'Show Solution';
           const saveBtn = document.createElement('button');
-          saveBtn.className = 'pyq-save-btn';
+          saveBtn.className = 'pyq-save-btn btn-tint-blue';
           saveBtn.textContent = 'Save';
           saveBtn.onclick = async function() {
             const { data: { session } } = await client.auth.getSession();
