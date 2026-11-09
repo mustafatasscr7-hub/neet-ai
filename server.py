@@ -3242,16 +3242,21 @@ async def search_ncert(query: str, limit: int = 3, stats: dict = None):
 # ncert_v2_compare.py) before anything switches over.
 NCERT_V2_ENABLED = os.getenv("NCERT_V2_ENABLED", "false").strip().lower() == "true"
 
-async def search_ncert_v2(query: str, limit: int = 3):
+async def search_ncert_v2(query: str, limit: int = 3, stats: dict = None):
     """Same return shape as search_ncert (list of dicts with id/subject/class/chapter_name/
     chapter_name_en/language/content/similarity), plus heading/page/chunk_index from the new
     table. Returns [] immediately (no embedding call, no RPC call) when NCERT_V2_ENABLED is off.
 
     Falls back to the old search_ncert() whenever ncert_content_v2 has nothing for this query
-    (empty RPC result, or the RPC call itself failing) -- the rebuild can land one subject/chapter
-    at a time (see ncert_rechunk_v2.py's per-chapter checkpointing), so a chapter not loaded into
-    v2 yet must not mean "no NCERT match" for a real student question. No chapter is known to be
-    fully missing as of the 2026-11-06 load, but this is defensive either way."""
+    (empty RPC result, or the embedding/RPC call itself raising) -- the rebuild can land one
+    subject/chapter at a time (see ncert_rechunk_v2.py's per-chapter checkpointing), so a chapter
+    not loaded into v2 yet must not mean "no NCERT match" for a real student question. No chapter
+    is known to be fully missing as of the 2026-11-06 load, but this is defensive either way.
+
+    stats, if given, is filled the same way search_ncert's own stats param is ("language",
+    "top_raw_score"), plus "version" -- "v2" when ncert_content_v2 actually answered, "v1" when
+    this fell back to search_ncert -- so callers logging to ncert_retrieval_log know which table
+    served the request without re-deriving it."""
     if not NCERT_V2_ENABLED:
         return []
     headers = {
@@ -3259,21 +3264,35 @@ async def search_ncert_v2(query: str, limit: int = 3):
         "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
         "Content-Type": "application/json"
     }
-    embedding = await get_embedding(query)
     try:
+        embedding = await get_embedding(query)
         response = await async_client.post(
             f"{SUPABASE_URL}/rest/v1/rpc/match_ncert_v2_hybrid",
             headers=headers,
             json={"query_embedding": embedding, "query_text": query, "match_count": limit}
         )
+        rows = response.json() if response.status_code == 200 else None
     except Exception:
-        return await search_ncert(query, limit)
-    if response.status_code != 200:
-        return await search_ncert(query, limit)
-    rows = response.json()
+        rows = None
     if not isinstance(rows, list) or not rows:
-        return await search_ncert(query, limit)
+        fallback = await search_ncert(query, limit, stats=stats)
+        if stats is not None:
+            stats["version"] = "v1"
+        return fallback
+    if stats is not None:
+        stats["language"] = "en"
+        stats["top_raw_score"] = rows[0].get("similarity")
+        stats["version"] = "v2"
     return rows
+
+async def _search_ncert_for_chat(query: str, language: str, limit: int = 3, stats: dict = None):
+    """The single switch point for stream_response's /chat NCERT retrieval: routes an English
+    query to search_ncert_v2 when NCERT_V2_ENABLED, which itself falls back to search_ncert when
+    v2 has nothing -- otherwise (flag off, or language == "hi") calls search_ncert directly,
+    exactly as before. search_ncert's own Hindi branch is never touched by this."""
+    if NCERT_V2_ENABLED and language == "en":
+        return await search_ncert_v2(query, limit=limit, stats=stats)
+    return await search_ncert(query, limit=limit, stats=stats)
 
 def _ncert_chapter_citation(subject: str, class_num, chapter_name: str, lookup_name: str = None) -> str:
     """Builds an authoritative citation string like 'NCERT Class 12, Chapter 3 -- Current
@@ -3406,9 +3425,15 @@ def _ncert_citations(rows: list, hindi_titles: bool = False) -> list:
             citations.append(citation)
     return citations
 
-async def _log_ncert_retrieval(language: str, question_subject: Optional[str], top_raw_score, retrieved: list, used: list):
+async def _log_ncert_retrieval(language: str, question_subject: Optional[str], top_raw_score, retrieved: list, used: list, version: Optional[str] = None):
     """One ncert_retrieval_log row per /chat answer that ran NCERT search. Ids, scores and chapters
-    only -- never the question or answer text. Best-effort, like the other telemetry writes."""
+    only -- never the question or answer text. Best-effort, like the other telemetry writes.
+
+    version ("v1"/"v2"), when known, is folded into each chunk dict below instead of a dedicated
+    column -- ncert_retrieval_log's columns are fixed (see create_ncert_retrieval_log_table.sql)
+    but `chunks` is schemaless jsonb, so this is additive with no migration. Silently omitted
+    when there's nothing to attach it to (retrieved == [], e.g. outcome == "none") or when the
+    caller doesn't pass one (today's search_ncert-only callers)."""
     used_ids = {r.get("id") for r in used}
     chunks = [{
         "id": r.get("id"),
@@ -3417,6 +3442,7 @@ async def _log_ncert_retrieval(language: str, question_subject: Optional[str], t
         "class": r.get("class"),
         "chapter": r.get("chapter_name_en") or r.get("chapter_name"),
         "used": r.get("id") in used_ids,
+        **({"version": version} if version else {}),
     } for r in retrieved]
     outcome = "grounded" if used else ("set_aside" if retrieved else "none")
     try:
@@ -6609,8 +6635,12 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
         mistake_rows_coro = fetch_student_mistake_rows(user_id) if (personalize and user_id) else _empty_list()
         mock_wrong_rows_coro = fetch_mock_wrong_rows(user_id) if (personalize and user_id) else _empty_list()
         search_stats = {}
+        # Language decided once up front (not re-derived from search_stats below) so the v2
+        # dispatch and the spelling-retry re-search agree on it even before the first search
+        # returns -- see _search_ncert_for_chat and NCERT_V2_ENABLED above.
+        retrieval_language = _detect_query_language(text)
         retrieved, mistake_rows, mock_wrong_rows, diagram_exists = await asyncio.gather(
-            search_ncert(text, stats=search_stats), mistake_rows_coro, mock_wrong_rows_coro, diagram_exists_coro
+            _search_ncert_for_chat(text, retrieval_language, stats=search_stats), mistake_rows_coro, mock_wrong_rows_coro, diagram_exists_coro
         )
         # One-time spelling-fix retry (see _ncert_spelling_rewrite): only for a genuine miss on a
         # short, text-only doubt -- never for an image/PDF doubt (nothing here to misspell) and
@@ -6620,13 +6650,14 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
         if not retrieved and not images and not pdf and len(text.split()) <= NCERT_REWRITE_MAX_WORDS:
             rewritten_query = await _ncert_spelling_rewrite(text, user_id)
             if rewritten_query:
-                retried = await search_ncert(rewritten_query)
+                # _ncert_spelling_rewrite keeps the same language, so retrieval_language still applies.
+                retried = await _search_ncert_for_chat(rewritten_query, retrieval_language)
                 if retried:
                     retrieved = retried
         # Chunks from a clearly different subject are dropped here, so every later "was anything
         # retrieved" check (citation stripping included) treats an all-unrelated set as no retrieval.
         results = _relevant_ncert_chunks(text, retrieved)
-        asyncio.create_task(_log_ncert_retrieval(search_stats.get("language") or _detect_query_language(text), _question_subject(text), search_stats.get("top_raw_score"), retrieved, results))
+        asyncio.create_task(_log_ncert_retrieval(search_stats.get("language") or retrieval_language, _question_subject(text), search_stats.get("top_raw_score"), retrieved, results, version=search_stats.get("version")))
     student_context = build_student_context(mistake_rows, mock_wrong_rows, {r.get('subject') for r in results})
     # Sanitized once here, used in every user_message branch below -- never the raw `text` itself,
     # which stays untouched for retrieval/logging/history above (see _neutralize_ref_data_tags).
