@@ -578,7 +578,7 @@
         <option value="reported">Reported</option>
         <option value="all">All</option>
       </select>
-      <button type="button" class="q-approve-btn" id="approveCleanBtn" onclick="approveCleanOnPage()" style="display:none">✅ Approve clean rows on this page</button>
+      <button type="button" class="q-approve-btn" id="approveCleanBtn" onclick="approveCleanOnPage()" style="display:none">Approve clean rows on this page</button>
       <div class="result-count" id="resultCount"></div>
       <div class="result-note" id="resultNote"></div>
     </div>
@@ -617,9 +617,9 @@
     <div class="bulk-action-bar" id="bulkActionBar">
       <label class="check-label"><input type="checkbox" id="selectAllCheckbox" onchange="toggleSelectAll(this.checked)"/> Select all on this page</label>
       <span class="bulk-count" id="bulkSelectedCount">0 selected</span>
-      <button type="button" class="q-approve-btn" id="bulkApproveBtn" onclick="bulkApproveSelected()" style="display:none">✅ Approve Selected</button>
-      <button type="button" class="q-approve-btn" id="bulkReviewApproveBtn" onclick="bulkReviewApproveSelected()" style="display:none">✅ Approve for students</button>
-      <button type="button" class="q-delete-btn" id="bulkDeleteBtn" onclick="bulkDeleteSelected()">🗑 Delete Selected</button>
+      <button type="button" class="q-approve-btn" id="bulkApproveBtn" onclick="bulkApproveSelected()" style="display:none">Approve Selected</button>
+      <button type="button" class="q-approve-btn" id="bulkReviewApproveBtn" onclick="bulkReviewApproveSelected()" style="display:none">Approve for students</button>
+      <button type="button" class="q-delete-btn" id="bulkDeleteBtn" onclick="bulkDeleteSelected()">Delete Selected</button>
       <button type="button" class="q-edit-btn" onclick="clearSelection()">Clear</button>
     </div>
 
@@ -1665,7 +1665,7 @@
       const clean = currentRows.filter(q => awaitingReview(q) && !(q.warnings || []).length);
       const btn = document.getElementById('approveCleanBtn');
       btn.style.display = clean.length && !duplicatesMode && !reportsMode && !diagramMode && !contractorDupFilterOn ? 'inline-block' : 'none';
-      btn.textContent = `✅ Approve ${clean.length} clean row${clean.length === 1 ? '' : 's'} on this page`;
+      btn.textContent = `Approve ${clean.length} clean row${clean.length === 1 ? '' : 's'} on this page`;
     }
 
     async function postReview(ids, status, note) {
@@ -1723,7 +1723,7 @@
       if (result.error) {
         alert('Approve failed: ' + result.error);
         btnEl.disabled = false;
-        btnEl.textContent = '✅ Approve for students';
+        btnEl.textContent = 'Approve for students';
         return;
       }
       applyReviewResult(result.updated);
@@ -2195,8 +2195,8 @@
 
     function reviewWarningsHtml(q) {
       return (q.warnings || []).map(w => w.duplicate_of
-        ? `<a class="q-warn" href="?id=${encodeURIComponent(w.duplicate_of)}" target="_blank" rel="noopener">⚠ ${escapeHtml(w.text)}</a>`
-        : `<span class="q-warn">⚠ ${escapeHtml(w.text)}</span>`).join('');
+        ? `<a class="q-warn" href="?id=${encodeURIComponent(w.duplicate_of)}" target="_blank" rel="noopener">${escapeHtml(w.text)}</a>`
+        : `<span class="q-warn">${escapeHtml(w.text)}</span>`).join('');
     }
 
     // Split into a primary line (status badge -- sits with year/subject/chapter) and a
@@ -2838,15 +2838,15 @@
             ${flags.map(f => `<span class="q-flag">${escapeHtml(f)}</span>`).join('')}
             ${reviewWarningsHtml(q)}
             ${autoReasonChipsHtml(q)}
-            ${minimalActions || q.review_status === 'rejected' ? '' : `<button class="q-edit-btn" onclick="startEdit('${q.id}')">✏️ Edit</button>`}
-            ${waiting ? `<button class="q-approve-btn" onclick="reviewApprove('${q.id}', this)">✅ Approve for students</button>` : ''}
-            ${reviewMode && !waiting ? `<button class="q-approve-btn" onclick="approveQuestion('${q.id}', this)">✅ Approve</button>` : ''}
+            ${minimalActions || q.review_status === 'rejected' ? '' : `<button class="q-edit-btn" onclick="startEdit('${q.id}')">Edit</button>`}
+            ${waiting ? `<button class="q-approve-btn" onclick="reviewApprove('${q.id}', this)">Approve for students</button>` : ''}
+            ${reviewMode && !waiting ? `<button class="q-approve-btn" onclick="approveQuestion('${q.id}', this)">Approve</button>` : ''}
             ${reviewActions && q.review_status === 'rejected' ? `<button class="q-approve-btn" onclick="restoreQuestion('${q.id}', this)">Restore</button>` : ''}
             ${reviewActions && q.review_status === 'approved' && q.auto_approved ? `<button class="q-edit-btn" onclick="unapproveQuestion('${q.id}', this)">Unapprove</button>` : ''}
-            ${reviewActions && q.review_status && q.review_status !== 'rejected' && !noteOpenIds.has(q.id) && !rejectOpenIds.has(q.id) ? `<button class="q-fix-btn" onclick="openNeedsFix('${q.id}')">🔧 Needs fix</button>` : ''}
+            ${reviewActions && q.review_status && q.review_status !== 'rejected' && !noteOpenIds.has(q.id) && !rejectOpenIds.has(q.id) ? `<button class="q-fix-btn" onclick="openNeedsFix('${q.id}')">Needs fix</button>` : ''}
             ${reviewActions && q.review_status !== 'rejected' && !noteOpenIds.has(q.id) && !rejectOpenIds.has(q.id) ? `<button class="q-reject-btn" onclick="openReject('${q.id}')">Reject (error)</button>` : ''}
             ${dupSelect && q.review_status !== 'rejected' && !dupRejectOpenIds.has(q.id) ? `<button class="q-reject-btn" onclick="openDupReject('${q.id}')">Reject (duplicate)</button>` : ''}
-            ${minimalActions || q.review_status === 'rejected' ? '' : `<button class="q-delete-btn" onclick="deleteQuestion('${q.id}', this)">🗑 Delete</button>`}
+            ${minimalActions || q.review_status === 'rejected' ? '' : `<button class="q-delete-btn" onclick="deleteQuestion('${q.id}', this)">Delete</button>`}
           </div>
           ${reviewActions ? needsFixBoxHtml(q) : ''}
           ${reviewActions ? rejectBoxHtml(q) : ''}
@@ -3563,7 +3563,7 @@
                 ${keepBtn}
               </div>
             </div>
-            ${g.ids.length > 2 ? `<div class="result-note" style="margin-bottom:10px;">Use each card's own 🗑 Delete button below to keep whichever one(s) you want and remove the rest, or tick cards and use Select all but one.</div>` : ''}
+            ${g.ids.length > 2 ? `<div class="result-note" style="margin-bottom:10px;">Use each card's own Delete button below to keep whichever one(s) you want and remove the rest, or tick cards and use Select all but one.</div>` : ''}
             ${capNote}
             <div class="dup-columns">
               ${g.ids.map(id => `
@@ -3571,7 +3571,7 @@
                   ${questionCardHtml(rowsMap[id], { minimalActions: true, dupSelect: true })}
                   ${noteFor(id)}
                   <div class="dup-card-actions">
-                    <button type="button" class="q-delete-btn" onclick="deleteQuestion('${id}', this)">🗑 Delete</button>
+                    <button type="button" class="q-delete-btn" onclick="deleteQuestion('${id}', this)">Delete</button>
                   </div>
                 </div>`).join('')}
             </div>
@@ -3835,7 +3835,7 @@
           <div class="q-admin-bar">
             <span class="q-admin-id">${d.id}</span>
             <button type="button" class="q-edit-btn" onclick="startDiagramEdit(${d.id})">Edit</button>
-            ${!d.reviewed ? `<button type="button" class="q-approve-btn" onclick="confirmDiagram(${d.id}, this)">✅ Confirm</button>` : ''}
+            ${!d.reviewed ? `<button type="button" class="q-approve-btn" onclick="confirmDiagram(${d.id}, this)">Confirm</button>` : ''}
             <button type="button" class="q-delete-btn" onclick="deleteDiagramReview(${d.id})">Delete</button>
           </div>
         </div>`;
@@ -4100,7 +4100,7 @@
             <div class="report-header">
               <span class="report-count-badge">${g.count} report${g.count === 1 ? '' : 's'}</span>
               <div class="report-reasons-list">${reasonsHtml}</div>
-              ${g.question ? `<button type="button" class="report-approve-btn" onclick="approveReportGroup('${g.pyq_id}', this)">✅ Approve</button>` : ''}
+              ${g.question ? `<button type="button" class="report-approve-btn" onclick="approveReportGroup('${g.pyq_id}', this)">Approve</button>` : ''}
               <button type="button" class="report-resolve-btn" onclick="resolveReportGroup('${g.pyq_id}', this)">Mark Resolved</button>
             </div>
             ${notesHtml}
@@ -4249,7 +4249,7 @@
         // each card's own Delete button (already correct in duplicatesMode) is the way to
         // pick exactly which ones to remove.
         const bulkDeleteBtn = g.ids.length === 2
-          ? `<button type="button" class="dup-delete-both-btn" onclick="deleteBothInPair('${g.ids[0]}', '${g.ids[1]}', this)">🗑 Delete both</button>`
+          ? `<button type="button" class="dup-delete-both-btn" onclick="deleteBothInPair('${g.ids[0]}', '${g.ids[1]}', this)">Delete both</button>`
           : '';
         const selectAllButOneBtn = `<button type="button" class="dup-select-all-but-one-btn" onclick="selectAllButOne('${idsCsv}', '${g.ids[0]}')">Select all but one</button>`;
         return `
@@ -4265,7 +4265,7 @@
                 ${bulkDeleteBtn}
               </div>
             </div>
-            ${g.ids.length > 2 ? `<div class="result-note" style="margin-bottom:10px;">Use each card's own 🗑 Delete button below to keep whichever one(s) you want and remove the rest, or tick cards and use Select all but one.</div>` : ''}
+            ${g.ids.length > 2 ? `<div class="result-note" style="margin-bottom:10px;">Use each card's own Delete button below to keep whichever one(s) you want and remove the rest, or tick cards and use Select all but one.</div>` : ''}
             <div class="dup-columns">
               ${g.ids.map(id => questionCardHtml(duplicateRowsMap[id], { dupSelect: true })).join('')}
             </div>

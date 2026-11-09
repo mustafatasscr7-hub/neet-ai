@@ -129,13 +129,13 @@ REAL_DIRTY = [
     "- But the question says \"non-transition element\" — wait, group 11 elements are transition metals.\n\n⚠️ Correction: Actually, the given options are all false",
 ]
 CLEAN = [
-    "✅ Answer: C — It is a transition element.\n\n📝 Solution:\n- Unununium = element 111 (Rg).\n- Group 11, period 7 → d-block.\n\n🔑 Key Concept:\nIUPAC roots: un=1.",
+    "Answer: C — It is a transition element.\n\nSolution:\n- Unununium = element 111 (Rg).\n- Group 11, period 7 → d-block.\n\nKey Concept:\nIUPAC roots: un=1.",
     "- End correction: $e = 0.3d$ is added to the resonance column length.",
     "Let me verify each statement for vertical projection upward:",
     "However, the resistance of a semiconductor actually decreases with temperature.",
     "The cell must wait for the next signal before depolarising again.",
     "- Let us check the options one by one: A is wrong because...",
-    "✅ उत्तर: C — यह एक संक्रमण तत्व है।\n\n📝 हल:\n- अनअनअनियम = तत्व 111",
+    "उत्तर: C — यह एक संक्रमण तत्व है।\n\nहल:\n- अनअनअनियम = तत्व 111",
 ]
 SOLVE_REQ = dict(pyq_id="test-pyq-1", question="Q?", option_a="1", option_b="2", option_c="3", option_d="4", correct_answer="b")
 
@@ -148,7 +148,7 @@ def test_detector():
         check(f"flags real cached row #{i + 1}", server._has_self_correction(text))
     check("flags Hindi self-correction", server._has_self_correction("रुकिए, दोबारा जाँच करते हैं।"))
     check("flags answer-key disagreement line",
-          server._has_self_correction("⚠️ The given answer appears to be incorrect: Mega is 10^6, not 10^9"))
+          server._has_self_correction("The given answer appears to be incorrect: Mega is 10^6, not 10^9"))
     for i, text in enumerate(CLEAN):
         check(f"passes clean text #{i + 1}", not server._has_self_correction(text), text[:50])
 

@@ -1585,9 +1585,9 @@
     .answer-actions-row { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; }
     /* NEET Importance + Chapter metadata row -- extracted from the raw "NEET Importance: N/5"
        and "Chapter: ..." lines DeepSeek outputs and re-rendered here as compact styled elements
-       instead of the raw text, decoupling generation from presentation. Real ★ glyphs (not the
-       ⭐ emoji) since only a real glyph's color is overridable via CSS -- an emoji always renders
-       in its platform's fixed color regardless of any `color` set on it. */
+       instead of the raw text, decoupling generation from presentation. Real ★ glyphs (not a
+       star emoji) since only a real glyph's color is overridable via CSS -- an emoji always
+       renders in its platform's fixed color regardless of any `color` set on it. */
     .answer-meta-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
     .answer-stars { font-size: 14px; letter-spacing: 1px; color: #b8963f; }
     .answer-stars .star-empty { color: #45403a; }
@@ -2190,7 +2190,7 @@
           </div>
         </div>
        <div id="limitBanner" style="display:none;border-bottom:1px solid #1e1e1e;padding:10px 6px;margin-bottom:6px;align-items:center;justify-content:space-between;gap:12px;">
-          <span id="limitBannerText" style="font-size:12px;color:#666;" data-i18n="chat.dailyLimitReached">⚡ Daily limit reached - resets at midnight</span>
+          <span id="limitBannerText" style="font-size:12px;color:#666;" data-i18n="chat.dailyLimitReached">Daily limit reached - resets at midnight</span>
           <button id="limitBannerBtn" onclick="window.location.href='./pricing.html'" style="background:linear-gradient(135deg,#4f8ef7,#7c3aed);border:none;color:white;padding:5px 14px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;font-family:Inter,sans-serif;white-space:nowrap;flex-shrink:0;" data-i18n="chat.upgradeToPro">Upgrade to Pro →</button>
         </div>
         <div id="longChatNudge" style="display:none;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px 10px;padding:8px 12px;margin-bottom:8px;border-radius:10px;background:#141c26;border:1px solid #1d3550;">
@@ -3307,7 +3307,6 @@ let selectedImages = [];
         rm.textContent = '✕';
         rm.style.cssText = 'background:transparent;border:none;color:#666;cursor:pointer;font-size:13px;';
         rm.onclick = removePdfAttachment;
-        chip.innerHTML = '<span>📄</span>';
         chip.appendChild(nameSpan);
         chip.appendChild(rm);
         container.appendChild(chip);
@@ -3488,8 +3487,21 @@ let selectedImages = [];
       return html;
     }
 
+    // Legacy AI-answer formatting-marker emoji (book/check/memo/key/magnifying-glass/warning) --
+    // SYSTEM_PROMPT and the /solve prompt used to prefix these section labels with them; both
+    // prompts are emoji-free now, but older saved/cached answers (chat history, pyq_solution_cache)
+    // still have the literal characters in their stored text. Stripping them here, once, before
+    // any of the marker-line regexes below run, means those regexes never need their own
+    // emoji-optional variants, and old answers render identically to new emoji-free ones. Written
+    // via \u{} escapes rather than literal glyphs so this source file itself stays emoji-free.
+    const LEGACY_ANSWER_MARKER_RE = /[\u{2705}\u{1F4DA}\u{1F4DD}\u{1F511}\u{1F50D}\u{26A0}\u{FE0F}]\s?/gu;
+    function stripAnswerEmojiMarkers(text) {
+      return text ? text.replace(LEGACY_ANSWER_MARKER_RE, '') : text;
+    }
+
     function extractAnswerMeta(text) {
       if (!text) return { cleanText: text, metaHtml: '' };
+      text = stripAnswerEmojiMarkers(text);
       // Second line of defense for the same "DOUBT_TYPE: conversational" first-line marker the
       // streaming loop above now strips at the source -- catches any message saved to history
       // before that fix existed (or any other path that hands raw text straight here without
@@ -3505,12 +3517,12 @@ let selectedImages = [];
       // already-saved message, with no separate database cleanup needed.
       text = text.replace(/^\s*VISUAL_INTENT:\s*(yes|no)\s*\n+/i, '');
       const ratingMatch = text.match(/NEET Importance:\s*\[?(\d)\]?\s*\/\s*5/i);
-      const chapterMatch = text.match(/📚?\s*\**\s*Chapter:\**\s*\[?([^\n\]]+)\]?/i);
+      const chapterMatch = text.match(/\**\s*Chapter:\**\s*\[?([^\n\]]+)\]?/i);
       if (!ratingMatch && !chapterMatch) return { cleanText: text, metaHtml: '' };
 
       const cleanText = text
         .replace(/NEET Importance:\s*\[?\d\]?\s*\/\s*5\s*\n*/i, '')
-        .replace(/📚?\s*\**\s*Chapter:\**\s*\[?[^\n\]]+\]?\s*\n*/i, '')
+        .replace(/\**\s*Chapter:\**\s*\[?[^\n\]]+\]?\s*\n*/i, '')
         .replace(/^\s+/, '');
 
       let starsHtml = '';
@@ -3729,7 +3741,7 @@ let selectedImages = [];
         // as a raw HTML block (<div class="solution-steps">...) into the string that parseWithMath
         // then hands to marked.parse, and marked treats an already-HTML block as opaque, never
         // re-scanning its contents for inline markdown. Without this, any "**" the model puts
-        // inside a Solution:/📝 Solution: block (both /chat's own numeric-answer format and
+        // inside a Solution: block (both /chat's own numeric-answer format and
         // /solve's PYQ template route through here) stays literal, unrendered asterisks on screen
         // (confirmed via a real /solve response: "**Seed habit**", "**(A)**" etc never became
         // bold). Same fix as pyqbank.html/savedquestions.html's Show Solution panels and
@@ -3756,14 +3768,14 @@ let selectedImages = [];
     }
 
     function parseWithMath(text) {
-      let html = text;
+      let html = stripAnswerEmojiMarkers(text);
       // Terminator covers both real "Solution:" templates in this codebase: server.py's chat
       // numeric-answer format ends the block at "Final Answer:", the /solve endpoint's PYQ
       // template (reused by the PYQ-modal solve box, also rendered through this function) has
-      // no Final Answer line and ends it at "🔑 Key Concept:" instead -- falls back to end of
+      // no Final Answer line and ends it at "Key Concept:" instead -- falls back to end of
       // string if neither shows up. Hindi answers use server.py's fixed Hindi labels for the
       // same template (HINDI_LANG_CONTEXT): "हल:" ... "अंतिम उत्तर:".
-      html = html.replace(/(Solution|हल):\n([\s\S]*?)(?=\n\n(?:Final Answer|अंतिम उत्तर):|\n\n🔑 Key Concept:|$)/, function(_, label, stepsText) {
+      html = html.replace(/(Solution|हल):\n([\s\S]*?)(?=\n\n(?:Final Answer|अंतिम उत्तर):|\n\nKey Concept:|$)/, function(_, label, stepsText) {
         return label + ':\n' + renderSolutionStepsHtml(stepsText);
       });
       html = html.replace(/\$\$([^$]+)\$\$/g, function(_, math) {
@@ -3905,7 +3917,7 @@ let selectedImages = [];
     const MERMAID_FENCE_RE = /```mermaid\b[\s\S]*?(?:```|$)/g;
 
     function maskMermaidBlocksForStreaming(text) {
-      return text.replace(MERMAID_FENCE_RE, '\n<div class="mermaid-placeholder">📊 Generating diagram…</div>\n');
+      return text.replace(MERMAID_FENCE_RE, '\n<div class="mermaid-placeholder">Generating diagram…</div>\n');
     }
 
     // Previously rendered fullText completely raw, with the "NEET Importance: N/5"/"Chapter: ..."
@@ -4486,10 +4498,10 @@ let selectedImages = [];
     function createPyqButton(searchText, chapterText) {
       const pyqBtn = document.createElement('button');
       pyqBtn.className = 'pyq-btn';
-      pyqBtn.innerHTML = '📋 Previous Year Questions';
+      pyqBtn.innerHTML = 'Previous Year Questions';
       pyqBtn.onclick = async function() {
         pyqBtn.disabled = true;
-        pyqBtn.innerHTML = '⏳ Searching PYQs...';
+        pyqBtn.innerHTML = 'Searching PYQs...';
         try {
           const res = await fetch(`${API_BASE}/pyq`, {
             method: 'POST',
@@ -4499,12 +4511,12 @@ let selectedImages = [];
           const data = await res.json();
           if (data.pyqs && data.pyqs.length > 0) {
             showPYQModal(data.pyqs, data.match_type);
-            pyqBtn.innerHTML = '📋 Previous Year Questions';
+            pyqBtn.innerHTML = 'Previous Year Questions';
           } else {
-            pyqBtn.innerHTML = '🔍 No PYQs found for this topic yet';
+            pyqBtn.innerHTML = 'No PYQs found for this topic yet';
           }
         } catch(e) {
-          pyqBtn.innerHTML = '❌ Error loading';
+          pyqBtn.innerHTML = 'Error loading';
         } finally {
           // Re-enable in every outcome (success, no-results, error) -- previously only the
           // success branch reset this, so a "no results"/error click permanently disabled
@@ -4957,7 +4969,7 @@ let selectedImages = [];
           solBtn.textContent = 'Show Solution';
           const saveBtn = document.createElement('button');
           saveBtn.className = 'pyq-save-btn';
-          saveBtn.textContent = '🔖 Save';
+          saveBtn.textContent = 'Save';
           saveBtn.onclick = async function() {
             const { data: { session } } = await client.auth.getSession();
             if (!session) { alert('Please log in to save questions.'); return; }
@@ -4982,13 +4994,13 @@ let selectedImages = [];
               source: 'PYQ Modal'
             });
             if (saveError) {
-              saveBtn.textContent = '❌ Failed, retry';
+              saveBtn.textContent = 'Failed, retry';
               saveBtn.style.borderColor = '#ef4444';
               saveBtn.style.color = '#ef4444';
               saveBtn.disabled = false;
               return;
             }
-            saveBtn.textContent = '✅ Saved';
+            saveBtn.textContent = 'Saved';
             saveBtn.style.borderColor = '#4ade80';
             saveBtn.style.color = '#4ade80';
             saveBtn.disabled = true;
@@ -5228,7 +5240,7 @@ let selectedImages = [];
         // Same fit-content-ancestor caveat as .diagram-skeleton above -- width relative to the
         // viewport, not the percentage of an ambiguous fit-content parent.
         fallback.style.cssText = 'width:min(240px, calc(100vw - 140px));padding:28px 12px;text-align:center;color:#888;font-size:13px;';
-        fallback.textContent = '🖼️ Diagram could not be loaded';
+        fallback.textContent = 'Diagram could not be loaded';
         container.appendChild(fallback);
       });
       img.src = diagram.image_url;
@@ -5537,14 +5549,14 @@ let selectedImages = [];
         return;
       }
       btnEl.disabled = true;
-      btnEl.innerHTML = '⏳ Finding diagram...';
+      btnEl.innerHTML = 'Finding diagram...';
       const data = await fetchDiagramMatch(doubtText, answerText);
       if (data && data.matched && data.image_url) {
         showDiagramModal(data);
-        btnEl.innerHTML = '🖼️ Show Diagram';
+        btnEl.innerHTML = 'Show Diagram';
         btnEl.disabled = false;
       } else {
-        btnEl.innerHTML = data ? 'No diagram available for this topic' : '❌ Error loading';
+        btnEl.innerHTML = data ? 'No diagram available for this topic' : 'Error loading';
       }
     }
 
@@ -5600,7 +5612,7 @@ let selectedImages = [];
       if (showDiagramBtn) {
         const diagramBtn = document.createElement('button');
         diagramBtn.className = 'diagram-btn';
-        diagramBtn.innerHTML = '🖼️ Show Diagram';
+        diagramBtn.innerHTML = 'Show Diagram';
         diagramBtn.onclick = () => handleShowDiagramClick(diagramBtn, searchText, answerText, diagramPrefetch);
         actionsRow.appendChild(diagramBtn);
       }
@@ -5667,7 +5679,7 @@ let selectedImages = [];
       out = out.replace(/\*(.*?)\*/g, '$1');
       out = out.replace(/^#{1,6}\s+/gm, '');
       out = out.replace(/^[-*]\s+/gm, '');
-      out = out.replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, ''); // 📚📝🔑🧠✅⭐ etc. section markers
+      out = out.replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, ''); // legacy book/memo/key/brain/check/star section markers
       out = out.replace(/\s{2,}/g, ' ').trim();
       return out;
     }
@@ -6667,28 +6679,34 @@ function plainTextFromMarkdown(text) {
     // context for whatever was quoted -- one shared builder instead of three near-identical
     // copies, so the per-mode wording only ever has to change in one place. 'explain' quotes get
     // an instruction to simplify; 'ask' quotes keep the original neutral framing.
+    // Every quoted span (PYQ stem/options/answer, selected text) is wrapped in <ref_data> tags --
+    // see server.py SYSTEM_PROMPT rule 12: this is quoted/retrieved reference content, not a
+    // fresh instruction, so it's marked the same way NCERT retrieval is, in case the quoted text
+    // itself contains something that reads like an instruction. The framing text around each tag
+    // ("Please explain this part...", "Question:", etc.) stays outside the tags -- that framing
+    // is the real instruction.
     function buildQuotedPreamble(quotes) {
       return quotes.map(function(q) {
         if (q.mode === 'pyq_doubt') {
           const parts = [];
-          if (q.stem) parts.push('Question: ' + q.stem + '.');
-          if (q.correct) parts.push('Correct answer: ' + q.correct + '.');
-          parts.push('Selected line: "' + q.text + '"');
+          if (q.stem) parts.push('Question: <ref_data>' + q.stem + '</ref_data>.');
+          if (q.correct) parts.push('Correct answer: <ref_data>' + q.correct + '</ref_data>.');
+          parts.push('Selected line: <ref_data>' + q.text + '</ref_data>');
           return parts.join(' ');
         }
         if (q.mode === 'pyq_question') {
           const parts = [];
-          if (q.text) parts.push('Question: ' + q.text + '.');
+          if (q.text) parts.push('Question: <ref_data>' + q.text + '</ref_data>.');
           if (q.options) {
             const optParts = ['a', 'b', 'c', 'd'].filter(function(l) { return q.options[l]; }).map(function(l) { return l.toUpperCase() + ') ' + q.options[l]; });
-            if (optParts.length) parts.push('Options: ' + optParts.join(' ') + '.');
+            if (optParts.length) parts.push('Options: <ref_data>' + optParts.join(' ') + '</ref_data>.');
           }
-          if (q.correct) parts.push('Correct answer: ' + q.correct + '.');
+          if (q.correct) parts.push('Correct answer: <ref_data>' + q.correct + '</ref_data>.');
           return parts.join(' ');
         }
         return q.mode === 'explain'
-          ? 'Please explain this part in simple, easy-to-understand terms: "' + q.text + '"'
-          : 'Regarding this part: "' + q.text + '"';
+          ? 'Please explain this part in simple, easy-to-understand terms: <ref_data>' + q.text + '</ref_data>'
+          : 'Regarding this part: <ref_data>' + q.text + '</ref_data>';
       }).join('\n\n');
     }
     function buildQuestionWithQuotes(quotes, text) {
@@ -7197,7 +7215,7 @@ function plainTextFromMarkdown(text) {
         actionsRow.style.cssText = 'padding:0 24px 16px 64px;';
         const diagramBtn = document.createElement('button');
         diagramBtn.className = 'diagram-btn';
-        diagramBtn.innerHTML = '🖼️ Show Diagram';
+        diagramBtn.innerHTML = 'Show Diagram';
         diagramBtn.onclick = () => handleShowDiagramClick(diagramBtn, last.userText, last.aiText, data);
         actionsRow.appendChild(diagramBtn);
         chatWindow.appendChild(actionsRow);
@@ -9414,7 +9432,7 @@ function plainTextFromMarkdown(text) {
                 // skips the chapter-filter narrowing the post-stream call used to do, trading a
                 // small amount of match precision (immaterial against today's small, topically
                 // distinct diagram catalog -- see chat_diagram_matching memory) for not needing
-                // to wait for the model to have written a 📚 Chapter: line yet, which is the
+                // to wait for the model to have written a Chapter: line yet, which is the
                 // whole point here. VISUAL_INTENT: no is entirely unaffected -- diagramPrefetch
                 // simply never gets set, and the loop below behaves exactly as it always has.
                 if (visualIntent === 'yes') {
@@ -12116,7 +12134,7 @@ function openSettings() {
             <div style="font-size:22px;font-weight:700;color:#fff;margin-bottom:8px;" data-i18n="chat.free">Free</div>
             <div style="font-size:13px;color:#666;margin-bottom:20px;" data-i18n="chat.freePlanDesc">Limited daily doubts · Basic access</div>
             `}
-            <button onclick="window.open('./pricing.html','_blank')" style="background:${pro ? 'transparent' : '#4f8ef7'};border:${pro ? '1px solid #2a2a2a' : 'none'};color:${pro ? '#ececec' : 'white'};padding:10px 24px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;font-family:Inter,sans-serif;" data-i18n="${isMax ? 'chat.viewPlans' : pro ? 'chat.upgradeToMaxShort' : 'chat.upgradeToProShort'}">${isMax ? 'View Plans' : pro ? '⭐ Upgrade to Max' : '⭐ Upgrade to Pro'}</button>
+            <button onclick="window.open('./pricing.html','_blank')" style="background:${pro ? 'transparent' : '#4f8ef7'};border:${pro ? '1px solid #2a2a2a' : 'none'};color:${pro ? '#ececec' : 'white'};padding:10px 24px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;font-family:Inter,sans-serif;" data-i18n="${isMax ? 'chat.viewPlans' : pro ? 'chat.upgradeToMaxShort' : 'chat.upgradeToProShort'}">${isMax ? 'View Plans' : pro ? 'Upgrade to Max' : 'Upgrade to Pro'}</button>
           </div>
           ${isMax ? '' : '<div style="font-size:12px;color:#333;text-align:center;" data-i18n="chat.razorpayNote">Payments powered by Razorpay · Launching soon</div>'}
         `;
@@ -12304,7 +12322,7 @@ function openSettings() {
     }
 
     // Feather-style (viewBox 24x24, stroke-based) sun/moon icons, matching every other icon in
-    // this app -- replaces the old "🌙 Dark" / "☀️ Light" emoji-prefixed labels.
+    // this app -- replaces the old "Dark"/"Light" emoji-prefixed labels.
     const THEME_ICONS = {
       dark: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>',
       light: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>'

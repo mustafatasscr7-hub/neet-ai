@@ -668,7 +668,7 @@
             <div class="subject-pill bio-pill">${t('scoreboard','bioPill')}: ${localizeNum(r.subject_biology_score)}/${localizeNum(360)}</div>
             <div class="subject-pill phy-pill">${t('scoreboard','phyPill')}: ${localizeNum(r.subject_physics_score)}/${localizeNum(180)}</div>
             <div class="subject-pill che-pill">${t('scoreboard','chemPill')}: ${localizeNum(r.subject_chemistry_score)}/${localizeNum(180)}</div>
-            <div class="test-time">⏱ ${formatTime(r.time_taken)}</div>
+            <div class="test-time">${formatTime(r.time_taken)}</div>
           </div>
         `;
         wrap.appendChild(card);
@@ -897,7 +897,7 @@
         skeleton.remove();
         const fallback = document.createElement('div');
         fallback.style.cssText = 'width:min(240px, calc(100vw - 140px));padding:28px 12px;text-align:center;color:#888;font-size:13px;';
-        fallback.textContent = '🖼️ Diagram could not be loaded';
+        fallback.textContent = 'Diagram could not be loaded';
         container.appendChild(fallback);
       });
       img.src = diagram.image_url;

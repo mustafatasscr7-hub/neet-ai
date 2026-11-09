@@ -333,9 +333,9 @@
     const client = createClient(SUPABASE_URL, SUPABASE_KEY);
 
     const subjectConfig = {
-      'Biology': { icon: '🔬', color: '#4ade80' },
-      'Physics': { icon: '⚡', color: '#4f8ef7' },
-      'Chemistry': { icon: '⚗️', color: '#f97316' }
+      'Biology': { color: '#4ade80' },
+      'Physics': { color: '#4f8ef7' },
+      'Chemistry': { color: '#f97316' }
     };
 
 let allDiagrams = [];      // everything matching the current Subject+Class fetch (server-side)
@@ -510,7 +510,7 @@ let allDiagrams = [];      // everything matching the current Subject+Class fetc
         skeleton.remove();
         const fallback = document.createElement('div');
         fallback.style.cssText = 'width:min(240px, calc(100vw - 140px));padding:28px 12px;text-align:center;color:#888;font-size:13px;';
-        fallback.textContent = '🖼️ Diagram could not be loaded';
+        fallback.textContent = 'Diagram could not be loaded';
         container.appendChild(fallback);
       });
       img.src = diagram.image_url;

@@ -275,7 +275,7 @@ async function showSettingsSection(section, clickedEl) {
         <div style="font-size:22px;font-weight:700;color:#fff;margin-bottom:8px;" data-i18n="chat.free">Free</div>
         <div style="font-size:13px;color:#666;margin-bottom:20px;" data-i18n="chat.freePlanDesc">Limited daily doubts · Basic access</div>
         `}
-        <button onclick="window.open('./pricing.html','_blank')" style="background:${pro ? 'transparent' : '#4f8ef7'};border:${pro ? '1px solid #2a2a2a' : 'none'};color:${pro ? '#ececec' : 'white'};padding:10px 24px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;font-family:Inter,sans-serif;" data-i18n="${isMax ? 'chat.viewPlans' : pro ? 'chat.upgradeToMaxShort' : 'chat.upgradeToProShort'}">${isMax ? 'View Plans' : pro ? '⭐ Upgrade to Max' : '⭐ Upgrade to Pro'}</button>
+        <button onclick="window.open('./pricing.html','_blank')" style="background:${pro ? 'transparent' : '#4f8ef7'};border:${pro ? '1px solid #2a2a2a' : 'none'};color:${pro ? '#ececec' : 'white'};padding:10px 24px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;font-family:Inter,sans-serif;" data-i18n="${isMax ? 'chat.viewPlans' : pro ? 'chat.upgradeToMaxShort' : 'chat.upgradeToProShort'}">${isMax ? 'View Plans' : pro ? 'Upgrade to Max' : 'Upgrade to Pro'}</button>
       </div>
       ${isMax ? '' : '<div style="font-size:12px;color:#333;text-align:center;" data-i18n="chat.razorpayNote">Payments powered by Razorpay · Launching soon</div>'}
     `;

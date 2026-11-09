@@ -123,7 +123,7 @@ PHY_UNITS = row("p1", "Physics", 11, "Units and Measurement", 0.55, "The SI unit
 PHY_OHM = row("p2", "Physics", 12, "Current Electricity", 0.71, "Ohm's law: V = IR ...")
 PHY_LAWS = row("p3", "Physics", 11, "Laws of Motion", 0.57, "Force is the rate of change of momentum ...")
 
-ANSWER_WITH_CITATION = ("VISUAL_INTENT: no\n\nNEET Importance: 4/5\n\n📚 Chapter: NCERT Class 11, Chapter 1 — Some Basic Concepts of Chemistry\n\n"
+ANSWER_WITH_CITATION = ("VISUAL_INTENT: no\n\nNEET Importance: 4/5\n\nChapter: NCERT Class 11, Chapter 1 — Some Basic Concepts of Chemistry\n\n"
                         "Answer:\n- The SI unit of force is the newton (N) = kg m s⁻².\n\nKey Points:\n- 1 N = 10⁵ dyne.")
 
 
@@ -145,7 +145,7 @@ def test_wrong_subject_no_citation():
         check("chunk content not sent", "SI base units" not in msg and "NCERT Content" not in msg)
         check("no 'Retrieved from:' list", "Retrieved from" not in msg)
         check("model told to set aside and answer", "set aside" in msg and "do not refuse" in msg)
-        check("Chapter line stripped from the answer", "📚 Chapter" not in out and "Some Basic Concepts" not in out, out)
+        check("Chapter line stripped from the answer", "Chapter:" not in out and "Some Basic Concepts" not in out, out)
         check("answer itself still streams", "newton (N)" in out)
         log = h.client.posts_to("ncert_retrieval_log")
         check("logged as set_aside", len(log) == 1 and log[0][1]["outcome"] == "set_aside", log)
@@ -153,13 +153,13 @@ def test_wrong_subject_no_citation():
 
 
 def test_normal_case_unchanged():
-    print("\n3. normal case unchanged")
+    print("\n3. normal case unchanged (except the 2026-11-07 <ref_data> wrapping around the retrieved passage -- see SYSTEM_PROMPT rule 12)")
     with Harness(ANSWER_WITH_CITATION, [PHY_OHM]) as h:
         asyncio.run(drain(server.stream_response("What is Ohm's law?", personalize=False, skip_cache=True)))
-        expected = ("NCERT Content:\n[Physics - Class 12 - Current Electricity]\nOhm's law: V = IR ...\n\n"
+        expected = ("NCERT Content:\n<ref_data>\n[Physics - Class 12 - Current Electricity]\nOhm's law: V = IR ...\n</ref_data>\n\n"
                     "Retrieved from (copy EXACTLY ONE of these verbatim into your Chapter: line -- never a different name or number):\n"
                     "- NCERT Class 12, Chapter 3 — Current Electricity\n\nStudent Question: What is Ohm's law?")
-        check("prompt identical to before", h.user_message() == expected, h.user_message())
+        check("prompt identical to before (plus the new <ref_data> wrap)", h.user_message() == expected, h.user_message())
         log = h.client.posts_to("ncert_retrieval_log")
         check("logged as grounded", len(log) == 1 and log[0][1]["outcome"] == "grounded")
     # No clear subject -> nothing set aside even across subjects.

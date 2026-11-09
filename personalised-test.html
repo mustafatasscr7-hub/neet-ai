@@ -2004,7 +2004,7 @@
       savedQuestions.add(index);
       const saveBtn = document.getElementById('saveBtn-' + index);
       if (saveBtn) {
-        saveBtn.textContent = '✅ Saved';
+        saveBtn.textContent = 'Saved';
         saveBtn.style.borderColor = '#4ade80';
         saveBtn.style.color = '#4ade80';
         saveBtn.disabled = true;
@@ -2287,7 +2287,7 @@
       });
       if (error) { alert('Failed to save.'); return; }
       const btn = document.getElementById('review-save-' + i);
-      if (btn) { btn.textContent = '✅ Saved'; btn.style.borderColor = '#4ade80'; btn.style.color = '#4ade80'; btn.disabled = true; }
+      if (btn) { btn.textContent = 'Saved'; btn.style.borderColor = '#4ade80'; btn.style.color = '#4ade80'; btn.disabled = true; }
     }
 
     // Keyboard shortcuts for the question-taking screen only (keyboard-shortcuts audit/rollout,
