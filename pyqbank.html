@@ -1726,7 +1726,7 @@ ${q.diagram_url ? `<img class="q-diagram-img q-img" src="${q.diagram_url}">` : '
         el.onclick = null;
         if (hasVerifiedAnswer && opt === correctOpt) {
           el.classList.add('correct');
-        } else if (opt === selectedOpt) {
+        } else if (hasVerifiedAnswer && opt === selectedOpt) {
           el.classList.add('wrong');
         }
       });
