@@ -262,8 +262,8 @@
          rather than relocated in the DOM, so desktop's single-row header is untouched. */
       .header-left button[onclick="confirmExit()"] { display: none; }
       .header > .submit-btn { display: none; }
-      .exam-footer-actions { display: flex; gap: 12px; margin-top: 16px; padding-top: 16px; border-top: 1px solid #1e1e1e; }
-      .exam-footer-actions button { flex: 1; margin: 0 !important; text-align: center; }
+      .exam-footer-actions { display: flex; gap: 12px; margin-top: 16px; padding-top: 16px; padding-bottom: max(16px, env(safe-area-inset-bottom, 0px)); border-top: 1px solid #1e1e1e; }
+      .exam-footer-actions button { flex: 1; margin: 0 !important; display: flex; align-items: center; justify-content: center; text-align: center; min-height: clamp(44px, 12vw, 48px); padding: clamp(12px, 3.5vw, 14px) clamp(16px, 5vw, 20px) !important; font-size: clamp(14px, 3.8vw, 15px) !important; }
       body.light-mode .exam-footer-actions { border-color: #e3e3ea !important; }
     }
   </style>
