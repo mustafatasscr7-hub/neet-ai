@@ -2091,7 +2091,7 @@
     <div class="sidebar-scroll-area">
       <div class="sidebar-label" id="pinnedLabel" style="display:none;" data-i18n="chat.pinned">Pinned</div>
       <div class="history-list" id="pinnedList" style="display:none;"></div>
-      <div class="sidebar-label" data-i18n="chat.recent">Recent</div>
+      <div class="sidebar-label" id="recentLabel" data-i18n="chat.recent">Recent</div>
       <div class="history-list" id="historyList"></div>
     </div>
 
@@ -7788,6 +7788,7 @@ function plainTextFromMarkdown(text) {
       document.getElementById('conv-' + id)?.remove();
       document.getElementById('menu-' + id)?.remove();
       conversations = conversations.filter(c => c !== conv);
+      refreshPinnedSectionVisibility();
       // Only reset/navigate away when the deleted chat is the one actually open -- deleting a
       // different sidebar chat shouldn't blow away whatever the student is currently looking at.
       const wasOpenChat = conv ? (currentId === conv.id || currentId === conv.supabaseId) : (currentId === id);
@@ -7862,9 +7863,16 @@ function plainTextFromMarkdown(text) {
       // CSS rule already does for everything else in a collapsed sidebar.
       const collapsed = document.querySelector('.sidebar').classList.contains('collapsed');
       const show = hasAny && !collapsed;
-      const before = snapshotTops([document.getElementById('historyList')], null);
+      const recentList = document.getElementById('historyList');
+      // Same empty-section problem as Pinned: a guest (or any account with zero chats, or one
+      // where every chat is pinned) used to still show a bare "Recent" label with nothing
+      // under it. Hidden the same way, and same inline-vs-collapsed-CSS reasoning as above --
+      // once this sets an inline display it has to keep tracking collapsed itself too.
+      const showRecent = recentList.children.length > 0 && !collapsed;
+      const before = snapshotTops([recentList], null);
       list.style.display = show ? 'flex' : 'none';
       document.getElementById('pinnedLabel').style.display = show ? 'block' : 'none';
+      document.getElementById('recentLabel').style.display = showRecent ? 'block' : 'none';
       flipPlay(before);
     }
 
@@ -8368,6 +8376,7 @@ function plainTextFromMarkdown(text) {
       item.classList.add('active');
       document.getElementById('historyList').prepend(item);
       conversations.push({ id: id, title: title, messages: currentConversation, isPinned: false });
+      refreshPinnedSectionVisibility();
       updateHeaderTitle(title);
 
       const { data: { session } } = await client.auth.getSession();
@@ -11780,12 +11789,15 @@ function plainTextFromMarkdown(text) {
               if (openedItem) openedItem.classList.add('active');
             }
           }
+        } else {
+          refreshPinnedSectionVisibility();
         }
       } else {
         document.getElementById('loginNudge').style.display = 'flex';
         document.getElementById('guestMenu').style.display = 'flex';
         document.getElementById('guestAvatarBtn').style.display = 'flex';
         document.getElementById('profileSection').style.display = 'none';
+        refreshPinnedSectionVisibility();
       }
       // Re-render now that we actually know whether there's a real display name -- the
       // synchronous render at page load ran before this session check resolved, so it could
