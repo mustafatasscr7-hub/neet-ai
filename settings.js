@@ -57,33 +57,83 @@ async function openSettings() {
     <div class="settings-modal-panel">
 
       <!-- Close button -->
-      <button onclick="document.getElementById('settingsModal').remove()" style="position:absolute;top:16px;right:16px;background:transparent;border:none;color:#666;cursor:pointer;font-size:20px;z-index:10;">✕</button>
+      <button class="settings-modal-close" onclick="document.getElementById('settingsModal').remove()" style="position:absolute;top:16px;right:16px;background:transparent;border:none;color:#666;cursor:pointer;font-size:20px;z-index:10;">✕</button>
 
-      <!-- Left sidebar (becomes a horizontal scrollable tab strip on mobile, see .settings-sidebar's @media rule) -->
+      <!-- Left sidebar: desktop only now (mobile uses .settings-mobile-list/.settings-mobile-back-header below instead) -->
       <div class="settings-sidebar">
         <div class="settings-sidebar-title" data-i18n="chat.settingsTitle">Settings</div>
-       <div class="settings-nav-item active" onclick="showSettingsSection('general', this)" style="padding:9px 14px;border-radius:8px;cursor:pointer;font-size:13px;color:#ececec;background:#2a2a2a;display:flex;align-items:center;gap:10px;">
+       <div class="settings-nav-item active" data-section="general" onclick="showSettingsSection('general', this)" style="padding:9px 14px;border-radius:8px;cursor:pointer;font-size:13px;color:#ececec;background:#2a2a2a;display:flex;align-items:center;gap:10px;">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
           <span data-i18n="chat.settingsGeneral">General</span>
         </div>
         ${isLoggedIn ? `
-        <div class="settings-nav-item" onclick="showSettingsSection('account', this)" style="padding:9px 14px;border-radius:8px;cursor:pointer;font-size:13px;color:#666;display:flex;align-items:center;gap:10px;">
+        <div class="settings-nav-item" data-section="account" onclick="showSettingsSection('account', this)" style="padding:9px 14px;border-radius:8px;cursor:pointer;font-size:13px;color:#666;display:flex;align-items:center;gap:10px;">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
           <span data-i18n="chat.settingsAccount">Account</span>
         </div>
-        <div class="settings-nav-item" onclick="showSettingsSection('plan', this)" style="padding:9px 14px;border-radius:8px;cursor:pointer;font-size:13px;color:#666;display:flex;align-items:center;gap:10px;">
+        <div class="settings-nav-item" data-section="plan" onclick="showSettingsSection('plan', this)" style="padding:9px 14px;border-radius:8px;cursor:pointer;font-size:13px;color:#666;display:flex;align-items:center;gap:10px;">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
           <span data-i18n="chat.settingsPlan">Plan</span>
         </div>
-        <div class="settings-nav-item" onclick="showSettingsSection('usage', this)" style="padding:9px 14px;border-radius:8px;cursor:pointer;font-size:13px;color:#666;display:flex;align-items:center;gap:10px;">
+        <div class="settings-nav-item" data-section="usage" onclick="showSettingsSection('usage', this)" style="padding:9px 14px;border-radius:8px;cursor:pointer;font-size:13px;color:#666;display:flex;align-items:center;gap:10px;">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
           <span data-i18n="chat.settingsUsage">Usage</span>
         </div>
-        <div class="settings-nav-item" onclick="showSettingsSection('privacy', this)" style="padding:9px 14px;border-radius:8px;cursor:pointer;font-size:13px;color:#666;display:flex;align-items:center;gap:10px;">
+        <div class="settings-nav-item" data-section="privacy" onclick="showSettingsSection('privacy', this)" style="padding:9px 14px;border-radius:8px;cursor:pointer;font-size:13px;color:#666;display:flex;align-items:center;gap:10px;">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
           <span data-i18n="chat.settingsPrivacy">Privacy</span>
         </div>
         ` : ''}
+      </div>
+
+      <!-- Mobile-only main list (see .settings-mobile-list's @media rule + openSettingsSectionMobile()) -->
+      <div class="settings-mobile-list" id="settingsMobileList">
+        <div class="settings-mobile-list-title" data-i18n="chat.settingsTitle">Settings</div>
+        <div class="settings-mobile-row" onclick="openSettingsSectionMobile('general')">
+          <div class="settings-mobile-row-left">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#888" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            <span data-i18n="chat.settingsGeneral">General</span>
+          </div>
+          <svg class="settings-mobile-row-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+        </div>
+        ${isLoggedIn ? `
+        <div class="settings-mobile-row" onclick="openSettingsSectionMobile('account')">
+          <div class="settings-mobile-row-left">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#888" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+            <span data-i18n="chat.settingsAccount">Account</span>
+          </div>
+          <svg class="settings-mobile-row-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+        </div>
+        <div class="settings-mobile-row" onclick="openSettingsSectionMobile('plan')">
+          <div class="settings-mobile-row-left">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#888" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+            <span data-i18n="chat.settingsPlan">Plan</span>
+          </div>
+          <svg class="settings-mobile-row-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+        </div>
+        <div class="settings-mobile-row" onclick="openSettingsSectionMobile('usage')">
+          <div class="settings-mobile-row-left">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#888" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+            <span data-i18n="chat.settingsUsage">Usage</span>
+          </div>
+          <svg class="settings-mobile-row-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+        </div>
+        <div class="settings-mobile-row" onclick="openSettingsSectionMobile('privacy')">
+          <div class="settings-mobile-row-left">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#888" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+            <span data-i18n="chat.settingsPrivacy">Privacy</span>
+          </div>
+          <svg class="settings-mobile-row-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+        </div>
+        ` : ''}
+      </div>
+
+      <!-- Mobile-only back header for the full-screen section view -->
+      <div class="settings-mobile-back-header" id="settingsMobileBackHeader">
+        <button class="settings-mobile-back-btn" onclick="showSettingsMobileList()" aria-label="Back">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <span class="settings-mobile-back-title" id="settingsMobileBackTitle"></span>
       </div>
 
       <!-- Right content -->
@@ -94,7 +144,42 @@ async function openSettings() {
 
   document.body.appendChild(modal);
   modal.addEventListener('click', function(e) { if (e.target === modal) modal.remove(); });
-  showSettingsSection('general', document.querySelector('.settings-nav-item.active'));
+  if (window.matchMedia('(max-width: 620px)').matches) {
+    showSettingsMobileList();
+  } else {
+    showSettingsSection('general', document.querySelector('.settings-nav-item.active'));
+  }
+}
+
+// Mobile-only: shows the main Settings list, hiding the section content/back-header. No-op
+// on desktop since .settings-mobile-list only gets display treatment under the 620px
+// breakpoint (see its @media rule) -- the .is-active class itself is harmless there.
+function showSettingsMobileList() {
+  const list = document.getElementById('settingsMobileList');
+  const header = document.getElementById('settingsMobileBackHeader');
+  const content = document.getElementById('settingsContent');
+  if (list) list.classList.add('is-active');
+  if (header) header.classList.remove('is-active');
+  if (content) content.classList.add('is-hidden');
+}
+
+// Mobile-only: renders `section` into the existing content area (same showSettingsSection()
+// used by desktop) then swaps the mobile list out for the full-screen section + back header.
+async function openSettingsSectionMobile(section) {
+  const navItem = document.querySelector(`.settings-nav-item[data-section="${section}"]`);
+  await showSettingsSection(section, navItem);
+  const list = document.getElementById('settingsMobileList');
+  const header = document.getElementById('settingsMobileBackHeader');
+  const content = document.getElementById('settingsContent');
+  const titleEl = document.getElementById('settingsMobileBackTitle');
+  const sourceLabel = navItem ? navItem.querySelector('[data-i18n]') : null;
+  if (titleEl && sourceLabel) {
+    titleEl.textContent = sourceLabel.textContent;
+    titleEl.setAttribute('data-i18n', sourceLabel.getAttribute('data-i18n'));
+  }
+  if (list) list.classList.remove('is-active');
+  if (header) header.classList.add('is-active');
+  if (content) { content.classList.remove('is-hidden'); content.scrollTop = 0; }
 }
 
 async function showSettingsSection(section, clickedEl) {

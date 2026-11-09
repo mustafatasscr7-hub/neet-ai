@@ -8,15 +8,63 @@
 .settings-content-area { flex: 1; padding: 32px; overflow-y: auto; }
 #displayNameInput { width: 200px; }
 
+/* Mobile-only ChatGPT-style settings navigation (main list -> full-screen section). Hidden
+   unconditionally here so desktop never renders them regardless of the .is-active class JS
+   toggles; the @media block below is what actually un-hides them under 620px, matching
+   .settings-sidebar's own display:none there. See openSettings()/openSettingsSectionMobile()/
+   showSettingsMobileList() for the state machine. */
+.settings-mobile-list { display: none; flex-direction: column; overflow-y: auto; padding: 8px; }
+.settings-mobile-list-title { font-size: 11px; color: #444; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; padding: 28px 14px 14px; }
+.settings-mobile-row { display: flex; align-items: center; justify-content: space-between; padding: 13px 14px; border-radius: 10px; cursor: pointer; color: #ececec; font-size: 14px; -webkit-tap-highlight-color: transparent; }
+.settings-mobile-row:active { background: #242424; }
+.settings-mobile-row-left { display: flex; align-items: center; gap: 12px; }
+.settings-mobile-row-chevron { color: #555; flex-shrink: 0; }
+.settings-mobile-back-header { display: none; align-items: center; gap: 4px; padding: 14px 52px 12px 6px; flex-shrink: 0; border-bottom: 1px solid #1e1e1e; }
+.settings-mobile-back-btn { background: transparent; border: none; color: #ececec; cursor: pointer; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; -webkit-tap-highlight-color: transparent; }
+.settings-mobile-back-title { font-size: 15px; font-weight: 700; color: #fff; }
+body.light-mode .settings-mobile-row { color: #16161d !important; }
+body.light-mode .settings-mobile-row:active { background: #ececf0 !important; }
+body.light-mode .settings-mobile-row-chevron { color: #8a8a94 !important; }
+body.light-mode .settings-mobile-back-header { border-bottom-color: rgba(0,0,0,0.08) !important; }
+body.light-mode .settings-mobile-back-btn { color: #16161d !important; }
+body.light-mode .settings-mobile-back-title { color: #0d0d0d !important; }
+
 @media (max-width: 620px) {
   .settings-modal-panel { width: 100vw; height: 100vh; max-width: 100vw; max-height: 100vh; border-radius: 0; flex-direction: column; }
-  .settings-sidebar { width: 100%; flex-direction: row; overflow-x: auto; -webkit-overflow-scrolling: touch; border-right: none; border-bottom: 1px solid #1e1e1e; padding: 8px 52px 8px 8px; gap: 6px; }
-  .settings-sidebar-title { display: none; }
-  .settings-sidebar .settings-nav-item { flex-shrink: 0; white-space: nowrap; }
-  .settings-content-area { padding: 20px; }
+
+  /* No horizontal tab strip on mobile anymore -- replaced by .settings-mobile-list /
+     .settings-mobile-back-header (ChatGPT-style list -> full-screen section), toggled via
+     their .is-active class in openSettings()/openSettingsSectionMobile()/
+     showSettingsMobileList(). Desktop's sidebar (and the close button over it) is untouched. */
+  .settings-sidebar { display: none; }
+  .settings-mobile-list.is-active { display: flex; }
+  .settings-mobile-back-header.is-active { display: flex; }
+  .settings-content-area.is-hidden { display: none; }
+  .settings-content-area { padding: clamp(16px, 5vw, 20px); }
+
   #settingsContent [style*="justify-content:space-between"] { flex-wrap: wrap; row-gap: 10px; }
   #displayNameInputGroup { width: 100%; }
   #displayNameInput { flex: 1; min-width: 0; width: auto; }
+
+  /* Each section's own <h2> title is now redundant with .settings-mobile-back-title above it. */
+  #settingsContent > h2:first-child { display: none; }
+  #settingsContent .usage-title [data-i18n="chat.settingsUsage"] { display: none; }
+
+  /* Fluid sizing for the mobile Settings list/sub-screen views, scaled for this denser UI so
+     nothing is oversized at 320px or cramped at 428px+. +env(safe-area-inset-top) alone resolves
+     to 0 in a normal browser tab, so an unconditional flat +18px on top of it is what actually
+     keeps the main list title, the close X, and every sub-screen's back-header clear of real
+     Android Chrome's address-bar chrome (not a hardware cutout, which env() does cover). */
+  .settings-mobile-list-title { font-size: clamp(10px, 2.8vw, 11px); padding-top: calc(28px + 18px + env(safe-area-inset-top, 0px)); }
+  .settings-mobile-row { font-size: clamp(13px, 3.4vw, 14px); padding: clamp(13px, 3.4vw, 15px) clamp(12px, 3.5vw, 14px); }
+  .settings-mobile-row-left { gap: clamp(10px, 3vw, 12px); }
+  .settings-mobile-row-left svg { width: clamp(15px, 4.5vw, 17px); height: clamp(15px, 4.5vw, 17px); flex-shrink: 0; }
+  .settings-mobile-row-chevron { width: clamp(14px, 4vw, 16px) !important; height: clamp(14px, 4vw, 16px) !important; }
+  .settings-modal-close { width: clamp(40px, 10.5vw, 44px) !important; height: clamp(40px, 10.5vw, 44px) !important; top: calc(clamp(8px, 2.3vw, 12px) + 18px + env(safe-area-inset-top, 0px)) !important; right: clamp(8px, 2.3vw, 12px) !important; font-size: clamp(17px, 4.7vw, 20px) !important; }
+  .settings-mobile-back-header { padding: clamp(12px, 3.3vw, 14px) clamp(48px, 14vw, 56px) clamp(10px, 2.8vw, 12px) clamp(5px, 1.5vw, 6px); padding-top: calc(clamp(12px, 3.3vw, 14px) + 18px + env(safe-area-inset-top, 0px)); }
+  .settings-mobile-back-btn { width: clamp(40px, 10.5vw, 44px); height: clamp(40px, 10.5vw, 44px); }
+  .settings-mobile-back-btn svg { width: clamp(18px, 5vw, 20px); height: clamp(18px, 5vw, 20px); }
+  .settings-mobile-back-title { font-size: clamp(14px, 3.9vw, 15px); }
 }
 
 body.light-mode .settings-modal-panel { background: #ffffff !important; border-color: #d5d5dd !important; }
