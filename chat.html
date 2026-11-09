@@ -2,6 +2,22 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
+  <!-- Theme-flash fix: theme.js only sets the light-mode/dark-mode class on DOMContentLoaded,
+       which the render-blocking CDN links/scripts below delay by up to ~1s, so a saved light
+       theme would visibly flash dark first. This runs before any of those, reading the same
+       'theme' localStorage key theme.js uses, and sets the class on <html> synchronously
+       (document.body doesn't exist yet this early) so the CSS variables below resolve correctly
+       at first paint. theme.js's own DOMContentLoaded listener stays in place and just re-applies
+       the same class to <body> once it exists -- harmless, not the thing fixing the flash. -->
+  <script>
+  (function () {
+    try {
+      var isLight = localStorage.getItem('theme') === 'light';
+      document.documentElement.classList.toggle('light-mode', isLight);
+      document.documentElement.classList.toggle('dark-mode', !isLight);
+    } catch (e) {}
+  })();
+  </script>
   <!-- interactive-widget=resizes-content (additive -- ignored by browsers that don't support it,
        falling back to the old behavior) makes 100vh-based layout actually shrink when the on-
        screen keyboard opens, instead of staying pinned to the pre-keyboard viewport height. That
@@ -50,7 +66,12 @@
        the "Dyslexic Friendly" chat font option keeps working even if that CDN ever goes away. */
     @font-face { font-family: 'OpenDyslexic'; src: url('assets/fonts/OpenDyslexic-Regular.woff') format('woff'); font-weight: 400; font-style: normal; font-display: swap; }
     @font-face { font-family: 'OpenDyslexic'; src: url('assets/fonts/OpenDyslexic-Bold.woff') format('woff'); font-weight: 700; font-style: normal; font-display: swap; }
-    body { font-family: 'Inter', sans-serif; background: #0d0d0d; color: #ececec; height: 100vh; display: flex; overflow: hidden; user-select: none; -webkit-user-select: none; }
+    /* --chat-bg/--chat-fg exist only so body's initial paint can read the <html> class the
+       head script above sets synchronously (body itself doesn't exist yet when that script
+       runs, so it can't carry the class until later) -- not a general token layer. */
+    :root { --chat-bg: #0d0d0d; --chat-fg: #ececec; }
+    :root.light-mode { --chat-bg: #f5f5f5; --chat-fg: #0d0d0d; }
+    body { font-family: 'Inter', sans-serif; background: var(--chat-bg); color: var(--chat-fg); height: 100vh; display: flex; overflow: hidden; user-select: none; -webkit-user-select: none; }
     /* Div/span-based controls (nav items, buttons, badges) don't get the browser's implicit
        user-select:none that a native <button> has, so clicking their text was dropping a text
        caret into them instead of just registering the click. Disabled site-wide above, then
