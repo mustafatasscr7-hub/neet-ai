@@ -11,3 +11,6 @@ __pycache__/
 backups/
 .scan_cache/
 .venv/
+ncert_text_clean/
+ncert_page_recovery_*.jsonl
+ncert_page_recovery_*.json
