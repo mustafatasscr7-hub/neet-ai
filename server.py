@@ -3577,21 +3577,22 @@ _NCERT_BLOCK_END = "===FROM_NCERT_END==="
 
 _NCERT_SECTIONS_RULE = f"""
 
-13. EXACT-QUOTE CHECK -- only applies when "NCERT Exact Section Text" reference data is present
-above. After writing your complete normal answer exactly as the rules above already specify,
-decide whether 1 to 3 SHORT passages from that reference text, copied WORD FOR WORD (never
-paraphrased, summarized, or combined from different sentences), directly support your answer.
-Each candidate line must be at least 6 words long and copied EXACTLY as written in the reference
-text -- changing even one word makes it invalid and worthless to the student. If at least one
-such line genuinely exists, append this block after your answer, with nothing else before or
-after it:
+13. EXACT-QUOTE CHECK (MANDATORY) -- applies whenever "NCERT Exact Section Text" reference data
+is present above. After writing your complete normal answer exactly as the rules above already
+specify, you MUST append a "From NCERT" block with 1 to 3 SHORT passages copied WORD FOR WORD
+from that reference text (never paraphrased, summarized, or combined from different sentences).
+This step is not optional and is not something to skip for convenience -- search the reference
+text for a supporting line before deciding there is none. Each quoted line must be at least 6
+words long and copied EXACTLY as written in the reference text -- changing even one word makes it
+invalid and worthless to the student. Append the block after your answer, with nothing else
+before or after it:
 {_NCERT_BLOCK_START}
 "<line copied exactly from the reference text>" (<Chapter>, <Heading>)
 {_NCERT_BLOCK_END}
 (add a second and/or third quoted line the same way, each on its own line between the two
-markers above, only if a genuinely distinct line also fits just as well)
-If no line fits this exactly -- the common case, do not force it -- omit this entire block,
-including both marker lines, and write nothing at all after your normal answer."""
+markers above, if a genuinely distinct line also fits)
+Only omit this entire block, including both marker lines, if you have carefully checked and no
+line in the reference text fits at all -- this should be rare, not the default."""
 
 def _normalize_ncert_quote_text(s: str) -> str:
     s = (s or "").replace("“", '"').replace("”", '"').replace("‘", "'").replace("’", "'")
