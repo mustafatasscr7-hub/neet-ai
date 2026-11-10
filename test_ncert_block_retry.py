@@ -44,8 +44,8 @@ SECTION_TEXT = (
     "The wide range of living types is amazing. All living organisms exhibit growth, "
     "reproduction and the ability to sense their environment and respond to it."
 )
-VALID_HEADINGS = ["Chapter 1: The Living World"]
-GOOD_BLOCK = '"The wide range of living types is amazing." (Chapter 1: The Living World)'
+SECTIONS = [{"chapter": "Chapter 1", "heading": "The Living World", "text": SECTION_TEXT}]
+GOOD_BLOCK = '"The wide range of living types is amazing."'
 
 
 # ---------- 1-2. trigger conditions ----------
@@ -62,15 +62,15 @@ def test_trigger_empty_block():
 
 def test_trigger_all_quotes_rejected():
     print("\n1c. block present but every quote rejected by the verifier -> retry")
-    raw = '"Mitochondria is the powerhouse of the cell." (Chapter 1: The Living World)'
-    shown, dropped = server._verify_ncert_quotes(raw, SECTION_TEXT, VALID_HEADINGS)
+    raw = '"Mitochondria is the powerhouse of the cell."'
+    shown, dropped = server._verify_ncert_quotes(raw, SECTIONS)
     check("verifier dropped it first (sanity)", shown == [] and len(dropped) == 1, (shown, dropped))
     check("retry triggered", server._should_retry_ncert_block(raw, shown))
 
 
 def test_no_trigger_when_quote_survives():
     print("\n1d. at least one quote survives -> no retry")
-    shown, dropped = server._verify_ncert_quotes(GOOD_BLOCK, SECTION_TEXT, VALID_HEADINGS)
+    shown, dropped = server._verify_ncert_quotes(GOOD_BLOCK, SECTIONS)
     check("verifier kept it (sanity)", len(shown) == 1, (shown, dropped))
     check("no retry triggered", not server._should_retry_ncert_block(GOOD_BLOCK, shown))
 
@@ -180,10 +180,10 @@ def test_retry_call_fails_silently():
 def test_retry_also_failing_end_to_end():
     print("\n7. retry succeeds in calling the model but its block also has zero valid quotes")
     with ClientSwap():
-        server.qwen_async_client = FakeQwenRetryClient(content='"Mitochondria is the powerhouse of the cell." (Chapter 1: The Living World)')
+        server.qwen_async_client = FakeQwenRetryClient(content='"Mitochondria is the powerhouse of the cell."')
         raw, _ = asyncio.run(server._retry_ncert_block("q", SECTION_TEXT, True, "u1"))
         check("retry returned a block", raw is not None, raw)
-        shown, dropped = server._verify_ncert_quotes(raw, SECTION_TEXT, VALID_HEADINGS)
+        shown, dropped = server._verify_ncert_quotes(raw, SECTIONS)
         check("still nothing shown after retry (invented quote)", shown == [] and len(dropped) == 1, (shown, dropped))
         check("caller's own gate would emit no marker at all for an empty shown list", shown == [])
 

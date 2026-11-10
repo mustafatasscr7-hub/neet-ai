@@ -3592,10 +3592,12 @@ words long and copied EXACTLY as written in the reference text -- changing even 
 invalid and worthless to the student. Append the block after your answer, with nothing else
 before or after it:
 {_NCERT_BLOCK_START}
-"<line copied exactly from the reference text>" (<Chapter>, <Heading>)
+"<line copied exactly from the reference text>"
 {_NCERT_BLOCK_END}
 (add a second and/or third quoted line the same way, each on its own line between the two
 markers above, if a genuinely distinct line also fits)
+Do not add a citation, chapter name, heading, or any other text to a quoted line -- just the
+quoted line itself, nothing else.
 Only omit this entire block, including both marker lines, if you have carefully checked and no
 line in the reference text fits at all -- this should be rare, not the default."""
 
@@ -3684,34 +3686,41 @@ def _exact_source_substring(normalized_candidate: str, source_text: str) -> str:
     end = offsets[idx + len(normalized_candidate) - 1] + 1
     return source_text[start:end]
 
-def _verify_ncert_quotes(raw_block: str, combined_section_text: str, valid_headings: list = None):
+def _verify_ncert_quotes(raw_block: str, sections: list):
     """No model involved -- a quote (at least 6 words) is shown only if it is a verbatim
-    substring of combined_section_text once both sides are normalized (curly/straight quotes,
-    whitespace, case), AND (when valid_headings is given) its citation actually names one of the
-    real picked section headings. That second check matters on its own: live testing found the
-    model can write a perfectly verbatim quote (genuinely copied from the reference text) while
-    inventing a completely different, wrong chapter/heading for its citation (observed live: a
-    real quote from this chapter's own Phylum section, cited as "NCERT Class 11, Chapter 4 --
-    Animal Kingdom" -- a real NCERT chapter, just not the one this text is actually from). A
-    quote whose words are real but whose citation is fabricated is exactly as misleading to a
-    student as an invented quote, so it is dropped the same way. Everything else -- too short,
-    not an exact substring (paraphrase, one changed word, invented) -- is dropped and never
-    reaches the student. A shown quote is rendered with the source's own exact text (see
-    _exact_source_substring), never the model's copy of it. Returns (shown, dropped), each a
-    list of {quote, citation} dicts."""
-    normalized_source = _normalize_ncert_quote_text(combined_section_text)
-    normalized_headings = [_normalize_ncert_quote_text(h) for h in (valid_headings or []) if h]
+    substring of one of `sections`' own text, once both sides are normalized (curly/straight
+    quotes, whitespace, case). `sections` is the list of actually-picked DB rows (each a dict
+    with at least "chapter", "heading", "text"), in picked order.
+
+    The model is no longer asked for a citation at all (see _NCERT_SECTIONS_RULE) -- whatever
+    trailing "(...)" a candidate line carries is still parsed by _split_ncert_candidate_lines
+    (kept for the dropped-entry detail only) but is never trusted or checked here. Live testing
+    found a model-written citation is not reliable enough to gate on: the model can write a
+    perfectly verbatim quote while inventing a wrong chapter/heading for it, or write back the
+    literal unfilled "(<Chapter>, <Heading>)" placeholder instead of filling it in. So the script
+    attaches the real citation itself: whichever section's own text the quote was actually found
+    in (first match wins when more than one section was picked). A quote that is not an exact
+    substring of any picked section -- too short, paraphrased, one changed word, invented -- is
+    dropped regardless of what it was captioned with. A shown quote is rendered with the matched
+    section's own exact text (see _exact_source_substring). Returns (shown, dropped), each a list
+    of {quote, citation} dicts; a shown citation is always "<section.chapter>, <section.heading>"."""
+    normalized_sections = [(_normalize_ncert_quote_text(s.get("text") or ""), s) for s in (sections or [])]
     shown, dropped = [], []
-    for quote_raw, citation in _split_ncert_candidate_lines(raw_block):
+    for quote_raw, model_citation in _split_ncert_candidate_lines(raw_block):
         word_count = len(quote_raw.split())
         normalized_quote = _normalize_ncert_quote_text(quote_raw)
-        entry = {"quote": quote_raw, "citation": citation}
-        quote_ok = word_count >= 6 and normalized_quote in normalized_source
-        citation_ok = (not normalized_headings) or any(h in _normalize_ncert_quote_text(citation) for h in normalized_headings)
-        if quote_ok and citation_ok:
-            shown.append({"quote": _exact_source_substring(normalized_quote, combined_section_text), "citation": citation})
+        matched_section = None
+        if word_count >= 6 and normalized_quote:
+            for normalized_source, section in normalized_sections:
+                if normalized_quote in normalized_source:
+                    matched_section = section
+                    break
+        if matched_section:
+            quote_text = _exact_source_substring(normalized_quote, matched_section["text"])
+            citation = f"{matched_section.get('chapter', '')}, {matched_section.get('heading', '')}"
+            shown.append({"quote": quote_text, "citation": citation})
         else:
-            dropped.append(entry)
+            dropped.append({"quote": quote_raw, "citation": model_citation})
     return shown[:3], dropped
 
 # ---------- Block retry (B): one follow-up call when the main answer's quote block is unusable ----------
@@ -3728,9 +3737,10 @@ _NCERT_RETRY_SYSTEM = (
     "applies to it. Reply with ONLY a \"From NCERT\" block: 1 to 3 SHORT passages copied WORD "
     "FOR WORD from the reference text (never paraphrased, summarized, or combined from different "
     "sentences). Each quoted line must be at least 6 words long and copied EXACTLY as written. "
-    "Format, nothing else before or after it:\n"
+    "Do not add a citation, chapter name, heading, or any other text to a quoted line -- just "
+    "the quoted line itself. Format, nothing else before or after it:\n"
     f"{_NCERT_BLOCK_START}\n"
-    "\"<line copied exactly from the reference text>\" (<Chapter>, <Heading>)\n"
+    "\"<line copied exactly from the reference text>\"\n"
     f"{_NCERT_BLOCK_END}\n"
     "(add a second and/or third quoted line the same way, each on its own line between the two "
     "markers, if a genuinely distinct line also fits)\n"
@@ -7627,12 +7637,12 @@ options in the question, ignore this instruction entirely.""" if (images or pdf)
             # never-rendered-as-text mechanism as the running-summary marker below. A request
             # where the feature never activated is a complete no-op (nothing in this block runs).
             if ncert_sections_active:
-                combined_section_text = " ".join(
-                    sections_cache_for_chat["by_id"][i]["text"] for i in picked_section_ids if i in sections_cache_for_chat["by_id"]
-                )
-                valid_headings = [sections_cache_for_chat["by_id"][i]["heading"] for i in picked_section_ids if i in sections_cache_for_chat["by_id"]]
+                sections_for_verify = [
+                    sections_cache_for_chat["by_id"][i] for i in picked_section_ids if i in sections_cache_for_chat["by_id"]
+                ]
+                combined_section_text = " ".join(s["text"] for s in sections_for_verify)
                 raw_block = sections_holder.get("raw_block")
-                quotes_shown, quotes_dropped = _verify_ncert_quotes(raw_block, combined_section_text, valid_headings) if raw_block else ([], [])
+                quotes_shown, quotes_dropped = _verify_ncert_quotes(raw_block, sections_for_verify) if raw_block else ([], [])
                 # Block retry (B): the main answer's block was missing (raw_block falsy -- the
                 # model never wrote the start marker at all), empty, or had zero quotes survive
                 # the verifier above. One follow-up call, same model as the main answer (see
@@ -7644,7 +7654,7 @@ options in the question, ignore this instruction entirely.""" if (images or pdf)
                     retried = True
                     retry_raw, retry_latency_ms = await _retry_ncert_block(text, combined_section_text, use_qwen_for_this_request, user_id)
                     if retry_raw:
-                        quotes_shown, quotes_dropped = _verify_ncert_quotes(retry_raw, combined_section_text, valid_headings)
+                        quotes_shown, quotes_dropped = _verify_ncert_quotes(retry_raw, sections_for_verify)
                 # total_request_latency_ms is wall-clock from the picker call's own start to here
                 # (picker + the rest of this answer's generation + the retry, if one ran) -- a
                 # rough, request-level number for the test report, not a controlled A/B
