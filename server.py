@@ -3498,6 +3498,17 @@ NCERT_SECTIONS_RETRY_ENABLED = True
 NCERT_SECTIONS_CACHE_TTL = 600  # 10 minutes -- see _get_ncert_sections_cache
 _ncert_sections_cache = {"loaded_at": 0.0, "index_lines": [], "by_id": {}}
 
+def _ncert_sections_rule_applies_for_model(model_label: str) -> bool:
+    """False for any Gemini-served answer -- the quote block is never appended to/generated for
+    an answer Gemini serves. In production this is already structurally guaranteed: the picker
+    (and so ncert_sections_active) only ever runs for `not images and not pdf` requests, and
+    images/pdf are exactly the only requests Gemini ever serves (_stream_gemini_media) -- a text
+    doubt never reaches Gemini at all. Kept as its own small, independently testable function
+    (rather than relying on that structural guarantee alone) because a test harness that calls
+    Gemini directly for a text answer -- see the "15 real questions" live retest -- must honor
+    the same rule, not just production's /chat routing."""
+    return "gemini" not in (model_label or "").lower()
+
 async def _get_ncert_sections_cache() -> dict:
     """In-memory cache of every ncert_sections row (today: 12 rows, one manually-loaded chapter),
     refreshed at most once per NCERT_SECTIONS_CACHE_TTL. The table is tiny by design (see
@@ -3511,29 +3522,41 @@ async def _get_ncert_sections_cache() -> dict:
     try:
         resp = await async_client.get(
             f"{SUPABASE_URL}/rest/v1/ncert_sections", headers=ADMIN_HEADERS,
-            params={"select": "id,class,subject,chapter,heading,ordinal,text", "order": "chapter,ordinal"}
+            params={"select": "id,class,subject,chapter,heading,ordinal,text,keywords", "order": "chapter,ordinal"}
         )
         rows = resp.json() if resp.status_code == 200 else []
     except Exception:
         rows = []
     if rows:
         _ncert_sections_cache["by_id"] = {r["id"]: r for r in rows}
-        # Chapter name deliberately left out -- live testing found including it (padded onto
-        # every line, redundant while only one chapter is loaded) measurably hurt the picker's
-        # own accuracy against closely related headings, vs. just "id. heading" below.
-        _ncert_sections_cache["index_lines"] = [f"{r['id']}. {r['heading']}" for r in rows]
+        # 2026-11-10: chapter name was previously left out of every line (see
+        # load_ncert_section_keywords.py) on a past finding that it was redundant padding while
+        # only one chapter is loaded and hurt the picker's own accuracy. Re-added now alongside a
+        # per-section `keywords` line (10-15 terms + the kinds of questions that section answers,
+        # generated once by load_ncert_section_keywords.py) because some sections -- e.g.
+        # "1.1 Diversity in the Living World", 1,100+ words -- cover many topics under one heading
+        # that the heading text alone can't disambiguate; see ncert_sections_keywords.sql. Falls
+        # back to "id: chapter - heading" (no trailing keywords segment) when a row's `keywords`
+        # is still NULL (not yet generated for that row).
+        _ncert_sections_cache["index_lines"] = [
+            f"{r['id']}: {r['chapter']} - {r['heading']}" + (f" - {r['keywords']}" if r.get("keywords") else "")
+            for r in rows
+        ]
         _ncert_sections_cache["loaded_at"] = now
     return _ncert_sections_cache
 
 NCERT_SECTIONS_PICKER_SYSTEM = (
-    "A student asked a NEET exam question. Below is a numbered list of section headings from "
-    "one NCERT textbook chapter. Pick the section(s) (at most 2) whose heading topic is the "
-    "CLOSEST, most specific match to what the question is actually asking -- do not also pick a "
-    "broader/general section unless the question genuinely needs both (e.g. a question "
+    "A student asked a NEET exam question. Below is a numbered list of sections from one NCERT "
+    "textbook chapter, each shown as \"id: chapter - heading\" or \"id: chapter - heading - "
+    "keywords\" (keywords, when present, list that section's key terms and the kinds of "
+    "questions it answers). Pick the section(s) (at most 2) that DIRECTLY cover what the "
+    "question is actually asking -- the question must be about something that section's own "
+    "heading or keywords actually name, not merely a related or adjacent topic. Do not also pick "
+    "a broader/general section unless the question genuinely needs both (e.g. a question "
     "specifically about one named sub-topic should pick ONLY that sub-topic's own section, not "
     "also a general section covering the whole group it belongs to). Reply with ONLY the id "
-    "number(s), comma-separated (e.g. \"2\" or \"2,4\"). If none of the sections relate to the "
-    "question at all, reply NONE. No other text, no explanation."
+    "number(s), comma-separated (e.g. \"2\" or \"2,4\"). If no section directly covers the "
+    "question -- a related topic is not enough -- reply NONE. No other text, no explanation."
 )
 
 async def _pick_ncert_sections(text: str, cache: dict, user_id: str = "") -> list:
@@ -3580,26 +3603,35 @@ async def _pick_ncert_sections(text: str, cache: dict, user_id: str = "") -> lis
 _NCERT_BLOCK_START = "===FROM_NCERT_START==="
 _NCERT_BLOCK_END = "===FROM_NCERT_END==="
 
+# Sentinel the model writes as the sole content of a quote block, between the same two markers,
+# when it checked and genuinely found nothing relevant -- distinct from never writing the start
+# marker at all. See _is_explicit_ncert_none: an explicit NONE is a valid, final result (show
+# nothing, don't retry); a block that's simply missing still triggers the block retry (B).
+_NCERT_SECTIONS_NONE = "NONE"
+
 _NCERT_SECTIONS_RULE = f"""
 
-13. EXACT-QUOTE CHECK (MANDATORY) -- applies whenever "NCERT Exact Section Text" reference data
-is present above. After writing your complete normal answer exactly as the rules above already
-specify, you MUST append a "From NCERT" block with 1 to 3 SHORT passages copied WORD FOR WORD
-from that reference text (never paraphrased, summarized, or combined from different sentences).
-This step is not optional and is not something to skip for convenience -- search the reference
-text for a supporting line before deciding there is none. Each quoted line must be at least 6
-words long and copied EXACTLY as written in the reference text -- changing even one word makes it
-invalid and worthless to the student. Append the block after your answer, with nothing else
-before or after it:
+13. EXACT-QUOTE CHECK -- applies whenever "NCERT Exact Section Text" reference data is present
+above. After writing your complete normal answer exactly as the rules above already specify,
+check whether any line in that reference text directly states or supports a point you made in
+your answer. If at least one does, append a "From NCERT" block with 1 to 3 SHORT passages copied
+WORD FOR WORD from the reference text (never paraphrased, summarized, or combined from different
+sentences). Each quoted line must be at least 6 words long and copied EXACTLY as written in the
+reference text -- changing even one word makes it invalid and worthless to the student. Append
+the block after your answer, with nothing else before or after it:
 {_NCERT_BLOCK_START}
 "<line copied exactly from the reference text>"
 {_NCERT_BLOCK_END}
 (add a second and/or third quoted line the same way, each on its own line between the two
-markers above, if a genuinely distinct line also fits)
+markers above, if a genuinely distinct line also directly supports your answer)
 Do not add a citation, chapter name, heading, or any other text to a quoted line -- just the
 quoted line itself, nothing else.
-Only omit this entire block, including both marker lines, if you have carefully checked and no
-line in the reference text fits at all -- this should be rare, not the default."""
+If, after checking carefully, no line in the reference text directly states or supports a point
+in your answer, write exactly this instead of a block -- do not invent, paraphrase, or force in a
+loosely related line just to have something to quote:
+{_NCERT_BLOCK_START}
+{_NCERT_SECTIONS_NONE}
+{_NCERT_BLOCK_END}"""
 
 def _normalize_ncert_quote_text(s: str) -> str:
     s = (s or "").replace("“", '"').replace("”", '"').replace("‘", "'").replace("’", "'")
@@ -3734,26 +3766,39 @@ def _verify_ncert_quotes(raw_block: str, sections: list):
 # verifier as the main attempt. At most one retry per answer; silent on any failure.
 _NCERT_RETRY_SYSTEM = (
     "A student asked a NEET exam question. Below is the exact NCERT textbook section text that "
-    "applies to it. Reply with ONLY a \"From NCERT\" block: 1 to 3 SHORT passages copied WORD "
-    "FOR WORD from the reference text (never paraphrased, summarized, or combined from different "
-    "sentences). Each quoted line must be at least 6 words long and copied EXACTLY as written. "
-    "Do not add a citation, chapter name, heading, or any other text to a quoted line -- just "
-    "the quoted line itself. Format, nothing else before or after it:\n"
+    "applies to it. Check whether any line in that reference text directly states or supports a "
+    "correct answer to the question. If at least one does, reply with ONLY a \"From NCERT\" "
+    "block: 1 to 3 SHORT passages copied WORD FOR WORD from the reference text (never "
+    "paraphrased, summarized, or combined from different sentences). Each quoted line must be at "
+    "least 6 words long and copied EXACTLY as written. Do not add a citation, chapter name, "
+    "heading, or any other text to a quoted line -- just the quoted line itself. Format, nothing "
+    "else before or after it:\n"
     f"{_NCERT_BLOCK_START}\n"
     "\"<line copied exactly from the reference text>\"\n"
     f"{_NCERT_BLOCK_END}\n"
     "(add a second and/or third quoted line the same way, each on its own line between the two "
-    "markers, if a genuinely distinct line also fits)\n"
-    "If you have carefully checked and no line in the reference text fits at all, reply with just "
-    "the word NONE. No other text, no explanation."
+    "markers, if a genuinely distinct line also directly supports the answer)\n"
+    "If, after checking carefully, no line in the reference text directly states or supports a "
+    "correct answer to the question, reply with just the word NONE. No other text, no explanation."
 )
 
+def _is_explicit_ncert_none(raw_block) -> bool:
+    """True only when raw_block is the model's deliberate "checked, found nothing" signal (see
+    _NCERT_SECTIONS_NONE) -- distinct from raw_block being missing/empty, which means the model
+    never even wrote the marker. An explicit NONE is a valid, final result (_should_retry_ncert_block
+    must not fire for it); a merely-missing block still must retry."""
+    return bool(raw_block) and raw_block.strip().upper() == _NCERT_SECTIONS_NONE
+
 def _should_retry_ncert_block(raw_block, quotes_shown: list) -> bool:
-    """The three retry trigger conditions, in one place: raw_block missing (None -- the model
-    never wrote the start marker at all) or empty (falsy), OR a block was written but every
-    quote in it was dropped by _verify_ncert_quotes (quotes_shown empty despite raw_block being
-    truthy). Never triggers on its own for picker NONE -- the caller only reaches this when
-    ncert_sections_active is True, which already requires picked_section_ids to be non-empty."""
+    """The retry trigger conditions, in one place: raw_block missing (None -- the model never
+    wrote the start marker at all) or empty (falsy), OR a block was written but every quote in it
+    was dropped by _verify_ncert_quotes (quotes_shown empty despite raw_block being truthy) --
+    UNLESS raw_block is the explicit NONE sentinel (_is_explicit_ncert_none), which is a valid
+    final result and must never trigger a retry. Never triggers on its own for picker NONE --
+    the caller only reaches this when ncert_sections_active is True, which already requires
+    picked_section_ids to be non-empty."""
+    if _is_explicit_ncert_none(raw_block):
+        return False
     return (not raw_block) or (not quotes_shown)
 
 async def _retry_ncert_block(text: str, combined_section_text: str, use_qwen: bool, user_id: str = ""):
@@ -7669,12 +7714,23 @@ options in the question, ignore this instruction entirely.""" if (images or pdf)
                 ]
                 combined_section_text = " ".join(s["text"] for s in sections_for_verify)
                 raw_block = sections_holder.get("raw_block")
-                quotes_shown, quotes_dropped = _verify_ncert_quotes(raw_block, sections_for_verify) if raw_block else ([], [])
+                # An explicit NONE (the model checked and found nothing -- _NCERT_SECTIONS_NONE)
+                # is a valid final result: never run it through the verifier (it would just show
+                # up as a spurious under-6-word dropped candidate) and never retry on it. Only a
+                # genuinely missing/empty block or zero surviving quotes reaches the retry below.
+                if _is_explicit_ncert_none(raw_block):
+                    quotes_shown, quotes_dropped = [], []
+                elif raw_block:
+                    quotes_shown, quotes_dropped = _verify_ncert_quotes(raw_block, sections_for_verify)
+                else:
+                    quotes_shown, quotes_dropped = [], []
                 # Block retry (B): the main answer's block was missing (raw_block falsy -- the
                 # model never wrote the start marker at all), empty, or had zero quotes survive
                 # the verifier above. One follow-up call, same model as the main answer (see
                 # _retry_ncert_block), re-verified the same way. Never for picker NONE -- that
-                # case never reaches this branch since ncert_sections_active is False then.
+                # case never reaches this branch since ncert_sections_active is False then. Also
+                # never for an explicit NONE from the main answer -- _should_retry_ncert_block
+                # itself returns False for that case (see _is_explicit_ncert_none).
                 retried = False
                 retry_latency_ms = 0
                 if NCERT_SECTIONS_RETRY_ENABLED and _should_retry_ncert_block(raw_block, quotes_shown):

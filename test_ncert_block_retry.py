@@ -75,6 +75,39 @@ def test_no_trigger_when_quote_survives():
     check("no retry triggered", not server._should_retry_ncert_block(GOOD_BLOCK, shown))
 
 
+def test_explicit_none_is_recognized():
+    print("\n1e. explicit NONE sentinel is recognized regardless of surrounding whitespace/case")
+    check("bare NONE recognized", server._is_explicit_ncert_none("NONE"))
+    check("lowercase none recognized", server._is_explicit_ncert_none("none"))
+    check("whitespace-padded NONE recognized", server._is_explicit_ncert_none("\n  None  \n"))
+    check("empty string is not NONE", not server._is_explicit_ncert_none(""))
+    check("None value is not NONE", not server._is_explicit_ncert_none(None))
+    check("a real quote block is not NONE", not server._is_explicit_ncert_none(GOOD_BLOCK))
+
+
+def test_explicit_none_does_not_trigger_retry():
+    print("\n1f. an explicit NONE is a valid final result -> no retry, even though quotes_shown is empty")
+    check("retry NOT triggered for explicit NONE", not server._should_retry_ncert_block("NONE", []))
+    check("retry NOT triggered for explicit NONE (mixed case/whitespace)", not server._should_retry_ncert_block("  none\n", []))
+
+
+def test_missing_block_still_triggers_retry_not_none():
+    print("\n1g. a merely missing/empty block (no NONE written) still triggers retry -- not confused with explicit NONE")
+    check("missing block retries", server._should_retry_ncert_block(None, []))
+    check("missing block is not read as explicit NONE", not server._is_explicit_ncert_none(None))
+    check("empty-string block retries", server._should_retry_ncert_block("", []))
+    check("empty-string block is not read as explicit NONE", not server._is_explicit_ncert_none(""))
+
+
+def test_gemini_guard():
+    print("\n1h. the quote-block rule never applies to a Gemini-served answer")
+    check("gemini-3.5-flash-lite excluded", not server._ncert_sections_rule_applies_for_model("gemini-3.5-flash-lite"))
+    check("case-insensitive", not server._ncert_sections_rule_applies_for_model("Gemini-3.5-Flash-Lite"))
+    check("deepseek-flash still applies", server._ncert_sections_rule_applies_for_model("deepseek-flash"))
+    check("qwen-flash still applies", server._ncert_sections_rule_applies_for_model("qwen-flash"))
+    check("empty/None label still applies (not mistaken for gemini)", server._ncert_sections_rule_applies_for_model("") and server._ncert_sections_rule_applies_for_model(None))
+
+
 def test_picker_none_never_reaches_retry_gate():
     print("\n2. picker NONE -> ncert_sections_active is False, retry gate never entered")
     picked_section_ids = []  # what _pick_ncert_sections returns for NONE/timeout/empty index
@@ -228,6 +261,10 @@ if __name__ == "__main__":
     test_trigger_empty_block()
     test_trigger_all_quotes_rejected()
     test_no_trigger_when_quote_survives()
+    test_explicit_none_is_recognized()
+    test_explicit_none_does_not_trigger_retry()
+    test_missing_block_still_triggers_retry_not_none()
+    test_gemini_guard()
     test_picker_none_never_reaches_retry_gate()
     test_retry_qwen_success()
     test_retry_deepseek_success()
