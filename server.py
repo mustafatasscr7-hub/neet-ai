@@ -3603,7 +3603,86 @@ def _normalize_ncert_quote_text(s: str) -> str:
     s = (s or "").replace("“", '"').replace("”", '"').replace("‘", "'").replace("’", "'")
     return re.sub(r"\s+", " ", s).strip().lower()
 
-_NCERT_QUOTE_LINE_RE = re.compile(r'["“]([^"”]+)["”]\s*\(([^)]*)\)')
+# Formatting-tolerant candidate split (2026-11-10): live testing found Qwen-Flash's block (both
+# the main attempt and the block retry) often carries a genuinely verbatim, correctly cited line
+# with NO quotation marks around it at all -- the original quote-mark-anchored regex never even
+# saw it as a candidate, so a real, correct quote was silently invisible to the verifier rather
+# than being rejected by it. _split_ncert_candidate_lines below widens candidate DETECTION only
+# (bullets, numbering, missing quote marks, >1 quoted span crammed onto one line) -- it does not
+# loosen what counts as a match: every candidate it yields still goes through the exact same
+# normalized-substring + citation checks in _verify_ncert_quotes as before.
+_NCERT_QUOTED_SPAN_RE = re.compile(r'["“]([^"”]+)["”]\s*(?:\(([^()]*)\))?')
+_NCERT_BULLET_PREFIX_RE = re.compile(r'^\s*(?:[-*•–—]+|\(?\d{1,3}[.)]\)?)\s*')
+_NCERT_TRAILING_CITATION_RE = re.compile(r'\(([^()]*)\)\s*$')
+_NCERT_QUOTE_STRIP_CHARS = '"“”‘’\' \t'
+
+def _split_ncert_candidate_lines(raw_block: str) -> list:
+    """Splits a raw "From NCERT" block into (text, citation) candidate pairs. Quote-mark-
+    delimited spans are found first (handles a quote that itself spans a line break, and
+    multiple quoted passages crammed onto one physical line, with the "(...)" immediately after
+    a closing quote mark taken as that quote's citation). Whatever text is left over -- not
+    inside any quoted span -- is then split by line, with a leading bullet/number stripped and a
+    trailing "(...)" taken as that line's citation, so a correctly-copied line missing its quote
+    marks entirely still becomes a candidate instead of being invisible to the verifier. Citation
+    is "" when none was found; _verify_ncert_quotes decides separately whether that's good enough
+    (same logic as always -- this function only finds candidates, never judges them)."""
+    raw_block = raw_block or ""
+    candidates = []
+    consumed = bytearray(len(raw_block))
+    for m in _NCERT_QUOTED_SPAN_RE.finditer(raw_block):
+        text = m.group(1).strip()
+        citation = (m.group(2) or "").strip()
+        if text:
+            candidates.append((text, citation))
+        for i in range(m.start(), m.end()):
+            consumed[i] = 1
+    leftover = "".join(ch if not consumed[i] else "\n" for i, ch in enumerate(raw_block))
+    for line in leftover.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        line = _NCERT_BULLET_PREFIX_RE.sub("", line)
+        citation = ""
+        cm = _NCERT_TRAILING_CITATION_RE.search(line)
+        if cm:
+            citation = cm.group(1).strip()
+            line = line[:cm.start()].strip()
+        text = line.strip(_NCERT_QUOTE_STRIP_CHARS)
+        if text:
+            candidates.append((text, citation))
+    return candidates
+
+def _exact_source_substring(normalized_candidate: str, source_text: str) -> str:
+    """Looks up the real, original-cased/spaced substring of source_text that normalizes to
+    normalized_candidate, so the student is shown the textbook's own exact wording -- not the
+    model's copy of it, which the verifier accepts even when it differs from the source in case
+    or whitespace (that's the whole point of normalizing before comparing). Falls back to
+    normalized_candidate itself if the mapping doesn't find it (should not happen: the caller
+    only calls this after already confirming normalized_candidate is a substring of the
+    same-normalized source)."""
+    out_chars, offsets = [], []
+    for i, ch in enumerate(source_text):
+        if ch in "“”":
+            out_chars.append('"')
+            offsets.append(i)
+        elif ch in "‘’":
+            out_chars.append("'")
+            offsets.append(i)
+        elif ch.isspace():
+            if out_chars and out_chars[-1] == " ":
+                continue
+            out_chars.append(" ")
+            offsets.append(i)
+        else:
+            out_chars.append(ch.lower())
+            offsets.append(i)
+    mapped_source = "".join(out_chars)
+    idx = mapped_source.find(normalized_candidate)
+    if idx == -1 or not normalized_candidate:
+        return normalized_candidate
+    start = offsets[idx]
+    end = offsets[idx + len(normalized_candidate) - 1] + 1
+    return source_text[start:end]
 
 def _verify_ncert_quotes(raw_block: str, combined_section_text: str, valid_headings: list = None):
     """No model involved -- a quote (at least 6 words) is shown only if it is a verbatim
@@ -3617,18 +3696,20 @@ def _verify_ncert_quotes(raw_block: str, combined_section_text: str, valid_headi
     quote whose words are real but whose citation is fabricated is exactly as misleading to a
     student as an invented quote, so it is dropped the same way. Everything else -- too short,
     not an exact substring (paraphrase, one changed word, invented) -- is dropped and never
-    reaches the student. Returns (shown, dropped), each a list of {quote, citation} dicts."""
+    reaches the student. A shown quote is rendered with the source's own exact text (see
+    _exact_source_substring), never the model's copy of it. Returns (shown, dropped), each a
+    list of {quote, citation} dicts."""
     normalized_source = _normalize_ncert_quote_text(combined_section_text)
     normalized_headings = [_normalize_ncert_quote_text(h) for h in (valid_headings or []) if h]
     shown, dropped = [], []
-    for m in _NCERT_QUOTE_LINE_RE.finditer(raw_block or ""):
-        quote_raw, citation = m.group(1).strip(), m.group(2).strip()
+    for quote_raw, citation in _split_ncert_candidate_lines(raw_block):
         word_count = len(quote_raw.split())
+        normalized_quote = _normalize_ncert_quote_text(quote_raw)
         entry = {"quote": quote_raw, "citation": citation}
-        quote_ok = word_count >= 6 and _normalize_ncert_quote_text(quote_raw) in normalized_source
+        quote_ok = word_count >= 6 and normalized_quote in normalized_source
         citation_ok = (not normalized_headings) or any(h in _normalize_ncert_quote_text(citation) for h in normalized_headings)
         if quote_ok and citation_ok:
-            shown.append(entry)
+            shown.append({"quote": _exact_source_substring(normalized_quote, combined_section_text), "citation": citation})
         else:
             dropped.append(entry)
     return shown[:3], dropped

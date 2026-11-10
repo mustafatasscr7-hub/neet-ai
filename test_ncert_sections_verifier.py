@@ -141,10 +141,112 @@ def test_empty_or_garbage_block():
     print("\n9. empty/garbage block yields nothing, never raises")
     shown, dropped = server._verify_ncert_quotes("", SOURCE_TEXT)
     check("empty string -> nothing shown, nothing dropped", shown == [] and dropped == [])
+    # Updated 2026-11-10: the formatting-tolerant split now treats ANY >=6-word leftover line as
+    # a candidate (that's the whole point -- a real quote missing its quote marks must no longer
+    # be invisible). This made-up prose is a candidate, but a FAILING one (not a real NCERT
+    # substring) -- so it must show nothing, but it now shows up in `dropped` rather than being
+    # invisible to the verifier the way it was under the old quote-mark-anchored regex.
     shown, dropped = server._verify_ncert_quotes("no quotes here at all, just prose", SOURCE_TEXT)
-    check("no quote-shaped lines -> nothing shown, nothing dropped", shown == [] and dropped == [])
+    check("garbage prose -> nothing shown, but caught and dropped as a failing candidate", shown == [] and len(dropped) == 1, (shown, dropped))
     shown, dropped = server._verify_ncert_quotes(None, SOURCE_TEXT)
     check("None raw_block -> nothing shown, nothing dropped, no exception", shown == [] and dropped == [])
+
+
+def test_no_quote_marks_still_shown():
+    print("\n11. a verbatim line with NO quote marks at all is still caught and shown")
+    # Live root cause (2026-11-10, Qwen-Flash): a genuinely verbatim, correctly cited line with
+    # the quote marks dropped entirely was invisible to the old quote-mark-anchored regex.
+    raw = "The wide range of living types is amazing. (Chapter 1, The Living World)"
+    shown, dropped = server._verify_ncert_quotes(raw, SOURCE_TEXT)
+    check("shown despite missing quote marks", len(shown) == 1, (shown, dropped))
+    check("nothing dropped", len(dropped) == 0, dropped)
+    check("rendered with the source's own exact text", shown and shown[0]["quote"] == "The wide range of living types is amazing.", shown)
+
+
+def test_bulleted_line_without_quotes():
+    print("\n12. a bullet-prefixed line with no quote marks is still caught")
+    raw = "- The wide range of living types is amazing. (Chapter 1, The Living World)"
+    shown, dropped = server._verify_ncert_quotes(raw, SOURCE_TEXT)
+    check("bullet-prefixed line shown", len(shown) == 1, (shown, dropped))
+    check("bullet char not left in the quote", shown and not shown[0]["quote"].startswith("-"), shown)
+
+
+def test_numbered_line_without_quotes():
+    print("\n13. a numbered line (\"1.\") with no quote marks is still caught")
+    raw = "1. The wide range of living types is amazing. (Chapter 1, The Living World)"
+    shown, dropped = server._verify_ncert_quotes(raw, SOURCE_TEXT)
+    check("numbered line shown", len(shown) == 1, (shown, dropped))
+    check("number prefix not left in the quote", shown and not shown[0]["quote"][0].isdigit(), shown)
+
+
+def test_curly_quotes_without_matching_pair_still_shown():
+    print("\n14. curly-quoted line with no quote marks still matches (regression guard)")
+    raw = "“The wide range of living types is amazing.” (Chapter 1, The Living World)"
+    shown, dropped = server._verify_ncert_quotes(raw, SOURCE_TEXT)
+    check("curly-quoted line shown", len(shown) == 1, (shown, dropped))
+
+
+def test_citation_variant_without_quotes():
+    print("\n15. a citation-variant line (different wording, same heading) with no quote marks")
+    raw = "The wide range of living types is amazing. (NCERT Class 11, Chapter 1: The Living World)"
+    shown, dropped = server._verify_ncert_quotes(raw, SOURCE_TEXT, valid_headings=["Chapter 1: The Living World"])
+    check("shown: citation names the real heading even with extra wording", len(shown) == 1, (shown, dropped))
+
+
+def test_paraphrase_without_quotes_rejected():
+    print("\n16. a paraphrase with no quote marks is rejected (not a true substring)")
+    raw = "The huge variety of living creatures found on Earth is astonishing. (Chapter 1, The Living World)"
+    shown, dropped = server._verify_ncert_quotes(raw, SOURCE_TEXT)
+    check("nothing shown", len(shown) == 0, shown)
+    check("one dropped", len(dropped) == 1, dropped)
+
+
+def test_one_word_changed_without_quotes_rejected():
+    print("\n17. one-word-changed line with no quote marks is rejected")
+    raw = "The wide range of living creatures is amazing. (Chapter 1, The Living World)"
+    shown, dropped = server._verify_ncert_quotes(raw, SOURCE_TEXT)
+    check("nothing shown", len(shown) == 0, shown)
+    check("one dropped", len(dropped) == 1, dropped)
+
+
+def test_under_six_words_without_quotes_rejected():
+    print("\n18. under-6-words line with no quote marks is rejected even though verbatim")
+    raw = "How wonderful is the living (Chapter 1, The Living World)"
+    shown, dropped = server._verify_ncert_quotes(raw, SOURCE_TEXT)
+    check("nothing shown", len(shown) == 0, shown)
+    check("one dropped", len(dropped) == 1, dropped)
+
+
+def test_wrong_citation_without_quotes_rejected():
+    print("\n19. wrong-citation line with no quote marks is rejected")
+    raw = "The wide range of living types is amazing. (NCERT Class 11, Chapter 4 - Animal Kingdom)"
+    shown, dropped = server._verify_ncert_quotes(raw, SOURCE_TEXT, valid_headings=["Chapter 1: The Living World"])
+    check("nothing shown", len(shown) == 0, shown)
+    check("one dropped", len(dropped) == 1, dropped)
+
+
+def test_mixed_quoted_and_unquoted_lines_in_one_block():
+    print("\n20. a block mixing a quoted line and an unquoted line: both verified independently")
+    raw = (
+        '"The wide range of living types is amazing." (Chapter 1, The Living World)\n'
+        "All living organisms exhibit growth, reproduction and the ability to sense their "
+        "environment and respond to it. (Chapter 1, The Living World)"
+    )
+    shown, dropped = server._verify_ncert_quotes(raw, SOURCE_TEXT)
+    check("both lines shown", len(shown) == 2, (shown, dropped))
+    check("nothing dropped", len(dropped) == 0, dropped)
+
+
+def test_two_quoted_spans_crammed_on_one_line():
+    print("\n21. two quoted spans on a single physical line are split into two candidates")
+    raw = (
+        '"The wide range of living types is amazing." (Chapter 1, The Living World) '
+        '"All living organisms exhibit growth, reproduction and the ability to sense their '
+        'environment and respond to it." (Chapter 1, The Living World)'
+    )
+    shown, dropped = server._verify_ncert_quotes(raw, SOURCE_TEXT)
+    check("both quoted spans shown", len(shown) == 2, (shown, dropped))
+    check("nothing dropped", len(dropped) == 0, dropped)
 
 
 async def _collect(gen):
@@ -215,6 +317,17 @@ if __name__ == "__main__":
     test_real_quote_wrong_citation_rejected()
     test_mixed_valid_and_invalid_quotes()
     test_empty_or_garbage_block()
+    test_no_quote_marks_still_shown()
+    test_bulleted_line_without_quotes()
+    test_numbered_line_without_quotes()
+    test_curly_quotes_without_matching_pair_still_shown()
+    test_citation_variant_without_quotes()
+    test_paraphrase_without_quotes_rejected()
+    test_one_word_changed_without_quotes_rejected()
+    test_under_six_words_without_quotes_rejected()
+    test_wrong_citation_without_quotes_rejected()
+    test_mixed_quoted_and_unquoted_lines_in_one_block()
+    test_two_quoted_spans_crammed_on_one_line()
     test_strip_ncert_block_passthrough_when_no_marker()
     test_strip_ncert_block_captures_and_hides_real_block()
     print(f"\n{len(_passed)} passed, {len(_failed)} failed")
