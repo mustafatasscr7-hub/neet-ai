@@ -3805,14 +3805,42 @@ async def _retry_ncert_block(text: str, combined_section_text: str, use_qwen: bo
         return None, latency_ms
     return raw, latency_ms
 
+def _split_ncert_blocks(block_buf: str) -> list:
+    """Splits the raw captured tail (everything from the FIRST ===FROM_NCERT_START=== marker
+    onward, as captured by _strip_ncert_block) into one content string per START/END-marked
+    block. A model occasionally emits more than one separate block in the same answer instead
+    of multiple lines inside a single block (observed with Qwen-Flash on a Linnaeus/binomial-
+    nomenclature question) -- previously only the content up to the FIRST end marker survived,
+    so a real second quote in a second block was silently dropped before verification ever saw
+    it. This collects every block's content, in order. A final, unterminated block (no end
+    marker at all -- the common single-block case) is included as-is, matching the pre-existing
+    single-block fallback behavior."""
+    contents = []
+    remaining = block_buf
+    while True:
+        end_idx = remaining.find(_NCERT_BLOCK_END)
+        if end_idx == -1:
+            if remaining:
+                contents.append(remaining)
+            break
+        contents.append(remaining[:end_idx])
+        after_end = remaining[end_idx + len(_NCERT_BLOCK_END):]
+        start_idx = after_end.find(_NCERT_BLOCK_START)
+        if start_idx == -1:
+            break
+        remaining = after_end[start_idx + len(_NCERT_BLOCK_START):]
+    return contents
+
 async def _strip_ncert_block(stream, holder: dict):
     """Wraps a /chat text-doubt stream for a request where the sections feature is active --
     see _NCERT_SECTIONS_RULE. Passes every chunk through unchanged UNLESS/UNTIL `_NCERT_BLOCK_START`
-    appears, at which point everything from there onward is captured into holder['raw_block']
-    instead of ever being yielded -- the caller verifies it (via _verify_ncert_quotes) only after
-    this generator is fully exhausted, and decides separately whether to emit anything for it.
-    The common case (the model found nothing worth quoting and never wrote the start marker at
-    all) is a complete, byte-for-byte passthrough with holder['raw_block'] left as None."""
+    appears, at which point everything from there onward is captured (never yielded) -- the
+    caller verifies it (via _verify_ncert_quotes) only after this generator is fully exhausted,
+    and decides separately whether to emit anything for it. If more than one separate block
+    appears in the captured tail, _split_ncert_blocks merges all of their content into
+    holder['raw_block'] (newline-joined) before verification, so no block is dropped. The common
+    case (the model found nothing worth quoting and never wrote the start marker at all) is a
+    complete, byte-for-byte passthrough with holder['raw_block'] left as None."""
     holder["raw_block"] = None
     pending = ""
     in_block = False
@@ -3837,8 +3865,7 @@ async def _strip_ncert_block(stream, holder: dict):
             yield pending[:emit_len]
             pending = pending[emit_len:]
     if in_block:
-        end_idx = block_buf.find(_NCERT_BLOCK_END)
-        holder["raw_block"] = block_buf[:end_idx] if end_idx != -1 else block_buf
+        holder["raw_block"] = "\n".join(_split_ncert_blocks(block_buf))
     elif pending:
         yield pending
 

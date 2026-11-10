@@ -336,6 +336,69 @@ def test_strip_ncert_block_captures_and_hides_real_block():
     check("script-attached citation present even though the model wrote none", shown and shown[0]["citation"] == REAL_CITATION, shown)
 
 
+def test_strip_ncert_block_merges_two_separate_blocks():
+    print("\n10c. _strip_ncert_block: two separate START/END blocks are merged, not just the first")
+    holder = {}
+    answer_text = "Answer: mitochondria is the site of respiration."
+    block_text = (
+        f"\n{server._NCERT_BLOCK_START}\n"
+        '"The wide range of living types is amazing."\n'
+        f"{server._NCERT_BLOCK_END}\n"
+        f"{server._NCERT_BLOCK_START}\n"
+        '"All living organisms exhibit growth, reproduction and the ability to sense their environment and respond to it."\n'
+        f"{server._NCERT_BLOCK_END}"
+    )
+    full_text = answer_text + block_text
+    chunks = [full_text[:len(answer_text) + 5], full_text[len(answer_text) + 5:]]
+
+    async def run():
+        return await _collect(server._strip_ncert_block(_fake_stream(chunks), holder))
+
+    asyncio.run(run())
+    raw_block = holder.get("raw_block") or ""
+    check("first block's content survived", "wide range" in raw_block, raw_block)
+    check("second block's content also survived (not dropped)", "ability to sense" in raw_block, raw_block)
+    shown, dropped = server._verify_ncert_quotes(raw_block, SECTIONS)
+    check("both blocks' quotes verify", len(shown) == 2 and len(dropped) == 0, (shown, dropped))
+
+
+def test_strip_ncert_block_single_block_one_line():
+    print("\n10d. _strip_ncert_block: a single block with exactly one line still works")
+    holder = {}
+    answer_text = "Answer: mitochondria is the site of respiration."
+    block_text = (
+        f"\n{server._NCERT_BLOCK_START}\n"
+        '"The wide range of living types is amazing."\n'
+        f"{server._NCERT_BLOCK_END}"
+    )
+    full_text = answer_text + block_text
+
+    async def run():
+        return await _collect(server._strip_ncert_block(_fake_stream([full_text]), holder))
+
+    asyncio.run(run())
+    raw_block = holder.get("raw_block") or ""
+    shown, dropped = server._verify_ncert_quotes(raw_block, SECTIONS)
+    check("the single line verifies", len(shown) == 1 and len(dropped) == 0, (shown, dropped))
+
+
+def test_strip_ncert_block_empty_block_no_lines():
+    print("\n10e. _strip_ncert_block: a block with no lines at all (empty between markers)")
+    holder = {}
+    answer_text = "Answer: mitochondria is the site of respiration."
+    block_text = f"\n{server._NCERT_BLOCK_START}\n{server._NCERT_BLOCK_END}"
+    full_text = answer_text + block_text
+
+    async def run():
+        return await _collect(server._strip_ncert_block(_fake_stream([full_text]), holder))
+
+    asyncio.run(run())
+    raw_block = holder.get("raw_block")
+    shown, dropped = server._verify_ncert_quotes(raw_block or "", SECTIONS)
+    check("no candidates survive an empty block", len(shown) == 0 and len(dropped) == 0, (shown, dropped))
+    check("retry would trigger on an empty block", server._should_retry_ncert_block(raw_block, shown), (raw_block, shown))
+
+
 if __name__ == "__main__":
     test_real_verbatim_quote_passes()
     test_curly_quotes_accepted()
@@ -362,5 +425,8 @@ if __name__ == "__main__":
     test_two_quoted_spans_crammed_on_one_line()
     test_strip_ncert_block_passthrough_when_no_marker()
     test_strip_ncert_block_captures_and_hides_real_block()
+    test_strip_ncert_block_merges_two_separate_blocks()
+    test_strip_ncert_block_single_block_one_line()
+    test_strip_ncert_block_empty_block_no_lines()
     print(f"\n{len(_passed)} passed, {len(_failed)} failed")
     sys.exit(1 if _failed else 0)
