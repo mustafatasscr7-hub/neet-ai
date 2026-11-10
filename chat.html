@@ -11802,6 +11802,15 @@ function plainTextFromMarkdown(text) {
         document.getElementById('guestMenu').style.display = 'flex';
         document.getElementById('guestAvatarBtn').style.display = 'flex';
         document.getElementById('profileSection').style.display = 'none';
+        // Guest header: the Free-plan "Upgrade" button has nowhere useful to send a guest (they'd
+        // hit pricing.html's checkout with no account), so it becomes the same "Log in" action as
+        // the sidebar's nudge-login-btn/guestAvatarBtn instead -- same destination, same copy.
+        const headerUpgradeBtn = document.getElementById('headerUpgradeBtn');
+        if (headerUpgradeBtn) {
+          headerUpgradeBtn.textContent = t('chat', 'login');
+          headerUpgradeBtn.setAttribute('data-i18n', 'chat.login');
+          headerUpgradeBtn.onclick = () => { window.location.href = './login.html'; };
+        }
         refreshPinnedSectionVisibility();
       }
       // Re-render now that we actually know whether there's a real display name -- the
