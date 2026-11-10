@@ -240,8 +240,12 @@
     body.light-mode .submitting-box { background: #ffffff !important; border-color: #e3e3ea !important; color: #16161d !important; }
     body.light-mode .submitting-spinner { border-color: #e3e3ea !important; border-top-color: #4f8ef7 !important; }
 
+    #searchChatsInput { font-size: 13px; }
     @media (max-width: 768px) {
       .header { flex-wrap: wrap; row-gap: 8px; padding-left: clamp(12px, 4vw, 16px); padding-right: clamp(12px, 4vw, 16px); }
+      /* Prevents Safari's auto-zoom on tap: iOS zooms the page when a focused input's
+         computed font-size is under 16px. */
+      #searchChatsInput { font-size: clamp(16px, 4.3vw, 17px); }
 
       /* Exam screen: question + navigator stack vertically instead of sitting side by side
          (the 280px fixed-width panel otherwise left ~95px for the question itself). The navigator
@@ -294,7 +298,7 @@
           <span data-i18n="chat.searchChats">Search chats</span>
         </div>
         <div id="searchChatsBox" style="display:none;padding:4px 8px;">
-          <input id="searchChatsInput" type="text" placeholder="Search chats..." data-i18n-placeholder="chat.searchPlaceholder" style="width:100%;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;padding:8px 12px;color:#ececec;font-size:13px;font-family:Inter,sans-serif;outline:none;" />
+          <input id="searchChatsInput" type="text" placeholder="Search chats..." data-i18n-placeholder="chat.searchPlaceholder" style="width:100%;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;padding:8px 12px;color:#ececec;font-family:Inter,sans-serif;outline:none;" />
         </div>
         <div class="nav-item" id="navChats" onclick="window.location.href='./chat.html'">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>

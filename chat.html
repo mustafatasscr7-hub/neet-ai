@@ -1340,7 +1340,7 @@
        identical multi-line behavior instead of staying a single-line <input>. */
     .welcome-search textarea { resize: none; max-height: 134px; min-height: 24px; line-height: 1.6; }
     @media (max-width: 620px) {
-      .welcome-search textarea { max-height: 90px; }
+      .welcome-search textarea { max-height: 90px; font-size: clamp(16px, 4.3vw, 17px); }
     }
     /* Applied only by focusMessageInput()'s programmatic auto-focus (see JS), never by a real
        click -- a click focusing an input is already a deliberate "I'm about to type" signal, so
@@ -1623,7 +1623,7 @@
        listener reads max-height back off this element via getComputedStyle instead of
        hardcoding it a second time, so the two breakpoints can't drift out of sync. */
     @media (max-width: 620px) {
-      .input-wrapper textarea { max-height: 90px; }
+      .input-wrapper textarea { max-height: 90px; font-size: clamp(16px, 4.3vw, 17px); }
     }
     .send-btn { width: 34px; height: 34px; background: #4f8ef7; border: none; border-radius: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s; flex-shrink: 0; }
     .send-btn:hover { background: #3b7de8; }
