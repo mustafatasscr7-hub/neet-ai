@@ -3482,6 +3482,216 @@ async def _log_ncert_retrieval(language: str, question_subject: Optional[str], t
     except Exception:
         pass
 
+# ---------- "From NCERT" exact-quote test feature (NCERT_SECTIONS_ENABLED, default off) ----------
+# Pro/Max only, text doubts only. Separate, additive test of whether a cheap DeepSeek picker call
+# plus a verbatim-quote rule appended to the normal /chat prompt can produce a short, word-for-word
+# "From NCERT" block the server can mechanically verify (no model in the loop for verification) --
+# see load_ncert_sections.py / ncert_sections.sql for the manually-cleaned chapter text this reads.
+# Kept completely separate from search_ncert/NCERT_V2_ENABLED above: no shared code path, no shared
+# table, no effect on any request while this flag is off (the only state it is shipped in).
+NCERT_SECTIONS_ENABLED = os.getenv("NCERT_SECTIONS_ENABLED", "false").strip().lower() == "true"
+NCERT_SECTIONS_CACHE_TTL = 600  # 10 minutes -- see _get_ncert_sections_cache
+_ncert_sections_cache = {"loaded_at": 0.0, "index_lines": [], "by_id": {}}
+
+async def _get_ncert_sections_cache() -> dict:
+    """In-memory cache of every ncert_sections row (today: 12 rows, one manually-loaded chapter),
+    refreshed at most once per NCERT_SECTIONS_CACHE_TTL. The table is tiny by design (see
+    ncert_sections.sql's own comment -- no embeddings, manually curated), so caching the whole
+    thing is simpler and cheaper than a per-request query. A failed refresh keeps serving
+    whatever was cached before (or stays empty, which _pick_ncert_sections reads as "skip
+    silently") rather than ever raising."""
+    now = time.time()
+    if _ncert_sections_cache["by_id"] and now - _ncert_sections_cache["loaded_at"] < NCERT_SECTIONS_CACHE_TTL:
+        return _ncert_sections_cache
+    try:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/ncert_sections", headers=ADMIN_HEADERS,
+            params={"select": "id,class,subject,chapter,heading,ordinal,text", "order": "chapter,ordinal"}
+        )
+        rows = resp.json() if resp.status_code == 200 else []
+    except Exception:
+        rows = []
+    if rows:
+        _ncert_sections_cache["by_id"] = {r["id"]: r for r in rows}
+        # Chapter name deliberately left out -- live testing found including it (padded onto
+        # every line, redundant while only one chapter is loaded) measurably hurt the picker's
+        # own accuracy against closely related headings, vs. just "id. heading" below.
+        _ncert_sections_cache["index_lines"] = [f"{r['id']}. {r['heading']}" for r in rows]
+        _ncert_sections_cache["loaded_at"] = now
+    return _ncert_sections_cache
+
+NCERT_SECTIONS_PICKER_SYSTEM = (
+    "A student asked a NEET exam question. Below is a numbered list of section headings from "
+    "one NCERT textbook chapter. Pick the section(s) (at most 2) whose heading topic is the "
+    "CLOSEST, most specific match to what the question is actually asking -- do not also pick a "
+    "broader/general section unless the question genuinely needs both (e.g. a question "
+    "specifically about one named sub-topic should pick ONLY that sub-topic's own section, not "
+    "also a general section covering the whole group it belongs to). Reply with ONLY the id "
+    "number(s), comma-separated (e.g. \"2\" or \"2,4\"). If none of the sections relate to the "
+    "question at all, reply NONE. No other text, no explanation."
+)
+
+async def _pick_ncert_sections(text: str, cache: dict, user_id: str = "") -> list:
+    """One cheap DeepSeek call, thinking disabled, max_tokens=50, 3s timeout -- returns up to 2
+    section ids from `cache`, or [] for NONE/timeout/error/empty index. Never raises; a failure
+    here must never affect the main answer, so every exit path is a plain `return []`."""
+    if not cache["index_lines"]:
+        return []
+    try:
+        is_peak = _is_deepseek_peak_hour()
+        resp = await asyncio.wait_for(
+            deepseek_async_client.messages.create(
+                model=DEEPSEEK_MODEL, max_tokens=50, thinking={"type": "disabled"},
+                system=NCERT_SECTIONS_PICKER_SYSTEM,
+                messages=[{"role": "user", "content": f"Sections:\n{chr(10).join(cache['index_lines'])}\n\nStudent question: {text}"}],
+            ),
+            timeout=3,
+        )
+    except Exception:
+        return []
+    try:
+        raw = "".join(b.text for b in resp.content if hasattr(b, "text")).strip()
+        usage = resp.usage
+        cache_miss = usage.input_tokens + (usage.cache_creation_input_tokens or 0)
+        cache_hit = usage.cache_read_input_tokens or 0
+        cost = _deepseek_cost(cache_miss, cache_hit, usage.output_tokens, is_peak)
+        asyncio.create_task(log_provider_usage(DEEPSEEK_MODEL, is_peak, cache_miss + cache_hit, usage.output_tokens, cost, "/chat-ncert-sections-picker", user_id, cache_hit_tokens=cache_hit))
+    except Exception:
+        return []
+    if not raw or raw.strip().upper().startswith("NONE"):
+        return []
+    picked = []
+    for part in re.split(r"[,\s]+", raw.strip()):
+        part = part.strip().strip(".")
+        if part.isdigit() and int(part) in cache["by_id"] and int(part) not in picked:
+            picked.append(int(part))
+    return picked[:2]
+
+# Out-of-band tail markers the model is told to wrap its verbatim NCERT quote block in (see
+# _NCERT_SECTIONS_RULE) -- never shown to the student: _strip_ncert_block below holds back
+# everything from the first marker onward instead of yielding it, same out-of-band-trailer
+# principle as RUNNING_SUMMARY_MARKER_PREFIX, just detected mid-stream (inside the model's own
+# single completion) rather than appended by a separate server-side call afterward.
+_NCERT_BLOCK_START = "===FROM_NCERT_START==="
+_NCERT_BLOCK_END = "===FROM_NCERT_END==="
+
+_NCERT_SECTIONS_RULE = f"""
+
+13. EXACT-QUOTE CHECK -- only applies when "NCERT Exact Section Text" reference data is present
+above. After writing your complete normal answer exactly as the rules above already specify,
+decide whether 1 to 3 SHORT passages from that reference text, copied WORD FOR WORD (never
+paraphrased, summarized, or combined from different sentences), directly support your answer.
+Each candidate line must be at least 6 words long and copied EXACTLY as written in the reference
+text -- changing even one word makes it invalid and worthless to the student. If at least one
+such line genuinely exists, append this block after your answer, with nothing else before or
+after it:
+{_NCERT_BLOCK_START}
+"<line copied exactly from the reference text>" (<Chapter>, <Heading>)
+{_NCERT_BLOCK_END}
+(add a second and/or third quoted line the same way, each on its own line between the two
+markers above, only if a genuinely distinct line also fits just as well)
+If no line fits this exactly -- the common case, do not force it -- omit this entire block,
+including both marker lines, and write nothing at all after your normal answer."""
+
+def _normalize_ncert_quote_text(s: str) -> str:
+    s = (s or "").replace("“", '"').replace("”", '"').replace("‘", "'").replace("’", "'")
+    return re.sub(r"\s+", " ", s).strip().lower()
+
+_NCERT_QUOTE_LINE_RE = re.compile(r'["“]([^"”]+)["”]\s*\(([^)]*)\)')
+
+def _verify_ncert_quotes(raw_block: str, combined_section_text: str, valid_headings: list = None):
+    """No model involved -- a quote (at least 6 words) is shown only if it is a verbatim
+    substring of combined_section_text once both sides are normalized (curly/straight quotes,
+    whitespace, case), AND (when valid_headings is given) its citation actually names one of the
+    real picked section headings. That second check matters on its own: live testing found the
+    model can write a perfectly verbatim quote (genuinely copied from the reference text) while
+    inventing a completely different, wrong chapter/heading for its citation (observed live: a
+    real quote from this chapter's own Phylum section, cited as "NCERT Class 11, Chapter 4 --
+    Animal Kingdom" -- a real NCERT chapter, just not the one this text is actually from). A
+    quote whose words are real but whose citation is fabricated is exactly as misleading to a
+    student as an invented quote, so it is dropped the same way. Everything else -- too short,
+    not an exact substring (paraphrase, one changed word, invented) -- is dropped and never
+    reaches the student. Returns (shown, dropped), each a list of {quote, citation} dicts."""
+    normalized_source = _normalize_ncert_quote_text(combined_section_text)
+    normalized_headings = [_normalize_ncert_quote_text(h) for h in (valid_headings or []) if h]
+    shown, dropped = [], []
+    for m in _NCERT_QUOTE_LINE_RE.finditer(raw_block or ""):
+        quote_raw, citation = m.group(1).strip(), m.group(2).strip()
+        word_count = len(quote_raw.split())
+        entry = {"quote": quote_raw, "citation": citation}
+        quote_ok = word_count >= 6 and _normalize_ncert_quote_text(quote_raw) in normalized_source
+        citation_ok = (not normalized_headings) or any(h in _normalize_ncert_quote_text(citation) for h in normalized_headings)
+        if quote_ok and citation_ok:
+            shown.append(entry)
+        else:
+            dropped.append(entry)
+    return shown[:3], dropped
+
+async def _strip_ncert_block(stream, holder: dict):
+    """Wraps a /chat text-doubt stream for a request where the sections feature is active --
+    see _NCERT_SECTIONS_RULE. Passes every chunk through unchanged UNLESS/UNTIL `_NCERT_BLOCK_START`
+    appears, at which point everything from there onward is captured into holder['raw_block']
+    instead of ever being yielded -- the caller verifies it (via _verify_ncert_quotes) only after
+    this generator is fully exhausted, and decides separately whether to emit anything for it.
+    The common case (the model found nothing worth quoting and never wrote the start marker at
+    all) is a complete, byte-for-byte passthrough with holder['raw_block'] left as None."""
+    holder["raw_block"] = None
+    pending = ""
+    in_block = False
+    block_buf = ""
+    lookback = len(_NCERT_BLOCK_START) + 4
+    async for chunk in stream:
+        if in_block:
+            block_buf += chunk
+            continue
+        pending += chunk
+        idx = pending.find(_NCERT_BLOCK_START)
+        if idx != -1:
+            before = pending[:idx]
+            if before:
+                yield before
+            in_block = True
+            block_buf = pending[idx + len(_NCERT_BLOCK_START):]
+            pending = ""
+            continue
+        if len(pending) > lookback:
+            emit_len = len(pending) - lookback
+            yield pending[:emit_len]
+            pending = pending[emit_len:]
+    if in_block:
+        end_idx = block_buf.find(_NCERT_BLOCK_END)
+        holder["raw_block"] = block_buf[:end_idx] if end_idx != -1 else block_buf
+    elif pending:
+        yield pending
+
+# Out-of-band trailer for the verified "From NCERT" block -- same NUL-delimited, never-rendered-
+# as-text design as RUNNING_SUMMARY_MARKER_PREFIX above (NUL bytes can't occur in real model
+# text), just a different tag so chat.html can tell the two apart. Only ever appended when at
+# least one quote survived _verify_ncert_quotes -- never for an empty/all-dropped result.
+NCERT_SECTIONS_MARKER_PREFIX = "\n\x00NCSEC\x00"
+NCERT_SECTIONS_MARKER_SUFFIX = "\x00"
+
+def _encode_ncert_sections_marker(quotes_shown: list) -> str:
+    encoded = base64.b64encode(json.dumps(quotes_shown).encode("utf-8")).decode("ascii")
+    return f"{NCERT_SECTIONS_MARKER_PREFIX}{encoded}{NCERT_SECTIONS_MARKER_SUFFIX}"
+
+async def _log_ncert_sections_event(language: str, picked_ids: list, quotes_shown: list, quotes_dropped: list, picker_latency_ms: int, total_latency_ms: int):
+    """Same table as _log_ncert_retrieval (no new table), tagged version="sections" in `chunks`
+    instead of a dedicated column. Ids and counts only -- never the question text; quote/citation
+    text is kept here (unlike the v1 log) since these are short, mechanically-verified NCERT
+    textbook excerpts, not student-written content."""
+    outcome = "grounded" if quotes_shown else ("set_aside" if picked_ids else "none")
+    chunks = [{"version": "sections", "section_ids": picked_ids, "quotes_shown": quotes_shown,
+               "quotes_dropped": quotes_dropped, "picker_latency_ms": picker_latency_ms,
+               "total_added_latency_ms": total_latency_ms}]
+    try:
+        await async_client.post(
+            f"{SUPABASE_URL}/rest/v1/ncert_retrieval_log", headers={**ADMIN_HEADERS, "Content-Type": "application/json"},
+            json={"language": language, "question_subject": None, "outcome": outcome, "chunks": chunks, "top_raw_score": None}
+        )
+    except Exception:
+        pass
+
 # Re-measured 2026-08-24 after backfilling embeddings for the ~80% of pyq rows that had none
 # (984/5,084 -> 5,084/5,084) -- worth re-checking since 4x more embedded content changes what a
 # given similarity score actually means. Real scores against the now-complete set: 9 genuinely
@@ -6690,6 +6900,23 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
         results = _relevant_ncert_chunks(text, retrieved)
         asyncio.create_task(_log_ncert_retrieval(search_stats.get("language") or retrieval_language, _question_subject(text), search_stats.get("top_raw_score"), retrieved, results, version=search_stats.get("version")))
     student_context = build_student_context(mistake_rows, mock_wrong_rows, {r.get('subject') for r in results})
+    # "From NCERT" exact-quote test feature -- see NCERT_SECTIONS_ENABLED's own comment above.
+    # Pro/Max, text doubts only (images/pdf go to Gemini via a completely different path below
+    # and never reach this). A no-op (one cheap env-var check) for every request while the flag
+    # is off, which is the only state this ships in.
+    ncert_sections_active = False
+    picked_section_ids = []
+    sections_cache_for_chat = None
+    picker_latency_ms = 0
+    if NCERT_SECTIONS_ENABLED and not images and not pdf and text.strip():
+        plan_for_sections = await get_user_plan(user_id)
+        if plan_for_sections in ("pro", "max"):
+            sections_cache_for_chat = await _get_ncert_sections_cache()
+            if sections_cache_for_chat["by_id"]:
+                _sections_picker_t0 = time.monotonic()
+                picked_section_ids = await _pick_ncert_sections(text, sections_cache_for_chat, user_id)
+                picker_latency_ms = int((time.monotonic() - _sections_picker_t0) * 1000)
+                ncert_sections_active = bool(picked_section_ids)
     # Sanitized once here, used in every user_message branch below -- never the raw `text` itself,
     # which stays untouched for retrieval/logging/history above (see _neutralize_ref_data_tags).
     safe_text = _neutralize_ref_data_tags(text)
@@ -6719,6 +6946,15 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
         user_message = f"Student Question: {safe_text}"
     if diagram_exists:
         user_message += "\n\n[A relevant NCERT diagram exists for this topic -- this is the ONLY signal that tells you whether offering a format-clarification (rule 11) is honest to offer. If this note is absent, a diagram is not available, so never offer to show one.]"
+    if ncert_sections_active:
+        # Separate <ref_data> block from the v1/v2 `context` one above (SYSTEM_PROMPT rule 12
+        # applies to any number of these, not just one) -- kept independent on purpose so this
+        # test feature never touches the existing NCERT-retrieval prompt-building logic above.
+        sections_text = "\n\n".join(
+            f"[{sections_cache_for_chat['by_id'][i]['chapter']} - {sections_cache_for_chat['by_id'][i]['heading']}]\n{sections_cache_for_chat['by_id'][i]['text']}"
+            for i in picked_section_ids
+        )
+        user_message += f"\n\nNCERT Exact Section Text:\n<ref_data>\n{_neutralize_ref_data_tags(sections_text)}\n</ref_data>"
 
     messages = []
     # Sliced here only, for building this text-path `messages` array -- deliberately NOT
@@ -6826,6 +7062,8 @@ full explanation (including why each other option is wrong) on the lines after i
 normally would -- do not shorten, skip, or omit anything else. If there are no multiple-choice
 options in the question, ignore this instruction entirely.""" if (images or pdf) else ""
         full_system = SYSTEM_PROMPT + name_context + style_context + student_context + graph_context + conciseness_context + mcq_context
+        if ncert_sections_active:
+            full_system = full_system + _NCERT_SECTIONS_RULE
         if _is_mnemonic_request(text):
             # Applied here (before the images/pdf/else branch split) so it reaches whichever
             # model actually serves the request, including Gemini for an image of a mnemonic
@@ -6901,6 +7139,13 @@ options in the question, ignore this instruction entirely.""" if (images or pdf)
             force_qwen = max_tier == "breakeven"
             print(f"MODEL SELECTED: {'qwen-flash (Max breakeven downgrade)' if force_qwen else ('qwen-flash (DeepSeek peak-hour fallback)' if is_peak else DEEPSEEK_MODEL)}", flush=True)
             sys.stdout.flush()
+            # "From NCERT" test feature: holds the raw (unverified) block captured out of whichever
+            # attempt's stream actually produced the final full_answer -- see _strip_ncert_block.
+            # Re-set to None on every call (including each override/retry attempt below), so only
+            # the attempt that actually won gets checked after the loop. A complete no-op wrapper
+            # (`lambda s: s`) when the feature isn't active for this request.
+            sections_holder = {"raw_block": None}
+            _wrap_for_sections = (lambda s: _strip_ncert_block(s, sections_holder)) if ncert_sections_active else (lambda s: s)
             full_answer = ""
             # billing_context lets this loop waive the student's daily-budget charge the moment
             # it recognizes the response is a clarifying question (rule 11), not a real answer --
@@ -6940,14 +7185,14 @@ options in the question, ignore this instruction entirely.""" if (images or pdf)
             # longer-established, Qwen-specific mechanism.
             mcq_shaped = (not multi_object_numerical) and _is_mcq_shaped(text)
             if multi_object_numerical:
-                stream_source = _stream_qwen_verified(full_system, messages, text, user_id, ip, "/chat", billing_context, max_tokens=answer_max_tokens)
+                stream_source = _wrap_for_sections(_stream_qwen_verified(full_system, messages, text, user_id, ip, "/chat", billing_context, max_tokens=answer_max_tokens))
             elif mcq_shaped:
                 # See MCQ_AMBIGUOUS_GUARD's own comment for why this is appended here rather than
                 # baked into SYSTEM_PROMPT itself -- fixes the AMBIGUOUS-misfire on the FIRST
                 # attempt instead of relying on the existing whitelist-guard's costly regenerate.
-                stream_source = _stream_mcq_hedge_verified(full_system + MCQ_AMBIGUOUS_GUARD, messages, text, user_id, ip, "/chat", billing_context, force_qwen, max_tokens=answer_max_tokens)
+                stream_source = _wrap_for_sections(_stream_mcq_hedge_verified(full_system + MCQ_AMBIGUOUS_GUARD, messages, text, user_id, ip, "/chat", billing_context, force_qwen, max_tokens=answer_max_tokens))
             else:
-                stream_source = _stream_with_peak_fallback(full_system, messages, user_id, ip, "/chat", billing_context, force_qwen, max_tokens=answer_max_tokens)
+                stream_source = _wrap_for_sections(_stream_with_peak_fallback(full_system, messages, user_id, ip, "/chat", billing_context, force_qwen, max_tokens=answer_max_tokens))
 
             # Peel off a leading SIMULATED_STREAM_MARKER chunk (only ever yielded by
             # _stream_qwen_verified) BEFORE it reaches the rule-11 AMBIGUOUS/CLARIFY_TYPE
@@ -7130,7 +7375,7 @@ options in the question, ignore this instruction entirely.""" if (images or pdf)
                     # served retries on Qwen with an extra note first (cheap, measured 30/30),
                     # and only falls back to a full DeepSeek generation if that is empty again.
                     # A request DeepSeek served retries on DeepSeek, as before.
-                    override_stream = _stream_empty_conversational_retry(override_system, messages, user_id, ip, is_peak, billing_context, use_qwen_for_this_request, answer_max_tokens)
+                    override_stream = _wrap_for_sections(_stream_empty_conversational_retry(override_system, messages, user_id, ip, is_peak, billing_context, use_qwen_for_this_request, answer_max_tokens))
                 else:
                     override_system = full_system + (
                         "\n\nOVERRIDE (server-enforced, not optional): this exact doubt has been "
@@ -7141,7 +7386,7 @@ options in the question, ignore this instruction entirely.""" if (images or pdf)
                     )
                     full_answer = ""
                     billing_context = {"bill": True}
-                    override_stream = _stream_with_peak_fallback(override_system, messages, user_id, ip, "/chat", billing_context, force_qwen, max_tokens=answer_max_tokens)
+                    override_stream = _wrap_for_sections(_stream_with_peak_fallback(override_system, messages, user_id, ip, "/chat", billing_context, force_qwen, max_tokens=answer_max_tokens))
                 if override_reason == "invalid_clarify":
                     # Hard server-side re-validation of the retry itself (added 2026-09-21) --
                     # the override above still only relies on the model actually obeying "do not
@@ -7184,7 +7429,7 @@ options in the question, ignore this instruction entirely.""" if (images or pdf)
                         final_system = full_system.replace(SYSTEM_PROMPT, SYSTEM_PROMPT_NO_CLARIFY, 1)
                         full_answer = ""
                         billing_context = {"bill": True}
-                        final_stream = _stream_with_peak_fallback(final_system, messages, user_id, ip, "/chat", billing_context, force_qwen, max_tokens=answer_max_tokens)
+                        final_stream = _wrap_for_sections(_stream_with_peak_fallback(final_system, messages, user_id, ip, "/chat", billing_context, force_qwen, max_tokens=answer_max_tokens))
                         async for text_chunk in _force_citation_when_no_retrieval(final_stream, bool(results)):
                             full_answer += text_chunk
                             yield text_chunk
@@ -7202,6 +7447,30 @@ options in the question, ignore this instruction entirely.""" if (images or pdf)
                     async for text_chunk in _force_citation_when_no_retrieval(override_stream, bool(results)):
                         full_answer += text_chunk
                         yield text_chunk
+            # "From NCERT" test feature: verify (no model involved) whatever _strip_ncert_block
+            # captured from whichever attempt actually produced full_answer above, then -- only if
+            # at least one quote survives -- emit it as one out-of-band trailer event, same
+            # never-rendered-as-text mechanism as the running-summary marker below. A request
+            # where the feature never activated, or where it activated but the model never wrote
+            # the start marker (the common case), costs nothing here: sections_holder['raw_block']
+            # is just None and this whole block is skipped.
+            if ncert_sections_active and sections_holder.get("raw_block"):
+                combined_section_text = " ".join(
+                    sections_cache_for_chat["by_id"][i]["text"] for i in picked_section_ids if i in sections_cache_for_chat["by_id"]
+                )
+                valid_headings = [sections_cache_for_chat["by_id"][i]["heading"] for i in picked_section_ids if i in sections_cache_for_chat["by_id"]]
+                quotes_shown, quotes_dropped = _verify_ncert_quotes(sections_holder["raw_block"], combined_section_text, valid_headings)
+                # total_request_latency_ms is wall-clock from the picker call's own start to here
+                # (picker + the rest of this answer's generation) -- a rough, request-level number
+                # for the test report, not a controlled A/B measurement; the test harness in step 4
+                # measures real added latency directly (with/without the flag) for that purpose.
+                total_request_latency_ms = int((time.monotonic() - _sections_picker_t0) * 1000)
+                # retrieval_language is always defined here: ncert_sections_active requires
+                # `not images and not pdf`, which is exactly the branch that sets it (skip_ncert_search,
+                # the only branch that doesn't, requires images=True).
+                asyncio.create_task(_log_ncert_sections_event(retrieval_language, picked_section_ids, quotes_shown, quotes_dropped, picker_latency_ms, total_request_latency_ms))
+                if quotes_shown:
+                    yield _encode_ncert_sections_marker(quotes_shown)
             if cache_skip_reason is None:
                 # billing_context is the dict of whichever attempt produced full_answer (each
                 # override retry starts a fresh one), so its capped/corrected flags are this answer's.

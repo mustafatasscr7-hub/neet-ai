@@ -1381,6 +1381,15 @@
        is a defensive, explicit backstop for that guarantee, not a fix for an observed leak. */
     .message-bubble.ai .katex, .message-bubble.ai .katex *,
     .message-bubble.user .katex, .message-bubble.user .katex * { font-family: KaTeX_Main, KaTeX_Math, "Times New Roman", serif !important; }
+    /* "From NCERT" test feature card (NCERT_SECTIONS_ENABLED, default off -- see server.py).
+       Quiet by design: small text, no background noise beyond a faint accent tint, blue (#4f8ef7,
+       the site's one standing accent) left border only -- never purple, never a loud box. */
+    .ncert-sections-card { margin-top: 12px; padding: 8px 12px; border-left: 3px solid #4f8ef7; background: rgba(79,142,247,0.07); border-radius: 0 6px 6px 0; font-size: 13px; line-height: 1.55; color: #bdbdbd; }
+    .ncert-sections-card-title { font-weight: 600; color: #4f8ef7; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 5px; }
+    .ncert-sections-card-quote { margin: 3px 0; }
+    .ncert-sections-card-citation { color: #8a8a8a; font-size: 12px; }
+    body.light-mode .ncert-sections-card { background: rgba(79,142,247,0.06) !important; color: #3a3a3a !important; }
+    body.light-mode .ncert-sections-card-citation { color: #6b6b6b !important; }
     /* Scoped to .message-bubble.ai so the same wrapper class parseWithMath() also produces for
        the PYQ-modal solve box (a different container, not an answer bubble) is unaffected --
        this rule simply doesn't match there, no JS-side conditional needed. .message-bubble.user
@@ -9348,14 +9357,45 @@ function plainTextFromMarkdown(text) {
         // Decodes runningSummaryMarkerBuffer (expected shape: \u0000RSUM\u0000<base64>\u0000)
         // once the stream has fully ended -- returns null (no update) on anything malformed,
         // same fail-safe spirit as the server side: a corrupted/incomplete marker must never
-        // throw or corrupt the real answer that already rendered successfully.
+        // throw or corrupt the real answer that already rendered successfully. Deliberately NOT
+        // anchored to the start/end of the buffer (unlike the original version of this function):
+        // server.py's NCERT_SECTIONS test feature (see decodeNcertSectionsMarker below) can append
+        // its own \u0000NCSEC\u0000...\u0000 marker BEFORE this one in the same trailer, so RSUM's
+        // own marker is searched for anywhere in the buffer rather than assumed to be the only
+        // thing in it.
         function decodeRunningSummaryMarker() {
-          const m = runningSummaryMarkerBuffer.match(/^\u0000RSUM\u0000([A-Za-z0-9+/=]+)\u0000?$/);
+          const m = runningSummaryMarkerBuffer.match(/\u0000RSUM\u0000([A-Za-z0-9+/=]+)\u0000?/);
           if (!m) return null;
           try {
             const bytes = Uint8Array.from(atob(m[1]), c => c.charCodeAt(0));
             return new TextDecoder('utf-8').decode(bytes) || null;
           } catch (e) { return null; }
+        }
+        // "From NCERT" test feature (NCERT_SECTIONS_ENABLED, default off -- see server.py). Same
+        // out-of-band trailer mechanism as RSUM above, different tag, decoded from the same shared
+        // buffer independently of it. Payload is base64-encoded JSON: a list of {quote, citation}
+        // objects, already mechanically verified server-side (_verify_ncert_quotes) -- nothing
+        // here re-checks them, this only renders what the server already decided was safe to show.
+        function decodeNcertSectionsMarker() {
+          const m = runningSummaryMarkerBuffer.match(/\u0000NCSEC\u0000([A-Za-z0-9+/=]+)\u0000?/);
+          if (!m) return null;
+          try {
+            const bytes = Uint8Array.from(atob(m[1]), c => c.charCodeAt(0));
+            const parsed = JSON.parse(new TextDecoder('utf-8').decode(bytes));
+            return (Array.isArray(parsed) && parsed.length) ? parsed : null;
+          } catch (e) { return null; }
+        }
+        // Builds the small quiet "From NCERT" card's HTML, or '' if there's nothing to show.
+        // escapeHtml on both fields -- quote/citation are model-generated text flowing straight
+        // from server.py's JSON payload, never assumed safe just because they passed the
+        // substring-verification check (that check only guarantees the quote's WORDS are real,
+        // not that it's free of HTML-special characters).
+        function renderNcertSectionsCardHtml(quotes) {
+          if (!quotes || !quotes.length) return '';
+          const lines = quotes.map(q =>
+            `<div class="ncert-sections-card-quote">&ldquo;${escapeHtml(q.quote || '')}&rdquo; <span class="ncert-sections-card-citation">(${escapeHtml(q.citation || '')})</span></div>`
+          ).join('');
+          return `<div class="ncert-sections-card"><div class="ncert-sections-card-title">From NCERT</div>${lines}</div>`;
         }
 
         // server.py's second-pass verification (a narrow fix for a Qwen failure on multi-object
@@ -9617,6 +9657,7 @@ function plainTextFromMarkdown(text) {
         // scan in streamAIResponse's own request-building code naturally keeps using whatever
         // it already had.
         const newRunningSummary = inRunningSummaryMarker ? decodeRunningSummaryMarker() : null;
+        const newNcertSectionsQuotes = inRunningSummaryMarker ? decodeNcertSectionsMarker() : null;
         removeTypingRow(); // safety net -- covers a done-with-no-value edge case (empty response)
         ensureAiRow();
 
@@ -9825,7 +9866,7 @@ function plainTextFromMarkdown(text) {
           fullText = t('chat', 'emptyReplyFallback');
         }
         const { cleanText: cleanFullText, metaHtml, chapterText } = extractAnswerMeta(fullText);
-        textArea.innerHTML = metaHtml + parseWithMath(cleanFullText);
+        textArea.innerHTML = metaHtml + parseWithMath(cleanFullText) + renderNcertSectionsCardHtml(newNcertSectionsQuotes);
         await renderMermaidBlocksIn(textArea);
 
         // diagramPrefetch/isAutoEmbed were already resolved (and, if matched, already embedded
@@ -9864,7 +9905,7 @@ function plainTextFromMarkdown(text) {
         // the DOM the live stream built, never in the data that actually gets persisted
         // (localStorage and the `chats.messages` JSONB column both just serialize whatever shape
         // this object is, so adding a field here needs no migration on either side).
-        const newVersion = { text: fullText, diagram: isAutoEmbed ? diagramPrefetch : undefined };
+        const newVersion = { text: fullText, diagram: isAutoEmbed ? diagramPrefetch : undefined, ncertQuotes: newNcertSectionsQuotes || undefined };
         let aiMsg;
         if (retryTarget) {
           // Same message, new version -- append to its history rather than pushing a second,
