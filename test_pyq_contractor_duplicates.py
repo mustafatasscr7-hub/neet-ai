@@ -141,6 +141,10 @@ def pyq_row(question, uploader_name, review_status, year, created_at=None, **ext
         "created_at": created_at or f"2024-01-{_seq:02d}T00:00:00Z",
         "review_status": review_status, "review_note": None, "uploaded_by": "contractor",
         "uploaded_at": created_at or f"2024-01-{_seq:02d}T00:00:00Z", "uploader_name": uploader_name,
+        # mock_exam_columns.sql: every real row defaults to 'pyq' -- the fake PostgREST honours
+        # source=eq.pyq as a real filter, so a fixture row missing this key entirely would never
+        # match it, unlike the real DB's column default.
+        "source": "pyq",
     }
     row.update(extra)
     return row

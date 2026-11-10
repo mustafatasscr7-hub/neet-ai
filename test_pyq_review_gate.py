@@ -201,6 +201,10 @@ def pyq_row(status="approved", *, subject="Biology", chapter=CHAPTER, active=Tru
         "uploaded_by": uploaded_by, "uploaded_at": datetime.now(timezone.utc).isoformat(), "batch_id": None,
         "reviewed_at": None, "reviewed_by": None, "reviewed": status == "approved", "embedding": [0.1] * 4,
         "_sim": sim, "source_tag": "t", "question_type": "mcq", "created_at": datetime.now(timezone.utc).isoformat(),
+        # mock_exam_columns.sql: every real row defaults to 'pyq' -- the fake PostgREST honours
+        # source=eq.pyq as a real filter, so a fixture row missing this key entirely would never
+        # match it, unlike the real DB's column default.
+        "source": "pyq",
     }
     row.update(extra)
     return row

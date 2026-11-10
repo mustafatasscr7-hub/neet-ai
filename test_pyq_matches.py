@@ -108,6 +108,10 @@ def pyq_row(question, **extra):
         "created_at": f"2024-01-{_seq:02d}T00:00:00Z",
         "review_status": "pending", "review_note": None, "uploaded_by": "contractor",
         "uploaded_at": f"2024-01-{_seq:02d}T00:00:00Z", "uploader_name": "Mr. Md Moniruzzaman",
+        # mock_exam_columns.sql: every real row defaults to 'pyq' -- the fake PostgREST honours
+        # source=eq.pyq as a real filter (see FakeSupabase.matches), so a fixture row missing this
+        # key entirely would never match it, unlike the real DB's column default.
+        "source": "pyq",
     }
     row.update(extra)
     return row

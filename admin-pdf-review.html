@@ -297,17 +297,32 @@
   </div>
 
   <div class="panel">
+    <h2>Content type</h2>
+    <div class="subject-picker" id="contentTypePicker">
+      <button type="button" class="subject-btn active" data-content-type="pyq" onclick="selectContentType('pyq')">PYQ</button>
+      <button type="button" class="subject-btn" data-content-type="mock_exam" onclick="selectContentType('mock_exam')">Mock exam</button>
+    </div>
+
+    <div id="mockExamNote" style="display:none;font-size:11px;color:#888;margin-top:-6px;margin-bottom:10px;">Mock exam questions always need review -- none are auto-approved, no matter who uploads them.</div>
+
     <div class="mode-tabs" id="inputModeTabs">
       <button type="button" class="mode-btn active" data-mode="pdf" onclick="selectInputMode('pdf')">PDF Scan</button>
       <button type="button" class="mode-btn" data-mode="paste" onclick="selectInputMode('paste')">Paste LaTeX (Mathpix/SimpleTex)</button>
     </div>
 
-    <h2>1. Choose subject</h2>
+    <h2 id="subjectStepHeading">1. Choose subject</h2>
     <div class="subject-picker" id="subjectPicker">
       <button type="button" class="subject-btn" data-subject="Biology" onclick="selectSubject('Biology')">Biology</button>
       <button type="button" class="subject-btn" data-subject="Physics" onclick="selectSubject('Physics')">Physics</button>
       <button type="button" class="subject-btn" data-subject="Chemistry" onclick="selectSubject('Chemistry')">Chemistry</button>
     </div>
+
+    <div id="mockNameSection" style="display:none;">
+      <label style="display:block;font-size:11px;color:#888;margin-bottom:4px;">Mock name (e.g. "Mock Test 1")</label>
+      <input type="text" id="mockNameInput" placeholder="Mock Test 1" oninput="onMockNameInput()" style="width:100%;max-width:300px;background:#0d0d0d;border:1px solid #2a2a2a;border-radius:8px;padding:8px 10px;color:#ececec;font-family:'Inter',sans-serif;font-size:13px;margin-bottom:10px;"/>
+    </div>
+
+    <div id="mockCompletenessPanel" style="display:none;"></div>
 
     <h2>Language</h2>
     <div class="subject-picker" id="languagePicker">
@@ -318,7 +333,7 @@
 
     <div id="pdfModeSection">
       <h2>2. Upload PDF</h2>
-      <div style="margin-bottom:10px;">
+      <div id="pdfLayoutRow" style="margin-bottom:10px;">
         <label style="display:block;font-size:11px;color:#888;margin-bottom:4px;">Layout</label>
         <select id="pdfLayoutSelect" style="width:100%;max-width:300px;background:#0d0d0d;border:1px solid #2a2a2a;border-radius:8px;padding:8px 10px;color:#ececec;font-family:'Inter',sans-serif;font-size:13px;">
           <option value="standard">Standard (official question papers)</option>
@@ -330,6 +345,7 @@
           <option value="scanned">Scanned pages (image-only)</option>
         </select>
       </div>
+      <div id="mockLayoutNote" style="display:none;font-size:11px;color:#888;margin-bottom:10px;">Layout: Mock exam (Physics/Chemistry/Biology sections and the answer key are detected automatically)</div>
       <div class="upload-row">
         <input type="file" id="pdfFile" accept="application/pdf" onchange="updateScanButton()"/>
         <button type="button" class="scan-btn" id="scanBtn" disabled onclick="scanPdf()">Scan PDF</button>
@@ -377,6 +393,17 @@
   const API_BASE = 'https://neet-ai-production.up.railway.app';
   let adminKey = sessionStorage.getItem('admin_key') || '';
   let currentSubject = null;
+  // Mock exam mode (mock_exam_columns.sql) -- one upload spans Physics/Chemistry/Biology, so
+  // blocks carry their own per-block `subject` instead of the single global currentSubject PYQ
+  // mode uses. mockExistingRowsBySubject is this mode's own (source=mock) duplicate-check corpus,
+  // one per subject, loaded once when Mock exam is selected -- chapter TF-IDF suggestion is
+  // deliberately NOT ported to mock mode (reviewer picks the chapter manually from the same
+  // syllabus-backed dropdown); only the exact/near-duplicate check and the chapter/class dropdown
+  // are subject-aware here.
+  let mockMode = false;
+  let currentMockName = '';
+  let mockExistingRowsBySubject = { Physics: [], Chemistry: [], Biology: [] };
+  const MOCK_EXAM_SUBJECTS = ['Physics', 'Chemistry', 'Biology'];
   let currentLanguage = 'en'; // 'en' or 'hi' -- picked once per PDF, saved on every question from it (pyq_language.sql)
   let currentPdfFilename = null; // filename of the last-scanned PDF, attached to saves so it shows up in Processed PDFs
   let currentBatchId = null; // one upload batch per scanned PDF / parsed paste -- saved as pyq.batch_id for the review filters
@@ -583,6 +610,64 @@
 
   if (adminKey) enterDashboard();
 
+  // ---------------- Content type (PYQ / Mock exam) ----------------
+
+  async function selectContentType(type) {
+    mockMode = type === 'mock_exam';
+    document.querySelectorAll('.subject-btn[data-content-type]').forEach(btn => btn.classList.toggle('active', btn.dataset.contentType === type));
+    document.getElementById('mockExamNote').style.display = mockMode ? 'block' : 'none';
+    document.getElementById('subjectStepHeading').textContent = mockMode ? '1. Mock exam details' : '1. Choose subject';
+    document.getElementById('subjectPicker').style.display = mockMode ? 'none' : 'flex';
+    document.getElementById('mockNameSection').style.display = mockMode ? 'block' : 'none';
+    document.getElementById('pdfLayoutRow').style.display = mockMode ? 'none' : 'block';
+    document.getElementById('mockLayoutNote').style.display = mockMode ? 'block' : 'none';
+    document.getElementById('mockCompletenessPanel').style.display = 'none';
+    // Paste mode (Mathpix/SimpleTex) is a PYQ-only input path -- mock exam only ever comes from
+    // a PDF scan, so that tab is hidden rather than left to silently misbehave in mock mode.
+    const pasteTab = document.querySelector('.mode-btn[data-mode="paste"]');
+    if (pasteTab) pasteTab.style.display = mockMode ? 'none' : '';
+    if (mockMode && inputMode === 'paste') selectInputMode('pdf');
+    currentSubject = null;
+    blocks = [];
+    scanFilenameMatch = null;
+    renderAllBlocks();
+    document.getElementById('summaryBar').style.display = 'none';
+    document.getElementById('flaggedPagesBanner').style.display = 'none';
+    clearDraft();
+    if (mockMode) {
+      await loadMockSubjectData();
+    }
+    updateScanButton();
+  }
+
+  function onMockNameInput() {
+    currentMockName = document.getElementById('mockNameInput').value.trim();
+    updateScanButton();
+  }
+
+  // Loads this mode's own (source=mock) duplicate-check corpus for all three subjects at once --
+  // unlike loadSubjectData (PYQ mode), this never touches chapterList/classifier: mock mode
+  // skips TF-IDF chapter suggestion entirely (see mockExistingRowsBySubject's own comment above),
+  // and allChaptersForSubject() already returns a complete syllabus-backed list per subject with
+  // no server call needed.
+  async function loadMockSubjectData() {
+    try {
+      const responses = await Promise.all(
+        MOCK_EXAM_SUBJECTS.map(s => fetch(`${API_BASE}/admin/pyq-classifier-data?subject=${encodeURIComponent(s)}&source=mock`, { headers: authHeaders() }))
+      );
+      if (responses.some(r => r.status === 401)) return logout();
+      if (responses.some(r => !r.ok)) {
+        alert('Could not load the mock exam duplicate-check data for one or more subjects -- you can still scan and review, but the duplicate warning will be empty.');
+        mockExistingRowsBySubject = { Physics: [], Chemistry: [], Biology: [] };
+        return;
+      }
+      const datas = await Promise.all(responses.map(r => r.json()));
+      MOCK_EXAM_SUBJECTS.forEach((s, i) => { mockExistingRowsBySubject[s] = datas[i].rows || []; });
+    } catch (e) {
+      mockExistingRowsBySubject = { Physics: [], Chemistry: [], Biology: [] };
+    }
+  }
+
   // ---------------- Subject selection + data loading ----------------
 
   async function selectSubject(subject) {
@@ -681,6 +766,8 @@
         blockIdSeq,
         scanFilenameMatch,
         inputMode,
+        mockMode,
+        mockName: currentMockName,
         blocks: serializeBlocksForDraft()
       };
       localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(draft));
@@ -734,8 +821,9 @@
     pendingDraft = draft;
     const when = new Date(draft.savedAt).toLocaleString();
     const count = draft.blocks.length;
+    const draftLabel = draft.mockMode ? (draft.mockName ? ', ' + draft.mockName : ', mock exam') : (draft.subject ? ', ' + draft.subject : '');
     document.getElementById('draftBannerText').textContent =
-      `Unsaved work from ${when} found (${count} question${count === 1 ? '' : 's'}${draft.subject ? ', ' + draft.subject : ''}) — Resume or Discard?`;
+      `Unsaved work from ${when} found (${count} question${count === 1 ? '' : 's'}${draftLabel}) - Resume or Discard?`;
     document.getElementById('draftBanner').style.display = 'flex';
   }
 
@@ -755,16 +843,36 @@
     scanFilenameMatch = draft.scanFilenameMatch || null;
     blocks = draft.blocks;
 
+    // mockMode absent on a pre-mock-exam draft -- defaults to false (PYQ), the only mode that
+    // existed then. selectContentType resets blocks/currentSubject, so it must run BEFORE those
+    // are restored above are relied on below, and it's called with its own reset suppressed by
+    // just setting state directly here instead of calling it.
+    mockMode = !!draft.mockMode;
+    currentMockName = draft.mockName || '';
+    document.querySelectorAll('.subject-btn[data-content-type]').forEach(btn => btn.classList.toggle('active', btn.dataset.contentType === (mockMode ? 'mock_exam' : 'pyq')));
+    document.getElementById('mockExamNote').style.display = mockMode ? 'block' : 'none';
+    document.getElementById('subjectStepHeading').textContent = mockMode ? '1. Mock exam details' : '1. Choose subject';
+    document.getElementById('subjectPicker').style.display = mockMode ? 'none' : 'flex';
+    document.getElementById('mockNameSection').style.display = mockMode ? 'block' : 'none';
+    document.getElementById('pdfLayoutRow').style.display = mockMode ? 'none' : 'block';
+    document.getElementById('mockLayoutNote').style.display = mockMode ? 'block' : 'none';
+    const pasteTab = document.querySelector('.mode-btn[data-mode="paste"]');
+    if (pasteTab) pasteTab.style.display = mockMode ? 'none' : '';
+    if (mockMode) document.getElementById('mockNameInput').value = currentMockName;
+
     if (currentSubject) {
       document.querySelectorAll('.subject-btn[data-subject]').forEach(btn => btn.classList.toggle('active', btn.dataset.subject === currentSubject));
     }
-    selectInputMode(draft.inputMode || 'pdf'); // absent on v1 drafts saved before Paste LaTeX mode existed -- default to the only mode that existed then
+    selectInputMode(mockMode ? 'pdf' : (draft.inputMode || 'pdf')); // absent on v1 drafts saved before Paste LaTeX mode existed -- default to the only mode that existed then
     renderAllBlocks();
     updateSummaryBar();
     document.getElementById('summaryBar').style.display = blocks.length ? 'flex' : 'none';
     updateScanButton();
 
-    if (currentSubject) {
+    if (mockMode) {
+      await loadMockSubjectData();
+      renderAllBlocks();
+    } else if (currentSubject) {
       await loadSubjectData(currentSubject);
       renderAllBlocks(); // refresh chapter options/suggestions now that chapterList/classifier are loaded
     }
@@ -783,12 +891,14 @@
     updateParseButton();
     populatePasteChapterSelect();
     const file = document.getElementById('pdfFile').files[0];
-    document.getElementById('scanBtn').disabled = !currentSubject || !file;
+    const ready = mockMode ? !!currentMockName : !!currentSubject;
+    document.getElementById('scanBtn').disabled = !ready || !file;
     const hintEl = document.getElementById('scanBtnHint');
     if (!hintEl) return;
-    if (currentSubject && file) hintEl.textContent = '';
-    else if (!currentSubject && !file) hintEl.textContent = 'Pick a subject above and choose a PDF file to enable scanning.';
-    else if (!currentSubject) hintEl.textContent = 'Pick a subject above to enable scanning.';
+    const pickLabel = mockMode ? 'a mock name above' : 'a subject above';
+    if (ready && file) hintEl.textContent = '';
+    else if (!ready && !file) hintEl.textContent = `Pick ${pickLabel} and choose a PDF file to enable scanning.`;
+    else if (!ready) hintEl.textContent = `Pick ${pickLabel} to enable scanning.`;
     else hintEl.textContent = 'Choose a PDF file to enable scanning.';
   }
 
@@ -1747,9 +1857,9 @@
 
   async function scanPdf() {
     const file = document.getElementById('pdfFile').files[0];
-    if (!file || !currentSubject) return;
+    if (!file || (mockMode ? !currentMockName : !currentSubject)) return;
     if (!(await checkPdfAlreadyProcessed(file.name))) return;
-    const layout = document.getElementById('pdfLayoutSelect').value;
+    const layout = mockMode ? 'mock_exam' : document.getElementById('pdfLayoutSelect').value;
     let confirmOverCap = false;
     if (layout === 'scanned') {
       const statusEl = document.getElementById('scanStatus');
@@ -1776,9 +1886,12 @@
       : 'Scanning your PDF... this can take a while for many pages.';
     document.getElementById('flaggedPagesBanner').style.display = 'none';
     document.getElementById('scanModeHint').style.display = 'none';
+    document.getElementById('mockCompletenessPanel').style.display = 'none';
     try {
       const b64 = await fileToBase64(file);
-      const body = { subject: currentSubject, data: b64, filename: file.name, layout, language: currentLanguage };
+      const body = mockMode
+        ? { data: b64, filename: file.name, layout, mock_name: currentMockName }
+        : { subject: currentSubject, data: b64, filename: file.name, layout, language: currentLanguage };
       if (layout === 'scanned') body.confirm_over_cap = confirmOverCap;
       let data;
       if (layout === 'scanned_ocr') {
@@ -1800,8 +1913,12 @@
       currentProcessedPdfId = data.processed_pdf_id || null;
       if (data.error) { statusEl.textContent = 'Scan failed: ' + data.error; return; }
       statusEl.style.display = 'none';
-      const filenameMatch = matchChapterFromFilename(file.name, allChaptersForSubject(currentSubject));
-      scanFilenameMatch = (filenameMatch && filenameMatch.score >= FILENAME_MATCH_THRESHOLD && !filenameMatch.tied) ? filenameMatch : null;
+      if (!mockMode) {
+        const filenameMatch = matchChapterFromFilename(file.name, allChaptersForSubject(currentSubject));
+        scanFilenameMatch = (filenameMatch && filenameMatch.score >= FILENAME_MATCH_THRESHOLD && !filenameMatch.tied) ? filenameMatch : null;
+      } else {
+        scanFilenameMatch = null; // filename-based chapter matching is PYQ-mode only
+      }
       blocks = (data.questions || []).map(q => ({
         id: 'b' + (blockIdSeq++),
         question: q.question, option_a: q.option_a, option_b: q.option_b, option_c: q.option_c, option_d: q.option_d,
@@ -1811,6 +1928,12 @@
         year: q.year, source_page: q.source_page,
         // Only scanned mode returns the printed question number; the other modes keep auto-numbering.
         display_number: q.question_number != null ? String(q.question_number) : null,
+        // Mock exam mode only (mock_exam_columns.sql) -- subject/mock_position are per-block
+        // (detected from the page header + printed question number), reviewer-correctable.
+        subject: mockMode ? q.subject : null,
+        mock_position: mockMode ? q.mock_position : null,
+        needs_review: mockMode ? !!q.needs_review : false,
+        review_reason: mockMode ? (q.review_reason || null) : null,
         saved: false, savePending: false
       }));
       document.getElementById('statPageCount').textContent = data.pages_scanned || 0;
@@ -1818,6 +1941,7 @@
       updateSummaryBar();
       document.getElementById('summaryBar').style.display = 'flex';
       renderFlaggedPagesBanner(data.flagged_pages || []);
+      if (mockMode) renderMockCompletenessPanel(data.completeness || {});
       if (data.cost && layout === 'scanned_ocr') {
         statusEl.style.display = 'block';
         const cachedNote = data.cost.pages_cached ? `, ${data.cost.pages_cached} from cache` : '';
@@ -1834,8 +1958,37 @@
       statusEl.textContent = 'Scan failed — check connection and try again.';
     } finally {
       document.getElementById('scanProgress').style.display = 'none';
-      scanBtn.disabled = !currentSubject || !document.getElementById('pdfFile').files[0];
+      scanBtn.disabled = (mockMode ? !currentMockName : !currentSubject) || !document.getElementById('pdfFile').files[0];
     }
+  }
+
+  // ---------------- Mock exam completeness panel ----------------
+  // Pure display of scan_mock_exam_pdf's completeness report (process_pyq_vision.py) -- no model
+  // call, computed server-side from the PDF's own printed question numbers. Reused as-is on a
+  // fresh scan; the reviewer fixes gaps by re-scanning or by correcting a block's subject/position.
+  function renderMockCompletenessPanel(completeness) {
+    const panel = document.getElementById('mockCompletenessPanel');
+    const subjects = ['Physics', 'Chemistry', 'Biology'];
+    if (!subjects.some(s => completeness[s])) { panel.style.display = 'none'; return; }
+    panel.style.background = '#4f8ef715';
+    panel.style.border = '1px solid #4f8ef750';
+    panel.style.borderRadius = '10px';
+    panel.style.padding = '12px 14px';
+    panel.style.marginBottom = '16px';
+    panel.style.fontSize = '12px';
+    panel.innerHTML = subjects.map(s => {
+      const c = completeness[s] || { expected: 0, found_count: 0, missing: [], duplicates: [], out_of_range: [] };
+      const complete = c.found_count === c.expected && c.duplicates.length === 0 && c.out_of_range.length === 0;
+      const parts = [];
+      if (c.missing.length) parts.push(`missing ${c.missing.slice(0, 20).join(', ')}${c.missing.length > 20 ? '…' : ''}`);
+      if (c.duplicates.length) parts.push(`repeated ${c.duplicates.join(', ')}`);
+      if (c.out_of_range.length) parts.push(`out of range ${c.out_of_range.join(', ')}`);
+      const color = complete ? '#4f8ef7' : '#ef4444';
+      return `<div style="margin-bottom:4px;color:${color};">
+        <b>${escapeHtml(s)}</b>: ${c.found_count}/${c.expected}${complete ? ' - complete' : ' - ' + escapeHtml(parts.join('; '))}
+      </div>`;
+    }).join('');
+    panel.style.display = 'block';
   }
 
   // Free OCR mode runs as a server-side job (a long chapter would outlast one request): start it,
@@ -2204,7 +2357,7 @@
     // Every real NCERT chapter for this subject is selectable, not just ones that already have
     // tagged rows - otherwise a confident filename/TF-IDF match to a never-before-tagged chapter
     // would have no matching <option> to select at all.
-    allChaptersForSubject(currentSubject).forEach(name => {
+    allChaptersForSubject(mockMode ? block.subject : currentSubject).forEach(name => {
       const sel = name === suggestedChapter ? ' selected' : '';
       html += `<option value="${escapeHtml(name)}"${sel}>${escapeHtml(name)}</option>`;
     });
@@ -2246,6 +2399,20 @@
           <button type="button" class="danger-link" onclick="removeBlock('${b.id}')">Remove</button>
         </div>
       </div>
+
+      ${mockMode ? `
+      <div class="q-meta-grid" style="margin-bottom:10px;">
+        <div class="q-field"><label>Subject</label>
+          <select id="subject-${b.id}" onchange="onMockSubjectChange('${b.id}')">
+            ${MOCK_EXAM_SUBJECTS.map(s => `<option value="${s}"${s === b.subject ? ' selected' : ''}>${s}</option>`).join('')}
+          </select>
+        </div>
+        <div class="q-field"><label>Position (1-180)</label>
+          <input type="number" min="1" max="180" id="position-${b.id}" value="${b.mock_position != null ? b.mock_position : ''}"/>
+        </div>
+      </div>
+      ${b.review_reason ? `<div class="q-dup-warning warn" style="display:block;">${escapeHtml(b.review_reason)}</div>` : ''}
+      ` : ''}
 
       <div class="q-field">
         <div class="q-field-label-row"><label>Question</label><button type="button" class="formula-btn" onclick="openFormulaEditor('q-text-${b.id}')">∑ Formula</button></div>
@@ -2340,6 +2507,10 @@
   function renderAllBlocks() {
     const container = document.getElementById('blocksContainer');
     blocks.forEach(b => {
+      // TF-IDF chapter suggestion is PYQ-mode only -- mock mode spans 3 subjects per upload and
+      // skips it entirely (see mockExistingRowsBySubject's own comment); the reviewer picks each
+      // block's chapter manually from the same syllabus-backed dropdown instead.
+      if (mockMode) { b._suggestion = null; return; }
       // A confident whole-PDF filename match (e.g. "Cell the Unit of Life - PYQ.pdf") is a
       // stronger signal than any one question's own TF-IDF match, so it takes priority.
       b._suggestion = scanFilenameMatch
@@ -2512,7 +2683,12 @@
       source_tag: document.getElementById('source-tag-' + id).value.trim() || null,
       class_: document.getElementById('class-' + id).value ? parseInt(document.getElementById('class-' + id).value, 10) : null,
       chapter: document.getElementById('chapter-' + id).value || null,
-      has_diagram: document.getElementById('hasdiagram-' + id).checked
+      has_diagram: document.getElementById('hasdiagram-' + id).checked,
+      // Mock exam mode only -- present only when blockTemplate rendered the subject/position row.
+      subject: document.getElementById('subject-' + id) ? document.getElementById('subject-' + id).value : null,
+      mock_position: document.getElementById('position-' + id)
+        ? (document.getElementById('position-' + id).value ? parseInt(document.getElementById('position-' + id).value, 10) : null)
+        : null
     };
   }
 
@@ -2776,6 +2952,25 @@
     window['dupTimer' + id] = setTimeout(() => runDuplicateCheck(id), 600);
   }
 
+  // Mock exam mode's own per-block subject/duplicate-corpus lookup -- PYQ mode keeps using the
+  // single global currentSubject/existingRows everywhere else unchanged.
+  function blockSubject(block) {
+    return mockMode ? (block.subject || MOCK_EXAM_SUBJECTS[0]) : currentSubject;
+  }
+  function existingRowsFor(block) {
+    return mockMode ? (mockExistingRowsBySubject[blockSubject(block)] || []) : existingRows;
+  }
+
+  function onMockSubjectChange(id) {
+    const idx = findBlockIndex(id);
+    if (idx === -1) return;
+    blocks[idx].subject = document.getElementById('subject-' + id).value;
+    const chapterSel = document.getElementById('chapter-' + id);
+    if (chapterSel) chapterSel.innerHTML = buildChapterOptionsHtml(blocks[idx]);
+    runDuplicateCheck(id);
+    scheduleAutoSave();
+  }
+
   function runDuplicateCheck(id) {
     const idx = findBlockIndex(id);
     if (idx === -1) return;
@@ -2783,7 +2978,7 @@
     if (!text.trim()) { document.getElementById('dup-warning-' + id).className = 'q-dup-warning'; return; }
     const chapterSel = document.getElementById('chapter-' + id);
     const scopeChapter = chapterSel ? chapterSel.value : null;
-    const result = checkDuplicates(existingRows, text, scopeChapter);
+    const result = checkDuplicates(existingRowsFor(blocks[idx]), text, scopeChapter);
     const warnEl = document.getElementById('dup-warning-' + id);
     if (result.exactMatch) {
       warnEl.textContent = 'This looks identical to an existing question in the bank — you can still save it (click Save twice), then clean it up later if it really is a duplicate.';
@@ -2802,7 +2997,8 @@
     const chapter = document.getElementById('chapter-' + id).value;
     const classSel = document.getElementById('class-' + id);
     if (chapter && classSel && !classSel.value) {
-      const cls = resolveClassForChapter(currentSubject, chapter);
+      const idx = findBlockIndex(id);
+      const cls = resolveClassForChapter(idx !== -1 ? blockSubject(blocks[idx]) : currentSubject, chapter);
       if (cls) classSel.value = cls;
     }
     runDuplicateCheck(id);
@@ -2960,8 +3156,14 @@
   // ---------------- Save ----------------
 
   function buildCreatePayload(id) {
-    const fields = readBlockFromDom(id);
-    return Object.assign({ subject: currentSubject, language: currentLanguage, source_pdf_filename: currentPdfFilename }, fields);
+    // subject/mock_position are destructured OUT of fields before merging -- in PYQ mode
+    // they're always null (readBlockFromDom's mock-only fields), and merging them back in would
+    // clobber the subject/mock_position this function computes just below.
+    const { subject: domSubject, mock_position: domPosition, ...fields } = readBlockFromDom(id);
+    const base = mockMode
+      ? { subject: domSubject || MOCK_EXAM_SUBJECTS[0], source: 'mock', mock_name: currentMockName, mock_position: domPosition, source_pdf_filename: currentPdfFilename }
+      : { subject: currentSubject, language: currentLanguage, source_pdf_filename: currentPdfFilename };
+    return Object.assign(base, fields);
   }
 
   async function saveBlock(id) {
@@ -2969,7 +3171,7 @@
     if (idx === -1) return;
     const block = blocks[idx];
     const fields = readBlockFromDom(id);
-    const result = checkDuplicates(existingRows, fields.question, fields.chapter);
+    const result = checkDuplicates(existingRowsFor(block), fields.question, fields.chapter);
     const btn = document.getElementById('save-btn-' + id);
 
     if (result.exactMatch && !block._dupConfirmed) {
@@ -3024,7 +3226,7 @@
         return;
       }
       block.saved = true;
-      existingRows.push({ question: fields.question, chapter: fields.chapter, class: fields.class_ });
+      existingRowsFor(block).push({ question: fields.question, chapter: fields.chapter, class: fields.class_ });
       btn.textContent = 'Saved';
       document.getElementById('saved-badge-' + id).style.display = 'inline-flex';
       document.getElementById('block-' + id).classList.add('is-saved');
@@ -3072,12 +3274,18 @@
       let warnedCount = 0;
       let dupCount = 0;
       unsaved.forEach(b => {
-        const fields = readBlockFromDom(b.id);
-        if (!fields.question) { skipped.push(b.id); return; }
-        const result = checkDuplicates(existingRows, fields.question, fields.chapter);
+        const domFields = readBlockFromDom(b.id);
+        if (!domFields.question) { skipped.push(b.id); return; }
+        const result = checkDuplicates(existingRowsFor(b), domFields.question, domFields.chapter);
         if (result.exactMatch) dupCount++;
         else if (result.similar.length > 0) warnedCount++;
-        const payload = Object.assign({ subject: currentSubject, language: currentLanguage, source_pdf_filename: currentPdfFilename }, fields);
+        // Same destructure-then-merge shape as buildCreatePayload, same reasoning: in PYQ mode
+        // domFields.subject/mock_position are always null and must not clobber the values below.
+        const { subject: domSubject, mock_position: domPosition, ...fields } = domFields;
+        const base = mockMode
+          ? { subject: domSubject || MOCK_EXAM_SUBJECTS[0], source: 'mock', mock_name: currentMockName, mock_position: domPosition, source_pdf_filename: currentPdfFilename }
+          : { subject: currentSubject, language: currentLanguage, source_pdf_filename: currentPdfFilename };
+        const payload = Object.assign(base, fields);
         payload.diagram_url = b.diagram_url;
         payload.option_a_diagram_url = b.option_a_diagram_url;
         payload.option_b_diagram_url = b.option_b_diagram_url;
@@ -3105,7 +3313,7 @@
           const block = blocks[findBlockIndex(t.id)];
           if (!block) return;
           block.saved = true;
-          existingRows.push({ question: t.payload.question, chapter: t.payload.chapter, class: t.payload.class_ });
+          existingRowsFor(block).push({ question: t.payload.question, chapter: t.payload.chapter, class: t.payload.class_ });
           const btn = document.getElementById('save-btn-' + t.id);
           if (btn) { btn.textContent = 'Saved'; btn.disabled = true; }
           const badge = document.getElementById('saved-badge-' + t.id);

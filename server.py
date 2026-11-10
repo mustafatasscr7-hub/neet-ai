@@ -375,7 +375,7 @@ qwen_async_client = openai.AsyncOpenAI(api_key=QWEN_API_KEY, base_url="https://d
 # application/pdf the same way it handles images -- see the pdf branch in stream_response().
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 import requests as http_requests
-from process_pyq_vision import scan_pdf_bytes, scan_mock_test_pdf
+from process_pyq_vision import scan_pdf_bytes, scan_mock_test_pdf, scan_mock_exam_pdf
 from process_pyq_book_3col import scan_book_pdf_bytes
 from process_pyq_scanned import scan_scanned_pdf_bytes, estimate_scanned_pdf_cost, DEFAULT_MAX_PAGES as SCANNED_DEFAULT_MAX_PAGES
 from process_pyq_scanned_ocr import scan_ocr_pdf_bytes, start_ocr_job, get_ocr_job, ocr_job_is_live
@@ -1149,6 +1149,10 @@ class ScanPdfRequest(BaseModel):
     # vision) -- also never auto-selected, for the same reason.
     # "scanned_ocr" = process_pyq_scanned_ocr's free variant of the same: local OCR + rules, $0,
     # no model call (the OCR engine is imported lazily, so the server starts without it).
+    # "mock_exam" = process_pyq_vision's scan_mock_exam_pdf: one full NEET-pattern mock paper
+    # (Physics+Chemistry+Biology in one PDF), subject and section boundaries detected from the
+    # page text itself instead of a single subject supplied by the admin. req.subject is ignored
+    # for this layout; req.mock_name is required instead.
     layout: str = "standard"
     # Scanned mode only: a PDF over its per-run page cap is refused unless the admin confirmed.
     confirm_over_cap: bool = False
@@ -1156,6 +1160,8 @@ class ScanPdfRequest(BaseModel):
     # two-pass Gemini-vision mode); admin_scan_pdf rejects "hi" with any other layout. See
     # pyq_language.sql.
     language: str = "en"
+    # Mock exam layout only -- e.g. "Mock Test 1". Becomes every extracted row's pyq.mock_name.
+    mock_name: Optional[str] = None
 
 class ScanPdfEstimateRequest(BaseModel):
     subject: str
@@ -1283,6 +1289,12 @@ class PyqQuestionCreate(BaseModel):
     # uploader name it had before deletion. A contractor's request never sets this (only the
     # admin-key branch in pyq-bulk-create reads it).
     uploader_name: Optional[str] = None
+    # Mock exam mode only (mock_exam_columns.sql) -- "pyq" (default, every existing caller) or
+    # "mock". None/"pyq" omits the column entirely on insert, same reasoning as source_pdf_filename
+    # above: the column needs that migration's `alter table` before it exists.
+    source: Optional[str] = None
+    mock_name: Optional[str] = None
+    mock_position: Optional[int] = None
 
 class PyqBulkCreate(BaseModel):
     questions: List[PyqQuestionCreate]
@@ -4048,9 +4060,11 @@ PYQ_CARD_COLUMNS = "id,subject,chapter,year,question,option_a,option_b,option_c,
 # The one filter every student-facing pyq read adds (add_pyq_review_status.sql). is_active is the
 # report/deactivate switch; review_status keeps contractor uploads hidden until an admin approves
 # them (pending / needs_fix never reach a student). language keeps Hindi PYQ rows (pyq_language.sql)
-# out of every student surface for now, regardless of review_status -- see requirement 5. test_pyq_
-# review_gate.py fails if a student path reads pyq without it.
-PYQ_STUDENT_VISIBLE = {"is_active": "eq.true", "review_status": "eq.approved", "language": "eq.en"}
+# out of every student surface for now, regardless of review_status -- see requirement 5. source
+# keeps mock-exam rows (mock_exam_columns.sql) out of every real-PYQ student surface too -- the
+# fixed mock test experience reads mock_tests/mock_test_questions instead, never this table. test_
+# pyq_review_gate.py fails if a student path reads pyq without it.
+PYQ_STUDENT_VISIBLE = {"is_active": "eq.true", "review_status": "eq.approved", "language": "eq.en", "source": "eq.pyq"}
 
 async def _backfill_pyq_chapters(results: list, headers: dict) -> list:
     """match_pyq (the RPC search_pyq below calls into) doesn't return a chapter column, so this
@@ -9773,9 +9787,12 @@ async def referral_status(verified_user_id: str = Depends(_get_verified_user_id)
 @app.get("/admin/pyq-stats")
 async def admin_pyq_stats(_: None = Depends(verify_admin)):
     try:
-        total_active = _admin_count({"is_active": "eq.true"})
-        empty_answer = _admin_count({"is_active": "eq.true", "or": "(correct_answer.is.null,correct_answer.eq.)"})
-        empty_chapter = _admin_count({"is_active": "eq.true", "or": "(chapter.is.null,chapter.eq.)"})
+        # source=eq.pyq throughout -- this is the real-PYQ bank's own coverage/data-quality
+        # snapshot (chapter tagging, answer completeness); mock rows (mock_exam_columns.sql)
+        # would only distort it, and they're reviewed through a separate flow anyway.
+        total_active = _admin_count({"is_active": "eq.true", "source": "eq.pyq"})
+        empty_answer = _admin_count({"is_active": "eq.true", "source": "eq.pyq", "or": "(correct_answer.is.null,correct_answer.eq.)"})
+        empty_chapter = _admin_count({"is_active": "eq.true", "source": "eq.pyq", "or": "(chapter.is.null,chapter.eq.)"})
         return {
             "total_active": total_active,
             "empty_correct_answer": empty_answer,
@@ -10121,18 +10138,24 @@ def _pyq_dup_tokens(row: dict) -> set:
 # same column list /admin/pyq-search's full=true uses, so a row read from here looks exactly
 # like one read from there.
 PYQ_DUP_CORPUS_SELECT = (
-    "id,subject,language,chapter,question,option_a,option_b,option_c,option_d,correct_answer,"
+    "id,subject,language,source,chapter,question,option_a,option_b,option_c,option_d,correct_answer,"
     "is_active,year,source_tag,class,has_diagram,diagram_url,option_a_diagram_url,"
     "option_b_diagram_url,option_c_diagram_url,option_d_diagram_url,created_at,"
     "review_status,review_note,uploaded_by,uploaded_at,uploader_name"
 )
 
-async def _pyq_dup_corpus(subject: str, language: str = "en", include_rejected: bool = False):
-    """[(id, tokens, row)] for every pyq row in the (subject, language) pair, any status --
-    cached briefly since the review page asks for it on every page turn. None if the read fails
-    (the duplicate check is then skipped, never guessed). Scoped by language too (pyq_language.sql,
-    requirement 3: "compare only within the same language") -- a Hindi row should never be flagged
-    as a duplicate of an unrelated English one just because the token overlap happens to match.
+async def _pyq_dup_corpus(subject: str, language: str = "en", include_rejected: bool = False, source: str = "pyq"):
+    """[(id, tokens, row)] for every pyq row in the (subject, language, source) triple, any
+    status -- cached briefly since the review page asks for it on every page turn. None if the
+    read fails (the duplicate check is then skipped, never guessed). Scoped by language too
+    (pyq_language.sql, requirement 3: "compare only within the same language") -- a Hindi row
+    should never be flagged as a duplicate of an unrelated English one just because the token
+    overlap happens to match.
+
+    source="pyq" (the default, every existing caller) keeps mock-exam rows (mock_exam_columns.sql)
+    out of every real-PYQ duplicate check -- "PYQ checks ignore mock rows". Mock review passes
+    source="mock" instead, so a mock row is only ever compared against other mock rows, never
+    against real PYQs, regardless of mock_name.
 
     The language filter is applied in Python, AFTER the fetch, rather than as a `language=eq.X`
     REST param: a row with no language value at all (any gap before pyq_language.sql's backfill
@@ -10145,14 +10168,14 @@ async def _pyq_dup_corpus(subject: str, language: str = "en", include_rejected: 
     signal against a real question someone is actively reviewing. include_rejected=True (used by
     /admin/pyq-matches' cross-check panel) keeps them -- that panel's whole job is to show what a
     stored "Duplicate" pill actually matched, even if the other copy has since been rejected."""
-    cache_key = (subject, language, include_rejected)
+    cache_key = (subject, language, include_rejected, source)
     hit = _pyq_dup_corpus_cache.get(cache_key)
     if hit and time.time() - hit[0] < PYQ_DUP_CORPUS_TTL:
         return hit[1]
     rows, offset, page_size = [], 0, 1000
     while True:
         params = {"subject": f"eq.{subject}", "select": PYQ_DUP_CORPUS_SELECT,
-                  "order": "id.asc", "limit": page_size, "offset": offset}
+                  "order": "id.asc", "limit": page_size, "offset": offset, "source": f"eq.{source}"}
         if not include_rejected:
             params["review_status"] = "neq.rejected"
         resp = await async_client.get(f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS, params=params)
@@ -10209,24 +10232,28 @@ def _dup_matches(row_id, tokens: set, corpus: list, threshold: float, cap: int =
 
 async def _attach_pyq_review_warnings(rows: list):
     """Adds row["warnings"] = [{code, text}] to each row. The duplicate check (a (subject,
-    language)-wide sweep -- see pyq_language.sql, requirement 3) only runs for rows still waiting
-    on review."""
+    language, source)-wide sweep -- see pyq_language.sql, requirement 3, and mock_exam_columns.sql
+    "PYQ checks ignore mock rows") only runs for rows still waiting on review."""
     for row in rows:
         row["warnings"] = _pyq_basic_warnings(row)
     to_check = [r for r in rows if r.get("review_status") != "approved" and r.get("subject") and r.get("id")]
-    pairs = sorted({(r["subject"], r.get("language") or "en") for r in to_check})
-    corpora = dict(zip(pairs, await asyncio.gather(*[_pyq_dup_corpus(s, lang) for s, lang in pairs])))
+    triples = sorted({(r["subject"], r.get("language") or "en", r.get("source") or "pyq") for r in to_check})
+    corpora = dict(zip(triples, await asyncio.gather(
+        *[_pyq_dup_corpus(s, lang, source=src) for s, lang, src in triples]
+    )))
 
     def scan():
-        for subject, language in pairs:
-            corpus = corpora.get((subject, language))
+        for subject, language, source in triples:
+            corpus = corpora.get((subject, language, source))
             if corpus is None:
                 continue
             # This page's own rows too, in case they were saved after the cached corpus was read.
             known = {i for i, _, _ in corpus}
             combined = corpus + [(o["id"], _pyq_dup_tokens(o), o) for o in rows
-                                  if o.get("subject") == subject and (o.get("language") or "en") == language and o.get("id") not in known]
-            for row in (r for r in to_check if r["subject"] == subject and (r.get("language") or "en") == language):
+                                  if o.get("subject") == subject and (o.get("language") or "en") == language
+                                  and (o.get("source") or "pyq") == source and o.get("id") not in known]
+            for row in (r for r in to_check if r["subject"] == subject and (r.get("language") or "en") == language
+                        and (r.get("source") or "pyq") == source):
                 tokens = _pyq_dup_tokens(row)
                 if not tokens:
                     continue
@@ -10643,20 +10670,25 @@ async def admin_contractor_tally(_: None = Depends(verify_admin)):
     batches."""
     try:
         async def tally_for(name):
-            (uploaded, approved, pending, needs_fix, deleted), reject_breakdown = await asyncio.gather(
+            # mock_count: how many of this uploader's current rows are mock-exam questions
+            # (mock_exam_columns.sql) -- already included in `uploaded`/the payable amount below
+            # (_log_pyq_upload logs any new contractor row regardless of source), this is purely
+            # a visibility breakdown, same reasoning as the rejected/needs_fix splits.
+            (uploaded, approved, pending, needs_fix, deleted, mock_count), reject_breakdown = await asyncio.gather(
                 asyncio.gather(
                     _pyq_uploaded_total(name),
                     _pyq_count({"review_status": "eq.approved", "uploader_name": f"eq.{name}"}),
                     _pyq_count({"review_status": "eq.pending", "uploader_name": f"eq.{name}"}),
                     _pyq_count({"review_status": "eq.needs_fix", "uploader_name": f"eq.{name}"}),
                     _pyq_delete_log_count(name),
+                    _pyq_count({"uploader_name": f"eq.{name}", "source": "eq.mock"}),
                 ),
                 _pyq_reject_breakdown(name),
             )
             return {
                 "uploader_name": name, "uploaded": uploaded, "approved": approved,
                 "pending": pending, "needs_fix": needs_fix, **reject_breakdown,
-                "deleted": deleted,
+                "deleted": deleted, "mock_count": mock_count,
                 **_pyq_payable_amount(uploaded, reject_breakdown["rejected_errors"],
                                        reject_breakdown["duplicates_deducted"]),
                 "target": PYQ_PAYOUT_TARGET,
@@ -10957,7 +10989,7 @@ async def _auto_dup_corpus(subject: str, language: str = "en"):
         resp = await async_client.get(
             f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
             params={"subject": f"eq.{subject}", "select": "id,language,question,option_a,option_b,option_c,option_d",
-                    "is_active": "eq.true", "review_status": "neq.rejected",
+                    "is_active": "eq.true", "review_status": "neq.rejected", "source": "eq.pyq",
                     "order": "id.asc", "limit": page_size, "offset": offset}
         )
         page = resp.json() if resp.status_code < 400 else None
@@ -11086,8 +11118,14 @@ async def _auto_check_new_rows_background(rows: list):
     """Called (fire-and-forget) right after pyq-bulk-create inserts new rows, so a contractor
     upload already has auto_pass/auto_reasons the first time it shows up in review. Must never
     fail or slow the upload itself -- every failure here is caught and only printed, same
-    reasoning as _log_pyq_upload/_embed_pyq_row_background above."""
+    reasoning as _log_pyq_upload/_embed_pyq_row_background above.
+
+    Mock rows (row["source"] == "mock", mock_exam_columns.sql) are filtered out before this ever
+    reaches _auto_check_and_patch_rows -- that function can set auto_pass/auto_approved and (with
+    allow_approve=True, its default here) flip review_status straight to "approved", which must
+    never happen to a mock row. Mock questions are never auto-approved, full stop."""
     try:
+        rows = [r for r in rows if r.get("source") != "mock"]
         if not rows or not await _pyq_auto_columns_exist():
             return
         await _auto_check_and_patch_rows(rows)
@@ -11114,20 +11152,23 @@ def _invalidate_pyq_dup_caches(pairs) -> None:
     before the next request) that task actually runs.
 
     _auto_dup_corpus_cache is keyed (subject, language). _pyq_dup_corpus_cache (the older
-    Duplicates-tool/cross-check-panel cache) is keyed (subject, language, include_rejected) --
-    both the True and False variant are cached separately (see _pyq_dup_corpus), so both must be
-    popped here or the include_rejected=True entry (used by /admin/pyq-matches) would keep
-    serving a corpus containing a row that's since been hard-deleted. (A plain (subject,
-    language) pop here was the pre-existing bug behind admin_pyq_delete's own cache-invalidation
-    comment never actually working -- fixed here rather than left in place, since this function
-    now owns that invalidation.)"""
+    Duplicates-tool/cross-check-panel cache) is keyed (subject, language, include_rejected,
+    source) -- every include_rejected/source combination is cached separately (see
+    _pyq_dup_corpus), so all four must be popped here or e.g. the include_rejected=True entry
+    (used by /admin/pyq-matches) would keep serving a corpus containing a row that's since been
+    hard-deleted. (A plain (subject, language) pop here was the pre-existing bug behind
+    admin_pyq_delete's own cache-invalidation comment never actually working -- fixed here rather
+    than left in place, since this function now owns that invalidation.) The caller doesn't
+    generally know a changed row's source, so both "pyq" and "mock" are popped unconditionally --
+    harmless over-invalidation (an extra corpus rebuild), never a staleness bug."""
     for subject, language in pairs:
         if not subject:
             continue
         language = language or "en"
         _auto_dup_corpus_cache.pop((subject, language), None)
-        _pyq_dup_corpus_cache.pop((subject, language, False), None)
-        _pyq_dup_corpus_cache.pop((subject, language, True), None)
+        for include_rejected in (False, True):
+            for source in ("pyq", "mock"):
+                _pyq_dup_corpus_cache.pop((subject, language, include_rejected, source), None)
 
 def _pyq_rows_for_duplicate_recheck(rows: list, language: str) -> list:
     """Pure filter used by _recheck_duplicate_flagged_rows, split out so it's testable without a
@@ -11213,7 +11254,7 @@ async def admin_pyq_auto_check(recheck: bool = False, offset: int = 0, _: None =
     if not await _pyq_auto_columns_exist():
         return {"error": PYQ_AUTO_APPROVE_MIGRATION_ERROR}
     try:
-        params = {"review_status": "eq.pending", "select": PYQ_AUTO_CHECK_SELECT,
+        params = {"review_status": "eq.pending", "source": "eq.pyq", "select": PYQ_AUTO_CHECK_SELECT,
                   "order": "id.asc", "limit": 500}
         if recheck:
             params["offset"] = offset
@@ -11247,7 +11288,12 @@ async def admin_pyq_auto_approve_all(body: PyqAutoApproveAllRequest, _: None = D
     if not await _pyq_auto_columns_exist():
         return {"error": PYQ_AUTO_APPROVE_MIGRATION_ERROR}
     try:
-        current = await _pyq_count({"review_status": "eq.pending", "auto_pass": "eq.true"})
+        # source=eq.pyq is belt-and-suspenders here -- admin_pyq_auto_check already never sets
+        # auto_pass on a mock row (it excludes them from its own candidate query) -- but a bulk
+        # "approve everything auto_pass=true" sweep is exactly the kind of operation that must
+        # never be allowed to catch a mock row even if that invariant were ever broken elsewhere.
+        # Mock questions are never auto-approved, full stop (see mock_exam_columns.sql).
+        current = await _pyq_count({"review_status": "eq.pending", "auto_pass": "eq.true", "source": "eq.pyq"})
         if not _auto_approve_all_count_ok(body.expected_count, current):
             return {"count_changed": True, "current_count": current}
         if current == 0:
@@ -11256,7 +11302,7 @@ async def admin_pyq_auto_approve_all(body: PyqAutoApproveAllRequest, _: None = D
         resp = await async_client.patch(
             f"{SUPABASE_URL}/rest/v1/pyq",
             headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
-            params={"review_status": "eq.pending", "auto_pass": "eq.true", "select": "id"},
+            params={"review_status": "eq.pending", "auto_pass": "eq.true", "source": "eq.pyq", "select": "id"},
             json={"review_status": "approved", "auto_approved": True, "reviewed_by": "auto-bulk", "reviewed_at": now}
         )
         if resp.status_code >= 400:
@@ -12024,10 +12070,15 @@ async def admin_pyq_backfill_correct_answer(limit: int = 200, _: None = Depends(
     string for an unresolved row (never NULL -- confirmed against real data), so the filter is
     eq.<empty> rather than is.null."""
     try:
+        # source=eq.pyq -- this is a backlog sweep over the real PYQ bank's own legacy blank-
+        # answer debris. Mock rows start blank by design too (mock_exam_columns.sql requires
+        # every one go through interactive review, answers included -- see the mock exam review
+        # flow in admin-pdf-review.html), so they must resolve through that reviewer-driven
+        # per-question flow, never silently picked up by an unrelated background sweep.
         resp = await async_client.get(
             f"{SUPABASE_URL}/rest/v1/pyq",
             headers=ADMIN_HEADERS,
-            params={"correct_answer": "eq.",
+            params={"correct_answer": "eq.", "source": "eq.pyq",
                     "select": "id,question,option_a,option_b,option_c,option_d",
                     "limit": str(limit)}
         )
@@ -12087,7 +12138,7 @@ async def admin_pyq_backfill_correct_answer(limit: int = 200, _: None = Depends(
     count_resp = await async_client.head(
         f"{SUPABASE_URL}/rest/v1/pyq",
         headers={**ADMIN_HEADERS, "Prefer": "count=exact"},
-        params={"correct_answer": "eq.", "select": "id"}
+        params={"correct_answer": "eq.", "source": "eq.pyq", "select": "id"}
     )
     remaining = int(count_resp.headers.get("content-range", "*/0").split("/")[-1])
 
@@ -12398,10 +12449,13 @@ def _update_processed_pdf_row(row_id, status: str, questions_extracted=None, err
 def admin_scan_pdf(req: ScanPdfRequest, _: None = Depends(verify_admin_or_contractor_pdf), __: None = Depends(rate_limit(10, 300, by="ip"))):
     # Deliberately sync (not async def): FastAPI runs sync path functions in a thread pool,
     # so this multi-second-to-multi-minute call doesn't block the event loop for other requests.
-    if req.subject not in ("Biology", "Physics", "Chemistry"):
-        return {"error": "Invalid subject"}
-    if req.layout not in ("standard", "3col_book", "scanned", "scanned_ocr"):
+    if req.layout not in ("standard", "3col_book", "scanned", "scanned_ocr", "mock_exam"):
         return {"error": "Invalid layout"}
+    if req.layout == "mock_exam":
+        if not req.mock_name or not req.mock_name.strip():
+            return {"error": "Mock name is required for the mock exam layout"}
+    elif req.subject not in ("Biology", "Physics", "Chemistry"):
+        return {"error": "Invalid subject"}
     if req.language not in ("en", "hi"):
         return {"error": "Invalid language"}
     if req.language == "hi" and not HINDI_UPLOADS_ENABLED:
@@ -12426,9 +12480,16 @@ def admin_scan_pdf(req: ScanPdfRequest, _: None = Depends(verify_admin_or_contra
         if page_count > SCANNED_DEFAULT_MAX_PAGES:
             return {"error": f"This PDF has {page_count} pages, over the {SCANNED_DEFAULT_MAX_PAGES}-page cap for one scanned-mode run. Confirm to run it anyway.", "needs_confirmation": True, "pages": page_count}
 
-    processed_pdf_id = _create_processed_pdf_row(req.filename, req.subject) if req.filename else None
+    # "Mock: <name>" so a mock upload's processed_pdfs row is clearly distinct from a real PYQ
+    # subject row at a glance (Processed PDFs list, chapter-gap summary) without needing a new
+    # column there -- chapter-gap detection only ever looks for real subject names, so this value
+    # simply never matches any chapter and is harmless to that logic.
+    tracking_subject = f"Mock: {req.mock_name.strip()}" if req.layout == "mock_exam" else req.subject
+    processed_pdf_id = _create_processed_pdf_row(req.filename, tracking_subject) if req.filename else None
     try:
-        if req.layout == "scanned":
+        if req.layout == "mock_exam":
+            result = scan_mock_exam_pdf(pdf_bytes, req.mock_name.strip())
+        elif req.layout == "scanned":
             result = scan_scanned_pdf_bytes(pdf_bytes, req.subject, confirm_over_cap=req.confirm_over_cap, language=req.language)
         elif req.layout == "scanned_ocr":
             result = scan_ocr_pdf_bytes(pdf_bytes, req.subject)
@@ -12630,9 +12691,15 @@ def admin_scan_pdf_estimate(req: ScanPdfEstimateRequest, _: None = Depends(verif
         return {"error": f"Could not read PDF: {e}"}
 
 @app.get("/admin/pyq-classifier-data")
-async def admin_pyq_classifier_data(subject: str, _: None = Depends(verify_admin_or_contractor_pdf)):
+async def admin_pyq_classifier_data(subject: str, source: str = "pyq", _: None = Depends(verify_admin_or_contractor_pdf)):
+    """source="pyq" (default, every existing caller) -- chapter-classifier training data and the
+    frontend's exact-duplicate corpus both stay real-PYQ-only, same "PYQ checks ignore mock rows"
+    rule as _pyq_dup_corpus. Mock mode passes source="mock" to get its own frontend dup corpus,
+    scoped to only other mock rows (mock_exam_columns.sql) -- never compared across the two."""
     if subject not in ("Biology", "Physics", "Chemistry"):
         return {"error": "Invalid subject"}
+    if source not in ("pyq", "mock"):
+        return {"error": "Invalid source"}
     try:
         # await async_client (not blocking http_requests) -- same reasoning as pyq-chapters above.
         # Also paginated, not a single limit:3000 request: PostgREST caps a single response at
@@ -12655,6 +12722,7 @@ async def admin_pyq_classifier_data(subject: str, _: None = Depends(verify_admin
         params_base = {
             "subject": f"eq.{subject}",
             "is_active": "eq.true",
+            "source": f"eq.{source}",
             "select": "question,chapter,class",
             "order": "id.asc",
             "limit": page_size,
@@ -13556,11 +13624,14 @@ async def admin_diagrams_backfill_embeddings(_: None = Depends(verify_admin)):
 @app.post("/admin/pyq-backfill-embeddings")
 async def admin_pyq_backfill_embeddings(batch_size: int = 200, _: None = Depends(verify_admin)):
     try:
+        # source=eq.pyq -- match_pyq already excludes mock rows from vector search regardless
+        # (mock_exam_columns.sql), so giving them an embedding here would only be wasted cost,
+        # never a safety gap either way.
         resp = await async_client.get(
             f"{SUPABASE_URL}/rest/v1/pyq",
             headers=ADMIN_HEADERS,
             params={"select": "id,question,chapter,option_a,option_b,option_c,option_d",
-                    "embedding": "is.null", "order": "id.asc", "limit": batch_size}
+                    "embedding": "is.null", "source": "eq.pyq", "order": "id.asc", "limit": batch_size}
         )
         if resp.status_code >= 400:
             return {"error": resp.text}
@@ -13631,6 +13702,12 @@ async def admin_pyq_bulk_create(body: PyqBulkCreate, role: str = Depends(verify_
         return {"error": "Invalid subject"}
     if any(q.language not in (None, "en", "hi") for q in body.questions):
         return {"error": "Invalid language"}
+    if any(q.source not in (None, "pyq", "mock") for q in body.questions):
+        return {"error": "Invalid source"}
+    if any(q.source == "mock" and not (q.mock_name and q.mock_name.strip()) for q in body.questions):
+        return {"error": "mock_name is required for a mock exam row"}
+    if any(q.mock_position is not None and not (1 <= q.mock_position <= 180) for q in body.questions):
+        return {"error": "mock_position must be between 1 and 180"}
     # Blocks new Hindi rows while paused, same as admin_scan_pdf -- but not a restore (q.id set,
     # see PyqQuestionCreate's docstring), which re-inserts a row that was already extracted and
     # paid for, not a fresh Gemini-costing upload.
@@ -13670,6 +13747,14 @@ async def admin_pyq_bulk_create(body: PyqBulkCreate, role: str = Depends(verify_
         # entirely keeps every save working before that migration is run, not just this feature.
         if q.source_pdf_filename:
             item["source_pdf_filename"] = q.source_pdf_filename
+        # Same reasoning again: these three need mock_exam_columns.sql's `alter table` before
+        # they exist. source is only ever written as "mock" -- a plain PYQ save (q.source is
+        # None/"pyq") omits the key entirely and keeps the column's own 'pyq' default.
+        if q.source == "mock":
+            item["source"] = "mock"
+            item["mock_name"] = q.mock_name.strip()
+            if q.mock_position is not None:
+                item["mock_position"] = q.mock_position
         # Same reasoning again: needs pyq_language.sql's `alter table` before the column exists.
         # Hindi rows are force-pended below (after the admin-role override block), regardless of
         # role or any review_status the caller sent -- see requirement 4 and PyqQuestionCreate's
@@ -13712,6 +13797,11 @@ async def admin_pyq_bulk_create(body: PyqBulkCreate, role: str = Depends(verify_
         # real human review pass -- "rejected"/"needs_fix" (an admin's own explicit downgrade
         # decision) are left alone, only "approved" is overridden.
         if language == "hi" and item["review_status"] == "approved":
+            item["review_status"] = "pending"
+        # Same final-say override, same reasoning, for mock rows: never auto-approved, no matter
+        # who uploaded it or what review_status they sent -- every mock question needs a real
+        # human review pass (mock_exam_columns.sql).
+        if q.source == "mock" and item["review_status"] == "approved":
             item["review_status"] = "pending"
         payload.append(item)
     try:
@@ -14458,7 +14548,7 @@ def admin_pyq_duplicates(threshold: float = 0.5, _: None = Depends(verify_admin)
                 f"{SUPABASE_URL}/rest/v1/pyq",
                 headers=ADMIN_HEADERS,
                 params={
-                    "select": "id,subject,language,chapter,question,option_a,option_b,option_c,option_d,"
+                    "select": "id,subject,language,source,chapter,question,option_a,option_b,option_c,option_d,"
                               "correct_answer,is_active,year,source_tag,class,has_diagram,"
                               "diagram_url,option_a_diagram_url,option_b_diagram_url,"
                               "option_c_diagram_url,option_d_diagram_url,created_at",
@@ -14494,11 +14584,12 @@ def admin_pyq_duplicates(threshold: float = 0.5, _: None = Depends(verify_admin)
         except Exception:
             pass
 
-        # Grouped by (subject, language), not subject alone -- compare only within the same
-        # language (pyq_language.sql, requirement 3).
+        # Grouped by (subject, language, source), not subject alone -- compare only within the
+        # same language (pyq_language.sql, requirement 3) and the same source (mock_exam_columns.
+        # sql: "PYQ checks ignore mock rows", mock rows compare only against other mock rows).
         by_subject = {}
         for r in all_rows:
-            by_subject.setdefault((r["subject"], r.get("language") or "en"), []).append(r)
+            by_subject.setdefault((r["subject"], r.get("language") or "en", r.get("source") or "pyq"), []).append(r)
 
         rows_by_id = {}
         pairs = []
@@ -14624,7 +14715,8 @@ async def admin_pyq_matches(id: str, _: None = Depends(verify_admin)):
             return {"error": "not found"}
         target = rows[0]
         language = target.get("language") or "en"
-        corpus = await _pyq_dup_corpus(target["subject"], language, include_rejected=True)
+        source = target.get("source") or "pyq"
+        corpus = await _pyq_dup_corpus(target["subject"], language, include_rejected=True, source=source)
         if corpus is None:
             return {"error": "could not read the duplicate corpus"}
         return _pyq_build_dup_matches(target, corpus)
@@ -14712,7 +14804,7 @@ async def admin_pyq_contractor_duplicates(_: None = Depends(verify_admin)):
             resp = await async_client.get(
                 f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
                 params={"review_status": "eq.pending", "uploader_name": f"eq.{CONTRACTOR_UPLOADER_NAME}",
-                        "select": "id,subject,language", "order": "id.asc", "limit": page_size, "offset": offset}
+                        "select": "id,subject,language,source", "order": "id.asc", "limit": page_size, "offset": offset}
             )
             if resp.status_code >= 400:
                 return {"error": resp.text}
@@ -14722,11 +14814,13 @@ async def admin_pyq_contractor_duplicates(_: None = Depends(verify_admin)):
                 break
             offset += page_size
 
-        # (subject, language) pairs -- compare only within the same language (pyq_language.sql,
-        # requirement 3): a Hindi contractor row should never be flagged against an English one.
-        pairs = sorted({(r["subject"], r.get("language") or "en") for r in to_check_ids if r.get("subject")})
-        corpora = dict(zip(pairs, await asyncio.gather(*[_pyq_dup_corpus(s, lang) for s, lang in pairs])))
-        pair_of = {r["id"]: (r["subject"], r.get("language") or "en") for r in to_check_ids}
+        # (subject, language, source) triples -- compare only within the same language
+        # (pyq_language.sql, requirement 3): a Hindi contractor row should never be flagged
+        # against an English one. Same for source (mock_exam_columns.sql): a mock row never
+        # compares against the real PYQ corpus, only other mock rows.
+        pairs = sorted({(r["subject"], r.get("language") or "en", r.get("source") or "pyq") for r in to_check_ids if r.get("subject")})
+        corpora = dict(zip(pairs, await asyncio.gather(*[_pyq_dup_corpus(s, lang, source=src) for s, lang, src in pairs])))
+        pair_of = {r["id"]: (r["subject"], r.get("language") or "en", r.get("source") or "pyq") for r in to_check_ids}
         to_check = [r["id"] for r in to_check_ids if pair_of.get(r["id"]) in corpora and corpora[pair_of[r["id"]]] is not None]
 
         def scan():
