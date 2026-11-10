@@ -3490,6 +3490,11 @@ async def _log_ncert_retrieval(language: str, question_subject: Optional[str], t
 # Kept completely separate from search_ncert/NCERT_V2_ENABLED above: no shared code path, no shared
 # table, no effect on any request while this flag is off (the only state it is shipped in).
 NCERT_SECTIONS_ENABLED = os.getenv("NCERT_SECTIONS_ENABLED", "false").strip().lower() == "true"
+# Module-level (not env-var) on purpose: this only ever matters while NCERT_SECTIONS_ENABLED
+# itself is on, which production never is yet -- a plain default-True toggle is enough for the
+# A/B test harness to monkeypatch False for its "feature on, retry off" arm without needing a
+# second env var wired through deployment for a flag that has no independent production use.
+NCERT_SECTIONS_RETRY_ENABLED = True
 NCERT_SECTIONS_CACHE_TTL = 600  # 10 minutes -- see _get_ncert_sections_cache
 _ncert_sections_cache = {"loaded_at": 0.0, "index_lines": [], "by_id": {}}
 
@@ -3628,6 +3633,87 @@ def _verify_ncert_quotes(raw_block: str, combined_section_text: str, valid_headi
             dropped.append(entry)
     return shown[:3], dropped
 
+# ---------- Block retry (B): one follow-up call when the main answer's quote block is unusable ----------
+# Triggered only when a section was picked (never on picker NONE, since the caller only reaches
+# this when ncert_sections_active) AND the main answer's "From NCERT" block came back missing,
+# empty, or with zero quotes surviving _verify_ncert_quotes. Asks the SAME model that served the
+# main answer (approximated here by `use_qwen_for_this_request`, the same flag the call site
+# already uses to pick the primary stream -- this doesn't track a mid-request DeepSeek<->Qwen
+# failover, which is out of scope for a single follow-up call) for just the quote block, nothing
+# else, so it's cheap and fast relative to a full regenerated answer. Run through the exact same
+# verifier as the main attempt. At most one retry per answer; silent on any failure.
+_NCERT_RETRY_SYSTEM = (
+    "A student asked a NEET exam question. Below is the exact NCERT textbook section text that "
+    "applies to it. Reply with ONLY a \"From NCERT\" block: 1 to 3 SHORT passages copied WORD "
+    "FOR WORD from the reference text (never paraphrased, summarized, or combined from different "
+    "sentences). Each quoted line must be at least 6 words long and copied EXACTLY as written. "
+    "Format, nothing else before or after it:\n"
+    f"{_NCERT_BLOCK_START}\n"
+    "\"<line copied exactly from the reference text>\" (<Chapter>, <Heading>)\n"
+    f"{_NCERT_BLOCK_END}\n"
+    "(add a second and/or third quoted line the same way, each on its own line between the two "
+    "markers, if a genuinely distinct line also fits)\n"
+    "If you have carefully checked and no line in the reference text fits at all, reply with just "
+    "the word NONE. No other text, no explanation."
+)
+
+def _should_retry_ncert_block(raw_block, quotes_shown: list) -> bool:
+    """The three retry trigger conditions, in one place: raw_block missing (None -- the model
+    never wrote the start marker at all) or empty (falsy), OR a block was written but every
+    quote in it was dropped by _verify_ncert_quotes (quotes_shown empty despite raw_block being
+    truthy). Never triggers on its own for picker NONE -- the caller only reaches this when
+    ncert_sections_active is True, which already requires picked_section_ids to be non-empty."""
+    return (not raw_block) or (not quotes_shown)
+
+async def _retry_ncert_block(text: str, combined_section_text: str, use_qwen: bool, user_id: str = ""):
+    """Returns (raw_block_or_None, latency_ms). Never raises -- every exit path on error/timeout/
+    empty/NONE returns (None, elapsed_so_far) so the caller can log added latency either way."""
+    t0 = time.monotonic()
+    ref_message = (
+        f"NCERT Exact Section Text:\n<ref_data>\n{_neutralize_ref_data_tags(combined_section_text)}\n</ref_data>"
+        f"\n\nStudent Question: {_neutralize_ref_data_tags(text)}"
+    )
+    try:
+        if use_qwen:
+            resp = await asyncio.wait_for(
+                qwen_async_client.chat.completions.create(
+                    model="qwen-flash", max_tokens=150, temperature=0,
+                    messages=[{"role": "system", "content": _NCERT_RETRY_SYSTEM}, {"role": "user", "content": ref_message}],
+                ),
+                timeout=3,
+            )
+            raw = (resp.choices[0].message.content or "").strip()
+            usage = getattr(resp, "usage", None)
+            if usage:
+                input_tokens = usage.prompt_tokens or 0
+                output_tokens = usage.completion_tokens or 0
+                details = getattr(usage, "prompt_tokens_details", None)
+                cache_hit_tokens = (details.cached_tokens or 0) if details else 0
+                cost = _qwen_cost(max(input_tokens - cache_hit_tokens, 0), cache_hit_tokens, output_tokens)
+                asyncio.create_task(log_provider_usage("qwen-flash", False, input_tokens, output_tokens, cost, "/chat-ncert-sections-retry", user_id, cache_hit_tokens=cache_hit_tokens))
+        else:
+            is_peak = _is_deepseek_peak_hour()
+            resp = await asyncio.wait_for(
+                deepseek_async_client.messages.create(
+                    model=DEEPSEEK_MODEL, max_tokens=150, thinking={"type": "disabled"},
+                    system=_NCERT_RETRY_SYSTEM,
+                    messages=[{"role": "user", "content": ref_message}],
+                ),
+                timeout=3,
+            )
+            raw = "".join(b.text for b in resp.content if hasattr(b, "text")).strip()
+            usage = resp.usage
+            cache_miss = usage.input_tokens + (usage.cache_creation_input_tokens or 0)
+            cache_hit = usage.cache_read_input_tokens or 0
+            cost = _deepseek_cost(cache_miss, cache_hit, usage.output_tokens, is_peak)
+            asyncio.create_task(log_provider_usage(DEEPSEEK_MODEL, is_peak, cache_miss + cache_hit, usage.output_tokens, cost, "/chat-ncert-sections-retry", user_id, cache_hit_tokens=cache_hit))
+    except Exception:
+        return None, int((time.monotonic() - t0) * 1000)
+    latency_ms = int((time.monotonic() - t0) * 1000)
+    if not raw or raw.strip().upper() == "NONE":
+        return None, latency_ms
+    return raw, latency_ms
+
 async def _strip_ncert_block(stream, holder: dict):
     """Wraps a /chat text-doubt stream for a request where the sections feature is active --
     see _NCERT_SECTIONS_RULE. Passes every chunk through unchanged UNLESS/UNTIL `_NCERT_BLOCK_START`
@@ -3676,15 +3762,21 @@ def _encode_ncert_sections_marker(quotes_shown: list) -> str:
     encoded = base64.b64encode(json.dumps(quotes_shown).encode("utf-8")).decode("ascii")
     return f"{NCERT_SECTIONS_MARKER_PREFIX}{encoded}{NCERT_SECTIONS_MARKER_SUFFIX}"
 
-async def _log_ncert_sections_event(language: str, picked_ids: list, quotes_shown: list, quotes_dropped: list, picker_latency_ms: int, total_latency_ms: int):
+async def _log_ncert_sections_event(language: str, picked_ids: list, quotes_shown: list, quotes_dropped: list, picker_latency_ms: int, total_latency_ms: int, retried: bool = False, retry_latency_ms: int = 0):
     """Same table as _log_ncert_retrieval (no new table), tagged version="sections" in `chunks`
     instead of a dedicated column. Ids and counts only -- never the question text; quote/citation
     text is kept here (unlike the v1 log) since these are short, mechanically-verified NCERT
-    textbook excerpts, not student-written content."""
+    textbook excerpts, not student-written content.
+
+    retried/retry_latency_ms (added for the block-retry feature): retried is True whenever the
+    main answer's own block was missing/empty/all-dropped and a follow-up call was attempted
+    (regardless of whether it fixed anything) -- quotes_shown/quotes_dropped already reflect
+    the retry's own result when one ran, so a reader doesn't need a separate pre/post-retry pair."""
     outcome = "grounded" if quotes_shown else ("set_aside" if picked_ids else "none")
     chunks = [{"version": "sections", "section_ids": picked_ids, "quotes_shown": quotes_shown,
                "quotes_dropped": quotes_dropped, "picker_latency_ms": picker_latency_ms,
-               "total_added_latency_ms": total_latency_ms}]
+               "total_added_latency_ms": total_latency_ms, "retried": retried,
+               "retry_latency_ms": retry_latency_ms}]
     try:
         await async_client.post(
             f"{SUPABASE_URL}/rest/v1/ncert_retrieval_log", headers={**ADMIN_HEADERS, "Content-Type": "application/json"},
@@ -7452,24 +7544,36 @@ options in the question, ignore this instruction entirely.""" if (images or pdf)
             # captured from whichever attempt actually produced full_answer above, then -- only if
             # at least one quote survives -- emit it as one out-of-band trailer event, same
             # never-rendered-as-text mechanism as the running-summary marker below. A request
-            # where the feature never activated, or where it activated but the model never wrote
-            # the start marker (the common case), costs nothing here: sections_holder['raw_block']
-            # is just None and this whole block is skipped.
-            if ncert_sections_active and sections_holder.get("raw_block"):
+            # where the feature never activated is a complete no-op (nothing in this block runs).
+            if ncert_sections_active:
                 combined_section_text = " ".join(
                     sections_cache_for_chat["by_id"][i]["text"] for i in picked_section_ids if i in sections_cache_for_chat["by_id"]
                 )
                 valid_headings = [sections_cache_for_chat["by_id"][i]["heading"] for i in picked_section_ids if i in sections_cache_for_chat["by_id"]]
-                quotes_shown, quotes_dropped = _verify_ncert_quotes(sections_holder["raw_block"], combined_section_text, valid_headings)
+                raw_block = sections_holder.get("raw_block")
+                quotes_shown, quotes_dropped = _verify_ncert_quotes(raw_block, combined_section_text, valid_headings) if raw_block else ([], [])
+                # Block retry (B): the main answer's block was missing (raw_block falsy -- the
+                # model never wrote the start marker at all), empty, or had zero quotes survive
+                # the verifier above. One follow-up call, same model as the main answer (see
+                # _retry_ncert_block), re-verified the same way. Never for picker NONE -- that
+                # case never reaches this branch since ncert_sections_active is False then.
+                retried = False
+                retry_latency_ms = 0
+                if NCERT_SECTIONS_RETRY_ENABLED and _should_retry_ncert_block(raw_block, quotes_shown):
+                    retried = True
+                    retry_raw, retry_latency_ms = await _retry_ncert_block(text, combined_section_text, use_qwen_for_this_request, user_id)
+                    if retry_raw:
+                        quotes_shown, quotes_dropped = _verify_ncert_quotes(retry_raw, combined_section_text, valid_headings)
                 # total_request_latency_ms is wall-clock from the picker call's own start to here
-                # (picker + the rest of this answer's generation) -- a rough, request-level number
-                # for the test report, not a controlled A/B measurement; the test harness in step 4
-                # measures real added latency directly (with/without the flag) for that purpose.
+                # (picker + the rest of this answer's generation + the retry, if one ran) -- a
+                # rough, request-level number for the test report, not a controlled A/B
+                # measurement; the test harness in step 4 measures real added latency directly
+                # (with/without the flag) for that purpose.
                 total_request_latency_ms = int((time.monotonic() - _sections_picker_t0) * 1000)
                 # retrieval_language is always defined here: ncert_sections_active requires
                 # `not images and not pdf`, which is exactly the branch that sets it (skip_ncert_search,
                 # the only branch that doesn't, requires images=True).
-                asyncio.create_task(_log_ncert_sections_event(retrieval_language, picked_section_ids, quotes_shown, quotes_dropped, picker_latency_ms, total_request_latency_ms))
+                asyncio.create_task(_log_ncert_sections_event(retrieval_language, picked_section_ids, quotes_shown, quotes_dropped, picker_latency_ms, total_request_latency_ms, retried, retry_latency_ms))
                 if quotes_shown:
                     yield _encode_ncert_sections_marker(quotes_shown)
             if cache_skip_reason is None:
