@@ -312,6 +312,9 @@
          Stays visually the same small text, just a comfortably tappable hit area around it. */
       #setupScreen .header button[data-i18n="personalisedTest.backToNeetAi"],
       #resultsScreen .header button[data-i18n="common.backToNeetAi"] { padding: 10px 0 !important; }
+      /* Prevents Safari's auto-zoom on tap: iOS zooms the page when a focused input's
+         computed font-size is under 16px. */
+      #customCountInput { font-size: clamp(16px, 4.3vw, 17px); }
     }
 
     @media (max-width: 768px) {
