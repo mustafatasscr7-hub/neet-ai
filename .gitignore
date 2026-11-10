@@ -11,3 +11,4 @@ __pycache__/
 backups/
 .scan_cache/
 .venv/
+ncert_manual/
