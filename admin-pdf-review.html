@@ -73,6 +73,8 @@
 
   .q-block { background: #111; border: 1px solid #1e1e1e; border-radius: 10px; padding: 16px; margin-bottom: 14px; }
   .q-block.is-saved { opacity: 0.55; }
+  .q-block.is-flagged { border-color: #ef444470; }
+  .q-crop-image { float: left; max-width: 220px; margin: 0 14px 10px 0; border: 1px solid #2a2a2a; border-radius: 8px; display: block; }
   .q-block-header { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
   .q-number { font-size: 13px; font-weight: 700; color: #4f8ef7; }
   .q-diagram-badge { font-size: 11px; background: #f9731620; color: #f97316; padding: 2px 8px; border-radius: 20px; font-weight: 600; }
@@ -1977,6 +1979,7 @@
         mock_position: mockMode ? q.mock_position : null,
         needs_review: mockMode ? !!q.needs_review : false,
         review_reason: mockMode ? (q.review_reason || null) : null,
+        crop_image_b64: mockMode ? (q.crop_image_b64 || null) : null,
         saved: false, savePending: false
       }));
       document.getElementById('statPageCount').textContent = data.pages_scanned || 0;
@@ -2006,9 +2009,26 @@
   }
 
   // ---------------- Mock exam completeness panel ----------------
-  // Pure display of scan_mock_exam_pdf's completeness report (process_pyq_vision.py) -- no model
-  // call, computed server-side from the PDF's own printed question numbers. Reused as-is on a
-  // fresh scan; the reviewer fixes gaps by re-scanning or by correcting a block's subject/position.
+  // Pure display of scan_mock_exam_pdf's completeness report (process_mock_exam_text.py) -- a
+  // deterministic, no-model-call scan of the PDF's own text layer, computed from its printed
+  // question numbers and word coverage. Reused as-is on a fresh scan; the reviewer fixes gaps by
+  // re-scanning the PDF or by correcting a flagged block directly below.
+  let _flaggedBlockIds = [];
+  let _flaggedJumpIndex = -1;
+
+  function jumpToNextFlagged() {
+    if (!_flaggedBlockIds.length) return;
+    _flaggedJumpIndex = (_flaggedJumpIndex + 1) % _flaggedBlockIds.length;
+    const el = document.getElementById('block-' + _flaggedBlockIds[_flaggedJumpIndex]);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.style.outline = '2px solid #ef4444';
+      setTimeout(() => { el.style.outline = ''; }, 1200);
+    }
+    const counter = document.getElementById('flaggedJumpCounter');
+    if (counter) counter.textContent = `${_flaggedJumpIndex + 1}/${_flaggedBlockIds.length}`;
+  }
+
   function renderMockCompletenessPanel(completeness) {
     const panel = document.getElementById('mockCompletenessPanel');
     const subjects = ['Physics', 'Chemistry', 'Biology'];
@@ -2019,18 +2039,33 @@
     panel.style.padding = '12px 14px';
     panel.style.marginBottom = '16px';
     panel.style.fontSize = '12px';
-    panel.innerHTML = subjects.map(s => {
-      const c = completeness[s] || { expected: 0, found_count: 0, missing: [], duplicates: [], out_of_range: [] };
-      const complete = c.found_count === c.expected && c.duplicates.length === 0 && c.out_of_range.length === 0;
+
+    _flaggedBlockIds = blocks.filter(b => b.needs_review).map(b => b.id);
+    _flaggedJumpIndex = -1;
+    const totalRedFlags = _flaggedBlockIds.length;
+
+    const rows = subjects.map(s => {
+      const c = completeness[s] || { expected: 0, found_count: 0, missing: [], coverage_pct: 0, red_flag_count: 0 };
+      const complete = c.found_count === c.expected && c.missing.length === 0;
       const parts = [];
       if (c.missing.length) parts.push(`missing ${c.missing.slice(0, 20).join(', ')}${c.missing.length > 20 ? '…' : ''}`);
-      if (c.duplicates.length) parts.push(`repeated ${c.duplicates.join(', ')}`);
-      if (c.out_of_range.length) parts.push(`out of range ${c.out_of_range.join(', ')}`);
       const color = complete ? '#4f8ef7' : '#ef4444';
       return `<div style="margin-bottom:4px;color:${color};">
         <b>${escapeHtml(s)}</b>: ${c.found_count}/${c.expected}${complete ? ' - complete' : ' - ' + escapeHtml(parts.join('; '))}
+        &nbsp;·&nbsp;coverage ${c.coverage_pct != null ? c.coverage_pct : '—'}%
+        &nbsp;·&nbsp;${c.red_flag_count || 0} flagged
       </div>`;
     }).join('');
+
+    const jumpControl = totalRedFlags
+      ? `<div style="margin-top:8px;display:flex;align-items:center;gap:8px;">
+          <button type="button" onclick="jumpToNextFlagged()" style="background:transparent;border:1px solid #ef444480;color:#ef4444;padding:4px 10px;border-radius:6px;font-size:11px;cursor:pointer;font-family:'Inter',sans-serif;">Next flagged question ▸</button>
+          <span style="color:#888;">${totalRedFlags} question(s) flagged across all subjects</span>
+          <span id="flaggedJumpCounter" style="color:#888;"></span>
+        </div>`
+      : `<div style="margin-top:8px;color:#4f8ef7;">No flagged questions.</div>`;
+
+    panel.innerHTML = rows + jumpControl;
     panel.style.display = 'block';
   }
 
@@ -2424,7 +2459,7 @@
   function blockTemplate(block, displayIndex) {
     const b = block;
     return `
-    <div class="q-block${b.saved ? ' is-saved' : ''}" id="block-${b.id}" data-id="${b.id}">
+    <div class="q-block${b.saved ? ' is-saved' : ''}${b.needs_review ? ' is-flagged' : ''}" id="block-${b.id}" data-id="${b.id}">
       <div class="q-block-header">
         <span class="q-number">Q<input type="text" id="qnum-${b.id}" value="${escapeHtml(b.display_number != null ? b.display_number : String(displayIndex))}" onchange="setQNumber('${b.id}')" title="Edit to match the actual question number in the PDF, if it drifted from the auto count" style="width:34px;background:transparent;border:none;border-bottom:1px dashed #4f8ef780;color:#4f8ef7;font-weight:700;font-size:13px;font-family:'Inter',sans-serif;padding:0 0 1px 2px;"/></span>
         ${b.has_diagram ? '<span class="q-diagram-badge">Diagram</span>' : ''}
@@ -2455,6 +2490,7 @@
         </div>
       </div>
       ${b.review_reason ? `<div class="q-dup-warning warn" style="display:block;">${escapeHtml(b.review_reason)}</div>` : ''}
+      ${b.crop_image_b64 ? `<img class="q-crop-image" src="data:image/png;base64,${b.crop_image_b64}" alt="Cropped source region for this flagged question" title="Source PDF region for this question -- compare against the fields below"/>` : ''}
       ` : ''}
 
       <div class="q-field">
@@ -2540,6 +2576,7 @@
 
       <div class="q-dup-warning" id="dup-warning-${b.id}"></div>
 
+      <div style="clear:both;"></div>
       <div class="q-block-footer">
         <button type="button" class="save-btn" id="save-btn-${b.id}" onclick="saveBlock('${b.id}')" ${b.saved ? 'disabled' : ''}>${b.saved ? 'Saved' : 'Save'}</button>
         <span class="q-source-page">${b.source_page ? 'from page ' + b.source_page : 'manually added'}</span>

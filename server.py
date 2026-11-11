@@ -375,8 +375,9 @@ qwen_async_client = openai.AsyncOpenAI(api_key=QWEN_API_KEY, base_url="https://d
 # application/pdf the same way it handles images -- see the pdf branch in stream_response().
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 import requests as http_requests
-from process_pyq_vision import scan_pdf_bytes, scan_mock_test_pdf, scan_mock_exam_pdf
+from process_pyq_vision import scan_pdf_bytes, scan_mock_test_pdf
 from process_pyq_book_3col import scan_book_pdf_bytes
+from process_mock_exam_text import scan_mock_exam_pdf
 from process_pyq_scanned import scan_scanned_pdf_bytes, estimate_scanned_pdf_cost, DEFAULT_MAX_PAGES as SCANNED_DEFAULT_MAX_PAGES
 from process_pyq_scanned_ocr import scan_ocr_pdf_bytes, start_ocr_job, get_ocr_job, ocr_job_is_live
 from utils.krutidev2unicode import kru2uni
@@ -1155,10 +1156,10 @@ class ScanPdfRequest(BaseModel):
     # vision) -- also never auto-selected, for the same reason.
     # "scanned_ocr" = process_pyq_scanned_ocr's free variant of the same: local OCR + rules, $0,
     # no model call (the OCR engine is imported lazily, so the server starts without it).
-    # "mock_exam" = process_pyq_vision's scan_mock_exam_pdf: one full NEET-pattern mock paper
+    # "mock_exam" = process_mock_exam_text's scan_mock_exam_pdf: one full NEET-pattern mock paper
     # (Physics+Chemistry+Biology in one PDF), subject and section boundaries detected from the
-    # page text itself instead of a single subject supplied by the admin. req.subject is ignored
-    # for this layout; req.mock_name is required instead.
+    # page geometry/text itself instead of a single subject supplied by the admin -- deterministic,
+    # no model call. req.subject is ignored for this layout; req.mock_name is required instead.
     layout: str = "standard"
     # Scanned mode only: a PDF over its per-run page cap is refused unless the admin confirmed.
     confirm_over_cap: bool = False
