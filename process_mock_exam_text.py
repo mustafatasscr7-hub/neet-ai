@@ -59,6 +59,7 @@ from process_pyq_vision import (
     MOCK_TEST_SUBJECT_ORDER,
 )
 from process_pyq_book_3col import _get_diagram_bboxes, _bbox_overlaps, _union_bbox
+from process_mock_exam_math import build_option_zones, assign_spans_to_zones, reconstruct_zone
 
 MOCK_EXAM_SUBJECT_COUNTS = {"Physics": 45, "Chemistry": 45, "Biology": 90}
 MOCK_EXAM_SUBJECT_OFFSET = {"Physics": 0, "Chemistry": 45, "Biology": 90}
@@ -122,13 +123,29 @@ def _page_blocks(page):
 # and/or a bare 1-3 digit page number is never real question/option content either way.
 _STRAY_CAPTION_RE = re.compile(r'^(?:mock\s*test-?\s*1\.?\s*)?\d{0,3}\s*(?:mock\s*test-?\s*1\.?\s*)?$', re.IGNORECASE)
 
+# A real page-number caption is set at ordinary running-text size, same as the rest of the page's
+# own prose -- a markedly smaller block that ALSO happens to be bare digits is far more likely a
+# superscript/subscript exponent that PyMuPDF isolated into its own tiny block (confirmed live via
+# a synthetic math-reconstruction test: a raised "2" for "m^2" got silently discarded here,
+# matching _STRAY_CAPTION_RE's own bare "\d{0,3}" branch, before this guard existed). Set below
+# every real exponent size confirmed live on the real sample (5.8-6.2) and below this layout's own
+# body text (9.9-10.1), with headroom for a smaller-but-still-real caption font on some other PDF.
+_MIN_CAPTION_FONT_SIZE = 8.0
+
 
 def _is_header_footer(block):
     bbox = block["bbox"]
     if (bbox[2] - bbox[0]) > _MAX_HEADER_FOOTER_WIDTH:
         return True
     text = _normalize_ws(_block_text_from_dict(block))
-    return bool(text) and bool(_STRAY_CAPTION_RE.match(text))
+    if not text or not _STRAY_CAPTION_RE.match(text):
+        return False
+    if text.isdigit():
+        sizes = [s["size"] for line in block.get("lines", []) for s in line.get("spans", [])
+                 if (s.get("text") or "").strip()]
+        if sizes and max(sizes) < _MIN_CAPTION_FONT_SIZE:
+            return False  # too small to be a real page-number caption -- likely an exponent
+    return True
 
 
 # A new question's own number+stem sometimes starts MID-BLOCK: PyMuPDF merges the tail of one
@@ -197,6 +214,21 @@ def _doc_has_text_layer(doc):
     return False
 
 
+_NUM_MARKER_SPAN_RE = re.compile(r'^(\d{1,3})[.)]$')
+
+
+def _find_number_marker_span_id(block):
+    """The question-number marker ("1.") is confirmed live to always be its own span (same shape
+    as a lettered option marker, see process_mock_exam_math.MARKER_RE) -- found here so the math
+    reconstruction pass can exclude it from the stem's own glyph pool the same way _question_start
+    already excludes it from the plain-text pool."""
+    for line in block.get("lines", []):
+        for s in line.get("spans", []):
+            if _NUM_MARKER_SPAN_RE.match((s.get("text") or "").strip()):
+                return id(s)
+    return None
+
+
 def _question_start(block):
     """Returns (number, rest_of_text_after_the_marker) if `block`'s own text starts with a bare
     "<number>." marker, else None. Never matched against a decimal fraction mid-sentence -- this
@@ -242,6 +274,56 @@ def _parse_options(text_acc):
     return stem, options
 
 
+def _flatten_question_spans(active):
+    """All of this question's own glyphs (across every block it accumulated, possibly spanning
+    more than one page if it started near a page's bottom), minus the question-number marker
+    itself -- the raw material for math reconstruction. Each span is tagged with its own page
+    index so reconstruct_question_math can look up that page's own fraction-bar drawings."""
+    flat = []
+    for page_index, block in active.get("raw_blocks", []):
+        for line in block.get("lines", []):
+            for s in line.get("spans", []):
+                if not s.get("text"):
+                    continue
+                if id(s) == active.get("number_marker_span_id"):
+                    continue
+                tagged = dict(s)
+                tagged["page_index"] = page_index
+                flat.append(tagged)
+    return flat
+
+
+def reconstruct_question_math(doc, active, drawings_cache):
+    """Tries the geometry-aware zone reconstruction (process_mock_exam_math) first; falls back to
+    the old plain-text _parse_options whenever build_option_zones can't unambiguously find this
+    question's own 4 lettered markers (a genuinely different layout, or a question this module's
+    own marker detection doesn't recognize -- always safer left to the existing text-based path
+    and its own existing needs_review gates than forced through a zone split built on a wrong
+    assumption, per process_mock_exam_math's own docstring)."""
+    flat_spans = _flatten_question_spans(active)
+    result = build_option_zones(flat_spans, active["bbox"])
+    if result is None:
+        return _parse_options(active["text_acc"])
+    stem_zone, option_zones, marker_ids = result
+    buckets = assign_spans_to_zones(flat_spans, stem_zone, option_zones, marker_ids)
+
+    def _drawings_for(spans):
+        pages = {s["page_index"] for s in spans}
+        out = []
+        for pi in pages:
+            if pi not in drawings_cache:
+                drawings_cache[pi] = doc[pi].get_drawings()
+            out.extend(drawings_cache[pi])
+        return out
+
+    stem_text = reconstruct_zone(buckets["stem"], _drawings_for(buckets["stem"]), stem_zone)
+    options = {
+        letter: reconstruct_zone(buckets[letter], _drawings_for(buckets[letter]), option_zones[letter])
+        for letter in ("a", "b", "c", "d")
+    }
+    return stem_text, options
+
+
 def _looks_math_garbled(text):
     tokens = (text or "").split()
     if len(tokens) < _GARBLED_MIN_TOKENS:
@@ -264,8 +346,8 @@ def _crop_question_image(doc, page_index, bbox, margin=8):
         return None
 
 
-def _finalize_question(doc, active, mock_name):
-    stem, opts = _parse_options(active["text_acc"])
+def _finalize_question(doc, active, mock_name, drawings_cache):
+    stem, opts = reconstruct_question_math(doc, active, drawings_cache)
     missing = [l for l in _OPTION_LETTERS if not opts.get(l)]
     needs_review = False
     review_reason = None
@@ -344,12 +426,13 @@ def scan_mock_exam_pdf(pdf_bytes, mock_name):
     # question-start marker). A one-way latch is enough: a subject passes through "before" to
     # "after" its own heading exactly once, in document order, and never returns to "before".
     past_answers_subjects = set()
+    drawings_cache = {}  # page_index -> page.get_drawings(), fetched at most once per page
 
     def close_active():
         nonlocal active
         if active is None:
             return
-        q = _finalize_question(doc, active, mock_name)
+        q = _finalize_question(doc, active, mock_name, drawings_cache)
         per_subject_questions[active["subject"]].append(q)
         if q["needs_review"]:
             flagged_pages.append({"page": active["start_page"], "reason": q["review_reason"]})
@@ -410,6 +493,8 @@ def scan_mock_exam_pdf(pdf_bytes, mock_name):
                     "subject": current_subject, "printed_number": qnum,
                     "start_page": page_index + 1, "text_acc": rest, "bbox": block["bbox"],
                     "has_diagram": any(_bbox_overlaps(block["bbox"], d) for d in diagram_bboxes),
+                    "raw_blocks": [(page_index, block)],
+                    "number_marker_span_id": _find_number_marker_span_id(block),
                 }
                 coverage[current_subject]["assigned"] += _word_count(block)
                 continue
@@ -417,6 +502,7 @@ def scan_mock_exam_pdf(pdf_bytes, mock_name):
                 continue  # content before this subject's own first recognized question-start
             active["text_acc"] += "\n" + _block_text_from_dict(block)
             active["bbox"] = _union_bbox(active["bbox"], block["bbox"])
+            active["raw_blocks"].append((page_index, block))
             if any(_bbox_overlaps(block["bbox"], d) for d in diagram_bboxes):
                 active["has_diagram"] = True
             coverage[current_subject]["assigned"] += _word_count(block)
