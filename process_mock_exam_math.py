@@ -36,11 +36,8 @@ already claimed by another bar, is left COMPLETELY ALONE -- its glyphs stay in t
 literal text. This never crashes and never silently drops content; it just means that stray
 fragment stays visible in the output, which process_mock_exam_text.py's own existing
 _looks_math_garbled gate (unusually many short stray tokens) already catches and flags for
-manual review -- most of this module's own confidence rules add no new flagging logic of their
-own, they only reduce how often that existing gate has something real to catch. The one
-exception is modulus/magnitude bars ("|x|", a vector norm "||v||"): an unpaired bar is reported
-back as its own dedicated issue rather than left to that generic gate, see this module's own
-"Modulus/magnitude bars" section further down for why a bar needs a confidence rule of its own.
+manual review -- this module adds no new flagging logic of its own, it only reduces how often
+that existing gate has something real to catch.
 """
 import re
 
@@ -147,228 +144,6 @@ def get_zone_fraction_bars(drawings, zone_bbox):
         if _is_fraction_bar_rect(rect, zone_bbox):
             bars.append((rect[0], rect[1], rect[2]))
     return bars
-
-
-# ---------------------------------------------------------------------------------------------
-# Modulus/magnitude bars: "|x|", "|a + b + c|", a vector norm "||v||". A bar is either a literal
-# "|" already in the text layer, a look-alike character (DIVIDES U+2223, PARALLEL TO U+2225 --
-# both anticipated; DOUBLE VERTICAL LINE U+2016, confirmed live in the real sample, see below), or
-# a short vertical vector-drawn stroke with no character at all -- the same "no reliable glyph"
-# shape this module's own root handling already anticipates for a drawn-overline root. Two bar
-# occurrences sitting immediately next to each other on the same row -- two single characters
-# glued together (e.g. "||"), or one inherently-double glyph like "‖" -- are ONE logical delimiter
-# and rebuilt as "||", never as two separate single bars.
-#
-# Confirmed live (MockTest1.pdf): every "|"/"‖" occurrence actually present in the real sample's
-# text layer turned out to be a CHEMISTRY double-bond mark (a structural formula's own C=O/C=NH
-# drawn with one or two short vertical strokes connecting an atom to the one directly above it on
-# a DIFFERENT text row), not a real modulus bar -- confirmed by rendering the source pages and
-# reading them directly, not just by the extracted text. This is exactly the shape the confidence
-# rule below rejects on its own: a bond mark is a single, lone bar-like occurrence on its own row
-# with no partner (an odd count), or a pair with nothing real between the two strokes (the gap a
-# double bond's own two near-parallel lines leave behind) -- never a case this module forces
-# through as if it were a real modulus pair.
-#
-# Confidence rule (same "wrong is worse than flagged" requirement as the rest of this module): a
-# ROW's own bar occurrences are only rebuilt if they pair up EXACTLY -- an even count, each pair
-# enclosing real, non-empty content on that same row -- checked for every row in the zone before
-# anything is rewritten. The whole zone is rewritten together, all-or-nothing: by construction,
-# either every occurrence maps 1:1 onto an output "|"/"||" (so a bar can never be silently lost by
-# this rewrite -- there is no code path that drops one without ALSO leaving the zone's text
-# untouched and reporting the problem back), or none of them are touched at all and the zone's own
-# bar characters stay exactly as literal text, with a reason reported back for the caller to flag
-# needs_review with -- never a partial rewrite, never a guess at which side of an unpaired bar is
-# "inside".
-_BAR_CHARS_SINGLE = {"|", "∣"}
-_BAR_CHARS_DOUBLE = {"∥", "‖"}
-_BAR_CHARS_ALL = _BAR_CHARS_SINGLE | _BAR_CHARS_DOUBLE
-_BAR_RUN_RE = re.compile("[" + "".join(re.escape(c) for c in _BAR_CHARS_ALL) + "]+")
-
-# A drawn vertical bar stroke -- same near-zero-thickness idea _is_fraction_bar_rect already uses
-# for the horizontal fraction case, transposed to the vertical axis. Bounded to roughly one text
-# row tall: a real modulus bar is never as short as a stray rendering artifact nor as tall as a
-# multi-row bracket (which this module does not attempt to reconstruct at all).
-_VBAR_MAX_WIDTH = 0.75
-_VBAR_MIN_HEIGHT = 4.0
-_VBAR_MAX_HEIGHT = 22.0
-# Two bar occurrences on the same row this close together (or closer) are the SAME logical
-# delimiter (a vector norm's own two strokes), not two independent bars each needing their own
-# partner -- confirmed live, the one glued-together "||" span in the real sample's own text layer
-# has its own two strokes well under 1pt apart.
-_BAR_ADJACENT_GAP = 2.0
-_BAR_ROW_TOL = 4.0
-# How far a drawn stroke may sit from the nearest REAL glyph in its own zone and still be
-# trusted as a candidate bar at all -- see _near_real_content's own docstring for why this check
-# exists in the first place. One generous text row (not just _BAR_ROW_TOL's tight same-row
-# pairing tolerance): the stroke only needs to be IN THE NEIGHBORHOOD of real content here, the
-# tighter tolerance below still decides whether it actually PAIRS with anything.
-_VBAR_CONTENT_REACH = 14.0
-
-
-def _is_vertical_bar_rect(rect, zone_bbox):
-    x0, y0, x1, y1 = rect
-    if (x1 - x0) > _VBAR_MAX_WIDTH:
-        return False
-    height = y1 - y0
-    if not (_VBAR_MIN_HEIGHT <= height <= _VBAR_MAX_HEIGHT):
-        return False
-    zx0, zy0, zx1, zy1 = zone_bbox
-    return zx0 - 2 <= x0 <= zx1 + 2 and zy0 - 2 <= y0 and y1 <= zy1 + 2
-
-
-def get_zone_vertical_bars(drawings, zone_bbox):
-    """Same shape as get_zone_fraction_bars (see its own docstring), transposed to vertical
-    strokes -- a drawn modulus bar never spans outside its own option/stem zone, for the same
-    reason a fraction bar never does."""
-    bars = []
-    for d in drawings:
-        rect = d.get("rect")
-        if rect is None:
-            continue
-        rect = (rect[0], rect[1], rect[2], rect[3])
-        if _is_vertical_bar_rect(rect, zone_bbox):
-            bars.append(rect)
-    return bars
-
-
-def _bar_runs(text):
-    """Every maximal run of 1+ bar-like characters in `text`, as (start, end, is_double) --
-    is_double whenever the run is 2+ characters (two bars glued together) or its own single
-    character is already visually double (PARALLEL TO / DOUBLE VERTICAL LINE)."""
-    out = []
-    for m in _BAR_RUN_RE.finditer(text):
-        run = m.group(0)
-        is_double = len(run) >= 2 or any(c in _BAR_CHARS_DOUBLE for c in run)
-        out.append((m.start(), m.end(), is_double))
-    return out
-
-
-def _near_real_content(rect, content_y_centers):
-    """A question's own stem/option zone_bbox is occasionally much larger than its own real
-    content -- confirmed live, a trailing accumulated block (e.g. a page's own running
-    watermark/footer, swept in because this question happened to be the last one recognized on
-    its own page) can stretch zone_bbox across most of the page, FAR past where this zone's own
-    text actually sits. Plain zone_bbox containment alone is what the rest of this module already
-    uses for a drawn fraction bar too, but a fraction is self-checking (it needs real numerator
-    AND denominator content within reach before it is ever trusted, see _FRAC_VERTICAL_REACH) --
-    a single drawn stroke has no such built-in check, so a stray drawing anywhere in an oversized
-    zone_bbox would otherwise count as a "bar" no matter how far it sits from anything real. This
-    requires a drawn stroke to sit within one ordinary text row of SOME real glyph actually in
-    this zone before it is trusted as a candidate bar at all."""
-    rect_y_center = (rect[1] + rect[3]) / 2.0
-    return any(abs(rect_y_center - cy) <= _VBAR_CONTENT_REACH for cy in content_y_centers)
-
-
-def _normalize_modulus_bars(spans, drawings, zone_bbox, body_size):
-    """Finds every modulus/magnitude bar occurrence in this zone (text-layer character or drawn
-    vertical stroke), pairs them per row, and either (a) -- every row's own bars pair up cleanly
-    -- returns new spans with every bar occurrence rewritten to the canonical "|"/"||" and no
-    issue, or (b) -- any row's own bars do not -- returns the ORIGINAL spans completely untouched
-    plus a human-readable reason, for the caller to flag needs_review with (see this module's own
-    docstring above for why this is all-or-nothing)."""
-    has_text_bar = any(s.get("text") and _BAR_RUN_RE.search(s["text"]) for s in spans)
-    content_y_centers = [_span_center(s)[1] for s in spans if s.get("text") and s["text"].strip()]
-    drawn_rects = [r for r in (get_zone_vertical_bars(drawings, zone_bbox) if drawings else [])
-                   if _near_real_content(r, content_y_centers)]
-    if not has_text_bar and not drawn_rects:
-        return spans, None
-
-    # content_items only ever need to answer "is there something real at roughly (x, y)" for the
-    # non-empty-between check further down -- not the text itself, just a position. A bar-
-    # containing span's own LEFTOVER text (e.g. the "x" in one single "|x|" span, glued with no
-    # gap on either side -- confirmed live, PyMuPDF's own insert_text keeps same-font same-size
-    # adjacent characters in ONE span) is real content exactly the same as a whole separate span
-    # free of any bar character would be; excluding a span just because it ALSO happens to carry
-    # the bar itself would wrongly treat "|x|" as if nothing were between its own two bars.
-    occurrences = []  # {bbox, is_double, src_span (None for a drawn stroke), match (start, end)}
-    content_items = []  # (x, y) -- position only, see above
-    for s in spans:
-        text = s.get("text") or ""
-        if not text:
-            continue
-        runs = _bar_runs(text)
-        if not runs:
-            if text.strip():
-                content_items.append(_span_center(s))
-            continue
-        x0, y0, x1, y1 = s["bbox"]
-        width = x1 - x0
-        n = len(text)
-
-        def _frac_x(i, x0=x0, width=width, n=n):
-            return x0 + width * (i / n) if n else x0
-
-        cursor = 0
-        for start, end, is_double in runs:
-            if text[cursor:start].strip():
-                content_items.append(((_frac_x(cursor) + _frac_x(start)) / 2.0, (y0 + y1) / 2.0))
-            occurrences.append({"bbox": (_frac_x(start), y0, _frac_x(end), y1), "is_double": is_double,
-                                 "src_span": s, "match": (start, end)})
-            cursor = end
-        if text[cursor:].strip():
-            content_items.append(((_frac_x(cursor) + _frac_x(n)) / 2.0, (y0 + y1) / 2.0))
-    for rect in drawn_rects:
-        occurrences.append({"bbox": rect, "is_double": False, "src_span": None, "match": None})
-
-    rows = _cluster_rows(occurrences, key=lambda o: (o["bbox"][1] + o["bbox"][3]) / 2.0, tol=_BAR_ROW_TOL)
-
-    span_replacements = {}  # id(span) -> list of (start, end, bar_text), applied left-to-right
-    new_bar_spans = []
-    for row in rows:
-        row.sort(key=lambda o: o["bbox"][0])
-        units = []
-        for occ in row:
-            if units and occ["bbox"][0] - units[-1]["x1"] <= _BAR_ADJACENT_GAP:
-                last = units[-1]
-                last["members"].append(occ)
-                last["is_double"] = True
-                last["x1"] = max(last["x1"], occ["bbox"][2])
-            else:
-                units.append({"members": [occ], "is_double": occ["is_double"],
-                              "x0": occ["bbox"][0], "x1": occ["bbox"][2],
-                              "y0": occ["bbox"][1], "y1": occ["bbox"][3]})
-        if len(units) % 2 != 0:
-            return spans, "an unpaired modulus bar"
-        for i in range(0, len(units), 2):
-            open_u, close_u = units[i], units[i + 1]
-            y_center = (open_u["y0"] + open_u["y1"]) / 2.0
-            between = [ci for ci in content_items
-                       if open_u["x1"] - 0.5 <= ci[0] <= close_u["x0"] + 0.5
-                       and abs(ci[1] - y_center) <= _BAR_ROW_TOL]
-            if not between:
-                return spans, "an unpaired modulus bar"
-            for u in (open_u, close_u):
-                bar_text = "||" if u["is_double"] else "|"
-                for occ in u["members"]:
-                    if occ["src_span"] is not None:
-                        span_replacements.setdefault(id(occ["src_span"]), []).append(
-                            (occ["match"][0], occ["match"][1], bar_text))
-                    else:
-                        new_bar_spans.append({
-                            "text": bar_text, "bbox": occ["bbox"],
-                            "origin": (occ["bbox"][0], occ["bbox"][3]),
-                            "size": body_size, "font": None,
-                        })
-
-    new_spans = []
-    for s in spans:
-        edits = span_replacements.get(id(s))
-        if not edits:
-            new_spans.append(s)
-            continue
-        text = s["text"]
-        out = []
-        pos = 0
-        for start, end, bar_text in sorted(edits):
-            out.append(text[pos:start])
-            out.append(bar_text)
-            pos = end
-        out.append(text[pos:])
-        ns = dict(s)
-        ns["text"] = "".join(out)
-        new_spans.append(ns)
-    new_spans.extend(new_bar_spans)
-    return new_spans, None
 
 
 def _span_center(span):
@@ -762,22 +537,17 @@ def reconstruct_zone(spans, drawings, zone_bbox):
     """Main entry point: reconstructs one question-stem or option's own text from its raw glyph
     spans (list of PyMuPDF span dicts restricted to this zone) plus the page's own vector
     drawings (for fraction-bar detection, restricted to this zone by get_zone_fraction_bars).
-    Returns (text, bar_issue) -- text already wrapped in $...$ around every math run -- never
-    raises, never drops a glyph: anything not confidently reconstructed is passed through as
-    literal text. bar_issue is None unless this zone's own modulus/magnitude bars could not be
-    confidently paired (see _normalize_modulus_bars), in which case text is returned with those
-    bar characters completely unchanged and the caller should flag the question needs_review with
-    bar_issue as the reason."""
+    Returns a plain string already wrapped in $...$ around every math run -- never raises, never
+    drops a glyph: anything not confidently reconstructed is passed through as literal text."""
     spans = [s for s in spans if s.get("text")]
     if not spans:
-        return "", None
+        return ""
 
     # Computed ONCE from the zone's own full span pool (before anything is claimed by a fraction)
     # and reused everywhere below -- a fraction's numerator/denominator is often only 1-2 spans,
     # too few for this same "most total characters" heuristic to reliably tell body text apart
     # from an exponent on its own (see _join_plain_spans's own docstring).
     base_size, base_baseline = _base_size_and_baseline(spans)
-    spans, bar_issue = _normalize_modulus_bars(spans, drawings, zone_bbox, base_size)
 
     claimed_ids = set()
     pool = []  # list of dicts: {text, bbox, origin, size, font, is_math}
@@ -934,7 +704,7 @@ def reconstruct_zone(spans, drawings, zone_bbox):
     result = re.sub(r"\$\s*\$", " ", result)  # two adjacent math runs with nothing real between
     result = _space_after_closing_dollars(result)
     result = re.sub(r"[ \t]+", " ", result).strip()
-    return result, bar_issue
+    return result
 
 
 def _space_after_closing_dollars(text):

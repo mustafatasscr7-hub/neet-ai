@@ -17,12 +17,6 @@ Covers the reconstruction shapes confirmed live on the real sample PDF (MockTest
   * a 2x2 grid of options where two of the four cells each hold their own inline fraction, without
     one option's fraction bleeding into its neighbor's (requirement: never cross an option
     boundary);
-  * modulus/magnitude bars: "|x|" glued into one span, "|a + b + c|", a paired bar inside one
-    option of an inline row (never bleeding into its neighbor), a vector norm's own double bar
-    "||v||", and a bar with no character at all (two drawn vertical strokes, the same "no reliable
-    glyph" shape this module's own fraction bar already handles);
-  * the modulus-bar confidence rule: a lone, unpaired bar is flagged needs_review (reason names
-    "modulus bars") with the bar glyph still literally present, never guessed into an expression;
   * the confidence rule itself: a small glyph whose own bbox straddles the midpoint between two
     options sharing one row falls back to the plain-text path (flagged by the existing gates)
     rather than being guessed into the wrong option.
@@ -285,139 +279,6 @@ def test_vector_arrow_from_mt_extra_font():
     check('option A reconstructed as "\\vec{r}"', q["option_a"].replace(" ", "") == "$\\vec{r}$", q["option_a"])
 
 
-# ---------------------------------------------------------------- modulus/magnitude bars
-
-def test_modulus_single_variable_glued_in_one_span():
-    print("\n# |x| -- both bars glued into the SAME span as their own content (one PyMuPDF run,")
-    print("# confirmed live: insert_text's own single call keeps a uniform-format run as one span)")
-    doc = fitz.open()
-    page = _new_page(doc)
-    _header(page, "Physics", 2)
-    page.insert_text((50, 80), "10. Modulus question?", fontsize=10)
-    _marker(page, 50, 100, "a")
-    page.insert_text((63, 100), "|x|", fontsize=10)
-    _marker(page, 50, 115, "b")
-    page.insert_text((63, 115), "plain", fontsize=10)
-    _marker(page, 50, 130, "c")
-    page.insert_text((63, 130), "plain2", fontsize=10)
-    _marker(page, 50, 145, "d")
-    page.insert_text((63, 145), "plain3", fontsize=10)
-    result = pmet.scan_mock_exam_pdf(_pdf_bytes(doc), "Synthetic Math 10")
-    q = _one_question(result)
-    check("not flagged", not q["needs_review"], q)
-    check('option A reconstructed as "|x|"', q["option_a"].strip() == "|x|", q["option_a"])
-
-
-def test_modulus_multi_token_expression():
-    print("\n# |a + b + c| -- a longer expression between the pair, same baseline")
-    doc = fitz.open()
-    page = _new_page(doc)
-    _header(page, "Physics", 2)
-    page.insert_text((50, 80), "11. Modulus-of-a-sum question?", fontsize=10)
-    _marker(page, 50, 100, "a")
-    page.insert_text((63, 100), "|a + b + c|", fontsize=10)
-    _marker(page, 50, 115, "b")
-    page.insert_text((63, 115), "plain", fontsize=10)
-    _marker(page, 50, 130, "c")
-    page.insert_text((63, 130), "plain2", fontsize=10)
-    _marker(page, 50, 145, "d")
-    page.insert_text((63, 145), "plain3", fontsize=10)
-    result = pmet.scan_mock_exam_pdf(_pdf_bytes(doc), "Synthetic Math 11")
-    q = _one_question(result)
-    check("not flagged", not q["needs_review"], q)
-    check('option A reconstructed as "|a + b + c|"', q["option_a"].strip() == "|a + b + c|", q["option_a"])
-
-
-def test_modulus_bar_inside_one_option_of_an_inline_row():
-    print("\n# A paired bar inside ONE option of a 2-per-row inline layout -- reconstructs cleanly")
-    print("# and never bleeds into its neighbor's own zone (requirement: same option-zone geometry)")
-    doc = fitz.open()
-    page = _new_page(doc)
-    _header(page, "Physics", 2)
-    page.insert_text((50, 80), "12. Inline-row modulus question?", fontsize=10)
-    _marker(page, 50, 100, "a")
-    page.insert_text((63, 100), "|p|", fontsize=10)
-    _marker(page, 120, 100, "b")
-    page.insert_text((133, 100), "q", fontsize=10)
-    _marker(page, 50, 115, "c")
-    page.insert_text((63, 115), "plain2", fontsize=10)
-    _marker(page, 50, 130, "d")
-    page.insert_text((63, 130), "plain3", fontsize=10)
-    result = pmet.scan_mock_exam_pdf(_pdf_bytes(doc), "Synthetic Math 12")
-    q = _one_question(result)
-    check("not flagged", not q["needs_review"], q)
-    check('option A reconstructed as "|p|"', q["option_a"].strip() == "|p|", q["option_a"])
-    check("option B untouched by option A's own bars", q["option_b"].strip() == "q", q["option_b"])
-
-
-def test_unpaired_modulus_bar_flags_needs_review():
-    print("\n# requirement 3's confidence rule: a lone bar with no partner on its own row is NEVER")
-    print("# guessed into a modulus expression -- flagged needs_review (reason names \"modulus")
-    print("# bars\") with the bar glyph still literally present, exactly as it was on the page.")
-    doc = fitz.open()
-    page = _new_page(doc)
-    _header(page, "Physics", 2)
-    page.insert_text((50, 80), "13. Unpaired-bar question?", fontsize=10)
-    _marker(page, 50, 100, "a")
-    page.insert_text((63, 100), "|x", fontsize=10)
-    _marker(page, 50, 115, "b")
-    page.insert_text((63, 115), "plain", fontsize=10)
-    _marker(page, 50, 130, "c")
-    page.insert_text((63, 130), "plain2", fontsize=10)
-    _marker(page, 50, 145, "d")
-    page.insert_text((63, 145), "plain3", fontsize=10)
-    result = pmet.scan_mock_exam_pdf(_pdf_bytes(doc), "Synthetic Math 13")
-    q = _one_question(result)
-    check("flagged needs_review", q["needs_review"], q)
-    check('reason names "modulus bars"', "modulus bars" in (q["review_reason"] or ""), q["review_reason"])
-    check("the bar glyph is still literally present (never silently dropped/guessed)",
-          "|" in q["option_a"], q["option_a"])
-
-
-def test_double_bar_vector_norm():
-    print('\n# ||v|| -- a vector norm\'s own DOUBLE bar, rebuilt as "||" not two separate singles')
-    doc = fitz.open()
-    page = _new_page(doc)
-    _header(page, "Physics", 2)
-    page.insert_text((50, 80), "14. Vector-norm question?", fontsize=10)
-    _marker(page, 50, 100, "a")
-    page.insert_text((63, 100), "||v||", fontsize=10)
-    _marker(page, 50, 115, "b")
-    page.insert_text((63, 115), "plain", fontsize=10)
-    _marker(page, 50, 130, "c")
-    page.insert_text((63, 130), "plain2", fontsize=10)
-    _marker(page, 50, 145, "d")
-    page.insert_text((63, 145), "plain3", fontsize=10)
-    result = pmet.scan_mock_exam_pdf(_pdf_bytes(doc), "Synthetic Math 14")
-    q = _one_question(result)
-    check("not flagged", not q["needs_review"], q)
-    check('option A reconstructed as "||v||"', q["option_a"].strip() == "||v||", q["option_a"])
-
-
-def test_drawn_vertical_stroke_as_modulus_bar():
-    print("\n# A modulus bar with NO character at all -- just two drawn vertical strokes, the same")
-    print("# \"no reliable glyph\" shape this module's own fraction bar already handles (a vector-")
-    print("# drawn line with no '/' character anywhere), transposed to the vertical axis.")
-    doc = fitz.open()
-    page = _new_page(doc)
-    _header(page, "Physics", 2)
-    page.insert_text((50, 80), "15. Drawn-stroke modulus question?", fontsize=10)
-    _marker(page, 50, 100, "a")
-    page.draw_line((66, 92), (66, 104))   # opening bar -- a drawn stroke, no character
-    page.insert_text((70, 100), "v", fontsize=10)
-    page.draw_line((80, 92), (80, 104))   # closing bar
-    _marker(page, 50, 115, "b")
-    page.insert_text((63, 115), "plain", fontsize=10)
-    _marker(page, 50, 130, "c")
-    page.insert_text((63, 130), "plain2", fontsize=10)
-    _marker(page, 50, 145, "d")
-    page.insert_text((63, 145), "plain3", fontsize=10)
-    result = pmet.scan_mock_exam_pdf(_pdf_bytes(doc), "Synthetic Math 15")
-    q = _one_question(result)
-    check("not flagged", not q["needs_review"], q)
-    check('option A reconstructed as "|v|"', q["option_a"].strip() == "|v|", q["option_a"])
-
-
 # ---------------------------------------------------------------- confidence rule
 
 def test_straddling_exponent_falls_back_instead_of_guessing():
@@ -463,12 +324,6 @@ def main():
     test_root_with_parenthesized_radicand_across_spans()
     test_bare_root_with_nothing_after_it_stays_literal()
     test_vector_arrow_from_mt_extra_font()
-    test_modulus_single_variable_glued_in_one_span()
-    test_modulus_multi_token_expression()
-    test_modulus_bar_inside_one_option_of_an_inline_row()
-    test_unpaired_modulus_bar_flags_needs_review()
-    test_double_bar_vector_norm()
-    test_drawn_vertical_stroke_as_modulus_bar()
     test_straddling_exponent_falls_back_instead_of_guessing()
 
     print(f"\n{len(_passed)} passed, {len(_failed)} failed")

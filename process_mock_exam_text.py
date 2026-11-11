@@ -299,18 +299,11 @@ def reconstruct_question_math(doc, active, drawings_cache):
     question's own 4 lettered markers (a genuinely different layout, or a question this module's
     own marker detection doesn't recognize -- always safer left to the existing text-based path
     and its own existing needs_review gates than forced through a zone split built on a wrong
-    assumption, per process_mock_exam_math's own docstring).
-
-    Returns (stem_text, options, bar_issues) -- bar_issues is a dict {location_label: reason} for
-    the stem and/or any option whose own modulus/magnitude bars could not be confidently paired
-    (see process_mock_exam_math._normalize_modulus_bars), empty whenever nothing needed flagging.
-    Always empty on the plain-text fallback path below -- that path never runs this module's own
-    bar reconstruction at all, same as it never runs the rest of process_mock_exam_math either."""
+    assumption, per process_mock_exam_math's own docstring)."""
     flat_spans = _flatten_question_spans(active)
     result = build_option_zones(flat_spans, active["bbox"])
     if result is None:
-        stem, opts = _parse_options(active["text_acc"])
-        return stem, opts, {}
+        return _parse_options(active["text_acc"])
     stem_zone, option_zones, marker_ids = result
     buckets = assign_spans_to_zones(flat_spans, stem_zone, option_zones, marker_ids)
 
@@ -323,17 +316,12 @@ def reconstruct_question_math(doc, active, drawings_cache):
             out.extend(drawings_cache[pi])
         return out
 
-    bar_issues = {}
-    stem_text, stem_issue = reconstruct_zone(buckets["stem"], _drawings_for(buckets["stem"]), stem_zone)
-    if stem_issue:
-        bar_issues["stem"] = stem_issue
-    options = {}
-    for letter in ("a", "b", "c", "d"):
-        text, issue = reconstruct_zone(buckets[letter], _drawings_for(buckets[letter]), option_zones[letter])
-        options[letter] = text
-        if issue:
-            bar_issues[f"option {letter.upper()}"] = issue
-    return stem_text, options, bar_issues
+    stem_text = reconstruct_zone(buckets["stem"], _drawings_for(buckets["stem"]), stem_zone)
+    options = {
+        letter: reconstruct_zone(buckets[letter], _drawings_for(buckets[letter]), option_zones[letter])
+        for letter in ("a", "b", "c", "d")
+    }
+    return stem_text, options
 
 
 def _looks_math_garbled(text):
@@ -359,7 +347,7 @@ def _crop_question_image(doc, page_index, bbox, margin=8):
 
 
 def _finalize_question(doc, active, mock_name, drawings_cache):
-    stem, opts, bar_issues = reconstruct_question_math(doc, active, drawings_cache)
+    stem, opts = reconstruct_question_math(doc, active, drawings_cache)
     missing = [l for l in _OPTION_LETTERS if not opts.get(l)]
     needs_review = False
     review_reason = None
@@ -369,12 +357,6 @@ def _finalize_question(doc, active, mock_name, drawings_cache):
             f"Option(s) {', '.join(l.upper() for l in missing)} came back empty for "
             f"{active['subject']} question {active['printed_number']} -- a marker may have been "
             f"missed or its content fragmented across the page."
-        )
-    elif bar_issues:
-        needs_review = True
-        review_reason = (
-            f"{active['subject']} question {active['printed_number']}: modulus bars in "
-            f"{', '.join(bar_issues)} could not be confidently paired -- please check against the PDF."
         )
     elif not stem:
         needs_review = True
