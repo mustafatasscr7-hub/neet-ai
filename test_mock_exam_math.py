@@ -17,6 +17,18 @@ Covers the reconstruction shapes confirmed live on the real sample PDF (MockTest
   * a 2x2 grid of options where two of the four cells each hold their own inline fraction, without
     one option's fraction bleeding into its neighbor's (requirement: never cross an option
     boundary);
+  * modulus/magnitude bars: "|x|" glued into one span, "|a + b + c|", a paired bar inside one
+    option of an inline row (never bleeding into its neighbor), a vector norm's own double bar
+    "||v||", and a bar with no character at all (two drawn vertical strokes, the same "no reliable
+    glyph" shape this module's own fraction bar already handles);
+  * the modulus-bar confidence rule, as fixed after a real regression (2026-11-11): a lone bar-like
+    mark with no possible partner anywhere nearby is never flagged and never acted on (the fix for
+    that regression - see process_mock_exam_math's own "Regression" comment), while a genuine
+    multi-mark row that still cannot pair up cleanly is flagged needs_review (reason names
+    "modulus bars") with the bar glyphs still literally present, never guessed into an expression;
+    a thin filled rectangle (a table's own cell border/shading) and a drawn stroke inside an
+    already-detected diagram region are both excluded before they are ever treated as a candidate
+    bar at all, regardless of how a real bar's own width/height bounds would otherwise match them;
   * the confidence rule itself: a small glyph whose own bbox straddles the midpoint between two
     options sharing one row falls back to the plain-text path (flagged by the existing gates)
     rather than being guessed into the wrong option.
@@ -279,6 +291,231 @@ def test_vector_arrow_from_mt_extra_font():
     check('option A reconstructed as "\\vec{r}"', q["option_a"].replace(" ", "") == "$\\vec{r}$", q["option_a"])
 
 
+# ---------------------------------------------------------------- modulus/magnitude bars
+
+def test_modulus_single_variable_glued_in_one_span():
+    print("\n# |x| - both bars glued into the SAME span as their own content (one PyMuPDF run,")
+    print("# confirmed live: insert_text's own single call keeps a uniform-format run as one span)")
+    doc = fitz.open()
+    page = _new_page(doc)
+    _header(page, "Physics", 2)
+    page.insert_text((50, 80), "10. Modulus question?", fontsize=10)
+    _marker(page, 50, 100, "a")
+    page.insert_text((63, 100), "|x|", fontsize=10)
+    _marker(page, 50, 115, "b")
+    page.insert_text((63, 115), "plain", fontsize=10)
+    _marker(page, 50, 130, "c")
+    page.insert_text((63, 130), "plain2", fontsize=10)
+    _marker(page, 50, 145, "d")
+    page.insert_text((63, 145), "plain3", fontsize=10)
+    result = pmet.scan_mock_exam_pdf(_pdf_bytes(doc), "Synthetic Math 10")
+    q = _one_question(result)
+    check("not flagged", not q["needs_review"], q)
+    check('option A reconstructed as "|x|"', q["option_a"].strip() == "|x|", q["option_a"])
+
+
+def test_modulus_multi_token_expression():
+    print("\n# |a + b + c| - a longer expression between the pair, same baseline")
+    doc = fitz.open()
+    page = _new_page(doc)
+    _header(page, "Physics", 2)
+    page.insert_text((50, 80), "11. Modulus-of-a-sum question?", fontsize=10)
+    _marker(page, 50, 100, "a")
+    page.insert_text((63, 100), "|a + b + c|", fontsize=10)
+    _marker(page, 50, 115, "b")
+    page.insert_text((63, 115), "plain", fontsize=10)
+    _marker(page, 50, 130, "c")
+    page.insert_text((63, 130), "plain2", fontsize=10)
+    _marker(page, 50, 145, "d")
+    page.insert_text((63, 145), "plain3", fontsize=10)
+    result = pmet.scan_mock_exam_pdf(_pdf_bytes(doc), "Synthetic Math 11")
+    q = _one_question(result)
+    check("not flagged", not q["needs_review"], q)
+    check('option A reconstructed as "|a + b + c|"', q["option_a"].strip() == "|a + b + c|", q["option_a"])
+
+
+def test_modulus_bar_inside_one_option_of_an_inline_row():
+    print("\n# A paired bar inside ONE option of a 2-per-row inline layout - reconstructs cleanly")
+    print("# and never bleeds into its neighbor's own zone (requirement: same option-zone geometry)")
+    doc = fitz.open()
+    page = _new_page(doc)
+    _header(page, "Physics", 2)
+    page.insert_text((50, 80), "12. Inline-row modulus question?", fontsize=10)
+    _marker(page, 50, 100, "a")
+    page.insert_text((63, 100), "|p|", fontsize=10)
+    _marker(page, 120, 100, "b")
+    page.insert_text((133, 100), "q", fontsize=10)
+    _marker(page, 50, 115, "c")
+    page.insert_text((63, 115), "plain2", fontsize=10)
+    _marker(page, 50, 130, "d")
+    page.insert_text((63, 130), "plain3", fontsize=10)
+    result = pmet.scan_mock_exam_pdf(_pdf_bytes(doc), "Synthetic Math 12")
+    q = _one_question(result)
+    check("not flagged", not q["needs_review"], q)
+    check('option A reconstructed as "|p|"', q["option_a"].strip() == "|p|", q["option_a"])
+    check("option B untouched by option A's own bars", q["option_b"].strip() == "q", q["option_b"])
+
+
+def test_double_bar_vector_norm():
+    print('\n# ||v|| - a vector norm\'s own DOUBLE bar, rebuilt as "||" not two separate singles')
+    doc = fitz.open()
+    page = _new_page(doc)
+    _header(page, "Physics", 2)
+    page.insert_text((50, 80), "14. Vector-norm question?", fontsize=10)
+    _marker(page, 50, 100, "a")
+    page.insert_text((63, 100), "||v||", fontsize=10)
+    _marker(page, 50, 115, "b")
+    page.insert_text((63, 115), "plain", fontsize=10)
+    _marker(page, 50, 130, "c")
+    page.insert_text((63, 130), "plain2", fontsize=10)
+    _marker(page, 50, 145, "d")
+    page.insert_text((63, 145), "plain3", fontsize=10)
+    result = pmet.scan_mock_exam_pdf(_pdf_bytes(doc), "Synthetic Math 14")
+    q = _one_question(result)
+    check("not flagged", not q["needs_review"], q)
+    check('option A reconstructed as "||v||"', q["option_a"].strip() == "||v||", q["option_a"])
+
+
+def test_drawn_vertical_stroke_as_modulus_bar():
+    print("\n# A modulus bar with NO character at all - just two drawn vertical strokes, the same")
+    print("# \"no reliable glyph\" shape this module's own fraction bar already handles (a vector-")
+    print("# drawn line with no '/' character anywhere), transposed to the vertical axis.")
+    doc = fitz.open()
+    page = _new_page(doc)
+    _header(page, "Physics", 2)
+    page.insert_text((50, 80), "15. Drawn-stroke modulus question?", fontsize=10)
+    _marker(page, 50, 100, "a")
+    page.draw_line((66, 92), (66, 104))   # opening bar - a drawn stroke, no character
+    page.insert_text((70, 100), "v", fontsize=10)
+    page.draw_line((80, 92), (80, 104))   # closing bar
+    _marker(page, 50, 115, "b")
+    page.insert_text((63, 115), "plain", fontsize=10)
+    _marker(page, 50, 130, "c")
+    page.insert_text((63, 130), "plain2", fontsize=10)
+    _marker(page, 50, 145, "d")
+    page.insert_text((63, 145), "plain3", fontsize=10)
+    result = pmet.scan_mock_exam_pdf(_pdf_bytes(doc), "Synthetic Math 15")
+    q = _one_question(result)
+    check("not flagged", not q["needs_review"], q)
+    check('option A reconstructed as "|v|"', q["option_a"].strip() == "|v|", q["option_a"])
+
+
+def test_lone_stray_bar_never_flagged():
+    print("\n# Regression fix (2026-11-11): a LONE bar-like mark with no possible partner anywhere")
+    print("# nearby - e.g. a chemistry double-bond character caught in running option text, the")
+    print("# real false positive found on MockTest1.pdf - is never flagged and never acted on. It")
+    print("# stays exactly as literal text, same as any other glyph this module does not")
+    print("# confidently reconstruct (requirement: never bail a zone for a stray stroke elsewhere).")
+    doc = fitz.open()
+    page = _new_page(doc)
+    _header(page, "Physics", 2)
+    page.insert_text((50, 80), "13. Lone-bar question?", fontsize=10)
+    _marker(page, 50, 100, "a")
+    page.insert_text((63, 100), "|x", fontsize=10)
+    _marker(page, 50, 115, "b")
+    page.insert_text((63, 115), "plain", fontsize=10)
+    _marker(page, 50, 130, "c")
+    page.insert_text((63, 130), "plain2", fontsize=10)
+    _marker(page, 50, 145, "d")
+    page.insert_text((63, 145), "plain3", fontsize=10)
+    result = pmet.scan_mock_exam_pdf(_pdf_bytes(doc), "Synthetic Math 13")
+    q = _one_question(result)
+    check("NOT flagged (a lone mark is never ambiguous, never acted on)", not q["needs_review"], q)
+    check("the bar glyph is still literally present, completely untouched",
+          q["option_a"].strip() == "|x", q["option_a"])
+
+
+def test_two_bars_with_nothing_real_between_flags_as_ambiguous():
+    print("\n# Two bar-like marks DO sit on the same baseline - a genuine candidate pair - but with")
+    print("# nothing real between them (the gap a chemistry double bond's own two near-parallel")
+    print("# strokes leave behind). This is the \"ambiguous\" shape that must still flag needs_review")
+    print("# (reason names \"modulus bars\"), never guessed into an empty \"||\" expression.")
+    doc = fitz.open()
+    page = _new_page(doc)
+    _header(page, "Physics", 2)
+    page.insert_text((50, 80), "16. Empty-between-bars question?", fontsize=10)
+    _marker(page, 50, 100, "a")
+    page.insert_text((63, 100), "|", fontsize=10)
+    page.insert_text((80, 100), "|", fontsize=10)  # same row, far enough apart not to merge,
+    _marker(page, 50, 115, "b")                     # but nothing real sits between the two bars
+    page.insert_text((63, 115), "plain", fontsize=10)
+    _marker(page, 50, 130, "c")
+    page.insert_text((63, 130), "plain2", fontsize=10)
+    _marker(page, 50, 145, "d")
+    page.insert_text((63, 145), "plain3", fontsize=10)
+    result = pmet.scan_mock_exam_pdf(_pdf_bytes(doc), "Synthetic Math 16")
+    q = _one_question(result)
+    check("flagged needs_review (a genuine pair that still can't be trusted)", q["needs_review"], q)
+    check('reason names "modulus bars"', "modulus bars" in (q["review_reason"] or ""), q["review_reason"])
+    check("both bar glyphs are still literally present (never silently dropped/guessed)",
+          q["option_a"].count("|") == 2, q["option_a"])
+
+
+def test_filled_rectangle_not_treated_as_modulus_bar():
+    print("\n# Regression fix (2026-11-11): a THIN FILLED RECTANGLE (a Match-the-Following table's")
+    print("# own cell border/shading on the real sample, PyMuPDF drawing type \"f\" with a \"re\"")
+    print("# item) passes every width/height bound a real bar's drawn stroke does, but is a wholly")
+    print("# different drawing primitive - never treated as a bar candidate at all, even though a")
+    print("# real pair sitting exactly here, around exactly this content, would have reconstructed.")
+    doc = fitz.open()
+    page = _new_page(doc)
+    _header(page, "Physics", 2)
+    page.insert_text((50, 80), "17. Filled-rectangle question?", fontsize=10)
+    _marker(page, 50, 100, "a")
+    page.insert_text((63, 100), "x", fontsize=10)
+    page.draw_rect(fitz.Rect(72, 92, 72.4, 104), color=None, fill=(0, 0, 0))
+    page.insert_text((76, 100), "y", fontsize=10)
+    page.draw_rect(fitz.Rect(84, 92, 84.4, 104), color=None, fill=(0, 0, 0))
+    page.insert_text((88, 100), "z", fontsize=10)
+    _marker(page, 50, 115, "b")
+    page.insert_text((63, 115), "plain", fontsize=10)
+    _marker(page, 50, 130, "c")
+    page.insert_text((63, 130), "plain2", fontsize=10)
+    _marker(page, 50, 145, "d")
+    page.insert_text((63, 145), "plain3", fontsize=10)
+    result = pmet.scan_mock_exam_pdf(_pdf_bytes(doc), "Synthetic Math 17")
+    q = _one_question(result)
+    check("not flagged", not q["needs_review"], q)
+    check("no bar characters inserted around the filled rectangles",
+          "|" not in q["option_a"], q["option_a"])
+    check('option A keeps its own real content ("x y z")',
+          q["option_a"].replace(" ", "") == "xyz", q["option_a"])
+
+
+def test_drawn_stroke_inside_diagram_excluded():
+    print("\n# Regression fix (2026-11-11): a drawn stroke that sits inside an already-detected")
+    print("# diagram region (a circuit's own battery symbol, a structural formula's own ring bond,")
+    print("# confirmed live on the real sample) is excluded before it is ever treated as a bar")
+    print("# candidate, even though it is a genuine stroke that would otherwise qualify.")
+    doc = fitz.open()
+    page = _new_page(doc)
+    _header(page, "Physics", 2)
+    page.insert_text((50, 80), "18. Diagram-stroke question?", fontsize=10)
+    _marker(page, 50, 100, "a")
+    page.insert_text((63, 100), "x", fontsize=10)
+    # A small synthetic raster image -- _get_diagram_bboxes's own raster pass needs no YOLO model
+    # (unlike its vector pass), so this is the deterministic way to mark a region as "a diagram"
+    # in a test, matching _MIN_DIAGRAM_DIM's own 20pt floor.
+    pix = fitz.Pixmap(fitz.csGRAY, (0, 0, 40, 40), False)
+    pix.set_rect(pix.irect, (200,))
+    page.insert_image(fitz.Rect(100, 85, 140, 125), stream=pix.tobytes("png"))
+    page.draw_line((110, 98), (110, 110))
+    page.insert_text((114, 106), "y", fontsize=10)
+    page.draw_line((124, 98), (124, 110))
+    page.insert_text((128, 100), "z", fontsize=10)
+    _marker(page, 50, 115, "b")
+    page.insert_text((63, 115), "plain", fontsize=10)
+    _marker(page, 50, 130, "c")
+    page.insert_text((63, 130), "plain2", fontsize=10)
+    _marker(page, 50, 145, "d")
+    page.insert_text((63, 145), "plain3", fontsize=10)
+    result = pmet.scan_mock_exam_pdf(_pdf_bytes(doc), "Synthetic Math 18")
+    q = _one_question(result)
+    check("not flagged", not q["needs_review"], q)
+    check("no bar characters inserted around the diagram's own strokes",
+          "|" not in q["option_a"], q["option_a"])
+
+
 # ---------------------------------------------------------------- confidence rule
 
 def test_straddling_exponent_falls_back_instead_of_guessing():
@@ -324,6 +561,15 @@ def main():
     test_root_with_parenthesized_radicand_across_spans()
     test_bare_root_with_nothing_after_it_stays_literal()
     test_vector_arrow_from_mt_extra_font()
+    test_modulus_single_variable_glued_in_one_span()
+    test_modulus_multi_token_expression()
+    test_modulus_bar_inside_one_option_of_an_inline_row()
+    test_double_bar_vector_norm()
+    test_drawn_vertical_stroke_as_modulus_bar()
+    test_lone_stray_bar_never_flagged()
+    test_two_bars_with_nothing_real_between_flags_as_ambiguous()
+    test_filled_rectangle_not_treated_as_modulus_bar()
+    test_drawn_stroke_inside_diagram_excluded()
     test_straddling_exponent_falls_back_instead_of_guessing()
 
     print(f"\n{len(_passed)} passed, {len(_failed)} failed")

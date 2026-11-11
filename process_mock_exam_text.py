@@ -293,17 +293,24 @@ def _flatten_question_spans(active):
     return flat
 
 
-def reconstruct_question_math(doc, active, drawings_cache):
+def reconstruct_question_math(doc, active, drawings_cache, diagram_bboxes_cache):
     """Tries the geometry-aware zone reconstruction (process_mock_exam_math) first; falls back to
     the old plain-text _parse_options whenever build_option_zones can't unambiguously find this
     question's own 4 lettered markers (a genuinely different layout, or a question this module's
     own marker detection doesn't recognize -- always safer left to the existing text-based path
     and its own existing needs_review gates than forced through a zone split built on a wrong
-    assumption, per process_mock_exam_math's own docstring)."""
+    assumption, per process_mock_exam_math's own docstring).
+
+    Returns (stem_text, options, bar_issues) -- bar_issues is a dict {location_label: reason} for
+    the stem and/or any option whose own modulus/magnitude bars could not be confidently paired
+    (see process_mock_exam_math._normalize_modulus_bars), empty whenever nothing needed flagging.
+    Always empty on the plain-text fallback path below -- that path never runs this module's own
+    bar reconstruction at all, same as it never runs the rest of process_mock_exam_math either."""
     flat_spans = _flatten_question_spans(active)
     result = build_option_zones(flat_spans, active["bbox"])
     if result is None:
-        return _parse_options(active["text_acc"])
+        stem, opts = _parse_options(active["text_acc"])
+        return stem, opts, {}
     stem_zone, option_zones, marker_ids = result
     buckets = assign_spans_to_zones(flat_spans, stem_zone, option_zones, marker_ids)
 
@@ -316,12 +323,41 @@ def reconstruct_question_math(doc, active, drawings_cache):
             out.extend(drawings_cache[pi])
         return out
 
-    stem_text = reconstruct_zone(buckets["stem"], _drawings_for(buckets["stem"]), stem_zone)
-    options = {
-        letter: reconstruct_zone(buckets[letter], _drawings_for(buckets[letter]), option_zones[letter])
-        for letter in ("a", "b", "c", "d")
-    }
-    return stem_text, options
+    def _diagram_bboxes_for(spans):
+        """Same page-union shape as _drawings_for (see its own docstring) -- a zone whose content
+        spans a page boundary gets the diagram regions of EVERY page it touches, so a drawn
+        stroke is always checked against its own page's real diagrams regardless of which page
+        this zone's first span happens to live on. The lookup below should always already be
+        warm: the main scan loop populates diagram_bboxes_cache for every page it visits (the
+        same call it already makes for has_diagram), before any question on that page is ever
+        finalized -- the fallback recompute here only guards against a page this zone somehow
+        references before the main loop reached it, never the normal path. Recomputing
+        _get_diagram_bboxes a second time per page here, unconditionally, was tried first and
+        measurably slowed down every test that scans a real multi-page PDF (its own vector pass
+        runs a YOLO inference per page) -- not wrong, just wasteful, since the main loop already
+        has the answer."""
+        pages = {s["page_index"] for s in spans}
+        out = []
+        for pi in pages:
+            if pi not in diagram_bboxes_cache:
+                diagram_bboxes_cache[pi] = _get_diagram_bboxes(doc[pi])
+            out.extend(diagram_bboxes_cache[pi])
+        return out
+
+    bar_issues = {}
+    stem_text, stem_issue = reconstruct_zone(
+        buckets["stem"], _drawings_for(buckets["stem"]), stem_zone, _diagram_bboxes_for(buckets["stem"]))
+    if stem_issue:
+        bar_issues["stem"] = stem_issue
+    options = {}
+    for letter in ("a", "b", "c", "d"):
+        text, issue = reconstruct_zone(
+            buckets[letter], _drawings_for(buckets[letter]), option_zones[letter],
+            _diagram_bboxes_for(buckets[letter]))
+        options[letter] = text
+        if issue:
+            bar_issues[f"option {letter.upper()}"] = issue
+    return stem_text, options, bar_issues
 
 
 def _looks_math_garbled(text):
@@ -346,8 +382,8 @@ def _crop_question_image(doc, page_index, bbox, margin=8):
         return None
 
 
-def _finalize_question(doc, active, mock_name, drawings_cache):
-    stem, opts = reconstruct_question_math(doc, active, drawings_cache)
+def _finalize_question(doc, active, mock_name, drawings_cache, diagram_bboxes_cache):
+    stem, opts, bar_issues = reconstruct_question_math(doc, active, drawings_cache, diagram_bboxes_cache)
     missing = [l for l in _OPTION_LETTERS if not opts.get(l)]
     needs_review = False
     review_reason = None
@@ -357,6 +393,12 @@ def _finalize_question(doc, active, mock_name, drawings_cache):
             f"Option(s) {', '.join(l.upper() for l in missing)} came back empty for "
             f"{active['subject']} question {active['printed_number']} -- a marker may have been "
             f"missed or its content fragmented across the page."
+        )
+    elif bar_issues:
+        needs_review = True
+        review_reason = (
+            f"{active['subject']} question {active['printed_number']}: modulus bars in "
+            f"{', '.join(bar_issues)} could not be confidently paired -- please check against the PDF."
         )
     elif not stem:
         needs_review = True
@@ -427,12 +469,13 @@ def scan_mock_exam_pdf(pdf_bytes, mock_name):
     # "after" its own heading exactly once, in document order, and never returns to "before".
     past_answers_subjects = set()
     drawings_cache = {}  # page_index -> page.get_drawings(), fetched at most once per page
+    diagram_bboxes_cache = {}  # page_index -> _get_diagram_bboxes(page), fetched at most once per page
 
     def close_active():
         nonlocal active
         if active is None:
             return
-        q = _finalize_question(doc, active, mock_name, drawings_cache)
+        q = _finalize_question(doc, active, mock_name, drawings_cache, diagram_bboxes_cache)
         per_subject_questions[active["subject"]].append(q)
         if q["needs_review"]:
             flagged_pages.append({"page": active["start_page"], "reason": q["review_reason"]})
@@ -480,6 +523,8 @@ def scan_mock_exam_pdf(pdf_bytes, mock_name):
             past_answers_subjects.add(current_subject)
 
         diagram_bboxes = _get_diagram_bboxes(page)
+        diagram_bboxes_cache[page_index] = diagram_bboxes  # reused below for modulus-bar exclusion,
+        # never recomputed -- this call is the only one _get_diagram_bboxes ever makes per page.
 
         for block in ordered:
             coverage[current_subject]["total"] += _word_count(block)
