@@ -12,3 +12,4 @@ backups/
 .scan_cache/
 .venv/
 ncert_manual/
+ncert_pdfs/
