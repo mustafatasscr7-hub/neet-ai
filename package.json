@@ -1,6 +1,6 @@
 {
   "scripts": {
-    "test": "node test-paste-parser.js"
+    "test": "node test-paste-parser.js && node test-error-formatter.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.106.0"

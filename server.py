@@ -1132,7 +1132,13 @@ class RegisterReferralRequest(BaseModel):
     referred_id: Optional[str] = None  # ignored -- older clients still send it; see /referral/register
 
 class ScanPdfRequest(BaseModel):
-    subject: str
+    # Optional, not "Biology"/"Physics"/"Chemistry" validated at the type level, because
+    # layout="mock_exam" never sends it (subject is detected per-page from the PDF itself) --
+    # admin_scan_pdf's own `req.subject not in (...)` check still enforces it for every other
+    # layout. Making this required caused every mock-exam scan to 422 before admin_scan_pdf ever
+    # ran, surfaced to the admin as "Scan failed: [object Object]" (FastAPI's validation `detail`
+    # is a list of error objects, not a string).
+    subject: Optional[str] = None
     data: str  # base64-encoded PDF bytes
     filename: Optional[str] = None  # original filename, for processed_pdfs tracking
     # Who is actually at the keyboard for this upload (contractor-pdf-review.html's "Who is

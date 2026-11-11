@@ -182,6 +182,51 @@ def test_scan_mock_exam_pdf_mismatch_flagged():
     check("flagged_pages mentions the marker/extraction mismatch", any("marker" in f["reason"] for f in result["flagged_pages"]), result["flagged_pages"])
 
 
+# ---------------------------------------------------------------- /admin/scan-pdf endpoint
+
+
+def test_scan_pdf_endpoint_accepts_mock_exam_without_subject():
+    print("\n# /admin/scan-pdf: layout=mock_exam never sends `subject` (detected per-page from the "
+          "PDF itself) -- regression test for the 422 that made every mock-exam scan fail as "
+          "'Scan failed: [object Object]' (FastAPI's own validation `detail`, not a server error)")
+    import base64
+    server.ADMIN_PASSWORD = ADMIN_KEY
+    server.CONTRACTOR_PDF_KEY = CONTRACTOR_KEY
+    client = TestClient(server.app)
+    fake_result = {"questions": [], "pages_scanned": 0, "flagged_pages": [], "completeness": {}, "mock_name": "Mock Test 1"}
+
+    with patch.object(server, "scan_mock_exam_pdf", return_value=fake_result) as mocked:
+        r = client.post(
+            "/admin/scan-pdf",
+            json={"data": base64.b64encode(b"fake pdf bytes").decode(), "layout": "mock_exam", "mock_name": "Mock Test 1"},
+            headers={"X-Admin-Key": ADMIN_KEY},
+        )
+        check("mock_exam scan with no `subject` field returns 200, not a 422", r.status_code == 200, (r.status_code, r.text))
+        body = r.json()
+        check("response has no error", "error" not in body or body["error"] is None, body)
+        check("scan_mock_exam_pdf was actually called", mocked.called)
+
+    # A one-character mock_name is accepted server-side too (length is a frontend-only nicety,
+    # not a server validation rule) -- confirms the bug was never about name length.
+    with patch.object(server, "scan_mock_exam_pdf", return_value=fake_result):
+        r2 = client.post(
+            "/admin/scan-pdf",
+            json={"data": base64.b64encode(b"fake pdf bytes").decode(), "layout": "mock_exam", "mock_name": "M"},
+            headers={"X-Admin-Key": ADMIN_KEY},
+        )
+        check("a one-character mock_name still returns 200", r2.status_code == 200, (r2.status_code, r2.text))
+
+    # Every other layout must still require a real subject -- this is the one check that caught
+    # an invalid subject before (and must keep catching it now that the field is Optional).
+    r3 = client.post(
+        "/admin/scan-pdf",
+        json={"data": base64.b64encode(b"fake pdf bytes").decode(), "layout": "standard"},
+        headers={"X-Admin-Key": ADMIN_KEY},
+    )
+    check("a non-mock-exam scan with no subject is still a clean 200+error (not a 422)", r3.status_code == 200, (r3.status_code, r3.text))
+    check("...and the error says what's wrong", r3.json().get("error") == "Invalid subject", r3.json())
+
+
 # ---------------------------------------------------------------- isolation (server.py)
 
 
@@ -355,6 +400,7 @@ def main():
     test_completeness()
     test_scan_mock_exam_pdf_offline()
     test_scan_mock_exam_pdf_mismatch_flagged()
+    test_scan_pdf_endpoint_accepts_mock_exam_without_subject()
     test_student_visible_excludes_mock()
     test_bulk_create_forces_mock_pending()
     test_dup_corpus_scoped_by_source()

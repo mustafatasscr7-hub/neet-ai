@@ -353,7 +353,8 @@
 
     <div id="mockNameSection" style="display:none;">
       <label style="display:block;font-size:11px;color:#888;margin-bottom:4px;">Mock name (e.g. "Mock Test 1")</label>
-      <input type="text" id="mockNameInput" placeholder="Mock Test 1" oninput="onMockNameInput()" style="width:100%;max-width:300px;background:#0d0d0d;border:1px solid #2a2a2a;border-radius:8px;padding:8px 10px;color:#ececec;font-family:'Inter',sans-serif;font-size:13px;margin-bottom:10px;"/>
+      <input type="text" id="mockNameInput" placeholder="Mock Test 1" oninput="onMockNameInput()" style="width:100%;max-width:300px;background:#0d0d0d;border:1px solid #2a2a2a;border-radius:8px;padding:8px 10px;color:#ececec;font-family:'Inter',sans-serif;font-size:13px;margin-bottom:4px;"/>
+      <div id="mockNameError" style="display:none;font-size:11px;color:#f87171;margin-bottom:10px;"></div>
     </div>
 
     <div id="mockCompletenessPanel" style="display:none;"></div>
@@ -379,7 +380,7 @@
           <option value="scanned">Scanned pages (image-only)</option>
         </select>
       </div>
-      <div id="mockLayoutNote" style="display:none;font-size:11px;color:#888;margin-bottom:10px;">Layout: Mock exam (Physics/Chemistry/Biology sections and the answer key are detected automatically)</div>
+      <div id="mockLayoutNote" style="display:none;font-size:11px;color:#888;margin-bottom:10px;">Layout: Mock exam (Physics, Chemistry and Biology sections are detected automatically; the answer key is ignored)</div>
       <div class="upload-row">
         <input type="file" id="pdfFile" accept="application/pdf" onchange="updateScanButton()"/>
         <button type="button" class="scan-btn" id="scanBtn" disabled onclick="scanPdf()">Scan PDF</button>
@@ -574,10 +575,29 @@
   // A non-OK response (404, 422, 500...) doesn't always have the app's own {error: "..."} shape
   // (e.g. FastAPI's default 404 is {detail: "Not Found"}) - without this, those responses were
   // silently treated as "success with no data" instead of a visible failure.
+  // ---------------- HTTP error formatting ----------------
+  // FastAPI validation failures return `detail` as a list of {loc, msg, type} objects, not a
+  // string -- naively concatenating one of those into a status message (`'Scan failed: ' + x`)
+  // produces "[object Object]" (Array/Object stringify, not JSON). This always returns plain text.
+  function formatErrorDetail(detail) {
+    if (detail === null || detail === undefined || detail === '') return '';
+    if (typeof detail === 'string') return detail;
+    if (Array.isArray(detail)) return detail.map(formatErrorDetail).filter(Boolean).join('; ');
+    if (typeof detail === 'object') {
+      if (typeof detail.msg === 'string') {
+        const loc = Array.isArray(detail.loc) ? detail.loc.filter(p => p !== 'body').join('.') : '';
+        return loc ? `${loc}: ${detail.msg}` : detail.msg;
+      }
+      if (!Object.keys(detail).length) return '';
+      try { return JSON.stringify(detail); } catch (e) { return String(detail); }
+    }
+    return String(detail);
+  }
+
   async function describeHttpError(res) {
     try {
       const body = await res.json();
-      return body.error || body.detail || `HTTP ${res.status}`;
+      return formatErrorDetail(body.error) || formatErrorDetail(body.detail) || `HTTP ${res.status}`;
     } catch (e) {
       return `HTTP ${res.status}`;
     }
@@ -718,8 +738,25 @@
     updateScanButton();
   }
 
+  // ---------------- Mock name validation ----------------
+  const MOCK_NAME_MIN_LENGTH = 3;
+  // Any non-empty string is accepted server-side, but a one- or two-character name is almost
+  // always a typo mid-entry rather than a real mock name -- caught here so it never reaches the
+  // scan endpoint. Returns null (valid) or the empty string (nothing entered yet, no error shown
+  // -- that case is covered by the existing "pick a mock name above" scanBtnHint instead).
+  function mockNameValidationError(name) {
+    const trimmed = (name || '').trim();
+    if (!trimmed) return null;
+    if (trimmed.length < MOCK_NAME_MIN_LENGTH) return `Mock name must be at least ${MOCK_NAME_MIN_LENGTH} characters.`;
+    return null;
+  }
+
   function onMockNameInput() {
     currentMockName = document.getElementById('mockNameInput').value.trim();
+    const errEl = document.getElementById('mockNameError');
+    const err = mockNameValidationError(currentMockName);
+    errEl.textContent = err || '';
+    errEl.style.display = err ? 'block' : 'none';
     updateScanButton();
   }
 
@@ -934,7 +971,13 @@
     document.getElementById('mockLayoutNote').style.display = mockMode ? 'block' : 'none';
     const pasteTab = document.querySelector('.mode-btn[data-mode="paste"]');
     if (pasteTab) pasteTab.style.display = mockMode ? 'none' : '';
-    if (mockMode) document.getElementById('mockNameInput').value = currentMockName;
+    if (mockMode) {
+      document.getElementById('mockNameInput').value = currentMockName;
+      const mockErrEl = document.getElementById('mockNameError');
+      const mockErr = mockNameValidationError(currentMockName);
+      mockErrEl.textContent = mockErr || '';
+      mockErrEl.style.display = mockErr ? 'block' : 'none';
+    }
 
     if (currentSubject) {
       document.querySelectorAll('.subject-btn[data-subject]').forEach(btn => btn.classList.toggle('active', btn.dataset.subject === currentSubject));
@@ -967,7 +1010,7 @@
     updateParseButton();
     populatePasteChapterSelect();
     const file = document.getElementById('pdfFile').files[0];
-    const ready = mockMode ? !!currentMockName : !!currentSubject;
+    const ready = mockMode ? (!!currentMockName && !mockNameValidationError(currentMockName)) : !!currentSubject;
     document.getElementById('scanBtn').disabled = !currentUploaderName || !ready || !file;
     const hintEl = document.getElementById('scanBtnHint');
     if (!hintEl) return;
@@ -1937,7 +1980,7 @@
 
   async function scanPdf() {
     const file = document.getElementById('pdfFile').files[0];
-    if (!file || !currentUploaderName || (mockMode ? !currentMockName : !currentSubject)) return;
+    if (!file || !currentUploaderName || (mockMode ? (!currentMockName || !!mockNameValidationError(currentMockName)) : !currentSubject)) return;
     if (!(await checkPdfAlreadyProcessed(file.name))) return;
     const layout = mockMode ? 'mock_exam' : document.getElementById('pdfLayoutSelect').value;
     let confirmOverCap = false;
@@ -1991,7 +2034,7 @@
         data = await res.json();
       }
       currentProcessedPdfId = data.processed_pdf_id || null;
-      if (data.error) { statusEl.textContent = 'Scan failed: ' + data.error; return; }
+      if (data.error) { statusEl.textContent = 'Scan failed: ' + formatErrorDetail(data.error); return; }
       statusEl.style.display = 'none';
       if (!mockMode) {
         const filenameMatch = matchChapterFromFilename(file.name, allChaptersForSubject(currentSubject));
@@ -2038,7 +2081,7 @@
       statusEl.textContent = 'Scan failed — check connection and try again.';
     } finally {
       document.getElementById('scanProgress').style.display = 'none';
-      scanBtn.disabled = !currentUploaderName || (mockMode ? !currentMockName : !currentSubject) || !document.getElementById('pdfFile').files[0];
+      scanBtn.disabled = !currentUploaderName || (mockMode ? (!currentMockName || !!mockNameValidationError(currentMockName)) : !currentSubject) || !document.getElementById('pdfFile').files[0];
     }
   }
 
@@ -2084,7 +2127,7 @@
     if (res.status === 401) { logout(); return null; }
     if (!res.ok) { statusEl.textContent = 'Scan failed: ' + await describeHttpError(res); return null; }
     const start = await res.json();
-    if (start.error) { statusEl.textContent = 'Scan failed: ' + start.error; return null; }
+    if (start.error) { statusEl.textContent = 'Scan failed: ' + formatErrorDetail(start.error); return null; }
     fill.style.width = '0';
     bar.style.display = 'block';
     let misses = 0;
@@ -2102,16 +2145,16 @@
         if (++misses >= 5) { statusEl.textContent = 'Lost contact with the server while scanning: ' + e.message; return null; }
         continue;
       }
-      if (job.error && !job.status) { statusEl.textContent = 'Scan failed: ' + job.error; return null; }
+      if (job.error && !job.status) { statusEl.textContent = 'Scan failed: ' + formatErrorDetail(job.error); return null; }
       const total = job.pages_total || start.pages_total || 0;
       const done = job.pages_done || 0;
       fill.style.width = total ? `${Math.round(100 * done / total)}%` : '0';
       if (job.status === 'queued') statusEl.textContent = 'Waiting for another free OCR scan to finish...';
       else if (job.status === 'running') statusEl.textContent = `Running free OCR... ${done} of ${total} page${total === 1 ? '' : 's'} read.`;
-      else if (job.status === 'error') { statusEl.textContent = 'Scan failed: ' + job.error; return null; }
+      else if (job.status === 'error') { statusEl.textContent = 'Scan failed: ' + formatErrorDetail(job.error); return null; }
       else if (job.status === 'done') {
         const data = job.result;
-        if (data.error) { statusEl.textContent = 'Scan failed: ' + data.error; return null; }
+        if (data.error) { statusEl.textContent = 'Scan failed: ' + formatErrorDetail(data.error); return null; }
         return data;
       }
     }
@@ -2130,7 +2173,7 @@
     if (res.status === 401) { logout(); return null; }
     if (!res.ok) { statusEl.textContent = 'Scan failed: ' + await describeHttpError(res); return null; }
     const start = await res.json();
-    if (start.error) { statusEl.textContent = 'Scan failed: ' + start.error; return null; }
+    if (start.error) { statusEl.textContent = 'Scan failed: ' + formatErrorDetail(start.error); return null; }
     fill.style.width = '0';
     bar.style.display = 'block';
     let misses = 0;
@@ -2147,16 +2190,16 @@
         if (++misses >= 5) { statusEl.textContent = 'Lost contact with the server while scanning: ' + e.message; return null; }
         continue;
       }
-      if (job.error && !job.status) { statusEl.textContent = 'Scan failed: ' + job.error; return null; }
+      if (job.error && !job.status) { statusEl.textContent = 'Scan failed: ' + formatErrorDetail(job.error); return null; }
       const total = job.pages_total || start.pages_total || 0;
       const done = job.pages_done || 0;
       fill.style.width = total ? `${Math.round(100 * done / total)}%` : '0';
       if (job.status === 'queued') statusEl.textContent = 'Waiting for another scan to finish...';
       else if (job.status === 'running') statusEl.textContent = job.message || `Scanning... ${done} of ${total} page${total === 1 ? '' : 's'} read.`;
-      else if (job.status === 'error') { statusEl.textContent = 'Scan failed: ' + job.error; return null; }
+      else if (job.status === 'error') { statusEl.textContent = 'Scan failed: ' + formatErrorDetail(job.error); return null; }
       else if (job.status === 'done') {
         const data = job.result;
-        if (data.error) { statusEl.textContent = 'Scan failed: ' + data.error; return null; }
+        if (data.error) { statusEl.textContent = 'Scan failed: ' + formatErrorDetail(data.error); return null; }
         return data;
       }
     }
