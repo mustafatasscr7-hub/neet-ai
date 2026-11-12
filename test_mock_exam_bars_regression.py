@@ -23,13 +23,26 @@ import process_mock_exam_text as pmt  # noqa: E402
 # and reproduced again after re-adding modulus-bar handling the way this fix does it. Updated
 # again after the reconstruct-before-splitting + font-aware-table + order-mismatch work (see
 # process_mock_exam_math.py's own module docstring and process_mock_exam_text.py's own
-# _check_order_mismatch): 11 flagged / 178 engaged, reproduced live. A real regression must never
-# push flagged ABOVE this bound, or engagement BELOW it. The bounds below are a few points looser
-# than the exact reproduced numbers (not 11/178 themselves) for the same reason the original
-# bound was already looser than its own exact number -- this layout's own bold-marker detection
-# picking up a slightly different split on some other real sample should not by itself trip this
-# guard without masking an actual collapse.
-_MAX_FLAGGED = 15
+# _check_order_mismatch): 11 flagged / 178 engaged, reproduced live. Updated AGAIN after fixing
+# three confirmed-live silent errors (Q6/Q10 fraction-denominator digits, Q19's subscript-instead-
+# of-superscript, Q29's cross-question leak -- all three previously WRONG and unflagged), two
+# further confirmed-live silent errors found during the SAME session's own verification pass
+# (Q18's multi-line-stem baseline misclassification, Q39's fraction over-claiming an adjacent
+# "tan^-1"-style exponent character) -- all five fixed at the root -- and adding new conservative
+# geometry/text-confidence gates (requirement 2: an ambiguous fraction/hat-vector/baseline-
+# sensitive-shift/base-text-size attachment, a drawn root glyph -- this sample's own root sign is
+# never a real character, only ever a drawn shape, so a dropped one previously left NO trace at
+# all, see process_mock_exam_math.detect_drawn_root_glyphs -- and two decimal numbers merged with
+# no operator between them, see process_mock_exam_text._has_merged_decimal_numbers): 21 flagged /
+# 178 engaged, reproduced live -- every one of those NEW flags (Physics 3, 4, 11, 14, 22, 27, 39,
+# 40, Chemistry 1, 27, 28, Biology 35) verified against the real page image as a genuine,
+# previously-silent issue, not a false positive. A real regression must never push flagged ABOVE
+# this bound, or engagement BELOW it. The bounds below are a few points looser than the exact
+# reproduced numbers (not 21/178 themselves) for the same reason the original bound was already
+# looser than its own exact number -- this layout's own bold-marker detection picking up a
+# slightly different split on some other real sample should not by itself trip this guard without
+# masking an actual collapse.
+_MAX_FLAGGED = 25
 _MIN_ENGAGED = 175
 _EXPECTED_TOTAL_QUESTIONS = 180  # Physics 45 + Chemistry 45 + Biology 90, this layout's own format
 

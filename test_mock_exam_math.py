@@ -196,6 +196,125 @@ def test_2x2_grid_with_fraction_options_no_cross_contamination():
     check("option D untouched by either fraction", q["option_d"].strip() == "sixteen", q["option_d"])
 
 
+# ---------------------------------------------------------------- silent-error fixes (2026-11-13)
+
+def test_fraction_bar_wider_than_narrow_zone_reclaimed():
+    print("\n# A 4-inline-options row: option a's own fraction bar pokes past its own narrow "
+          "zone's marker-midpoint boundary, and the denominator digit's own center naturally "
+          "falls just past that SAME boundary into option b's own zone -- both the bar and the "
+          "digit must resolve back to option a, confirmed live MockTest1.pdf Physics Q6/Q10.")
+    doc = fitz.open()
+    page = _new_page(doc)
+    _header(page, "Physics", 2)
+    page.insert_text((50, 80), "6. Narrow-zone fraction question?", fontsize=10)
+    _marker(page, 50, 100, "a")
+    page.insert_text((70, 98), "p", fontsize=10)
+    page.draw_line((68, 102), (90, 102))          # bar wider than zone a's own narrow rectangle
+    page.insert_text((72, 112), "4", fontsize=10)  # denominator -- its own center sits past the
+    _marker(page, 95, 100, "b")                    # zone a/b boundary (midpoint of 50 and 95)
+    page.insert_text((110, 100), "q", fontsize=10)
+    _marker(page, 160, 100, "c")
+    page.insert_text((175, 100), "r", fontsize=10)
+    _marker(page, 220, 100, "d")
+    page.insert_text((235, 100), "s", fontsize=10)
+    result = pmet.scan_mock_exam_pdf(_pdf_bytes(doc), "Synthetic Math 5")
+    q = _one_question(result)
+    check("not flagged (bar and digit both correctly reclaimed)", not q["needs_review"], q)
+    check('option A reconstructed as "\\frac{p}{4}"', q["option_a"].replace(" ", "") == "$\\frac{p}{4}$", q["option_a"])
+    check('option B untouched (no stray "4" of its own)', q["option_b"].strip() == "q", q["option_b"])
+
+
+def test_multiline_option_uses_its_own_row_baseline():
+    print("\n# A multi-line option: a LATER physical line's own real exponent must classify "
+          "against THAT line's own baseline, not an earlier, longer line's -- confirmed live "
+          "MockTest1.pdf Physics Q18 (a stem's own later-line superscript read as a subscript "
+          "against the zone-wide baseline, which an EARLIER, longer line dominated).")
+    doc = fitz.open()
+    page = _new_page(doc)
+    _header(page, "Physics", 2)
+    page.insert_text((50, 80), "7. Multi-line option question?", fontsize=10)
+    _marker(page, 50, 100, "a")
+    page.insert_text((70, 100), "first", fontsize=10)
+    page.insert_text((100, 100), "line", fontsize=10)
+    page.insert_text((70, 120), "x", fontsize=10)   # a second physical line, own baseline
+    page.insert_text((76, 117), "2", fontsize=6)    # raised relative to THIS line, not the first
+    _marker(page, 50, 140, "b")
+    page.insert_text((70, 140), "other", fontsize=10)
+    _marker(page, 50, 155, "c")
+    page.insert_text((70, 155), "other2", fontsize=10)
+    _marker(page, 50, 170, "d")
+    page.insert_text((70, 170), "other3", fontsize=10)
+    result = pmet.scan_mock_exam_pdf(_pdf_bytes(doc), "Synthetic Math 6")
+    q = _one_question(result)
+    check("not flagged", not q["needs_review"], q)
+    check('option A\'s second line reads "x^{2}", not "x_{2}"',
+          "^{2}" in q["option_a"].replace(" ", "") and "_{2}" not in q["option_a"].replace(" ", ""),
+          q["option_a"])
+
+
+def test_midsentence_fragment_not_absorbed_by_preceding_question():
+    print("\n# A mid-sentence fragment's own bbox sits a couple points ABOVE the question-start "
+          "block it actually belongs to -- a naive y-only sort would process it first and leak "
+          "it into the PRECEDING question instead -- confirmed live MockTest1.pdf Physics "
+          "Q29/Q30 (a degree-symbol value embedded mid-sentence).")
+    doc = fitz.open()
+    page = _new_page(doc)
+    _header(page, "Physics", 2)
+    page.insert_text((50, 80), "1. First question?", fontsize=10)
+    _marker(page, 50, 94, "a")
+    page.insert_text((63, 94), "a1", fontsize=10)
+    _marker(page, 50, 108, "b")
+    page.insert_text((63, 108), "b1", fontsize=10)
+    _marker(page, 50, 122, "c")
+    page.insert_text((63, 122), "c1", fontsize=10)
+    _marker(page, 50, 136, "d")
+    page.insert_text((63, 136), "d1", fontsize=10)
+    page.insert_text((200, 158), "MIDVALUE", fontsize=9)
+    page.insert_text((50, 160), "2. Second question with embedded value here:", fontsize=10)
+    _marker(page, 50, 174, "a")
+    page.insert_text((63, 174), "a2", fontsize=10)
+    _marker(page, 50, 188, "b")
+    page.insert_text((63, 188), "b2", fontsize=10)
+    _marker(page, 50, 202, "c")
+    page.insert_text((63, 202), "c2", fontsize=10)
+    _marker(page, 50, 216, "d")
+    page.insert_text((63, 216), "d2", fontsize=10)
+    result = pmet.scan_mock_exam_pdf(_pdf_bytes(doc), "Synthetic Math 7")
+    physics = [q for q in result["questions"] if q["subject"] == "Physics"]
+    q1 = next(q for q in physics if q["printed_number"] == 1)
+    q2 = next(q for q in physics if q["printed_number"] == 2)
+    q1_fields = [q1["question"]] + [q1[f"option_{l}"] for l in "abcd"]
+    check("question 1 not contaminated by question 2's own mid-sentence fragment",
+          all("MIDVALUE" not in (f or "") for f in q1_fields), q1)
+    check("question 2's own stem contains the fragment", "MIDVALUE" in q2["question"], q2["question"])
+
+
+def test_fraction_bar_numerator_claimed_by_two_zones_flags_ambiguous():
+    print("\n# A fraction bar wide enough that its own numerator-reach window catches REAL "
+          "content from two different option zones at once -- a glyph genuinely claimed by two "
+          "zones -- must never guess which one owns it; flagged instead (requirement 2).")
+    doc = fitz.open()
+    page = _new_page(doc)
+    _header(page, "Physics", 2)
+    page.insert_text((50, 80), "10. Ambiguous-bar question?", fontsize=10)
+    _marker(page, 50, 100, "a")
+    page.insert_text((70, 98), "p", fontsize=10)
+    _marker(page, 150, 100, "b")
+    page.insert_text((160, 98), "q", fontsize=10)
+    page.draw_line((65, 102), (175, 102))  # one bar spanning across BOTH zones' own numerators
+    page.insert_text((70, 112), "4", fontsize=10)
+    page.insert_text((160, 112), "5", fontsize=10)
+    _marker(page, 230, 100, "c")
+    page.insert_text((244, 100), "r", fontsize=10)
+    _marker(page, 280, 100, "d")
+    page.insert_text((294, 100), "s", fontsize=10)
+    result = pmet.scan_mock_exam_pdf(_pdf_bytes(doc), "Synthetic Math 8")
+    q = _one_question(result)
+    check("flagged", q["needs_review"], q)
+    check("reason names the ambiguous fraction geometry",
+          "claimed by more than one option" in (q["review_reason"] or ""), q["review_reason"])
+
+
 # ---------------------------------------------------------------- root
 
 def test_root_glued_to_its_own_span():
@@ -761,6 +880,10 @@ def main():
     test_subscript()
     test_stacked_fraction_from_drawn_bar()
     test_2x2_grid_with_fraction_options_no_cross_contamination()
+    test_fraction_bar_wider_than_narrow_zone_reclaimed()
+    test_multiline_option_uses_its_own_row_baseline()
+    test_midsentence_fragment_not_absorbed_by_preceding_question()
+    test_fraction_bar_numerator_claimed_by_two_zones_flags_ambiguous()
     test_root_glued_to_its_own_span()
     test_root_with_parenthesized_radicand_across_spans()
     test_bare_root_with_nothing_after_it_stays_literal()

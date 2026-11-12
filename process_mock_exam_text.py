@@ -61,8 +61,9 @@ from process_pyq_vision import (
 )
 from process_pyq_book_3col import _get_diagram_bboxes, _bbox_overlaps, _union_bbox
 from process_mock_exam_math import (
-    build_option_zones, assign_spans_to_zones, reconstruct_zone,
-    MARKER_RE, _join_plain_spans, _is_hat_candidate, _is_vec_candidate,
+    build_option_zones, assign_spans_to_zones, reconstruct_zone, reclaim_fraction_denominators,
+    detect_baseline_sensitive_shift, detect_drawn_root_glyphs,
+    MARKER_RE, _join_plain_spans, _is_hat_candidate, _is_vec_candidate, _is_plain_stroke,
 )
 
 MOCK_EXAM_SUBJECT_COUNTS = {"Physics": 45, "Chemistry": 45, "Biology": 90}
@@ -136,8 +137,45 @@ _STRAY_CAPTION_RE = re.compile(r'^(?:mock\s*test-?\s*1\.?\s*)?\d{0,3}\s*(?:mock\
 # body text (9.9-10.1), with headroom for a smaller-but-still-real caption font on some other PDF.
 _MIN_CAPTION_FONT_SIZE = 8.0
 
+# A fraction's own denominator digit sits at ordinary BODY size (confirmed live, MockTest1.pdf
+# Physics Q6: a "2a" denominator's "2" is 9.9pt, the very same size as the rest of that option's
+# text) -- _MIN_CAPTION_FONT_SIZE's own guard above only protects a SMALL exponent/subscript, so a
+# body-sized lone digit that happens to be its own standalone block (confirmed live: PyMuPDF splits
+# a font-change mid-expression into its own block) was still read as a real page-number caption and
+# silently dropped before it ever reached this question's own glyph pool -- the SAME zone-split
+# math reconstruction that correctly rebuilds everything else around it then had nothing left to
+# rebuild this digit from at all. A real page-number caption never sits directly under a drawn
+# fraction bar; a denominator digit always does -- checked here with the page's own drawings
+# (already fetched once per page for has_diagram/modulus-bar use elsewhere, never a second time).
+_DENOM_BAR_REACH = 20
+_DENOM_BAR_MARGIN = 6
 
-def _is_header_footer(block):
+
+def _has_fraction_bar_above(block, drawings):
+    if not drawings:
+        return False
+    bx0, by0, bx1, by1 = block["bbox"]
+    for d in drawings:
+        rect = d.get("rect")
+        if rect is None:
+            continue
+        x0, y0, x1, y1 = rect
+        if abs(y1 - y0) > 0.75:
+            continue
+        width = x1 - x0
+        if width < 4 or width > 220:
+            continue
+        if not _is_plain_stroke(d):
+            continue
+        if y1 > by0 + 1 or by0 - y1 > _DENOM_BAR_REACH:
+            continue  # not above this block (within reach), or sitting below/overlapping it
+        if x1 < bx0 - _DENOM_BAR_MARGIN or x0 > bx1 + _DENOM_BAR_MARGIN:
+            continue
+        return True
+    return False
+
+
+def _is_header_footer(block, drawings=None):
     bbox = block["bbox"]
     if (bbox[2] - bbox[0]) > _MAX_HEADER_FOOTER_WIDTH:
         return True
@@ -149,6 +187,8 @@ def _is_header_footer(block):
                  if (s.get("text") or "").strip()]
         if sizes and max(sizes) < _MIN_CAPTION_FONT_SIZE:
             return False  # too small to be a real page-number caption -- likely an exponent
+        if _has_fraction_bar_above(block, drawings):
+            return False  # a fraction's own denominator digit, not a page-number caption
     return True
 
 
@@ -246,9 +286,36 @@ def _question_start(block):
     return int(m.group(1)), m.group(2)
 
 
+# A mid-sentence fragment that PyMuPDF splits into its own block purely because of a font/style
+# change (confirmed live, MockTest1.pdf: a degree-symbol "60 C deg 50 C deg" value embedded inside
+# a sentence -- "Hot water cools from <this> to <this> in the first 10 minutes...") can end up with
+# its own bbox top sitting a point or two ABOVE the sentence block it is actually embedded inside,
+# even though it reads well after that block's own opening words -- a naive pure-y0 sort then puts
+# it BEFORE its own question's "<number>." start block, so it gets accumulated into whatever
+# question was still active (the PRECEDING one) instead of the question it actually belongs to.
+# Same "same visual row, order by x not by a few points of y jitter" idea
+# process_mock_exam_math._rows_in_reading_order already uses for spans, applied here one level up,
+# to whole blocks -- two blocks this close in y are never two genuinely different lines (confirmed
+# live: ordinary sequential blocks sit a full line height apart, ~10pt+, on this layout).
+_COLUMN_ROW_TOL = 3.0
+
+
 def _cluster_two_columns(blocks, mid_x):
-    left = sorted([b for b in blocks if b["bbox"][0] < mid_x], key=lambda b: b["bbox"][1])
-    right = sorted([b for b in blocks if b["bbox"][0] >= mid_x], key=lambda b: b["bbox"][1])
+    def _ordered(bucket):
+        by_y = sorted(bucket, key=lambda b: b["bbox"][1])
+        rows = []
+        for b in by_y:
+            y = b["bbox"][1]
+            if rows and y - rows[-1][-1]["bbox"][1] <= _COLUMN_ROW_TOL:
+                rows[-1].append(b)
+            else:
+                rows.append([b])
+        out = []
+        for row in rows:
+            out.extend(sorted(row, key=lambda b: b["bbox"][0]))
+        return out
+    left = _ordered([b for b in blocks if b["bbox"][0] < mid_x])
+    right = _ordered([b for b in blocks if b["bbox"][0] >= mid_x])
     return left + right
 
 
@@ -297,7 +364,68 @@ def _flatten_question_spans(active):
     return flat
 
 
-def reconstruct_question_math(doc, active, drawings_cache, diagram_bboxes_cache):
+def _rawdict_spans_by_page(doc, page_index, cache):
+    """(bbox, chars) for every span of `page_index`'s own rawdict (character-level) text, fetched
+    at most once per page -- see _fix_leading_space_origins's own docstring for why this is
+    needed. bbox is rounded to absorb the float jitter that otherwise keeps an identical-looking
+    span from matching itself across the two extraction modes."""
+    if page_index not in cache:
+        entries = {}
+        rd = doc[page_index].get_text("rawdict")
+        for block in rd.get("blocks", []):
+            if block.get("type") != 0:
+                continue
+            for line in block.get("lines", []):
+                for s in line.get("spans", []):
+                    key = tuple(round(v, 1) for v in s["bbox"])
+                    entries[key] = s.get("chars") or []
+        cache[page_index] = entries
+    return cache[page_index]
+
+
+def _fix_leading_space_origins(doc, flat_spans, rawdict_cache):
+    """A span's own reported "origin" is its FIRST character's origin (PyMuPDF's own convention)
+    -- confirmed live (MockTest1.pdf Physics Q19 option D) that when PyMuPDF glues a leading
+    inter-word SPACE onto the front of a new styled run (a font/size change starts a new span
+    mid-sentence), that space's own origin can sit a full line-height away from where this SAME
+    span's own real (visible) characters actually sit: here, a trailing "yx" run's own reported
+    origin coincided with an unrelated fraction numerator's own baseline one row up (confirmed via
+    this page's own rawdict character data: the leading space's origin was the numerator's row,
+    while 'y' and 'x' themselves shared a completely different, lower baseline) -- which silently
+    pulled process_mock_exam_math._base_size_and_baseline's own "most common baseline" vote onto
+    the WRONG row, and from there classified this run's own trailing exponent as a subscript
+    instead of a superscript. The exponent's own real position never changed; only the reference
+    baseline it was measured against did. Recovered here, once per question, by looking up this
+    span's own real characters via the page's rawdict text and using the first NON-space
+    character's own origin instead -- a span whose own text has no leading whitespace (the
+    overwhelming majority) is returned completely unchanged, and a page this lookup can't match
+    (should never happen, since both extraction modes read the same content stream) leaves that
+    one span's own origin as-is rather than guessing."""
+    out = []
+    for s in flat_spans:
+        text = s.get("text") or ""
+        if not text or not text[0].isspace() or not text.strip():
+            out.append(s)
+            continue
+        entries = _rawdict_spans_by_page(doc, s["page_index"], rawdict_cache)
+        key = tuple(round(v, 1) for v in s["bbox"])
+        chars = entries.get(key)
+        fixed_origin = None
+        if chars:
+            for ch in chars:
+                if not ch["c"].isspace():
+                    fixed_origin = ch["origin"]
+                    break
+        if fixed_origin is None:
+            out.append(s)
+            continue
+        ns = dict(s)
+        ns["origin"] = fixed_origin
+        out.append(ns)
+    return out
+
+
+def reconstruct_question_math(doc, active, drawings_cache, diagram_bboxes_cache, rawdict_cache):
     """Tries the geometry-aware zone reconstruction (process_mock_exam_math) first; falls back to
     the old plain-text _parse_options whenever build_option_zones can't unambiguously find this
     question's own 4 lettered markers (a genuinely different layout, or a question this module's
@@ -317,13 +445,8 @@ def reconstruct_question_math(doc, active, drawings_cache, diagram_bboxes_cache)
     reconstruction itself are always empty/absent on that fallback path -- it never runs this
     module's own bar/glyph reconstruction at all, same as it never runs the rest of
     process_mock_exam_math either."""
-    flat_spans = _flatten_question_spans(active)
-    result = build_option_zones(flat_spans, active["bbox"])
-    if result is None:
-        stem, opts = _parse_options(active["text_acc"])
-        return stem, opts, {}, None
-    stem_zone, option_zones, marker_ids = result
-    buckets = assign_spans_to_zones(flat_spans, stem_zone, option_zones, marker_ids)
+    flat_spans_raw = _flatten_question_spans(active)
+    flat_spans = _fix_leading_space_origins(doc, flat_spans_raw, rawdict_cache)
 
     def _drawings_for(spans):
         pages = {s["page_index"] for s in spans}
@@ -335,18 +458,6 @@ def reconstruct_question_math(doc, active, drawings_cache, diagram_bboxes_cache)
         return out
 
     def _diagram_bboxes_for(spans):
-        """Same page-union shape as _drawings_for (see its own docstring) -- a zone whose content
-        spans a page boundary gets the diagram regions of EVERY page it touches, so a drawn
-        stroke is always checked against its own page's real diagrams regardless of which page
-        this zone's first span happens to live on. The lookup below should always already be
-        warm: the main scan loop populates diagram_bboxes_cache for every page it visits (the
-        same call it already makes for has_diagram), before any question on that page is ever
-        finalized -- the fallback recompute here only guards against a page this zone somehow
-        references before the main loop reached it, never the normal path. Recomputing
-        _get_diagram_bboxes a second time per page here, unconditionally, was tried first and
-        measurably slowed down every test that scans a real multi-page PDF (its own vector pass
-        runs a YOLO inference per page) -- not wrong, just wasteful, since the main loop already
-        has the answer."""
         pages = {s["page_index"] for s in spans}
         out = []
         for pi in pages:
@@ -355,19 +466,74 @@ def reconstruct_question_math(doc, active, drawings_cache, diagram_bboxes_cache)
             out.extend(diagram_bboxes_cache[pi])
         return out
 
+    # Conservative rule (requirement 2 / pass bar): a drawn root glyph (see detect_drawn_root_
+    # glyphs' own docstring) leaves zero trace in the text layer once dropped -- caught here,
+    # once per question and BEFORE the zone-split-vs-fallback branch below (a question that falls
+    # back to the plain-text path can still have a drawn root silently vanish from it exactly the
+    # same way), rather than ever risk it passing through silently.
+    root_glyph_issue = None
+    _content_y_centers = [(s["bbox"][1] + s["bbox"][3]) / 2.0 for s in flat_spans
+                           if (s.get("text") or "").strip()]
+    if detect_drawn_root_glyphs(_drawings_for(flat_spans), active["bbox"], _content_y_centers,
+                                _diagram_bboxes_for(flat_spans)):
+        root_glyph_issue = "a drawn root (square root) symbol may not have been fully reconstructed"
+
+    result = build_option_zones(flat_spans, active["bbox"])
+    if result is None:
+        stem, opts = _parse_options(active["text_acc"])
+        return stem, opts, ({"root geometry": root_glyph_issue} if root_glyph_issue else {}), None
+    stem_zone, option_zones, marker_ids = result
+    buckets = assign_spans_to_zones(flat_spans, stem_zone, option_zones, marker_ids)
+    # Conservative rule (requirement 2): bbox -> this SAME span's own PRE-origin-fix copy, used by
+    # detect_baseline_sensitive_shift below -- keyed globally (not per zone) so it still matches
+    # correctly even after reclaim_fraction_denominators moves a span from one zone's bucket into
+    # another (see that function's own docstring): the span's bbox never changes, only which
+    # zone's list it lives in.
+    _raw_by_bbox = {tuple(round(v, 1) for v in s["bbox"]): s for s in flat_spans_raw}
+
+    def _uncorrected_equivalent(spans):
+        out = []
+        for s in spans:
+            u = _raw_by_bbox.get(tuple(round(v, 1) for v in s["bbox"]))
+            if u is not None:
+                out.append(u)
+        return out
+
+    # Fraction-denominator reclaim (requirement 1a): a denominator row has no marker of its own to
+    # anchor assign_spans_to_zones's reading-order-sequence rule, so a tightly-packed zone's own
+    # marker-midpoint boundary can leave a denominator digit's own center just past its TRUE
+    # option's own boundary -- see reclaim_fraction_denominators's own docstring. Run once per
+    # question, on every zone's buckets together (a bar's own numerator/denominator can live in
+    # either sibling zone's bucket depending on which way assign_spans_to_zones' plain-rectangle
+    # fallback happened to lean), before any single zone is reconstructed on its own.
+    buckets, reclaim_issue = reclaim_fraction_denominators(
+        buckets, flat_spans, marker_ids, _drawings_for(flat_spans), active["bbox"],
+        _diagram_bboxes_for(flat_spans))
+
     bar_issues = {}
+    if reclaim_issue:
+        bar_issues["fraction geometry"] = reclaim_issue
+    if root_glyph_issue:
+        bar_issues["root geometry"] = root_glyph_issue
     stem_text, stem_issue = reconstruct_zone(
-        buckets["stem"], _drawings_for(buckets["stem"]), stem_zone, _diagram_bboxes_for(buckets["stem"]))
+        buckets["stem"], _drawings_for(buckets["stem"]), stem_zone, _diagram_bboxes_for(buckets["stem"]),
+        fraction_scope_bbox=active["bbox"])
     if stem_issue:
         bar_issues["stem"] = stem_issue
+    shift_issue = detect_baseline_sensitive_shift(buckets["stem"], _uncorrected_equivalent(buckets["stem"]))
+    if shift_issue:
+        bar_issues.setdefault("stem", shift_issue)
     options = {}
     for letter in ("a", "b", "c", "d"):
         text, issue = reconstruct_zone(
             buckets[letter], _drawings_for(buckets[letter]), option_zones[letter],
-            _diagram_bboxes_for(buckets[letter]))
+            _diagram_bboxes_for(buckets[letter]), fraction_scope_bbox=active["bbox"])
         options[letter] = text
         if issue:
             bar_issues[f"option {letter.upper()}"] = issue
+        shift_issue = detect_baseline_sensitive_shift(buckets[letter], _uncorrected_equivalent(buckets[letter]))
+        if shift_issue:
+            bar_issues.setdefault(f"option {letter.upper()}", shift_issue)
     return stem_text, options, bar_issues, buckets
 
 
@@ -383,6 +549,25 @@ def _looks_math_garbled(text):
     # "Delta" happens to repeat in it.
     stray = sum(1 for t in tokens if t != "$" and len(t) <= 2 and not t.isalpha())
     return (stray / len(tokens)) > _GARBLED_TOKEN_RATIO
+
+
+# Conservative rule (requirement 2 / pass bar): an arithmetic operator (confirmed live,
+# MockTest1.pdf Chemistry Q1: a "-" between "29.2" and "20.2", and a "x" between "1.79" and
+# "10^5") between two decimal numbers can be ENTIRELY missing from the text layer -- not a glyph
+# this module's own font-aware table could ever recognize (see process_mock_exam_math.py's own
+# module docstring, the SAME "<" comparison-operator gap documented there for Chemistry Q20 --
+# confirmed live here as the SAME font-decoding limitation, just a different operator), and unlike
+# a reordering, a genuinely MISSING character never moves _check_order_mismatch's own token order
+# at all, so that check cannot catch it either. Detected instead, purely from the TEXT itself: two
+# real decimal numbers glued directly together with no operator or space between them read as one
+# run with 2+ decimal points ("29.220.2") -- impossible for any single real number, so this is a
+# specific, low-false-positive signal that a separator was lost, not a guess at which operator it
+# was.
+_MERGED_DECIMALS_RE = re.compile(r'\d+\.\d+\.\d+')
+
+
+def _has_merged_decimal_numbers(text):
+    return bool(_MERGED_DECIMALS_RE.search(text or ""))
 
 
 # Silent-error check (requirement 3): strips every LaTeX command/delimiter and leaves only alnum
@@ -440,16 +625,71 @@ def _question_reading_order_tokens(buckets):
     return _content_tokens(" ".join(parts))
 
 
-def _question_reading_order_tokens_fallback(flat_spans):
+def _question_reading_order_tokens_fallback(doc, flat_spans):
     """Ground truth for _check_order_mismatch on the plain-text fallback path (no zone buckets
     exist there at all): the same whole-question, zone-agnostic reading-order reconstruction the
     geometry-aware path used before buckets were available for reuse (see
     _question_reading_order_tokens's own docstring for why that path moved on) -- still fully
     independent here, since the fallback path's own _parse_options works from linear TEXT, not
-    2D geometry, so it never faces the SAME grid-ordering difference in the first place."""
+    2D geometry, so it never faces the SAME grid-ordering difference in the first place.
+
+    The per-span Bold+MARKER_RE exclusion below only ever catches a marker that is its OWN whole
+    span in a BOLD font -- the geometry-aware path's own markers always are (build_option_zones
+    requires it), but this fallback path's own production side (_parse_options) strips a marker
+    from the middle of an ordinary, non-bold run via _OPTION_MARKER_RE instead (confirmed live: a
+    plain "a. alpha b. beta c. gamma d. delta" line, one single non-bold span, is never caught by
+    the per-span check at all) -- left unstripped here, the bare marker letters ("a", "b", "c",
+    "d") show up as extra tokens only on THIS side, which a real, perfectly-ordered reconstruction
+    can never match against. _OPTION_MARKER_RE is applied the same way _parse_options itself
+    already splits on it, so both sides compare the same underlying content.
+
+    Grouped by page_index, each page's own spans joined independently and the pages concatenated
+    in page order -- confirmed live (a question whose own options spill across a column break AND
+    a page break): a plain y-only row clustering across the WHOLE flat_spans pool has no concept
+    of a page boundary at all, so a later page's own content starting back at a small y (e.g. this
+    PDF layout's own "d. continuation option d" printed near the TOP of page 2) can sort as if it
+    were physically ABOVE page 1's own later rows -- the production side never makes this mistake,
+    since _parse_options accumulates block text strictly in the main scan loop's own per-page
+    order. WITHIN one page, also split left/right by that page's own horizontal midpoint and join
+    the LEFT half entirely before the right (same column-major order _cluster_two_columns already
+    uses) -- a plain y-row clustering has no concept of COLUMNS either, so a right-column block
+    sitting at a smaller y than a later left-column row (confirmed live, the same spilled-options
+    question: its own right-column options sit at the same y as question 1's own left-column
+    stem, well above this question's own left-column stem two rows down) would otherwise sort
+    before content that reads first on the real page. doc: used only to read each page's own width
+    for the midpoint split -- a page_index this doc doesn't have (should never happen) falls back
+    to a plain row join for that page's own spans, no column split.
+
+    A leading "<number>." question-marker prefix is stripped once, from the very start of the
+    whole joined text -- confirmed live: when the WHOLE first line (number and stem together) is
+    PyMuPDF's own single span (common in a short synthetic fixture with no font break at the
+    marker), _flatten_question_spans' own number_marker_span_id exclusion (an exact "^\\d+[.)]$"
+    span match) never catches it, the same way the production side's own _question_start strips it
+    from TEXT instead of ever relying on a dedicated marker span existing at all."""
     non_marker = [s for s in flat_spans
                   if not ("Bold" in (s.get("font") or "") and MARKER_RE.match(s["text"].strip()))]
-    return _content_tokens(_join_plain_spans(_strip_hat_vec(non_marker)))
+    non_marker = _strip_hat_vec(non_marker)
+    by_page = {}
+    for s in non_marker:
+        by_page.setdefault(s.get("page_index"), []).append(s)
+    parts = []
+    for page_index in sorted(by_page, key=lambda p: (p is None, p)):
+        page_spans = by_page[page_index]
+        mid_x = None
+        if doc is not None and page_index is not None and 0 <= page_index < len(doc):
+            mid_x = doc[page_index].rect.width / 2
+        if mid_x is None:
+            page_text = _join_plain_spans(page_spans)
+        else:
+            left = [s for s in page_spans if s["bbox"][0] < mid_x]
+            right = [s for s in page_spans if s["bbox"][0] >= mid_x]
+            page_text = " ".join(t for t in (_join_plain_spans(left), _join_plain_spans(right)) if t.strip())
+        if page_text.strip():
+            parts.append(page_text)
+    text = " ".join(parts)
+    text = _QSTART_RE.sub(lambda m: m.group(2), text, count=1)
+    text = _OPTION_MARKER_RE.sub(" ", text)
+    return _content_tokens(text)
 
 
 # Tuned against the real sample (MockTest1.pdf), via a full 180-question calibration pass (every
@@ -472,7 +712,7 @@ def _question_reading_order_tokens_fallback(flat_spans):
 _ORDER_MISMATCH_MIN_RATIO = 0.80
 
 
-def _check_order_mismatch(buckets, flat_spans, stem, opts):
+def _check_order_mismatch(doc, buckets, flat_spans, stem, opts):
     """Silent-error check (requirement 3): every question, flagged or not, gets its own FINAL
     stem+options (concatenated in that fixed a/b/c/d order) compared against an independent
     reconstruction of the very same glyphs -- _question_reading_order_tokens(buckets) when the
@@ -485,7 +725,7 @@ def _check_order_mismatch(buckets, flat_spans, stem, opts):
     None -- never raises, never touches stem/opts itself."""
     produced = _content_tokens(" ".join([stem] + [opts.get(l, "") for l in _OPTION_LETTERS]))
     reference = (_question_reading_order_tokens(buckets) if buckets is not None
-                 else _question_reading_order_tokens_fallback(flat_spans))
+                 else _question_reading_order_tokens_fallback(doc, flat_spans))
     if not produced or not reference:
         return None
     ratio = difflib.SequenceMatcher(None, reference, produced).ratio()
@@ -511,8 +751,9 @@ def _crop_question_image(doc, page_index, bbox, margin=8, dpi=200):
         return None
 
 
-def _finalize_question(doc, active, mock_name, drawings_cache, diagram_bboxes_cache):
-    stem, opts, bar_issues, buckets = reconstruct_question_math(doc, active, drawings_cache, diagram_bboxes_cache)
+def _finalize_question(doc, active, mock_name, drawings_cache, diagram_bboxes_cache, rawdict_cache):
+    stem, opts, bar_issues, buckets = reconstruct_question_math(
+        doc, active, drawings_cache, diagram_bboxes_cache, rawdict_cache)
     missing = [l for l in _OPTION_LETTERS if not opts.get(l)]
     needs_review = False
     review_reason = None
@@ -535,11 +776,19 @@ def _finalize_question(doc, active, mock_name, drawings_cache, diagram_bboxes_ca
         review_reason = f"{active['subject']} question {active['printed_number']}'s own stem came back empty."
     else:
         garbled_fields = [name for name, val in (("stem", stem), *((f"option {l.upper()}", opts.get(l, "")) for l in _OPTION_LETTERS)) if _looks_math_garbled(val)]
+        merged_decimal_fields = [name for name, val in (("stem", stem), *((f"option {l.upper()}", opts.get(l, "")) for l in _OPTION_LETTERS)) if _has_merged_decimal_numbers(val)]
         if garbled_fields:
             needs_review = True
             review_reason = (
                 f"{active['subject']} question {active['printed_number']}: leftover fragmented "
                 f"math glyphs detected in {', '.join(garbled_fields)} -- please clean up against the PDF."
+            )
+        elif merged_decimal_fields:
+            needs_review = True
+            review_reason = (
+                f"{active['subject']} question {active['printed_number']}: an operator between "
+                f"two decimal numbers may be missing in {', '.join(merged_decimal_fields)} -- "
+                f"please check against the PDF."
             )
         else:
             # Silent-error check (requirement 3): runs on EVERY question that would otherwise come
@@ -547,7 +796,7 @@ def _finalize_question(doc, active, mock_name, drawings_cache, diagram_bboxes_ca
             # that won't pair, a stray short token); this one instead cross-checks the final
             # result's own ORDER against an independently-reconstructed reading order, catching a
             # zone-assignment mistake that happens to leave no such symptom behind at all.
-            order_issue = _check_order_mismatch(buckets, _flatten_question_spans(active), stem, opts)
+            order_issue = _check_order_mismatch(doc, buckets, _flatten_question_spans(active), stem, opts)
             if order_issue:
                 needs_review = True
                 review_reason = f"{active['subject']} question {active['printed_number']}: {order_issue}."
@@ -615,12 +864,13 @@ def scan_mock_exam_pdf(pdf_bytes, mock_name):
     past_answers_subjects = set()
     drawings_cache = {}  # page_index -> page.get_drawings(), fetched at most once per page
     diagram_bboxes_cache = {}  # page_index -> _get_diagram_bboxes(page), fetched at most once per page
+    rawdict_cache = {}  # page_index -> {bbox: chars}, fetched at most once per page
 
     def close_active():
         nonlocal active
         if active is None:
             return
-        q = _finalize_question(doc, active, mock_name, drawings_cache, diagram_bboxes_cache)
+        q = _finalize_question(doc, active, mock_name, drawings_cache, diagram_bboxes_cache, rawdict_cache)
         per_subject_questions[active["subject"]].append(q)
         if q["needs_review"]:
             flagged_pages.append({"page": active["start_page"], "reason": q["review_reason"]})
@@ -629,9 +879,12 @@ def scan_mock_exam_pdf(pdf_bytes, mock_name):
     page_count = len(doc)
     for page_index in range(page_count):
         page = doc[page_index]
+        if page_index not in drawings_cache:
+            drawings_cache[page_index] = page.get_drawings()
+        page_drawings = drawings_cache[page_index]
         all_blocks = [seg for b in _page_blocks(page) for seg in _split_embedded_question_starts(b)]
-        header_blocks = [b for b in all_blocks if _is_header_footer(b)]
-        blocks = [b for b in all_blocks if not _is_header_footer(b)]
+        header_blocks = [b for b in all_blocks if _is_header_footer(b, page_drawings)]
+        blocks = [b for b in all_blocks if not _is_header_footer(b, page_drawings)]
         if not blocks:
             continue
         full_page_text = "\n".join(_block_text_from_dict(b) for b in blocks)

@@ -73,6 +73,17 @@ _BASELINE_TOL = 1.0
 _FRAC_VERTICAL_REACH = 20
 _FRAC_HORIZONTAL_MARGIN = 4
 
+# A SMALL (sub/superscript-sized) candidate gets a tighter margin than an ordinary body-sized one
+# -- confirmed live, MockTest1.pdf Physics Q39: the trailing "1" of an inverse-trig "tan^{-1}"
+# exponent sitting immediately before a fraction's own bar had its own center just 0.4pt inside
+# the ordinary 4pt margin, so the fraction wrongly claimed it as part of its own numerator while
+# its own immediately-preceding sibling character ("-", the same exponent run) stayed outside and
+# was correctly left as plain superscript text -- splitting one exponent run in half. The wider
+# 4pt margin exists for a genuinely wide BODY-sized glyph (a tall paren, confirmed live, Q6)
+# whose own bbox legitimately pokes past the bar's drawn extent; a small glyph has no such
+# legitimate reason to sit outside the bar's own narrower true span in the first place.
+_FRAC_HORIZONTAL_MARGIN_SMALL = 1
+
 # A hat/vec diacritic sits directly above the letter it modifies and is horizontally centered on
 # it (confirmed live: well within 4pt). Its own BBOX, though, routinely overlaps the base letter's
 # bbox by several points rather than sitting cleanly above with a visible gap -- confirmed live, a
@@ -414,6 +425,86 @@ def _in_any_bbox(rect, bboxes):
     return any(b[0] - 2 <= cx <= b[2] + 2 and b[1] - 2 <= cy <= b[3] + 2 for b in bboxes)
 
 
+# ---------------------------------------------------------------------------------------------
+# Drawn root (square root) glyph detection -- requirement 2/pass bar: this module's own confidence
+# rule already refuses to guess where a DRAWN root's radicand ends (_ROOT_CHAR's own docstring --
+# this sample's root sign is never a real U+221A character, only ever a drawn checkmark+overline
+# path, confirmed live: zero occurrences of the real character anywhere in the sample's text
+# layer). A drawn root that is silently dropped leaves NO trace at all in the text layer for any
+# other gate here to catch -- confirmed live, MockTest1.pdf Physics Q4 and Q11: "2{root}5" reads
+# as a perfectly ordinary, clean "25" once the root vanishes, no stray glyph, nothing a word-count
+# or garbled-token check could ever flag. This section's only job is to confirm the drawn shape
+# EXISTS somewhere in scope, so the caller can flag needs_review instead of ever losing it
+# silently -- it never attempts to reconstruct the radicand itself.
+#
+# Signature (confirmed live against every one of this sample's own 5 known root occurrences --
+# Q4 options a-d and Q11 option d, all independently verified against the real page image): a
+# stroke ("s") drawing of EXACTLY 4 straight "l" segments tracing the checkmark+overline shape,
+# matched by a near-identical-bbox FILL ("f") drawing (that same glyph's own bold outline, more
+# segments) within _ROOT_GLYPH_PAIR_TOL -- this redundant stroke+fill pairing at a small, body-
+# text-ish size is specific enough that nothing else on this sample (table borders, circuit/ring
+# diagrams -- already told apart elsewhere by bbox/stroke-primitive, see get_zone_vertical_bars's
+# own docstring) matches it by accident.
+_ROOT_GLYPH_STROKE_ITEMS = 4
+_ROOT_GLYPH_FILL_MIN_ITEMS = 8
+_ROOT_GLYPH_MIN_SIZE = 6.0
+_ROOT_GLYPH_MAX_SIZE = 16.0
+_ROOT_GLYPH_PAIR_TOL = 1.0
+
+
+def _is_root_checkmark_stroke(d):
+    if d.get("type") != "s":
+        return False
+    items = d.get("items") or []
+    return len(items) == _ROOT_GLYPH_STROKE_ITEMS and all(it[0] == "l" for it in items)
+
+
+def detect_drawn_root_glyphs(drawings, scope_bbox, content_y_centers, diagram_bboxes=()):
+    """True the moment a drawn root checkmark+overline glyph (see this section's own docstring) is
+    found within scope_bbox -- never reconstructs anything, only detects. diagram_bboxes: excludes
+    a candidate sitting inside an already-detected diagram region, same exclusion
+    get_zone_vertical_bars/get_zone_fraction_bars already apply to their own drawn shapes.
+
+    content_y_centers: this question's own real glyphs' own y-centers -- a candidate is also
+    required to sit within _near_real_content's own reach of ONE of them, the same protection
+    _normalize_modulus_bars already relies on for its own drawn strokes (see that function's own
+    docstring): a question's own accumulated bbox is occasionally far larger than its own real
+    content (confirmed live, MockTest1.pdf Physics Q7 -- a PRE-EXISTING block-accumulation
+    artifact unrelated to this detector's own job, its own bbox stretches across nearly this
+    page's entire left column) -- scope_bbox containment ALONE would then wrongly match a root
+    glyph that actually belongs to a completely different, unrelated question sharing the same
+    inflated bbox."""
+    strokes = [d for d in drawings if _is_root_checkmark_stroke(d)]
+    if not strokes:
+        return False
+    fills = [d for d in drawings if d.get("type") == "f"
+             and len(d.get("items") or []) >= _ROOT_GLYPH_FILL_MIN_ITEMS]
+    sx0, sy0, sx1, sy1 = scope_bbox
+    for s in strokes:
+        rect = s.get("rect")
+        if rect is None:
+            continue
+        rx0, ry0, rx1, ry1 = rect
+        w, h = rx1 - rx0, ry1 - ry0
+        if not (_ROOT_GLYPH_MIN_SIZE <= w <= _ROOT_GLYPH_MAX_SIZE
+                and _ROOT_GLYPH_MIN_SIZE <= h <= _ROOT_GLYPH_MAX_SIZE):
+            continue
+        cx, cy = (rx0 + rx1) / 2.0, (ry0 + ry1) / 2.0
+        if not (sx0 - 2 <= cx <= sx1 + 2 and sy0 - 2 <= cy <= sy1 + 2):
+            continue
+        if not _near_real_content(rect, content_y_centers):
+            continue
+        if diagram_bboxes and _in_any_bbox(rect, diagram_bboxes):
+            continue
+        for f in fills:
+            frect = f.get("rect")
+            if frect is None:
+                continue
+            if all(abs(a - b) <= _ROOT_GLYPH_PAIR_TOL for a, b in zip(rect, frect)):
+                return True
+    return False
+
+
 def get_zone_vertical_bars(drawings, zone_bbox, diagram_bboxes=()):
     """Same shape as get_zone_fraction_bars (see its own docstring), transposed to vertical
     strokes -- a drawn modulus bar never spans outside its own option/stem zone, for the same
@@ -641,6 +732,43 @@ def _base_size_and_baseline(spans):
     return base_size, base_baseline
 
 
+def base_size_is_ambiguous(spans):
+    """Conservative rule (requirement 2): "most total characters wins" (see _base_size_and_
+    baseline's own docstring) silently picks the WRONG size as this zone's own body text whenever
+    a SHORT option's own exponent/subscript happens to have MORE characters than its own (very
+    short) base text -- confirmed live, MockTest1.pdf Physics Q14 option D: "{prop}x^{1/2}" has
+    only 2 real body characters ("{prop}" and "x") against the exponent's own 3 ("1","/","2"), so
+    5.75pt (the EXPONENT's own size) won the vote over 8.63pt (the TRUE body size) -- every
+    character at that wrongly-chosen "body" size then reads as "normal" sized text instead of a
+    superscript, silently erasing the exponent (same failure process_mock_exam_math.
+    _join_plain_spans's own docstring already anticipated for a FRACTION's num/den sub-pool, here
+    newly confirmed live at the top-level ZONE call too, where a short option's own body text can
+    be just as thin). Detected by checking whether any OTHER size actually present is GENUINELY
+    competitive with the chosen size's own count (at least half of it, not just a couple of
+    characters) while being LARGER than the size _base_size_and_baseline actually picked. The "at
+    least half" bar matters live: an ordinary enclosing parenthesis pair is routinely rendered a
+    point or two TALLER than its own surrounding body text (equation-editor bracket-stretching,
+    confirmed live on this same sample's own Q6 -- a real, correct, unrelated zone, "(" ")" both
+    11.48pt against a 9.9pt body of 7 real characters) -- counting that alone as "a competing
+    body-size candidate" would false-positive on any such zone; a genuine exponent/subscript
+    conflict (confirmed live, Q14 option D: a 5.75pt "1/2" exponent with 3 characters against an
+    8.63pt body of only 2) is never this lopsided. A real body/exponent pair's own body text is
+    never smaller than its own exponent, so this conflict only ever arises in exactly this
+    pathological shape."""
+    char_count_by_size = {}
+    for s in spans:
+        n = len(s["text"].strip())
+        if n == 0:
+            continue
+        key = round(s["size"], 1)
+        char_count_by_size[key] = char_count_by_size.get(key, 0) + n
+    if len(char_count_by_size) < 2:
+        return False
+    base_size = max(char_count_by_size, key=lambda sz: (char_count_by_size[sz], sz))
+    base_count = char_count_by_size[base_size]
+    return any(sz > base_size and count * 2 >= base_count for sz, count in char_count_by_size.items())
+
+
 def _local_baseline(spans, base_size):
     """base_size is reliable as a GLOBAL (zone-wide) reference -- a literal font-size value means
     the same thing anywhere on the page. A single absolute baseline y does not: a fraction's own
@@ -665,6 +793,43 @@ def _classify_shift(span, base_size, base_baseline):
     if origin_y > base_baseline + _BASELINE_TOL:
         return "sub"
     return "normal"
+
+
+def detect_baseline_sensitive_shift(corrected_spans, uncorrected_spans):
+    """Conservative rule (requirement 2): a "base glyph with two candidate exponents" -- here, two
+    candidate DIRECTIONS (super vs sub) for the very same small glyph, depending on which of two
+    legitimately-computed baselines is trusted. Recomputes this SAME zone's own base_size/
+    base_baseline from `uncorrected_spans` (this zone's own spans BEFORE
+    process_mock_exam_text._fix_leading_space_origins ran) and compares every span's own
+    _classify_shift result against the SAME span classified under the CORRECTED pipeline's own
+    base_size/base_baseline -- confirmed live, MockTest1.pdf Physics Q19 option D: this exact
+    disagreement (super under the corrected baseline, sub under the uncorrected one) is what
+    silently produced "x_2" instead of "x^2" before that fix existed (see that function's own
+    docstring for the full story). A zone where the origin fix never actually changed anything
+    (the overwhelming majority, confirmed live -- only a span with its own literal leading
+    whitespace ever differs between the two span lists at all) always agrees here and is never
+    flagged; this is deliberately NOT a blanket "small offset" margin (tried first, confirmed live
+    via a full 180-question real-sample run: ordinary legitimate super/sub offsets on this sample
+    vary too widely across different font/size combinations for any single fixed-point cutoff to
+    separate "confident" from "ambiguous" without drowning the real signal in false positives --
+    29 of 180 on the real sample, against this check's own single-digit true positive)."""
+    if not corrected_spans:
+        return None
+    base_size_c, baseline_c = _base_size_and_baseline(corrected_spans)
+    base_size_u, baseline_u = _base_size_and_baseline(uncorrected_spans)
+    by_bbox = {}
+    for s in uncorrected_spans:
+        by_bbox[tuple(round(v, 1) for v in s["bbox"])] = s
+    for s in corrected_spans:
+        if not s["text"].strip():
+            continue
+        u = by_bbox.get(tuple(round(v, 1) for v in s["bbox"]))
+        if u is None:
+            continue
+        if _classify_shift(s, base_size_c, baseline_c) != _classify_shift(u, base_size_u, baseline_u):
+            return ("a superscript/subscript classification that depends on an ambiguous "
+                    "baseline reference")
+    return None
 
 
 def _row_key(span):
@@ -882,6 +1047,87 @@ def assign_spans_to_zones(flat_spans, stem_zone, option_zones, marker_ids):
     return buckets
 
 
+def reclaim_fraction_denominators(buckets, flat_spans, marker_ids, drawings, question_bbox, diagram_bboxes=()):
+    """Fixes a real, confirmed-live bug (MockTest1.pdf Physics Q10, a 4-options-inline row): a
+    fraction's own denominator sits on a row with NO marker of its own (the marker row is the
+    numerator's own row -- see assign_spans_to_zones's own docstring), so assign_spans_to_zones
+    falls back to plain rectangle-containment/nearest-zone for it -- but a tightly-packed option
+    column's own zone boundary (a marker x MIDPOINT) routinely sits just a hair to the LEFT of
+    where a denominator digit's own center actually falls (confirmed live: a "4" denominator's own
+    center sat 0.3pt past its true option's own zone boundary, purely because that option's
+    numerator -- "d", directly above it -- happens to be WIDER than the denominator, same
+    "content wider than the gap to the next marker" shape the reading-order-marker-sequence fix
+    already handles for a MARKER row, but this row has no marker to anchor that fix to at all). The
+    digit gets assigned to the WRONG, NEIGHBORING zone instead -- never dropped, just misplaced.
+
+    Fixed here by finding every fraction bar in the WHOLE QUESTION (not any one zone's own narrow
+    rectangle -- a bar whose own drawn width pokes a couple of points past a tight zone boundary
+    must never be measured against that boundary at all, same root cause as the digit above:
+    confirmed live, MockTest1.pdf Physics Q6, a bar 11pt wider than its own 2x2-grid zone), then
+    using whichever zone ALREADY correctly holds this bar's own numerator (a numerator always sits
+    on the marker's own row, already resolved correctly by assign_spans_to_zones's reading-order
+    sequence) as this bar's owner, and moving any denominator-reach span sitting in a DIFFERENT
+    zone's bucket into the owner's bucket instead -- never a guess: if a bar's own numerator reach
+    turns up spans in more than one zone at once (a genuinely ambiguous case this sample never
+    produces, but never assumed safe either), nothing is moved for that bar at all.
+
+    Only a span from a row with NO marker of its own at all is ever eligible to move -- a span
+    that already sits on the SAME row as its own zone's own marker (an ordinary short option next
+    to a sibling option's fraction, confirmed live via this module's own test suite: a "plain" word
+    sitting right next to its own "b." marker, geometrically within a NEIGHBORING fraction's own
+    denominator-reach window purely by coincidence) is never touched, no matter how close it sits
+    to another zone's own bar -- it is already correctly anchored by the reading-order-marker-
+    sequence rule, and this pass must never second-guess that.
+
+    Returns (buckets, issue) -- issue (requirement 2's conservative rule) is a human-readable
+    reason the moment some bar's own numerator-reach content spreads across 2+ zones at once (a
+    glyph genuinely claimed by more than one zone), else None; buckets is always returned, whether
+    or not an issue was found, every one of its keys' own lists possibly mutated in place."""
+    markerless_ids = set()
+    for row in _rows_in_reading_order(flat_spans):
+        if any(id(s) in marker_ids for s in row):
+            continue
+        markerless_ids.update(id(s) for s in row)
+
+    issue = None
+    bars = get_zone_fraction_bars(drawings, question_bbox, diagram_bboxes)
+    for bar_x0, bar_y0, bar_x1 in bars:
+        zones_hit = set()
+        for zone_name, spans in buckets.items():
+            for s in spans:
+                cx, cy = _span_center(s)
+                if not (bar_x0 - _FRAC_HORIZONTAL_MARGIN <= cx <= bar_x1 + _FRAC_HORIZONTAL_MARGIN):
+                    continue
+                if bar_y0 - _FRAC_VERTICAL_REACH <= cy < bar_y0:
+                    zones_hit.add(zone_name)
+        if len(zones_hit) >= 2:
+            # Conservative rule (requirement 2): this bar's own numerator-reach content spreads
+            # across more than one zone at once -- a glyph genuinely claimed by two zones -- never
+            # guessed which one owns it, flagged instead.
+            issue = issue or "a fraction bar whose own numerator is claimed by more than one option"
+            continue
+        if len(zones_hit) != 1:
+            continue  # no numerator found at all for this bar -- not this module's problem to flag
+        owner = next(iter(zones_hit))
+        for zone_name in list(buckets.keys()):
+            if zone_name == owner:
+                continue
+            moving_ids = set()
+            for s in buckets[zone_name]:
+                if id(s) not in markerless_ids:
+                    continue  # anchored to its own zone's own marker row -- never reclaimed
+                cx, cy = _span_center(s)
+                if not (bar_x0 - _FRAC_HORIZONTAL_MARGIN <= cx <= bar_x1 + _FRAC_HORIZONTAL_MARGIN):
+                    continue
+                if bar_y0 < cy <= bar_y0 + _FRAC_VERTICAL_REACH:
+                    moving_ids.add(id(s))
+            if moving_ids:
+                moved = [s for s in buckets[zone_name] if id(s) in moving_ids]
+                buckets[zone_name] = [s for s in buckets[zone_name] if id(s) not in moving_ids]
+                buckets[owner].extend(moved)
+    return buckets, issue
+
+
 # Safety cap on how many further spans a balanced-parenthesis radicand scan will walk before
 # giving up -- a real radicand is never this long; reaching the cap means something else is going
 # on (e.g. a stray "(" that was never really part of a root at all), so the whole root is left
@@ -960,13 +1206,28 @@ def _extract_roots(spans, base_size, base_baseline):
     return kept + replacements
 
 
-def reconstruct_zone(spans, drawings, zone_bbox, diagram_bboxes=()):
+def reconstruct_zone(spans, drawings, zone_bbox, diagram_bboxes=(), fraction_scope_bbox=None):
     """Main entry point: reconstructs one question-stem or option's own text from its raw glyph
     spans (list of PyMuPDF span dicts restricted to this zone) plus the page's own vector
     drawings (for fraction-bar and modulus-bar detection, restricted to this zone by
     get_zone_fraction_bars/get_zone_vertical_bars). diagram_bboxes: this zone's own page(s)'
     already-detected diagram regions (see get_zone_vertical_bars's own docstring) - pass () when
     the caller has none computed (e.g. a synthetic test with no diagram at all).
+
+    fraction_scope_bbox: the bbox a candidate FRACTION bar's own width/position is checked against
+    -- defaults to this zone's own zone_bbox (the original, narrower behavior, unchanged for any
+    caller/test that omits it) but the real caller (process_mock_exam_text.reconstruct_question_
+    math) passes the WHOLE QUESTION's own bbox instead. Confirmed live (MockTest1.pdf Physics Q6,
+    a 2x2 grid): a real fraction bar's own drawn width can poke several points past a tightly-
+    packed zone's own marker-midpoint boundary -- rejecting it outright at that narrow boundary
+    (the original behavior) silently left its numerator/denominator as unformatted stray text
+    instead of a "\\frac{}{}" even once every one of those glyphs reaches this zone's own span
+    pool correctly. Num/den CLAIMING itself still only ever searches `spans` (this zone's own
+    bucket, unaffected by this param) -- widening where the bar's own geometry is checked can
+    never pull in a sibling option's own content, only stop rejecting a bar that genuinely belongs
+    to THIS zone purely because it is wider than this zone's own narrow rectangle. Modulus bars
+    (_normalize_modulus_bars, a couple of lines below) keep using zone_bbox unchanged -- this
+    sample never showed that same exposure live, so that path is deliberately left as-is.
     Returns (text, issue) -- text already wrapped in $...$ around every math run -- never raises,
     never drops a glyph: anything not confidently reconstructed is passed through as literal
     text. issue is None unless this zone's own modulus/magnitude bars could not be confidently
@@ -984,21 +1245,25 @@ def reconstruct_zone(spans, drawings, zone_bbox, diagram_bboxes=()):
     # too few for this same "most total characters" heuristic to reliably tell body text apart
     # from an exponent on its own (see _join_plain_spans's own docstring).
     base_size, base_baseline = _base_size_and_baseline(spans)
+    size_issue = ("this zone's own body-text size could not be confidently told apart from a "
+                  "superscript/subscript's own size") if base_size_is_ambiguous(spans) else None
     spans, bar_issue = _normalize_modulus_bars(spans, drawings, zone_bbox, base_size, diagram_bboxes)
-    bar_issue = bar_issue or glyph_issue
+    bar_issue = bar_issue or glyph_issue or size_issue
 
     claimed_ids = set()
     pool = []  # list of dicts: {text, bbox, origin, size, font, is_math}
 
     # ---- Fractions first (the most structurally confident signal: an actual drawn bar) ----
-    bars = get_zone_fraction_bars(drawings, zone_bbox, diagram_bboxes)
+    bars = get_zone_fraction_bars(drawings, fraction_scope_bbox or zone_bbox, diagram_bboxes)
     for bar_x0, bar_y0, bar_x1 in bars:
         num_spans, den_spans = [], []
         for s in spans:
             if id(s) in claimed_ids:
                 continue
             cx, cy = _span_center(s)
-            if not (bar_x0 - _FRAC_HORIZONTAL_MARGIN <= cx <= bar_x1 + _FRAC_HORIZONTAL_MARGIN):
+            margin = (_FRAC_HORIZONTAL_MARGIN_SMALL if s.get("size") and s["size"] < base_size * _SIZE_RATIO
+                      else _FRAC_HORIZONTAL_MARGIN)
+            if not (bar_x0 - margin <= cx <= bar_x1 + margin):
                 continue
             if bar_y0 - _FRAC_VERTICAL_REACH <= cy < bar_y0:
                 num_spans.append(s)
@@ -1037,10 +1302,23 @@ def reconstruct_zone(spans, drawings, zone_bbox, diagram_bboxes=()):
             if -_DIACRITIC_MAX_OVERLAP <= gap <= _DIACRITIC_MAX_GAP and abs(bx - dx) <= _DIACRITIC_MAX_DX:
                 candidates.append((abs(bx - dx) + max(0, gap), b))
         if not candidates:
+            # Conservative rule (requirement 2): a hat/vec CANDIDATE glyph (this sample's own
+            # narrow MTExtra-font accent mark, see _is_vec_candidate's own docstring) with no base
+            # letter anywhere near it to attach to is left as literal stray text either way (never
+            # guessed), but flagged here too -- confirmed live, MockTest1.pdf Physics Q39 option C:
+            # an orphaned "ur" (MTExtra) sits well below this option's own real content with
+            # nothing plausible above it, reading as a visible, unexplained suffix that nothing
+            # else here was catching (it is alphabetic, so _looks_math_garbled's own stray-token
+            # ratio never counts it).
+            bar_issue = bar_issue or "an unattached hat/vector accent glyph with no nearby base letter"
             continue  # no confident pairing -- leave the diacritic glyph as literal stray text
         candidates.sort(key=lambda c: c[0])
         if len(candidates) >= 2 and candidates[1][0] - candidates[0][0] < 0.5:
-            continue  # ambiguous (two equally-close bases) -- stay unresolved, don't guess
+            # Conservative rule (requirement 2): a diacritic with two (or more) equally-close base
+            # letters is a glyph genuinely claimed by more than one possible attachment -- flagged
+            # here instead of just silently staying unresolved, so a human reviewer sees WHY.
+            bar_issue = bar_issue or "an ambiguous hat/vector attachment (two equally-close base letters)"
+            continue
         best = candidates[0][1]
         base_wraps[id(best)] = "hat" if _is_hat_candidate(d) else "vec"
         used_diacritic_ids.add(id(d))
@@ -1068,7 +1346,7 @@ def reconstruct_zone(spans, drawings, zone_bbox, diagram_bboxes=()):
             })
 
     # ---- Superscript/subscript classification for whatever's left, then final assembly ----
-    # (base_size/base_baseline: the same zone-wide values computed at the top of this function)
+    # (base_size: the same zone-wide value computed at the top of this function)
     rows = _rows_in_reading_order(pool + plain_pool)
 
     out = []
@@ -1085,6 +1363,20 @@ def reconstruct_zone(spans, drawings, zone_bbox, diagram_bboxes=()):
             if out and not out[-1].endswith((" ", "{")):
                 out.append(" ")
 
+        # A multi-LINE zone (an ordinary wrapped stem/option, not a stacked fraction) has a
+        # DIFFERENT absolute baseline per physical line -- confirmed live, MockTest1.pdf Physics
+        # Q18's own stem: the zone-wide base_baseline (computed once, dominated by whichever line
+        # has the most characters) sat 24.7pt away from a LATER line's own real baseline, so that
+        # later line's own genuine superscript ("10^3") measured as confidently BELOW it instead
+        # of above -- confidently, not just borderline, so no margin-based ambiguity check could
+        # catch it either; it needed the right reference instead. Recomputed per row via
+        # _local_baseline (same mechanism _join_plain_spans already uses for a fraction's own
+        # numerator/denominator sub-pool, generalized here to the top-level zone's own multi-line
+        # case) -- falls back to the zone-wide base_baseline whenever this row has no normal-sized
+        # span of its own to anchor to (a row that's ENTIRELY a lone exponent, never confirmed
+        # live but not ruled out either).
+        row_baseline = _local_baseline(row, base_size) if row else base_baseline
+
         # Pre-pass: classify every span in this row first, then absorb a PLAIN token backward
         # into its immediate math neighbor's run whenever they touch with no gap (e.g. the base
         # letter "V" immediately before its own "_{A}" subscript) -- same "glued directly, no
@@ -1100,7 +1392,7 @@ def reconstruct_zone(spans, drawings, zone_bbox, diagram_bboxes=()):
             is_frac_or_wrap = s.get("is_math") and ("\\frac" in text or "\\hat" in text or "\\vec" in text or "\\sqrt" in text)
             this_shift = None
             if not is_frac_or_wrap and s.get("size"):
-                this_shift = _classify_shift(s, base_size, base_baseline)
+                this_shift = _classify_shift(s, base_size, row_baseline)
                 this_shift = this_shift if this_shift != "normal" else None
             is_math_token = bool(s.get("is_math")) or this_shift is not None
             classified.append([s, is_math_token, this_shift])
