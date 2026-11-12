@@ -368,14 +368,17 @@ def _looks_math_garbled(text):
     return (stray / len(tokens)) > _GARBLED_TOKEN_RATIO
 
 
-def _crop_question_image(doc, page_index, bbox, margin=8):
+def _crop_question_image(doc, page_index, bbox, margin=8, dpi=200):
     """Base64 PNG crop of a flagged question's own source region, for the reviewer to compare
     directly against the parsed text -- only ever called for a flagged question (requirement 2),
-    never for every question, so a clean scan's response stays small."""
+    never for every question, so a clean scan's response stays small. 200 DPI (not this project's
+    more common 150): this same crop also doubles as the image sent to process_mock_exam_vision's
+    model-assisted re-read, where the extra resolution measurably helps it read a small exponent
+    or unit character correctly."""
     try:
         page = doc[page_index]
         rect = (fitz.Rect(bbox) + (-margin, -margin, margin, margin)) & page.rect
-        pix = page.get_pixmap(dpi=150, clip=rect)
+        pix = page.get_pixmap(dpi=dpi, clip=rect)
         return base64.standard_b64encode(pix.tobytes("png")).decode("ascii")
     except Exception as e:
         print(f"    Mock exam scan: could not crop a flagged question's image ({e})")
@@ -435,6 +438,11 @@ def _finalize_question(doc, active, mock_name, drawings_cache, diagram_bboxes_ca
     _flag_suspicious_mcq_options(q)  # belt-and-suspenders: catches merged/duplicate options too
     if q["needs_review"]:
         q["crop_image_b64"] = _crop_question_image(doc, active["start_page"] - 1, active["bbox"])
+        # Internal-only: process_mock_exam_vision's model-assisted re-read uses this question's own
+        # raw (pre-reconstruction) text as both its prompt hint and its word-match gate's ground
+        # truth -- popped back off before any scan result ever reaches the browser (see that
+        # module's apply_vision_to_flagged_questions). Never set for a clean question.
+        q["_text_layer_hint"] = _normalize_ws(active["text_acc"])
     return q
 
 

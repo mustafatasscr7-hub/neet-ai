@@ -378,6 +378,7 @@ import requests as http_requests
 from process_pyq_vision import scan_pdf_bytes, scan_mock_test_pdf
 from process_pyq_book_3col import scan_book_pdf_bytes
 from process_mock_exam_text import scan_mock_exam_pdf
+from process_mock_exam_vision import apply_vision_to_flagged_questions, MOCK_VISION_FLAGGED_ENABLED
 from process_pyq_scanned import scan_scanned_pdf_bytes, estimate_scanned_pdf_cost, DEFAULT_MAX_PAGES as SCANNED_DEFAULT_MAX_PAGES
 from process_pyq_scanned_ocr import scan_ocr_pdf_bytes, start_ocr_job, get_ocr_job, ocr_job_is_live
 from utils.krutidev2unicode import kru2uni
@@ -12496,6 +12497,8 @@ def admin_scan_pdf(req: ScanPdfRequest, _: None = Depends(verify_admin_or_contra
     try:
         if req.layout == "mock_exam":
             result = scan_mock_exam_pdf(pdf_bytes, req.mock_name.strip())
+            if MOCK_VISION_FLAGGED_ENABLED:
+                result = apply_vision_to_flagged_questions(result)
         elif req.layout == "scanned":
             result = scan_scanned_pdf_bytes(pdf_bytes, req.subject, confirm_over_cap=req.confirm_over_cap, language=req.language)
         elif req.layout == "scanned_ocr":

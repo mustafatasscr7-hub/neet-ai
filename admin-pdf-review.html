@@ -80,6 +80,7 @@
   .q-diagram-badge { font-size: 11px; background: #f9731620; color: #f97316; padding: 2px 8px; border-radius: 20px; font-weight: 600; }
   .q-saved-badge { font-size: 11px; background: #4ade8020; color: #4ade80; padding: 2px 8px; border-radius: 20px; font-weight: 600; }
   .q-language-badge { font-size: 11px; background: #2dd4bf20; color: #2dd4bf; padding: 2px 8px; border-radius: 20px; font-weight: 600; }
+  .q-model-read-badge { font-size: 11px; background: #4f8ef720; color: #4f8ef7; padding: 2px 8px; border-radius: 20px; font-weight: 600; }
   /* Paste-mode parse confidence -- only "fallback" gets a loud warning color since that's the
      tier that needs real scrutiny; "delimiter" is informational (unusual but reliable format). */
   .q-confidence-badge { font-size: 11px; padding: 2px 8px; border-radius: 20px; font-weight: 600; }
@@ -140,6 +141,7 @@
   .q-dup-warning { font-size: 12px; margin-top: 10px; padding: 8px 10px; border-radius: 6px; display: none; }
   .q-dup-warning.warn { display: block; background: #f9731620; color: #f97316; }
   .q-dup-warning.block { display: block; background: #ef444420; color: #ef4444; }
+  .q-model-read-note { margin-top: 6px; font-size: 11px; color: #4f8ef7; background: #4f8ef715; border: 1px solid #4f8ef750; border-radius: 6px; padding: 6px 10px; }
 
   .q-block-footer { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
   .save-btn { background: #4f8ef7; border: none; border-radius: 6px; padding: 8px 18px; color: white; font-size: 12px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
@@ -1980,6 +1982,7 @@
         needs_review: mockMode ? !!q.needs_review : false,
         review_reason: mockMode ? (q.review_reason || null) : null,
         crop_image_b64: mockMode ? (q.crop_image_b64 || null) : null,
+        model_read: mockMode ? !!q.model_read : false,
         saved: false, savePending: false
       }));
       document.getElementById('statPageCount').textContent = data.pages_scanned || 0;
@@ -1992,6 +1995,11 @@
         statusEl.style.display = 'block';
         const cachedNote = data.cost.pages_cached ? `, ${data.cost.pages_cached} from cache` : '';
         statusEl.textContent = `Free OCR read ${data.cost.pages_called} page${data.cost.pages_called === 1 ? '' : 's'}${cachedNote} in ${data.cost.seconds}s (${data.cost.seconds_per_page}s per page). Cost: $0.`;
+      } else if (data.cost && layout === 'mock_exam') {
+        statusEl.style.display = 'block';
+        statusEl.textContent = data.cost.attempted
+          ? `Vision re-read ${data.cost.attempted} flagged question${data.cost.attempted === 1 ? '' : 's'} (${data.cost.model_read} fixed, ${data.cost.gate_failed} still flagged). Cost: $${data.cost.usd.toFixed(4)}.`
+          : 'No flagged questions needed a vision re-read.';
       } else if (data.cost) {
         statusEl.style.display = 'block';
         statusEl.textContent = `Read ${data.cost.pages_called} page${data.cost.pages_called === 1 ? '' : 's'} (${data.cost.pages_cached} from cache). Actual cost: $${data.cost.usd.toFixed(4)}.`;
@@ -2464,6 +2472,7 @@
         <span class="q-number">Q<input type="text" id="qnum-${b.id}" value="${escapeHtml(b.display_number != null ? b.display_number : String(displayIndex))}" onchange="setQNumber('${b.id}')" title="Edit to match the actual question number in the PDF, if it drifted from the auto count" style="width:34px;background:transparent;border:none;border-bottom:1px dashed #4f8ef780;color:#4f8ef7;font-weight:700;font-size:13px;font-family:'Inter',sans-serif;padding:0 0 1px 2px;"/></span>
         ${b.has_diagram ? '<span class="q-diagram-badge">Diagram</span>' : ''}
         ${currentLanguage === 'hi' ? '<span class="q-language-badge">Hindi</span>' : ''}
+        ${b.model_read ? '<span class="q-model-read-badge" title="This question was flagged by the deterministic scan, then re-read from its own source image by Gemini Vision">Model-read</span>' : ''}
         <span id="confidence-badge-${b.id}" style="display:${b.saved ? 'none' : 'inline'}">
           ${b.parse_confidence === 'fallback' ? `<span class="q-confidence-badge fallback" title="${escapeHtml(describeDetectedPattern(b.detected_pattern, true))}">Needs review</span>` : ''}
           ${b.parse_confidence === 'delimiter' ? `<span class="q-confidence-badge delimiter" title="${escapeHtml(describeDetectedPattern(b.detected_pattern, false))}">${b.detected_pattern === 'table' ? 'Table row' : 'Pipe-delimited'}</span>` : ''}
@@ -2490,6 +2499,7 @@
         </div>
       </div>
       ${b.review_reason ? `<div class="q-dup-warning warn" style="display:block;">${escapeHtml(b.review_reason)}</div>` : ''}
+      ${b.model_read ? `<div class="q-model-read-note">Re-read from the source image by Gemini Vision because the deterministic scan flagged this question -- please still double check against the image below.</div>` : ''}
       ${b.crop_image_b64 ? `<img class="q-crop-image" src="data:image/png;base64,${b.crop_image_b64}" alt="Cropped source region for this flagged question" title="Source PDF region for this question -- compare against the fields below"/>` : ''}
       ` : ''}
 
