@@ -25,7 +25,7 @@ Covers the reconstruction shapes confirmed live on the real sample PDF (MockTest
     mark with no possible partner anywhere nearby is never flagged and never acted on (the fix for
     that regression - see process_mock_exam_math's own "Regression" comment), while a genuine
     multi-mark row that still cannot pair up cleanly is flagged needs_review (reason names
-    "modulus bars") with the bar glyphs still literally present, never guessed into an expression;
+    "modulus bar") with the bar glyphs still literally present, never guessed into an expression;
     a thin filled rectangle (a table's own cell border/shading) and a drawn stroke inside an
     already-detected diagram region are both excluded before they are ever treated as a candidate
     bar at all, regardless of how a real bar's own width/height bounds would otherwise match them;
@@ -429,7 +429,7 @@ def test_two_bars_with_nothing_real_between_flags_as_ambiguous():
     print("\n# Two bar-like marks DO sit on the same baseline - a genuine candidate pair - but with")
     print("# nothing real between them (the gap a chemistry double bond's own two near-parallel")
     print("# strokes leave behind). This is the \"ambiguous\" shape that must still flag needs_review")
-    print("# (reason names \"modulus bars\"), never guessed into an empty \"||\" expression.")
+    print("# (reason names \"modulus bar\"), never guessed into an empty \"||\" expression.")
     doc = fitz.open()
     page = _new_page(doc)
     _header(page, "Physics", 2)
@@ -446,7 +446,7 @@ def test_two_bars_with_nothing_real_between_flags_as_ambiguous():
     result = pmet.scan_mock_exam_pdf(_pdf_bytes(doc), "Synthetic Math 16")
     q = _one_question(result)
     check("flagged needs_review (a genuine pair that still can't be trusted)", q["needs_review"], q)
-    check('reason names "modulus bars"', "modulus bars" in (q["review_reason"] or ""), q["review_reason"])
+    check('reason names "modulus bar"', "modulus bar" in (q["review_reason"] or ""), q["review_reason"])
     check("both bar glyphs are still literally present (never silently dropped/guessed)",
           q["option_a"].count("|") == 2, q["option_a"])
 
@@ -518,21 +518,20 @@ def test_drawn_stroke_inside_diagram_excluded():
 
 # ---------------------------------------------------------------- confidence rule
 
-def test_straddling_exponent_falls_back_instead_of_guessing():
-    print("\n# requirement 4's confidence rule: a small glyph straddling the midpoint between two")
-    print("# inline options is never silently assigned to either one -- build_option_zones bails")
-    print("# out (its own documented None return) rather than guess which side it belongs to.")
-    print("# Checked directly against build_option_zones, not through needs_review: falling back")
-    print("# to the old plain-text path is a DIFFERENT code path with its own, unrelated gates --")
-    print("# whether THAT path happens to also flag this particular text is not what this rule is")
-    print("# about, and asserting on it would make this test depend on incidental old-path behavior.")
+def test_straddling_exponent_resolved_by_marker_sequence():
+    print("\n# Reconstruct-before-splitting requirement: a small glyph (superscript-sized) whose")
+    print("# own bbox straddles the midpoint between two options sharing one row is no longer a")
+    print("# reason to bail -- assign_spans_to_zones resolves it by marker-sequence adjacency")
+    print("# instead (see that function's own docstring), the same real shape as the live sample's")
+    print("# own Q1 (several options' own unit exponents packed on one shared line).")
     doc = fitz.open()
     page = _new_page(doc)
+    _header(page, "Physics", 2)
     page.insert_text((50, 80), "9. Straddling-exponent question?", fontsize=10)
     # a and b share one row; a's own exponent is deliberately positioned to straddle the a/b
     # midpoint (same confirmed-live shape as a real unit like "W m^-2" overflowing into "b.").
     _marker(page, 50, 100, "a")
-    page.insert_text((63, 100), "x", fontsize=10)
+    page.insert_text((75, 100), "x", fontsize=10)
     mid_x = (50 + 120) / 2.0  # midpoint between this row's own "a." and "b." markers
     page.insert_text((mid_x - 2, 94), "2", fontsize=6)  # small, straddles mid_x by construction
     _marker(page, 120, 100, "b")
@@ -541,15 +540,220 @@ def test_straddling_exponent_falls_back_instead_of_guessing():
     page.insert_text((63, 115), "plain2", fontsize=10)
     _marker(page, 50, 130, "d")
     page.insert_text((63, 130), "plain3", fontsize=10)
+    result = pmet.scan_mock_exam_pdf(_pdf_bytes(doc), "Synthetic Math 9")
+    q = _one_question(result)
+    check("not flagged", not q["needs_review"], q)
+    check('option A keeps both its own base "x" and its own exponent ("^{2}"), not severed to option B',
+          "x" in q["option_a"] and "^{2}" in q["option_a"], q["option_a"])
+    check('option B stays just "y", never contaminated by option A\'s own exponent',
+          q["option_b"].replace(" ", "") == "y", q["option_b"])
 
-    d = page.get_text("dict")
-    flat_spans = [s for b in d["blocks"] if b.get("type") == 0
-                  for line in b["lines"] for s in line["spans"]]
-    question_bbox = (45, 75, 200, 145)
-    result = pmm.build_option_zones(flat_spans, question_bbox)
-    check("build_option_zones bails out (returns None) instead of guessing which option the "
-          "straddling exponent belongs to", result is None, result)
-    doc.close()
+
+def test_normal_sized_content_past_marker_midpoint_still_resolved():
+    print("\n# The SAME requirement, for BASE-sized (not just small/superscript) content: a row's")
+    print("# own marker-midpoint rectangle can fall INSIDE one option's own real content whenever")
+    print("# that option's own content is simply wider than half its own gap to the next marker")
+    print("# (confirmed live, the real sample's own Q6 -- option A's own base-sized denominator")
+    print("# letter sits past the straight a/b midpoint, purely because option A's own content is")
+    print("# short and option B's marker follows close behind). Marker-sequence assignment has no")
+    print("# such failure mode: whatever comes after marker A and before marker B stays correct no")
+    print("# matter how far right it runs.")
+    doc = fitz.open()
+    page = _new_page(doc)
+    _header(page, "Physics", 2)
+    page.insert_text((50, 80), "10. Wide-option question?", fontsize=10)
+    # "a." and "b." sit close together, but option A's own content ("wideword") is wide enough to
+    # run past the raw a/b midpoint -- by construction, well into where a naive rectangle split
+    # would hand it to option B instead.
+    _marker(page, 50, 100, "a")
+    page.insert_text((63, 100), "wideword", fontsize=10)
+    _marker(page, 130, 100, "b")
+    page.insert_text((143, 100), "y", fontsize=10)
+    _marker(page, 50, 115, "c")
+    page.insert_text((63, 115), "plain2", fontsize=10)
+    _marker(page, 50, 130, "d")
+    page.insert_text((63, 130), "plain3", fontsize=10)
+    result = pmet.scan_mock_exam_pdf(_pdf_bytes(doc), "Synthetic Math 10")
+    q = _one_question(result)
+    check("not flagged", not q["needs_review"], q)
+    check('option A keeps its own full "wideword", not severed at the marker midpoint',
+          q["option_a"] == "wideword", q["option_a"])
+    check('option B stays just "y"', q["option_b"] == "y", q["option_b"])
+
+
+# ---------------------------------------------------------------- font-aware symbol table
+
+def _span(text, x0, y0, x1=None, y1=None, font="Symbol", size=10.0):
+    """A hand-built span dict in the same shape PyMuPDF's own get_text("dict") spans use --
+    process_mock_exam_math._collapse_symbol_font_glyphs is a pure function over this shape, and a
+    Private Use Area codepoint (this section's own font-aware table) has no real glyph in any
+    ordinary installed font, so round-tripping one through a real PDF's own text rendering is not
+    reliable on an arbitrary machine (confirmed live while writing these tests: a font with no
+    glyph for the codepoint silently substitutes something else instead). These tests build the
+    exact span shape directly instead, the same thing a real PDF's own text layer would already
+    have handed this function."""
+    if x1 is None:
+        x1 = x0 + max(1.0, size * 0.6 * len(text))
+    if y1 is None:
+        y1 = y0 + size
+    return {"text": text, "font": font, "size": size, "bbox": (x0, y0, x1, y1), "origin": (x0, y1)}
+
+
+def test_new_symbol_commands_mapped():
+    print("\n# Font-aware symbol table requirement: the additional Unicode symbols confirmed live")
+    print("# on the real sample (Rightarrow, therefore, angle, cdot, prime, and the Symbol font's")
+    print("# own U+2206/U+2126 lookalikes for Delta/Omega) map to their own LaTeX commands, the")
+    print("# same font-independent mechanism the existing Greek letters already use.")
+    text, replaced = pmm._sub_symbols("⇒ ∴ ∠ ⋅ ′ ∆ Ω")
+    check("replaced something", replaced, text)
+    for expect in ("\\Rightarrow", "\\therefore", "\\angle", "\\cdot", "\\prime", "\\Delta", "\\Omega"):
+        check(f'"{expect}" present', expect in text, text)
+
+
+def test_symbol_font_bracket_pieces_collapse_to_parens():
+    print("\n# Font-aware symbol table requirement: a SHORT tall-bracket construct's own pieces,")
+    print("# glued into one span's own text (confirmed live shape), collapse to a single literal")
+    print("# '(' / ')' each -- never one paren character per piece glyph.")
+    left_pieces = chr(0xF8EB) + chr(0xF8EC) + chr(0xF8ED)   # top/ext/bottom of a tall "("
+    right_pieces = chr(0xF8F6) + chr(0xF8F7) + chr(0xF8F8)  # top/ext/bottom of a tall ")"
+    spans = [
+        _span("x", 60, 100, font="TimesNewRoman"),
+        _span(left_pieces, 70, 100),
+        _span("y", 85, 100, font="TimesNewRoman"),
+        _span(right_pieces, 95, 100),
+    ]
+    new_spans, issue = pmm._collapse_symbol_font_glyphs(spans)
+    check("no issue reported", issue is None, issue)
+    joined = "".join(s["text"] for s in new_spans)
+    check('collapsed to "x(y)"', joined == "x(y)", repr(joined))
+
+
+def test_symbol_font_arrow_shaft_dropped_before_real_arrowhead():
+    print("\n# Font-aware symbol table requirement: the arrow-shaft-extender glyph contributes")
+    print("# nothing once it leads into a real arrowhead character -- the arrowhead alone already")
+    print("# carries the whole arrow's own meaning.")
+    shaft = chr(0xF8E7) * 3
+    spans = [
+        _span("A", 50, 100, font="TimesNewRoman"),
+        _span(shaft, 60, 100),
+        _span(chr(0x2192), 80, 100),
+        _span("B", 90, 100, font="TimesNewRoman"),
+    ]
+    new_spans, issue = pmm._collapse_symbol_font_glyphs(spans)
+    check("no issue reported", issue is None, issue)
+    joined = "".join(s["text"] for s in new_spans)
+    check('shaft removed, arrowhead kept ("A->B")', joined == "A" + chr(0x2192) + "B", repr(joined))
+
+
+def test_symbol_font_arrow_shaft_with_no_arrowhead_flags_question():
+    print("\n# Font-aware symbol table requirement: an arrow-shaft run that does NOT lead into a")
+    print("# real arrowhead anywhere on its own row is an unknown shape, not guessed into an arrow")
+    print("# that was never really there.")
+    spans = [
+        _span("A", 50, 100, font="TimesNewRoman"),
+        _span(chr(0xF8E7) * 3, 60, 100),
+        _span("B", 90, 100, font="TimesNewRoman"),
+    ]
+    new_spans, issue = pmm._collapse_symbol_font_glyphs(spans)
+    check("an issue is reported", issue is not None, issue)
+    check("U+F8E7 named in the issue", "F8E7" in (issue or ""), issue)
+    joined = "".join(s["text"] for s in new_spans)
+    check("the shaft glyphs are still present literally (never silently dropped)",
+          chr(0xF8E7) in joined, repr(joined))
+
+
+def test_unrecognized_symbol_font_glyph_flags_question():
+    print("\n# Font-aware symbol table requirement: a Symbol-font Private Use Area character this")
+    print("# table does NOT recognize is left as literal text AND reported as an issue -- never")
+    print('# silently reaching the output as an un-renderable character ("unknown glyphs still')
+    print('# flag the question").')
+    spans = [
+        _span("before", 50, 100, font="TimesNewRoman"),
+        _span(chr(0xF8FC), 90, 100),  # not in the recognized piece/shaft sets
+        _span("after", 100, 100, font="TimesNewRoman"),
+    ]
+    new_spans, issue = pmm._collapse_symbol_font_glyphs(spans)
+    check("an issue is reported", issue is not None, issue)
+    check("U+F8FC named in the issue", "F8FC" in (issue or ""), issue)
+    joined = "".join(s["text"] for s in new_spans)
+    check("the unknown glyph is still present literally (never silently dropped)",
+          chr(0xF8FC) in joined, repr(joined))
+
+
+def test_tall_bracket_across_multiple_spans_flags_instead_of_guessing():
+    print("\n# Font-aware symbol table requirement: a TALL bracket construct whose own pieces sit on")
+    print("# DIFFERENT baselines (hence different spans, confirmed live -- see this module's own")
+    print("# docstring, real sample Q40) is never collapsed by guessing how many '(' it should")
+    print("# become -- it is flagged instead, same confidence rule as everywhere else in this")
+    print("# module.")
+    spans = [
+        _span(chr(0xF8EB), 50, 90),   # top piece, its own row
+        _span(chr(0xF8EC), 50, 102),  # extension piece, a DIFFERENT row
+        _span(chr(0xF8ED), 50, 114),  # bottom piece, a THIRD row
+    ]
+    new_spans, issue = pmm._collapse_symbol_font_glyphs(spans)
+    check("flagged rather than collapsed into multiple '('", issue is not None, issue)
+    check('reason names "multiple lines"', "multiple lines" in (issue or ""), issue)
+
+
+# ---------------------------------------------------------------- silent-error (order-mismatch) check
+
+def test_order_mismatch_detects_scrambled_result():
+    print("\n# Silent-error check (requirement 3): an order-sensitive comparison catches a result")
+    print("# whose own final text is reordered relative to the page's own independent reading")
+    print("# order, even though every individual WORD is still present (a plain word-overlap gate,")
+    print("# like process_mock_exam_vision.py's own, would miss this entirely).")
+    correct = pmet._content_tokens("alpha beta gamma delta epsilon zeta eta theta")
+    scrambled = pmet._content_tokens("theta eta zeta epsilon delta gamma beta alpha")
+    import difflib
+    ratio = difflib.SequenceMatcher(None, correct, scrambled).ratio()
+    check("a fully-reversed sequence scores well below the 0.80 cutoff",
+          ratio < pmet._ORDER_MISMATCH_MIN_RATIO, ratio)
+    same_order = pmet._content_tokens("alpha beta gamma delta epsilon zeta eta theta")
+    ratio_same = difflib.SequenceMatcher(None, correct, same_order).ratio()
+    check("the SAME order scores a perfect match", ratio_same == 1.0, ratio_same)
+
+
+def test_order_mismatch_ignores_math_symbols_and_whitespace():
+    print("\n# Silent-error check (requirement 3): LaTeX markup and math symbols are stripped before")
+    print("# comparing -- two representations of the SAME content that merely mark it up")
+    print("# differently (one side wraps a value in \\frac{}{}, the other leaves it as plain")
+    print('# adjacent tokens) must still read as "the same order", not a false mismatch.')
+    latex_form = pmet._content_tokens("Let $\\vec{a}$ be a vector of length $\\frac{3}{4}$")
+    plain_form = pmet._content_tokens("Let a be a vector of length 3 4")
+    check("both sides reduce to the identical token sequence", latex_form == plain_form,
+          (latex_form, plain_form))
+
+
+def test_order_mismatch_grid_reading_order_not_a_false_positive():
+    print("\n# Silent-error check (requirement 3): a 2x2 grid's own TRUE page reading order genuinely")
+    print("# reads row-by-row (every row-1 numerator, then every row-1 denominator) rather than")
+    print('# "option A\'s own numerator+denominator, then option B\'s" -- a real structural')
+    print("# difference from the stem+a+b+c+d concatenation order, not a reconstruction mistake.")
+    print("# _question_reading_order_tokens must reuse the SAME zone buckets (not raw whole-page")
+    print("# reading order) so this never reads as a false order-mismatch -- covered end-to-end by")
+    print("# test_2x2_grid_with_fraction_options_no_cross_contamination's own \"not flagged\" check;")
+    print("# this test asserts the mechanism directly.")
+    doc = fitz.open()
+    page = _new_page(doc)
+    _header(page, "Chemistry", 2)
+    page.insert_text((50, 80), "4. Grid-with-fractions question?", fontsize=10)
+    _marker(page, 50, 100, "a")
+    page.insert_text((70, 98), "1", fontsize=10)
+    page.draw_line((68, 102), (82, 102))
+    page.insert_text((70, 112), "2", fontsize=10)
+    _marker(page, 120, 100, "b")
+    page.insert_text((140, 98), "3", fontsize=10)
+    page.draw_line((138, 102), (152, 102))
+    page.insert_text((140, 112), "4", fontsize=10)
+    _marker(page, 50, 125, "c")
+    page.insert_text((63, 125), "five", fontsize=10)
+    _marker(page, 120, 125, "d")
+    page.insert_text((133, 125), "sixteen", fontsize=10)
+    result = pmet.scan_mock_exam_pdf(_pdf_bytes(doc), "Synthetic Math Order")
+    q = _one_question(result, subject="Chemistry")
+    check("not flagged (raw page reading order genuinely differs from a-b-c-d order here, "
+          "but the bucket-based reference accounts for that)", not q["needs_review"], q)
 
 
 def main():
@@ -570,7 +774,17 @@ def main():
     test_two_bars_with_nothing_real_between_flags_as_ambiguous()
     test_filled_rectangle_not_treated_as_modulus_bar()
     test_drawn_stroke_inside_diagram_excluded()
-    test_straddling_exponent_falls_back_instead_of_guessing()
+    test_straddling_exponent_resolved_by_marker_sequence()
+    test_normal_sized_content_past_marker_midpoint_still_resolved()
+    test_new_symbol_commands_mapped()
+    test_symbol_font_bracket_pieces_collapse_to_parens()
+    test_symbol_font_arrow_shaft_dropped_before_real_arrowhead()
+    test_symbol_font_arrow_shaft_with_no_arrowhead_flags_question()
+    test_unrecognized_symbol_font_glyph_flags_question()
+    test_tall_bracket_across_multiple_spans_flags_instead_of_guessing()
+    test_order_mismatch_detects_scrambled_result()
+    test_order_mismatch_ignores_math_symbols_and_whitespace()
+    test_order_mismatch_grid_reading_order_not_a_false_positive()
 
     print(f"\n{len(_passed)} passed, {len(_failed)} failed")
     if _failed:

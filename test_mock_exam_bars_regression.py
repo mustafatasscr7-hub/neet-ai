@@ -20,12 +20,17 @@ import process_mock_exam_text as pmt  # noqa: E402
 # Known-good baseline on the real sample, measured directly against this repo's own git history:
 # 31 flagged / 159 engaged at commit a3f92fd (the math-reconstruction commit immediately before
 # the modulus-bar work), reproduced exactly by reverting 451d495 and rerunning this same scan -
-# and reproduced again after re-adding modulus-bar handling the way this fix does it. A real
-# regression must never push flagged ABOVE this bound, or engagement BELOW it. 150 (not 159) gives
-# a small cushion for this layout's own bold-marker detection picking up a slightly different
-# split on some other real sample, without masking an actual engagement collapse.
-_MAX_FLAGGED = 31
-_MIN_ENGAGED = 150
+# and reproduced again after re-adding modulus-bar handling the way this fix does it. Updated
+# again after the reconstruct-before-splitting + font-aware-table + order-mismatch work (see
+# process_mock_exam_math.py's own module docstring and process_mock_exam_text.py's own
+# _check_order_mismatch): 11 flagged / 178 engaged, reproduced live. A real regression must never
+# push flagged ABOVE this bound, or engagement BELOW it. The bounds below are a few points looser
+# than the exact reproduced numbers (not 11/178 themselves) for the same reason the original
+# bound was already looser than its own exact number -- this layout's own bold-marker detection
+# picking up a slightly different split on some other real sample should not by itself trip this
+# guard without masking an actual collapse.
+_MAX_FLAGGED = 15
+_MIN_ENGAGED = 175
 _EXPECTED_TOTAL_QUESTIONS = 180  # Physics 45 + Chemistry 45 + Biology 90, this layout's own format
 
 # Search order: this machine's own Claude-session cache first (where a previous session's own

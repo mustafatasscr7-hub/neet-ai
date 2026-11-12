@@ -49,6 +49,7 @@ Design, in one pass over the whole document:
 import re
 import io
 import base64
+import difflib
 
 import fitz
 
@@ -59,7 +60,10 @@ from process_pyq_vision import (
     MOCK_TEST_SUBJECT_ORDER,
 )
 from process_pyq_book_3col import _get_diagram_bboxes, _bbox_overlaps, _union_bbox
-from process_mock_exam_math import build_option_zones, assign_spans_to_zones, reconstruct_zone
+from process_mock_exam_math import (
+    build_option_zones, assign_spans_to_zones, reconstruct_zone,
+    MARKER_RE, _join_plain_spans, _is_hat_candidate, _is_vec_candidate,
+)
 
 MOCK_EXAM_SUBJECT_COUNTS = {"Physics": 45, "Chemistry": 45, "Biology": 90}
 MOCK_EXAM_SUBJECT_OFFSET = {"Physics": 0, "Chemistry": 45, "Biology": 90}
@@ -301,16 +305,23 @@ def reconstruct_question_math(doc, active, drawings_cache, diagram_bboxes_cache)
     and its own existing needs_review gates than forced through a zone split built on a wrong
     assumption, per process_mock_exam_math's own docstring).
 
-    Returns (stem_text, options, bar_issues) -- bar_issues is a dict {location_label: reason} for
-    the stem and/or any option whose own modulus/magnitude bars could not be confidently paired
-    (see process_mock_exam_math._normalize_modulus_bars), empty whenever nothing needed flagging.
-    Always empty on the plain-text fallback path below -- that path never runs this module's own
-    bar reconstruction at all, same as it never runs the rest of process_mock_exam_math either."""
+    Returns (stem_text, options, bar_issues, buckets) -- bar_issues is a dict {location_label:
+    reason} for the stem and/or any option whose own modulus/magnitude bars could not be
+    confidently paired (see process_mock_exam_math._normalize_modulus_bars) OR whose own Symbol-
+    font glyphs included one this module's font-aware table doesn't recognize (see
+    process_mock_exam_math._collapse_symbol_font_glyphs), empty whenever nothing needed flagging.
+    buckets is the SAME {stem/a/b/c/d: [spans]} this function itself used to reconstruct each
+    zone, handed back for _check_order_mismatch's own use (see its own docstring for why it
+    reuses this instead of an independently-computed reading order) -- None on the plain-text
+    fallback path below, which has no zones to hand back. Both bar_issues and the geometry-aware
+    reconstruction itself are always empty/absent on that fallback path -- it never runs this
+    module's own bar/glyph reconstruction at all, same as it never runs the rest of
+    process_mock_exam_math either."""
     flat_spans = _flatten_question_spans(active)
     result = build_option_zones(flat_spans, active["bbox"])
     if result is None:
         stem, opts = _parse_options(active["text_acc"])
-        return stem, opts, {}
+        return stem, opts, {}, None
     stem_zone, option_zones, marker_ids = result
     buckets = assign_spans_to_zones(flat_spans, stem_zone, option_zones, marker_ids)
 
@@ -357,15 +368,130 @@ def reconstruct_question_math(doc, active, drawings_cache, diagram_bboxes_cache)
         options[letter] = text
         if issue:
             bar_issues[f"option {letter.upper()}"] = issue
-    return stem_text, options, bar_issues
+    return stem_text, options, bar_issues, buckets
 
 
 def _looks_math_garbled(text):
     tokens = (text or "").split()
     if len(tokens) < _GARBLED_MIN_TOKENS:
         return False
-    stray = sum(1 for t in tokens if len(t) <= 2 and not t.isalpha())
+    # A bare "$" is never a sign of leftover fragmented math -- it is this module's OWN math-run
+    # delimiter (process_mock_exam_math.reconstruct_zone), which can legitimately land as its own
+    # whitespace-split token (e.g. a Greek/symbol substitution's own padding puts a space right
+    # next to the $ that wraps it, confirmed live: "$ \Delta $ H"). Counting it here would flag a
+    # short, perfectly correct option for no reason other than how many TIMES a real symbol like
+    # "Delta" happens to repeat in it.
+    stray = sum(1 for t in tokens if t != "$" and len(t) <= 2 and not t.isalpha())
     return (stray / len(tokens)) > _GARBLED_TOKEN_RATIO
+
+
+# Silent-error check (requirement 3): strips every LaTeX command/delimiter and leaves only alnum
+# RUNS, lowercased -- "ignore math symbols and whitespace" means a fraction/root/diacritic's own
+# markup is never compared, only the real letters and digits underneath it, so two representa-
+# tions of the SAME content that merely mark it up differently (one side wraps a Greek letter in
+# "\Delta", the other leaves a bare reading-order run with no LaTeX at all) still line up. A
+# letter run and a digit run are kept as SEPARATE tokens ("K4" -> "k","4") so an exponent digit
+# still lines up against its own raw digit even when only one side's own LaTeX wrapping sits
+# between them.
+_LATEX_MARKUP_RE = re.compile(r'\\[a-zA-Z]+|[{}$^_\\]')
+_ALNUM_TOKEN_RE = re.compile(r'[a-zA-Z]+|[0-9]+')
+
+
+def _content_tokens(text):
+    stripped = _LATEX_MARKUP_RE.sub(" ", text or "")
+    return [t.lower() for t in _ALNUM_TOKEN_RE.findall(stripped)]
+
+
+def _strip_hat_vec(spans):
+    """A hat/vec diacritic glyph (a bare circumflex, or the real "MT Extra" accent font's own
+    coincidental 'r'/'ur'/'Q' text -- see process_mock_exam_math's own module docstring) is
+    dropped entirely rather than joined in plain reading order: _join_plain_spans has no concept
+    of pairing it with its own base letter (that pairing is reconstruct_zone's own job) -- left
+    in, it glues onto its own base letter's token ("a" + accent-font "r" -> "ar"), a purely
+    REPRESENTATIONAL mismatch against the production side's own correctly-unwrapped "a" that
+    would otherwise drown out a genuine order problem on every vector-heavy question."""
+    return [s for s in spans if not _is_hat_candidate(s) and not _is_vec_candidate(s)]
+
+
+def _question_reading_order_tokens(buckets):
+    """Ground truth for _check_order_mismatch on the geometry-aware zone-split path: reuses the
+    SAME stem/a/b/c/d buckets reconstruct_question_math itself already computed (assign_spans_to_
+    zones), joining each bucket's own spans via process_mock_exam_math's plain row-based join
+    (_join_plain_spans) -- NOT reconstruct_zone's own fraction/root/diacritic-aware logic -- then
+    concatenating stem+a+b+c+d IN THAT FIXED ORDER, the same order the final stem+options string
+    itself is built in.
+
+    Confirmed live this is necessary, not just convenient: a 2x2 grid's own TRUE page reading
+    order genuinely reads "every row-1 numerator, then every row-1 denominator" (left cell then
+    right cell, top to bottom) rather than "option A's own numerator+denominator, then option
+    B's" -- a real structural difference from the stem+a+b+c+d concatenation order, not a
+    reconstruction mistake, and comparing against raw whole-page reading order there flagged a
+    perfectly correct 2x2-grid reconstruction (confirmed live via this module's own synthetic
+    test suite). Reusing the same zone buckets as production makes this check somewhat LESS able
+    to catch a pure zone-ASSIGNMENT mistake (both sides would inherit the identical mistake) --
+    but it stays fully independent of reconstruct_zone's own fraction/root/diacritic logic, where
+    the real problems this check has caught live (a false fraction-bar match scrambling a
+    stem's own reading order, confirmed live on the real sample's own Biology Q34)."""
+    parts = []
+    for name in ("stem", "a", "b", "c", "d"):
+        text = _join_plain_spans(_strip_hat_vec(buckets.get(name) or []))
+        if text.strip():
+            parts.append(text)
+    return _content_tokens(" ".join(parts))
+
+
+def _question_reading_order_tokens_fallback(flat_spans):
+    """Ground truth for _check_order_mismatch on the plain-text fallback path (no zone buckets
+    exist there at all): the same whole-question, zone-agnostic reading-order reconstruction the
+    geometry-aware path used before buckets were available for reuse (see
+    _question_reading_order_tokens's own docstring for why that path moved on) -- still fully
+    independent here, since the fallback path's own _parse_options works from linear TEXT, not
+    2D geometry, so it never faces the SAME grid-ordering difference in the first place."""
+    non_marker = [s for s in flat_spans
+                  if not ("Bold" in (s.get("font") or "") and MARKER_RE.match(s["text"].strip()))]
+    return _content_tokens(_join_plain_spans(_strip_hat_vec(non_marker)))
+
+
+# Tuned against the real sample (MockTest1.pdf), via a full 180-question calibration pass (every
+# question's own ratio, not just the already-flagged ones) plus a page-image spot-check of every
+# question that landed near the boundary either way, REDONE after _question_reading_order_tokens
+# moved to a bucket-based reference (see that function's own docstring for why): every question
+# confirmed CORRECT against its own page image now measures >= 0.86 (several genuinely correct
+# questions still cost a little on pure representational noise -- see _content_tokens's own
+# docstring for why -- so this is not 1.0), while the one confirmed real problem below this
+# sample's own clean floor measures 0.793 -- a chemical-ordering option's own "<" comparison signs
+# silently decoded to blank spaces, a font-specific glyph-mapping gap this module's own font-aware
+# table does not have enough evidence to safely resolve on its own (see
+# process_mock_exam_math.py's own module docstring). The bucket-based reference fix that was
+# needed to stop a 2x2 grid's own true page-reading order from reading as a false mismatch (see
+# _question_reading_order_tokens) also costs this check some of its own former reach -- an
+# isotope-notation option's own stacked superscript+subscript losing its ^/_ markup entirely
+# (confirmed live, a real but DIFFERENT bug than the one still caught here) no longer moves the
+# ratio, since both sides of the comparison now share the same zone bucket and its same body-size
+# tie-break mistake; that bug is real and documented, just no longer this check's own catch.
+_ORDER_MISMATCH_MIN_RATIO = 0.80
+
+
+def _check_order_mismatch(buckets, flat_spans, stem, opts):
+    """Silent-error check (requirement 3): every question, flagged or not, gets its own FINAL
+    stem+options (concatenated in that fixed a/b/c/d order) compared against an independent
+    reconstruction of the very same glyphs -- _question_reading_order_tokens(buckets) when the
+    geometry-aware zone split succeeded (buckets is not None), else
+    _question_reading_order_tokens_fallback(flat_spans) -- as an ORDER-SENSITIVE token sequence
+    (difflib.SequenceMatcher -- deliberately not the order-INsensitive word-overlap ratio
+    process_mock_exam_vision.py's own gate already uses elsewhere: a reordering keeps the exact
+    same bag of words, so only an order-sensitive comparison can catch it at all). Returns a
+    human-readable reason the moment the match ratio drops below _ORDER_MISMATCH_MIN_RATIO, else
+    None -- never raises, never touches stem/opts itself."""
+    produced = _content_tokens(" ".join([stem] + [opts.get(l, "") for l in _OPTION_LETTERS]))
+    reference = (_question_reading_order_tokens(buckets) if buckets is not None
+                 else _question_reading_order_tokens_fallback(flat_spans))
+    if not produced or not reference:
+        return None
+    ratio = difflib.SequenceMatcher(None, reference, produced).ratio()
+    if ratio < _ORDER_MISMATCH_MIN_RATIO:
+        return f"order mismatch -- only {ratio:.0%} order-aligned against the page's own reading order"
+    return None
 
 
 def _crop_question_image(doc, page_index, bbox, margin=8, dpi=200):
@@ -386,7 +512,7 @@ def _crop_question_image(doc, page_index, bbox, margin=8, dpi=200):
 
 
 def _finalize_question(doc, active, mock_name, drawings_cache, diagram_bboxes_cache):
-    stem, opts, bar_issues = reconstruct_question_math(doc, active, drawings_cache, diagram_bboxes_cache)
+    stem, opts, bar_issues, buckets = reconstruct_question_math(doc, active, drawings_cache, diagram_bboxes_cache)
     missing = [l for l in _OPTION_LETTERS if not opts.get(l)]
     needs_review = False
     review_reason = None
@@ -400,8 +526,9 @@ def _finalize_question(doc, active, mock_name, drawings_cache, diagram_bboxes_ca
     elif bar_issues:
         needs_review = True
         review_reason = (
-            f"{active['subject']} question {active['printed_number']}: modulus bars in "
-            f"{', '.join(bar_issues)} could not be confidently paired -- please check against the PDF."
+            f"{active['subject']} question {active['printed_number']}: "
+            + "; ".join(f"{loc} has {reason}" for loc, reason in bar_issues.items())
+            + " -- please check against the PDF."
         )
     elif not stem:
         needs_review = True
@@ -414,6 +541,16 @@ def _finalize_question(doc, active, mock_name, drawings_cache, diagram_bboxes_ca
                 f"{active['subject']} question {active['printed_number']}: leftover fragmented "
                 f"math glyphs detected in {', '.join(garbled_fields)} -- please clean up against the PDF."
             )
+        else:
+            # Silent-error check (requirement 3): runs on EVERY question that would otherwise come
+            # back clean -- the other gates above all look for a SYMPTOM (an empty field, a bar
+            # that won't pair, a stray short token); this one instead cross-checks the final
+            # result's own ORDER against an independently-reconstructed reading order, catching a
+            # zone-assignment mistake that happens to leave no such symptom behind at all.
+            order_issue = _check_order_mismatch(buckets, _flatten_question_spans(active), stem, opts)
+            if order_issue:
+                needs_review = True
+                review_reason = f"{active['subject']} question {active['printed_number']}: {order_issue}."
 
     q = {
         "question": stem,

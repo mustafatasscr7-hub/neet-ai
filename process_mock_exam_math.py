@@ -36,8 +36,23 @@ already claimed by another bar, is left COMPLETELY ALONE -- its glyphs stay in t
 literal text. This never crashes and never silently drops content; it just means that stray
 fragment stays visible in the output, which process_mock_exam_text.py's own existing
 _looks_math_garbled gate (unusually many short stray tokens) already catches and flags for
-manual review -- this module adds no new flagging logic of its own, it only reduces how often
-that existing gate has something real to catch.
+manual review -- this module adds no new flagging logic of its own beyond the font-aware symbol
+table's own unrecognized-glyph case (see that section), it only reduces how often the existing
+gates have something real to catch.
+
+Known, deliberately UNFIXED gap (found live via process_mock_exam_text.py's own order-mismatch
+check, not guessed): the real sample's own "Fewness,Bold" font -- its own embedded subset is
+mostly an ordinary BOLD TEXT face (every bold a-d marker and bold question number on much of the
+document uses it) -- decodes a "<"/">" comparison-operator glyph to a bare U+0020 SPACE in this
+PDF's own ToUnicode table (confirmed live, Chemistry Q20's own "NaCl < NH4Cl < NaCN < HCl"-style
+option). This is NOT in the font-aware table above: PyMuPDF's own text-extraction API (get_text
+"dict"/"rawdict") only ever exposes the ALREADY-DECODED (here wrong) Unicode character, never the
+underlying raw glyph index/CID a (font, glyph-code) mapping would need to tell a real "<" apart
+from an ordinary bold-text space using this SAME font (confirmed live: hundreds of genuine bold-
+marker spaces share the exact same font/size/width signature as the handful of real "<" signs --
+no geometry-only rule tried could separate them without risking a wrong guess elsewhere). Per this
+module's own confidence rule, guessing was rejected -- process_mock_exam_text.py's own order-
+mismatch check (_check_order_mismatch) is what actually catches a question built from this gap.
 """
 import re
 
@@ -101,12 +116,20 @@ _GREEK_COMMANDS = {
     "ρ": "rho", "σ": "sigma", "Σ": "Sigma", "τ": "tau",
     "υ": "upsilon", "φ": "phi", "Φ": "Phi", "χ": "chi",
     "ψ": "psi", "Ψ": "Psi", "ω": "omega", "Ω": "Omega",
+    "∆": "Delta",  # U+2206 INCREMENT -- this PDF's own Symbol font uses this, not U+0394, for
+    # a capital delta "change in X" (confirmed live: a page already past the answers heading
+    # uses it repeatedly as "∆" standing alone, never once as U+0394 anywhere in the sample).
+    "Ω": "Omega",  # U+2126 OHM SIGN -- this PDF's own Symbol font prints a literal ohm unit
+    # ("3Ω", "R = 300 Ω") with this codepoint, not U+03A9 (confirmed live, real option text on
+    # the sample's own Physics Q45) -- visually identical to capital Greek omega, same LaTeX.
 }
 _SYMBOL_COMMANDS = {
     "±": "pm", "×": "times", "÷": "div", "≈": "approx",
     "≠": "neq", "≤": "leq", "≥": "geq", "∝": "propto",
     "→": "rightarrow", "←": "leftarrow", "∞": "infty",
     "°": "circ", "≡": "equiv", "∂": "partial", "∇": "nabla",
+    "⇒": "Rightarrow", "∴": "therefore", "∠": "angle", "⋅": "cdot",
+    "′": "prime",
 }
 _ALL_SYMBOL_COMMANDS = {**_GREEK_COMMANDS, **_SYMBOL_COMMANDS}
 _SYMBOL_CHARS_RE = re.compile("[" + "".join(re.escape(c) for c in _ALL_SYMBOL_COMMANDS) + "]")
@@ -117,6 +140,134 @@ _SYMBOL_CHARS_RE = re.compile("[" + "".join(re.escape(c) for c in _ALL_SYMBOL_CO
 # no U+221A anywhere in the sample's text layer at all), so that shape is deliberately left
 # unhandled rather than guessed -- see module docstring's confidence rule.
 _ROOT_CHAR = "√"
+
+# ---------------------------------------------------------------------------------------------
+# Font-aware symbol table. Every character above is mapped by itself, font-independent, because
+# it already extracts as correct, universal Unicode (confirmed live) -- a real Greek letter means
+# the same thing no matter which font drew it. This PDF's own embedded "Symbol" font subset ALSO
+# emits characters in the Private Use Area (U+F8E5-U+F8FB, confirmed live via get_text("dict")'s
+# own span "font" field) that have NO such universal meaning: a bare PUA codepoint is only
+# meaningful alongside the FONT that produced it. Inspecting this sample's own "Symbol" font
+# usage directly (not guessed from rendered shape) turned up Microsoft Equation Editor/MathType's
+# own long-standing convention for drawing a TALL parenthesis/bracket out of several vertically-
+# stacked pieces (a top hook, a repeatable middle extension, a bottom hook) around a multi-row
+# expression, and for extending an arrow's own shaft to an arbitrary printed length -- confirmed
+# live by the exact evidence below, not assumed from the codepoints' names:
+#   - every LEFT-bracket-piece codepoint U+F8EB-U+F8F0 has its own RIGHT-bracket-piece partner at
+#     EXACTLY +0x0B (11) -- checked against every real occurrence in the sample, which always
+#     uses a left codepoint and its own +0x0B partner together, in matched same-size sets.
+#   - U+F8E7 is always immediately followed, on the same row, by a real arrowhead character ("->"
+#     U+2192 or "=>" U+21D2, both already in _SYMBOL_COMMANDS above) after possibly more of
+#     itself -- a longer printed arrow repeats this shaft piece more times, confirmed live
+#     ("C H I [x3]-> Intermediate").
+# This table is keyed on (normalized font name, character) and checked ONLY for a span whose own
+# font is a known Symbol-style math font (_SYMBOL_FONT_NAMES) -- the same codepoint in an ordinary
+# text font is just an unrelated private-use character, never looked up here at all.
+_SYMBOL_FONT_NAMES = {"symbol"}
+_LEFT_BRACKET_PIECE_CHARS = frozenset(chr(c) for c in range(0xF8EB, 0xF8F1))   # F8EB..F8F0
+_RIGHT_BRACKET_PIECE_CHARS = frozenset(chr(c) for c in range(0xF8F6, 0xF8FC))  # F8F6..F8FB
+_ARROW_SHAFT_EXTENDER_CHAR = chr(0xF8E7)
+_ARROWHEAD_CHARS = {"→", "⇒"}
+# The full Private Use Area range this sample's own "Symbol" font subset is confirmed to draw
+# from (see above) -- any character in here, in a Symbol-font span, that is NOT one of the
+# specific pieces this table already recognizes is an unknown glyph (a different equation-editor
+# construct this sample never happened to use) rather than a guess: per this module's own
+# confidence rule, _collapse_symbol_font_glyphs leaves it as literal text AND reports an issue for
+# the caller to flag needs_review with, rather than ever letting an un-renderable private-use
+# character silently reach the output unflagged.
+_SYMBOL_FONT_PUA_RANGE = (0xF8E0, 0xF8FF)
+
+
+def _collapse_symbol_font_glyphs(spans):
+    """Collapses every run of this zone's own Symbol-font bracket-piece glyphs (one character per
+    vertical piece -- top/extension/bottom, see this section's own docstring) into a single "("
+    or ")" character, and drops an arrow-shaft-extender run that leads into a real arrowhead
+    character. Returns (new_spans, issue) -- issue is a human-readable reason the moment ANY
+    Symbol-font Private Use Area character is left over afterwards unrecognized (never silently
+    passed through as a literal, un-renderable character); new_spans is returned completely
+    UNCHANGED (not even reordered) whenever this zone has no Symbol-font content at all, the
+    overwhelmingly common case, so this is cheap to call for every zone."""
+    if not any(_normalized_font_name(s.get("font")) in _SYMBOL_FONT_NAMES
+               and any(_SYMBOL_FONT_PUA_RANGE[0] <= ord(c) <= _SYMBOL_FONT_PUA_RANGE[1] for c in (s.get("text") or ""))
+               for s in spans):
+        return spans, None
+
+    rows = _rows_in_reading_order(spans)
+    row_of_id = {id(s): row for row in rows for s in row}
+
+    out = []
+    issue = None
+    # A bracket construct TALL enough to need more than one size-tier of pieces per side has each
+    # piece on its own different baseline -- confirmed live, the real sample's own Q40 (Biot-
+    # Savart's law, a fraction wrapped in a tall paren around ANOTHER fraction): unlike a short
+    # single-row construct (confirmed glued into one span's own text, see the within-span loop
+    # below), PyMuPDF never merges characters across different baselines into one span, so each
+    # vertical piece lands in its OWN separate span. Collapsing each one independently would emit
+    # one "(" per PIECE instead of one for the whole construct -- confirmed live, "((((" -- so a
+    # left/right side with piece characters split across more than one span is counted here and
+    # flagged below rather than guessed at.
+    left_piece_span_count = 0
+    right_piece_span_count = 0
+    for row in rows:
+        for s in row:
+            font = _normalized_font_name(s.get("font"))
+            text = s.get("text") or ""
+            if font not in _SYMBOL_FONT_NAMES or not any(
+                    _SYMBOL_FONT_PUA_RANGE[0] <= ord(c) <= _SYMBOL_FONT_PUA_RANGE[1] for c in text):
+                out.append(s)
+                continue
+            if any(c in _LEFT_BRACKET_PIECE_CHARS for c in text):
+                left_piece_span_count += 1
+            if any(c in _RIGHT_BRACKET_PIECE_CHARS for c in text):
+                right_piece_span_count += 1
+            # Rebuild this ONE span's own text, character by character -- confirmed live, a
+            # SHORT construct's own pieces sit glued into a single span's text already (PyMuPDF
+            # merges adjacent same-font/size characters into one span regardless of which
+            # individual glyph each one is).
+            new_text = []
+            j, n = 0, len(text)
+            while j < n:
+                ch = text[j]
+                if ch in _LEFT_BRACKET_PIECE_CHARS:
+                    while j < n and text[j] in _LEFT_BRACKET_PIECE_CHARS:
+                        j += 1
+                    new_text.append("(")
+                elif ch in _RIGHT_BRACKET_PIECE_CHARS:
+                    while j < n and text[j] in _RIGHT_BRACKET_PIECE_CHARS:
+                        j += 1
+                    new_text.append(")")
+                elif ch == _ARROW_SHAFT_EXTENDER_CHAR:
+                    k = j
+                    while k < n and text[k] == _ARROW_SHAFT_EXTENDER_CHAR:
+                        k += 1
+                    followed_by_arrowhead = k < n and text[k] in _ARROWHEAD_CHARS
+                    if not followed_by_arrowhead:
+                        row_list = row_of_id[id(s)]
+                        pos = next(idx for idx, x in enumerate(row_list) if x is s)
+                        for later in row_list[pos + 1:]:
+                            later_text = (later.get("text") or "").lstrip()
+                            if later_text:
+                                followed_by_arrowhead = later_text[0] in _ARROWHEAD_CHARS
+                                break
+                    if followed_by_arrowhead:
+                        j = k  # the shaft contributes nothing -- the arrowhead carries the meaning
+                    else:
+                        issue = f"an unrecognized Symbol-font glyph (U+{ord(ch):04X})"
+                        new_text.append(ch)  # left as literal -- never silently dropped either
+                        j += 1
+                elif _SYMBOL_FONT_PUA_RANGE[0] <= ord(ch) <= _SYMBOL_FONT_PUA_RANGE[1]:
+                    issue = f"an unrecognized Symbol-font glyph (U+{ord(ch):04X})"
+                    new_text.append(ch)
+                    j += 1
+                else:
+                    new_text.append(ch)
+                    j += 1
+            ns = dict(s)
+            ns["text"] = "".join(new_text)
+            out.append(ns)
+    if left_piece_span_count > 1 or right_piece_span_count > 1:
+        issue = "a tall Symbol-font bracket spanning multiple lines could not be confidently collapsed"
+    return out, issue
 
 
 def _is_fraction_bar_rect(rect, zone_bbox):
@@ -130,19 +281,37 @@ def _is_fraction_bar_rect(rect, zone_bbox):
     return zx0 - 2 <= x0 and x1 <= zx1 + 2 and zy0 - 2 <= y0 <= zy1 + 2
 
 
-def get_zone_fraction_bars(drawings, zone_bbox):
+def get_zone_fraction_bars(drawings, zone_bbox, diagram_bboxes=()):
     """drawings: page.get_drawings() output (fetched once per page by the caller). Returns a list
     of (x0, y0, x1) for every thin horizontal line drawing that falls inside zone_bbox -- a
     fraction bar never spans outside the option/stem zone it belongs to, which is what keeps this
-    from ever claiming content across an option boundary (see this module's own docstring)."""
+    from ever claiming content across an option boundary (see this module's own docstring).
+
+    Same two exclusions get_zone_vertical_bars already applies to a modulus bar, confirmed live
+    this section has the identical exposure (see that function's own docstring for how each was
+    found): _is_plain_stroke rejects a filled rectangle (a table's own cell border/shading, type
+    "f" -- a different drawing primitive than a real bar's stroked "l" line entirely), and
+    diagram_bboxes rejects a stroke that is really part of a diagram's own line art. Confirmed
+    live on a REAL false match (the real sample's own Biology Q34): a question whose own content
+    runs to near a page's own bottom accumulates a stray near-empty block from the TOP of the
+    NEXT page (harmless on its own -- just whitespace) that pulls that next page's own geometry
+    into this zone's own drawings lookup; zone_bbox's own y-range, a naive union across the two
+    pages, then coincidentally overlaps that NEXT page's own unrelated table border, which this
+    check rejects outright rather than ever risking a match this far from anything the zone's own
+    content could possibly mean."""
     bars = []
     for d in drawings:
         rect = d.get("rect")
         if rect is None:
             continue
         rect = (rect[0], rect[1], rect[2], rect[3])
-        if _is_fraction_bar_rect(rect, zone_bbox):
-            bars.append((rect[0], rect[1], rect[2]))
+        if not _is_fraction_bar_rect(rect, zone_bbox):
+            continue
+        if not _is_plain_stroke(d):
+            continue
+        if diagram_bboxes and _in_any_bbox(rect, diagram_bboxes):
+            continue
+        bars.append((rect[0], rect[1], rect[2]))
     return bars
 
 
@@ -620,65 +789,25 @@ def build_option_zones(flat_spans, question_bbox):
     row_top_y = [row[0][1]["bbox"][1] for row in rows]
 
     # 3-4 markers sharing one row (every option inline on a single line, e.g. "a. 0.1  b. 0.5
-    # c. 1  d. 5", or a 2x2 grid's own "a. ...  b. ...") usually has plenty of room -- the per-
-    # option budget is still generous relative to a short answer. It only breaks down when an
-    # option's own content is wide enough to reach the midpoint to its neighbor's own marker --
-    # confirmed live three times, in three different shapes: a unit expression like "W m^-2 K^-4"
-    # whose small exponent glyph straddles the midpoint outright; a same-size inline fraction
-    # (numerator/denominator stacked above/below the marker's own single line) whose own glyphs
-    # straddle it the same way, at ordinary body-text size; and a trailing small exponent (e.g.
-    # "kg/m^3"'s own unit exponent) that doesn't straddle the midpoint at all but lands entirely
-    # on the WRONG side of it, severed from the normal-size text it's actually attached to (here
-    # "kg/m" itself, immediately to its left with no gap) because that preceding text already used
-    # up most of the gap on its own. The THIRD shape needs its own check, not a wider distance
-    # margin from the boundary -- a margin wide enough to catch it also caught a same-sized
-    # exponent that legitimately sits well inside its own option's zone (confirmed live: a false
-    # positive on an otherwise-fine reconstruction). Checked instead by adjacency: a small glyph
-    # with an unclaimed, touching (near-zero gap) neighbor on the SAME row is only unsafe if a
-    # boundary falls somewhere between that neighbor and itself -- i.e. the boundary would sever
-    # two glyphs that belong together, not merely sit somewhere nearby. A same-size glyph
-    # (ordinary prose, e.g. a wide "is:") straddling the midpoint by a hair is NOT this failure and
-    # reconstructs fine, so it keeps the stricter straddle-only check.
-    body_size, _ = _base_size_and_baseline(flat_spans)
-    non_marker_ids = {id(m) for _, m in marker_list}
-    content_spans = [s for s in flat_spans if id(s) not in non_marker_ids and s["text"].strip()]
-    internal_boundaries = []  # (x, row_y0, row_y1, marker_top, marker_bottom)
-    for ri, row in enumerate(rows):
-        if len(row) < 2:
-            continue
-        row_y0 = min(it[1]["bbox"][1] for it in row) - 6
-        row_y1 = (row_top_y[ri + 1] - 2) if ri + 1 < len(rows) else qy1 + 4
-        marker_top = min(it[1]["bbox"][1] for it in row)
-        marker_bottom = max(it[1]["bbox"][3] for it in row)
-        for ci in range(len(row) - 1):
-            boundary_x = (row[ci][1]["bbox"][0] + row[ci + 1][1]["bbox"][0]) / 2.0
-            internal_boundaries.append((boundary_x, row_y0, row_y1, marker_top, marker_bottom))
-    if internal_boundaries:
-        for s in content_spans:
-            sx0, sy0, sx1, sy1 = s["bbox"]
-            s_cy = (sy0 + sy1) / 2.0
-            is_small = s["size"] < body_size * _SIZE_RATIO
-            left_neighbor = None
-            if is_small:
-                best_gap = None
-                for other in content_spans:
-                    if other is s:
-                        continue
-                    oy0, oy1 = other["bbox"][1], other["bbox"][3]
-                    if abs((oy0 + oy1) / 2.0 - s_cy) > 6:
-                        continue
-                    gap = sx0 - other["bbox"][2]
-                    if 0 <= gap < 3 and (best_gap is None or gap < best_gap):
-                        left_neighbor, best_gap = other, gap
-            for bx, by0, by1, m_top, m_bottom in internal_boundaries:
-                if not (by0 <= s_cy <= by1):
-                    continue
-                straddles = sx0 < bx < sx1
-                off_marker_line = sy0 < m_top - 3 or sy1 > m_bottom + 3
-                severed = left_neighbor is not None and left_neighbor["bbox"][0] <= bx <= sx1
-                if (straddles and (is_small or off_marker_line)) or severed:
-                    return None  # too close to call -- fall back rather than guess the side
-
+    # c. 1  d. 5", or a 2x2 grid's own "a. ...  b. ...") used to need its own rectangle-boundary
+    # safety check here: a plain marker-midpoint x-split breaks down the moment one option's own
+    # content is wider than half its own gap to the next marker -- confirmed live three times, a
+    # unit expression's own exponent straddling the midpoint outright, an inline fraction doing
+    # the same at ordinary body-text size, and a trailing exponent landing entirely on the WRONG
+    # side of a midpoint it never even straddles (severed from the normal-size text it is really
+    # attached to). Reconstruct-before-splitting requirement: rather than guard against each of
+    # these shapes with its own geometric margin, assign_spans_to_zones no longer uses these
+    # rectangles to decide a SHARED row's own content at all -- it walks a 2+-marker row by
+    # READING-ORDER marker sequence instead (see that function's own docstring), which has no
+    # straddle/sever failure mode in the first place: "whatever comes after marker A and before
+    # marker B" stays correct no matter how far right option A's own content runs. This is what
+    # finally lets a tightly-packed shared line (the real sample's own Q1, four options' worth of
+    # unit exponents sitting right on top of each other) engage this module's own reconstruction
+    # at all, instead of bailing the moment any one of them sits near a boundary. The rectangles
+    # built below are kept only for a row with FEWER than 2 markers (a genuine x-column question,
+    # e.g. a grid's own fraction-denominator continuation row with no marker of its own) and for
+    # scoping this zone's own fraction-bar/modulus-bar drawing lookups -- both already proven,
+    # unrelated to this requirement, and deliberately left untouched.
     zones = {}
     for ri, row in enumerate(rows):
         row_y0 = min(it[1]["bbox"][1] for it in row) - 6
@@ -702,28 +831,54 @@ def _dist_to_rect(cx, cy, rect):
 
 
 def assign_spans_to_zones(flat_spans, stem_zone, option_zones, marker_ids):
-    """Every remaining glyph (the 4 markers themselves are excluded by marker_ids) goes to
-    whichever zone's own rect contains its center, or -- for a glyph sitting just outside every
-    zone's own margin (e.g. a numerator poking slightly further above its option's marker than
-    the zone's own margin allows for) -- to whichever zone's rect is nearest. Zones never overlap
-    by construction (each one is bounded by the midpoint to its neighbor), so this never lets one
-    option's content bleed into another (requirement: never cross an option boundary)."""
+    """Every remaining glyph (the 4 markers themselves are excluded by marker_ids, consumed only
+    to update `current_zone` below) goes to whichever zone's own rect contains its center, or --
+    for a glyph sitting just outside every zone's own margin (e.g. a numerator poking slightly
+    further above its option's marker than the zone's own margin allows for) -- to whichever
+    zone's rect is nearest. This rectangle rule is used for a row carrying FEWER than 2 of this
+    question's own bold a-d markers (every option on its own row, or a grid's own fraction-
+    denominator continuation row with no marker of its own) -- a genuine x-column question the
+    rectangles already answer correctly (confirmed live: unrelated to, and unaffected by, the
+    rule below).
+
+    Reconstruct-before-splitting requirement: a row carrying 2 OR MORE markers together (every
+    option packed inline on one shared physical line, or a 2x2 grid's own marker row) is resolved
+    by READING-ORDER marker sequence instead -- walking that row's own spans left to right (rows
+    from _rows_in_reading_order, which already groups a raised/lowered glyph with its own base
+    line) and assigning EVERY span on it, base-sized or small, to whichever marker was most
+    recently crossed -- the same "whatever follows marker K up to marker K+1" rule the plain-text
+    _parse_options already uses, just generalized to glyph geometry here. Confirmed live this is
+    necessary even for a BASE-sized glyph, not only a superscript: a rectangle zone's own marker-
+    midpoint boundary can fall INSIDE one option's own real content whenever that option's own
+    content is simply wider than half its own gap to the next marker (the real sample's own Q1 --
+    option A's own base letter "K" sits past the straight midpoint toward option B's marker,
+    purely because A's own content is short and B's marker follows close behind). Reading-order
+    sequence has no such failure mode: "whatever comes after marker A and before marker B" stays
+    correct no matter how far right it runs. `current_zone` persists ACROSS rows (not reset per
+    row) so a marker crossed on one row still governs any later row with no marker of its own at
+    all (an ordinary wrapped continuation line)."""
     buckets = {"stem": [], "a": [], "b": [], "c": [], "d": []}
     all_zones = {"stem": stem_zone, **option_zones}
-    for s in flat_spans:
-        if id(s) in marker_ids:
-            continue
-        cx, cy = _span_center(s)
-        placed = False
+
+    def _plain_zone_for(cx, cy):
         for name, rect in all_zones.items():
             x0, y0, x1, y1 = rect
             if x0 <= cx <= x1 and y0 <= cy <= y1:
-                buckets[name].append(s)
-                placed = True
-                break
-        if not placed:
-            best_name = min(all_zones, key=lambda name: _dist_to_rect(cx, cy, all_zones[name]))
-            buckets[best_name].append(s)
+                return name
+        return min(all_zones, key=lambda name: _dist_to_rect(cx, cy, all_zones[name]))
+
+    current_zone = "stem"
+    for row in _rows_in_reading_order(flat_spans):
+        marker_count = sum(1 for s in row if id(s) in marker_ids)
+        for s in row:
+            if id(s) in marker_ids:
+                current_zone = s["text"].strip()[0].lower()
+                continue
+            if marker_count >= 2:
+                buckets[current_zone].append(s)
+            else:
+                cx, cy = _span_center(s)
+                buckets[_plain_zone_for(cx, cy)].append(s)
     return buckets
 
 
@@ -812,15 +967,17 @@ def reconstruct_zone(spans, drawings, zone_bbox, diagram_bboxes=()):
     get_zone_fraction_bars/get_zone_vertical_bars). diagram_bboxes: this zone's own page(s)'
     already-detected diagram regions (see get_zone_vertical_bars's own docstring) - pass () when
     the caller has none computed (e.g. a synthetic test with no diagram at all).
-    Returns (text, bar_issue) -- text already wrapped in $...$ around every math run -- never
-    raises, never drops a glyph: anything not confidently reconstructed is passed through as
-    literal text. bar_issue is None unless this zone's own modulus/magnitude bars could not be
-    confidently paired (see _normalize_modulus_bars), in which case text is returned with those
-    bar characters completely unchanged and the caller should flag the question needs_review with
-    bar_issue as the reason."""
+    Returns (text, issue) -- text already wrapped in $...$ around every math run -- never raises,
+    never drops a glyph: anything not confidently reconstructed is passed through as literal
+    text. issue is None unless this zone's own modulus/magnitude bars could not be confidently
+    paired (see _normalize_modulus_bars) OR a Symbol-font glyph could not be recognized (see
+    _collapse_symbol_font_glyphs) -- either way text is returned with that content completely
+    unchanged and the caller should flag the question needs_review with issue as the reason."""
     spans = [s for s in spans if s.get("text")]
     if not spans:
         return "", None
+
+    spans, glyph_issue = _collapse_symbol_font_glyphs(spans)
 
     # Computed ONCE from the zone's own full span pool (before anything is claimed by a fraction)
     # and reused everywhere below -- a fraction's numerator/denominator is often only 1-2 spans,
@@ -828,12 +985,13 @@ def reconstruct_zone(spans, drawings, zone_bbox, diagram_bboxes=()):
     # from an exponent on its own (see _join_plain_spans's own docstring).
     base_size, base_baseline = _base_size_and_baseline(spans)
     spans, bar_issue = _normalize_modulus_bars(spans, drawings, zone_bbox, base_size, diagram_bboxes)
+    bar_issue = bar_issue or glyph_issue
 
     claimed_ids = set()
     pool = []  # list of dicts: {text, bbox, origin, size, font, is_math}
 
     # ---- Fractions first (the most structurally confident signal: an actual drawn bar) ----
-    bars = get_zone_fraction_bars(drawings, zone_bbox)
+    bars = get_zone_fraction_bars(drawings, zone_bbox, diagram_bboxes)
     for bar_x0, bar_y0, bar_x1 in bars:
         num_spans, den_spans = [], []
         for s in spans:
