@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<meta name="robots" content="noindex, nofollow"/>
+<title>NCERT Content — NEET-AI Admin</title>
+<link rel="icon" href="assets/favicon.ico" sizes="any"/>
+<link rel="icon" type="image/svg+xml" href="assets/logo.svg"/>
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Inter', sans-serif; background: #0d0d0d; color: #ececec; min-height: 100vh; }
+
+  /* Password gate -- same pattern as admin-pdf-review.html / admin-pyq-preview.html */
+  #gateOverlay { position: fixed; inset: 0; background: #0d0d0d; display: flex; align-items: center; justify-content: center; z-index: 999; }
+  .gate-box { background: #111; border: 1px solid #2a2a2a; border-radius: 14px; padding: 32px; width: 100%; max-width: 340px; text-align: center; }
+  .gate-box h1 { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
+  .gate-box p { font-size: 12px; color: #666; margin-bottom: 20px; }
+  .gate-box input { width: 100%; background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 8px; padding: 10px 14px; color: #ececec; font-size: 14px; font-family: 'Inter', sans-serif; outline: none; margin-bottom: 12px; }
+  .gate-box input:focus { border-color: #4f8ef7; }
+  .gate-box button { width: 100%; background: #4f8ef7; border: none; border-radius: 8px; padding: 10px; color: white; font-size: 13px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
+  .gate-box button:hover { background: #3b7de8; }
+  .gate-error { font-size: 12px; color: #ef4444; margin-top: 10px; min-height: 14px; }
+
+  #dashboard { display: none; max-width: 1000px; margin: 0 auto; padding: 24px; }
+  .db-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+  .db-header h1 { font-size: 18px; font-weight: 700; }
+  .db-header h1 span { color: #4f8ef7; }
+  .db-header p { font-size: 12px; color: #666; margin-top: 2px; }
+  .logout-btn { background: transparent; border: 1px solid #2a2a2a; color: #888; padding: 6px 14px; border-radius: 8px; font-size: 12px; cursor: pointer; font-family: 'Inter', sans-serif; }
+  .logout-btn:hover { color: #ccc; border-color: #3a3a3a; }
+
+  .panel { background: #111; border: 1px solid #1e1e1e; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  .panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: #888; margin-bottom: 12px; }
+
+  .q-field label { display: block; font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 5px; }
+  .q-field textarea, .q-field input[type="text"], .q-field input[type="number"], .q-field select {
+    width: 100%; background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 6px; padding: 8px 10px;
+    color: #ececec; font-size: 13px; font-family: 'Inter', sans-serif; outline: none; resize: vertical;
+  }
+  .q-field textarea:focus, .q-field input:focus, .q-field select:focus { border-color: #4f8ef7; }
+  .form-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 12px; }
+  .form-row.cols-2 { grid-template-columns: 1fr 1fr; }
+  .form-row .q-field { margin-bottom: 0; }
+
+  .upload-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 4px; }
+  .upload-row input[type="file"] { flex: 1; min-width: 200px; font-size: 12px; color: #888; }
+  .primary-btn { background: #4f8ef7; border: none; border-radius: 8px; padding: 10px 20px; color: white; font-size: 13px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; white-space: nowrap; }
+  .primary-btn:hover:not(:disabled) { background: #3b7de8; }
+  .primary-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .secondary-btn { background: #1a1a1a; border: 1px solid #2a2a2a; color: #ececec; padding: 10px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
+  .secondary-btn:hover { border-color: #4f8ef7; color: #4f8ef7; }
+
+  #uploadStatus, #sectionStatus { font-size: 12px; margin-top: 10px; display: none; }
+  #uploadStatus.info, #sectionStatus.info { color: #4f8ef7; }
+  #uploadStatus.error, #sectionStatus.error { color: #ef4444; }
+  #uploadStatus.success, #sectionStatus.success { color: #4ade80; }
+
+  .preview-box { margin-top: 14px; border: 1px solid #2a2a2a; border-radius: 8px; padding: 14px; display: none; }
+  .preview-box h3 { font-size: 14px; font-weight: 700; margin-bottom: 4px; }
+  .preview-box .preview-meta { font-size: 11px; color: #888; margin-bottom: 10px; }
+  .exists-warning { font-size: 12px; color: #f5c518; background: #f5c51815; border: 1px solid #f5c51850; border-radius: 6px; padding: 8px 10px; margin-bottom: 10px; }
+  .flags-box { font-size: 12px; color: #ef4444; background: #ef444415; border: 1px solid #ef444450; border-radius: 6px; padding: 8px 10px; margin-bottom: 10px; }
+  .flags-box ul { margin: 6px 0 0 18px; }
+  .preview-sections { max-height: 320px; overflow-y: auto; border: 1px solid #1e1e1e; border-radius: 6px; margin-bottom: 12px; }
+  .preview-section-row { padding: 8px 10px; border-bottom: 1px solid #1a1a1a; font-size: 12px; display: flex; justify-content: space-between; gap: 10px; }
+  .preview-section-row:last-child { border-bottom: none; }
+  .preview-section-row .heading { color: #ececec; }
+  .preview-section-row .wc { color: #666; white-space: nowrap; }
+  .preview-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .overwrite-check { font-size: 12px; color: #f5c518; display: flex; align-items: center; gap: 6px; }
+
+  .totals-row { display: flex; gap: 18px; font-size: 12px; color: #888; margin-bottom: 12px; flex-wrap: wrap; }
+  .totals-row b { color: #ececec; }
+
+  .table-wrap { background: #0d0d0d; border: 1px solid #1e1e1e; border-radius: 8px; overflow: hidden; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  thead th { text-align: left; padding: 10px 12px; border-bottom: 1px solid #1e1e1e; color: #888; font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; white-space: nowrap; }
+  tbody tr { border-bottom: 1px solid #1a1a1a; cursor: pointer; }
+  tbody tr:last-child { border-bottom: none; }
+  tbody tr:hover { background: #151515; }
+  tbody td { padding: 8px 12px; vertical-align: middle; }
+  .subject-chip { font-size: 11px; padding: 2px 8px; border-radius: 20px; font-weight: 600; display: inline-block; }
+  .subject-chip.Physics { background: #4f8ef720; color: #4f8ef7; }
+  .subject-chip.Biology { background: #4ade8020; color: #4ade80; }
+  .subject-chip.Chemistry { background: #f9731620; color: #f97316; }
+  .kw-badge { font-size: 10px; padding: 2px 7px; border-radius: 20px; font-weight: 600; display: inline-block; }
+  .kw-badge.done { background: #4ade8020; color: #4ade80; }
+  .kw-badge.pending { background: #f5c51820; color: #f5c518; }
+  .action-btn { background: #1a1a1a; border: 1px solid #2a2a2a; color: #ececec; padding: 5px 10px; border-radius: 6px; font-size: 11px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
+  .action-btn:hover { border-color: #4f8ef7; color: #4f8ef7; }
+  .action-btn.danger:hover { border-color: #ef4444; color: #ef4444; }
+  .empty-row td { text-align: center; padding: 40px; color: #555; }
+
+  #chapterDetail { display: none; }
+  .detail-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; }
+  .detail-header h2 { font-size: 14px; color: #ececec; text-transform: none; letter-spacing: 0; margin-bottom: 2px; }
+  .detail-sections { border: 1px solid #1e1e1e; border-radius: 8px; overflow: hidden; }
+  .detail-section { border-bottom: 1px solid #1a1a1a; padding: 10px 12px; }
+  .detail-section:last-child { border-bottom: none; }
+  .detail-section-head { display: flex; justify-content: space-between; align-items: center; cursor: pointer; }
+  .detail-section-head .heading { font-weight: 600; font-size: 13px; }
+  .detail-section-head .meta { font-size: 11px; color: #666; display: flex; gap: 8px; align-items: center; }
+  .detail-section-body { display: none; font-size: 12px; color: #aaa; margin-top: 8px; white-space: pre-wrap; line-height: 1.5; }
+  .detail-section-body.open { display: block; }
+  .detail-section-kw { font-size: 11px; color: #4f8ef7; margin-top: 6px; }
+</style>
+</head>
+<body>
+
+<div id="gateOverlay">
+  <div class="gate-box">
+    <h1>NCERT Content</h1>
+    <p>Internal tool — enter admin password</p>
+    <input type="password" id="gatePassword" placeholder="Password" autocomplete="off"/>
+    <button onclick="verifyPassword()">Enter</button>
+    <div class="gate-error" id="gateError"></div>
+  </div>
+</div>
+
+<div id="dashboard">
+  <div class="db-header">
+    <div>
+      <h1>NEET<span>-AI</span> NCERT Content</h1>
+      <p>See, upload and manage ncert_sections chapters</p>
+    </div>
+    <button class="logout-btn" onclick="logout()">Log out</button>
+  </div>
+
+  <div class="panel">
+    <h2>Upload a chapter PDF</h2>
+    <div class="form-row">
+      <div class="q-field">
+        <label>Class</label>
+        <select id="uploadClass">
+          <option value="11">11</option>
+          <option value="12">12</option>
+        </select>
+      </div>
+      <div class="q-field">
+        <label>Subject</label>
+        <select id="uploadSubject">
+          <option value="Biology">Biology</option>
+          <option value="Physics">Physics</option>
+          <option value="Chemistry">Chemistry</option>
+        </select>
+      </div>
+      <div class="q-field">
+        <label>Chapter PDF (max 15 MB)</label>
+        <div class="upload-row">
+          <input type="file" id="chapterFile" accept="application/pdf" onchange="onChapterFileChange()"/>
+        </div>
+      </div>
+    </div>
+    <button type="button" class="primary-btn" id="previewBtn" onclick="previewChapter()" disabled>Preview</button>
+    <div id="uploadStatus"></div>
+
+    <div class="preview-box" id="previewBox">
+      <h3 id="previewTitle">—</h3>
+      <div class="preview-meta" id="previewMeta"></div>
+      <div class="exists-warning" id="existsWarning" style="display:none"></div>
+      <div class="flags-box" id="flagsBox" style="display:none"></div>
+      <div class="preview-sections" id="previewSections"></div>
+      <div class="preview-actions">
+        <label class="overwrite-check" id="overwriteRow" style="display:none">
+          <input type="checkbox" id="overwriteCheckbox"/> Overwrite the existing chapter
+        </label>
+        <button type="button" class="primary-btn" id="applyBtn" onclick="applyChapter()">Apply</button>
+        <button type="button" class="secondary-btn" onclick="cancelPreview(); setUploadStatus('', '')">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Loaded chapters</h2>
+    <div class="totals-row" id="totalsRow">Loading…</div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Class</th><th>Subject</th><th>Chapter</th><th>Sections</th><th>Words</th><th>Keywords</th><th>Loaded</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="chaptersTableBody">
+          <tr class="empty-row"><td colspan="8">Loading...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="panel" id="chapterDetail">
+    <div class="detail-header">
+      <div>
+        <h2 id="detailTitle">—</h2>
+        <div class="preview-meta" id="detailMeta"></div>
+      </div>
+      <button type="button" class="secondary-btn" onclick="closeChapterDetail()">Close</button>
+    </div>
+    <div class="detail-sections" id="detailSections"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Add or edit a section manually</h2>
+    <p style="font-size:11px;color:#666;margin-bottom:12px;">Use this when a chapter PDF fails validation, or to fix one section by hand. Saving with the same class/subject/chapter/ordinal as an existing section edits it in place.</p>
+    <div class="form-row cols-2">
+      <div class="q-field">
+        <label>Class</label>
+        <select id="manualClass">
+          <option value="11">11</option>
+          <option value="12">12</option>
+        </select>
+      </div>
+      <div class="q-field">
+        <label>Subject</label>
+        <select id="manualSubject">
+          <option value="Biology">Biology</option>
+          <option value="Physics">Physics</option>
+          <option value="Chemistry">Chemistry</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-row cols-2">
+      <div class="q-field">
+        <label>Chapter</label>
+        <input type="text" id="manualChapter" placeholder="e.g. The Living World"/>
+      </div>
+      <div class="q-field">
+        <label>Ordinal (section order, 0-based)</label>
+        <input type="number" id="manualOrdinal" min="0" step="1" value="0"/>
+      </div>
+    </div>
+    <div class="q-field" style="margin-bottom:12px;">
+      <label>Heading</label>
+      <input type="text" id="manualHeading" placeholder="e.g. 1.1 Diversity In The Living World"/>
+    </div>
+    <div class="q-field" style="margin-bottom:12px;">
+      <label>Text</label>
+      <textarea id="manualText" rows="6" placeholder="Section body text"></textarea>
+    </div>
+    <div class="preview-actions">
+      <label class="overwrite-check" style="color:#888;"><input type="checkbox" id="manualRegenKeywords"/> Generate keywords for this section (DeepSeek)</label>
+      <button type="button" class="primary-btn" onclick="saveManualSection()">Save section</button>
+      <button type="button" class="secondary-btn" onclick="clearManualForm()">Clear</button>
+    </div>
+    <div id="sectionStatus"></div>
+  </div>
+</div>
+
+<script src="./confirm-modal.js"></script>
+<script>
+  const API_BASE = 'https://neet-ai-production.up.railway.app';
+  let adminKey = sessionStorage.getItem('admin_key') || '';
+  let currentPreview = null; // last /preview response, held until Apply or Cancel
+
+  function authHeaders(extra) {
+    return Object.assign({ 'X-Admin-Key': adminKey }, extra || {});
+  }
+
+  // A 404/other HTTP error comes back as FastAPI's own {"detail": "..."} shape, not this app's
+  // usual {"error": ...} -- checking both keeps every error shown to the admin a plain string,
+  // never "[object Object]".
+  async function describeHttpError(res) {
+    try {
+      const body = await res.json();
+      return body.error || body.detail || `HTTP ${res.status}`;
+    } catch (e) {
+      return `HTTP ${res.status}`;
+    }
+  }
+
+  function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s == null ? '' : String(s);
+    return div.innerHTML;
+  }
+
+  async function verifyPassword() {
+    const pw = document.getElementById('gatePassword').value;
+    const errEl = document.getElementById('gateError');
+    errEl.textContent = '';
+    try {
+      const res = await fetch(`${API_BASE}/admin/verify`, { method: 'POST', headers: authHeaders({ 'X-Admin-Key': pw }) });
+      if (res.status === 200) {
+        adminKey = pw;
+        sessionStorage.setItem('admin_key', adminKey);
+        enterDashboard();
+      } else if (res.status === 429) {
+        const data = await res.json().catch(() => ({}));
+        errEl.textContent = data.detail || 'Too many failed attempts. Try again later.';
+      } else {
+        errEl.textContent = 'Wrong password.';
+      }
+    } catch (e) {
+      errEl.textContent = 'Could not reach server.';
+    }
+  }
+
+  document.getElementById('gatePassword').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') verifyPassword();
+  });
+
+  function logout() {
+    sessionStorage.removeItem('admin_key');
+    adminKey = '';
+    document.getElementById('dashboard').style.display = 'none';
+    document.getElementById('gateOverlay').style.display = 'flex';
+    document.getElementById('gatePassword').value = '';
+  }
+
+  function enterDashboard() {
+    document.getElementById('gateOverlay').style.display = 'none';
+    document.getElementById('dashboard').style.display = 'block';
+    loadChapters();
+  }
+
+  if (adminKey) {
+    enterDashboard();
+  }
+
+  // ---------------- Upload / preview / apply ----------------
+
+  function fileToBase64(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result.split(',')[1]);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function onChapterFileChange() {
+    document.getElementById('previewBtn').disabled = !document.getElementById('chapterFile').files.length;
+  }
+
+  function setUploadStatus(text, cls) {
+    const el = document.getElementById('uploadStatus');
+    el.textContent = text;
+    el.className = cls || '';
+    el.style.display = text ? 'block' : 'none';
+  }
+
+  async function previewChapter() {
+    const file = document.getElementById('chapterFile').files[0];
+    if (!file) return;
+    const cls = document.getElementById('uploadClass').value;
+    const subject = document.getElementById('uploadSubject').value;
+
+    if (file.size > 15 * 1024 * 1024) {
+      setUploadStatus(`This PDF is too large (${(file.size / (1024 * 1024)).toFixed(1)} MB) - the cap is 15 MB.`, 'error');
+      return;
+    }
+
+    const previewBtn = document.getElementById('previewBtn');
+    previewBtn.disabled = true;
+    setUploadStatus('Extracting and validating...', 'info');
+    document.getElementById('previewBox').style.display = 'none';
+
+    try {
+      const base64 = await fileToBase64(file);
+      const res = await fetch(`${API_BASE}/admin/ncert-content/preview`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ class: cls, subject, data: base64 })
+      });
+      if (res.status === 401) { logout(); return; }
+      if (!res.ok) { setUploadStatus(await describeHttpError(res), 'error'); return; }
+      const data = await res.json();
+      if (data.error) { setUploadStatus(data.error, 'error'); return; }
+
+      currentPreview = data;
+      renderPreview(data);
+      setUploadStatus('', '');
+    } catch (e) {
+      setUploadStatus('Could not reach server.', 'error');
+    } finally {
+      previewBtn.disabled = !document.getElementById('chapterFile').files.length;
+    }
+  }
+
+  function renderPreview(data) {
+    document.getElementById('previewBox').style.display = 'block';
+    document.getElementById('previewTitle').textContent = data.chapter_title || '(no chapter title found)';
+    document.getElementById('previewMeta').textContent =
+      `Class ${data.class} · ${data.subject} · ${data.section_count} section(s) · ${data.words} words`;
+
+    const existsEl = document.getElementById('existsWarning');
+    if (data.exists) {
+      existsEl.style.display = 'block';
+      existsEl.textContent = 'A chapter with this class, subject and title already exists. Check "Overwrite" to replace it.';
+    } else {
+      existsEl.style.display = 'none';
+    }
+
+    const flagsEl = document.getElementById('flagsBox');
+    const flags = data.flags || [];
+    if (flags.length) {
+      flagsEl.style.display = 'block';
+      flagsEl.innerHTML = 'This chapter failed validation and cannot be applied from the PDF route:<ul>' +
+        flags.map(f => `<li>${escapeHtml(f)}</li>`).join('') + '</ul>Use the manual section form below instead.';
+    } else {
+      flagsEl.style.display = 'none';
+    }
+
+    document.getElementById('previewSections').innerHTML = (data.sections || []).map(s => `
+      <div class="preview-section-row">
+        <span class="heading">${escapeHtml(s.heading)}</span>
+        <span class="wc">${s.word_count} words</span>
+      </div>
+    `).join('') || '<div class="preview-section-row"><span class="heading">No sections found.</span></div>';
+
+    document.getElementById('overwriteRow').style.display = data.exists ? 'flex' : 'none';
+    document.getElementById('overwriteCheckbox').checked = false;
+    document.getElementById('applyBtn').disabled = flags.length > 0;
+  }
+
+  // Does NOT touch #uploadStatus -- applyChapter() below calls this right after setting its own
+  // success/pending message there, and clearing it here would wipe that message instantly.
+  // The Cancel button clears the status itself alongside calling this.
+  function cancelPreview() {
+    currentPreview = null;
+    document.getElementById('previewBox').style.display = 'none';
+    document.getElementById('chapterFile').value = '';
+    document.getElementById('previewBtn').disabled = true;
+  }
+
+  async function applyChapter() {
+    if (!currentPreview || !currentPreview.preview_id) return;
+    const overwrite = document.getElementById('overwriteCheckbox').checked;
+    const applyBtn = document.getElementById('applyBtn');
+    applyBtn.disabled = true;
+    setUploadStatus('Writing sections and generating keywords...', 'info');
+
+    try {
+      const res = await fetch(`${API_BASE}/admin/ncert-content/apply`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ preview_id: currentPreview.preview_id, overwrite })
+      });
+      if (res.status === 401) { logout(); return; }
+      if (!res.ok) { setUploadStatus(await describeHttpError(res), 'error'); applyBtn.disabled = false; return; }
+      const data = await res.json();
+      if (data.error) { setUploadStatus(data.error, 'error'); applyBtn.disabled = false; return; }
+
+      const pendingNote = data.keywords_pending ? ' Some sections are still missing keywords (DeepSeek cost cap reached this request) -- re-open the chapter and use "Generate keywords" per section to finish.' : '';
+      setUploadStatus(`Wrote ${data.sections_written} section(s) for "${data.chapter}".${pendingNote}`, data.keywords_pending ? 'info' : 'success');
+      cancelPreview();
+      loadChapters();
+    } catch (e) {
+      setUploadStatus('Could not reach server.', 'error');
+      applyBtn.disabled = false;
+    }
+  }
+
+  // ---------------- Chapters list ----------------
+
+  async function loadChapters() {
+    const tbody = document.getElementById('chaptersTableBody');
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="8">Loading...</td></tr>';
+    try {
+      const res = await fetch(`${API_BASE}/admin/ncert-content`, { headers: authHeaders() });
+      if (res.status === 401) { logout(); return; }
+      if (!res.ok) { tbody.innerHTML = `<tr class="empty-row"><td colspan="8">${escapeHtml(await describeHttpError(res))}</td></tr>`; return; }
+      const data = await res.json();
+      if (data.error) { tbody.innerHTML = `<tr class="empty-row"><td colspan="8">${escapeHtml(data.error)}</td></tr>`; return; }
+      renderTotals(data.totals || {});
+      renderChapters(data.chapters || []);
+    } catch (e) {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="8">Could not reach server.</td></tr>';
+    }
+  }
+
+  function renderTotals(totals) {
+    document.getElementById('totalsRow').innerHTML =
+      `<span><b>${totals.chapters || 0}</b> chapters</span>` +
+      `<span><b>${totals.sections || 0}</b> sections</span>` +
+      `<span><b>${totals.words || 0}</b> words</span>` +
+      `<span><b>${totals.keywords_done || 0}</b>/${totals.sections || 0} sections have keywords</span>`;
+  }
+
+  function formatDate(iso) {
+    if (!iso) return '—';
+    try { return new Date(iso).toLocaleDateString(); } catch (e) { return iso; }
+  }
+
+  function renderChapters(chapters) {
+    const tbody = document.getElementById('chaptersTableBody');
+    if (chapters.length === 0) {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="8">No NCERT chapters loaded yet.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = chapters.map((c, i) => `
+      <tr onclick="openChapterDetail('${encodeURIComponent(c.class)}','${encodeURIComponent(c.subject)}','${encodeURIComponent(c.chapter)}')">
+        <td>${escapeHtml(c.class)}</td>
+        <td><span class="subject-chip ${escapeHtml(c.subject)}">${escapeHtml(c.subject)}</span></td>
+        <td>${escapeHtml(c.chapter)}</td>
+        <td>${c.section_count}</td>
+        <td>${c.total_words}</td>
+        <td><span class="kw-badge ${c.keywords_done === c.section_count ? 'done' : 'pending'}">${c.keywords_done}/${c.section_count}${c.keywords_done < c.section_count ? ' keywords pending' : ' keywords'}</span></td>
+        <td>${formatDate(c.created_at)}</td>
+        <td><button type="button" class="action-btn danger" onclick="event.stopPropagation(); deleteChapter('${encodeURIComponent(c.class)}','${encodeURIComponent(c.subject)}','${encodeURIComponent(c.chapter)}')">Delete</button></td>
+      </tr>
+    `).join('');
+  }
+
+  async function deleteChapter(clsEnc, subjectEnc, chapterEnc) {
+    const cls = decodeURIComponent(clsEnc), subject = decodeURIComponent(subjectEnc), chapter = decodeURIComponent(chapterEnc);
+    if (!(await showConfirmModal(`Delete "${chapter}" (Class ${cls} ${subject})? This removes every section of this chapter.`, { confirmLabel: 'Delete', danger: true }))) return;
+    try {
+      const url = `${API_BASE}/admin/ncert-content/chapter?class=${encodeURIComponent(cls)}&subject=${encodeURIComponent(subject)}&chapter=${encodeURIComponent(chapter)}&confirm=true`;
+      const res = await fetch(url, { method: 'DELETE', headers: authHeaders() });
+      if (res.status === 401) { logout(); return; }
+      if (!res.ok) { alert(await describeHttpError(res)); return; }
+      const data = await res.json();
+      if (data.error) { alert(data.error); return; }
+      closeChapterDetail();
+      loadChapters();
+    } catch (e) {
+      alert('Could not reach server.');
+    }
+  }
+
+  // ---------------- Chapter detail ----------------
+
+  async function openChapterDetail(clsEnc, subjectEnc, chapterEnc) {
+    const cls = decodeURIComponent(clsEnc), subject = decodeURIComponent(subjectEnc), chapter = decodeURIComponent(chapterEnc);
+    const panel = document.getElementById('chapterDetail');
+    panel.style.display = 'block';
+    document.getElementById('detailTitle').textContent = chapter;
+    document.getElementById('detailMeta').textContent = `Class ${cls} · ${subject}`;
+    document.getElementById('detailSections').innerHTML = 'Loading...';
+    panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+    try {
+      const url = `${API_BASE}/admin/ncert-content/chapter?class=${encodeURIComponent(cls)}&subject=${encodeURIComponent(subject)}&chapter=${encodeURIComponent(chapter)}`;
+      const res = await fetch(url, { headers: authHeaders() });
+      if (res.status === 401) { logout(); return; }
+      if (!res.ok) { document.getElementById('detailSections').textContent = await describeHttpError(res); return; }
+      const data = await res.json();
+      if (data.error) { document.getElementById('detailSections').textContent = data.error; return; }
+      renderChapterDetail(data, cls, subject, chapter);
+    } catch (e) {
+      document.getElementById('detailSections').textContent = 'Could not reach server.';
+    }
+  }
+
+  function renderChapterDetail(data, cls, subject, chapter) {
+    document.getElementById('detailSections').innerHTML = (data.sections || []).map((s, i) => `
+      <div class="detail-section">
+        <div class="detail-section-head" onclick="toggleDetailSection(${i})">
+          <span class="heading">${escapeHtml(s.heading)}</span>
+          <span class="meta">
+            ${s.word_count} words
+            <span class="kw-badge ${s.keywords ? 'done' : 'pending'}">${s.keywords ? 'keywords' : 'no keywords'}</span>
+            <button type="button" class="action-btn" onclick="event.stopPropagation(); editSectionFromDetail('${encodeURIComponent(cls)}','${encodeURIComponent(subject)}','${encodeURIComponent(chapter)}',${s.ordinal},'${encodeURIComponent(s.heading)}')">Edit</button>
+          </span>
+        </div>
+        <div class="detail-section-body" id="detail-section-body-${i}">
+          ${escapeHtml(s.text)}
+          ${s.keywords ? `<div class="detail-section-kw">Keywords: ${escapeHtml(s.keywords)}</div>` : ''}
+        </div>
+      </div>
+    `).join('') || '<div class="detail-section">No sections.</div>';
+    // Stash the raw rows for editSectionFromDetail -- re-encoding full text through the onclick
+    // attribute above (which only carries the heading) would risk breaking on quotes/newlines.
+    window._detailSectionsCache = data.sections || [];
+  }
+
+  function toggleDetailSection(i) {
+    const el = document.getElementById(`detail-section-body-${i}`);
+    if (el) el.classList.toggle('open');
+  }
+
+  function editSectionFromDetail(clsEnc, subjectEnc, chapterEnc, ordinal) {
+    const row = (window._detailSectionsCache || []).find(s => s.ordinal === ordinal);
+    if (!row) return;
+    document.getElementById('manualClass').value = decodeURIComponent(clsEnc);
+    document.getElementById('manualSubject').value = decodeURIComponent(subjectEnc);
+    document.getElementById('manualChapter').value = decodeURIComponent(chapterEnc);
+    document.getElementById('manualOrdinal').value = ordinal;
+    document.getElementById('manualHeading').value = row.heading;
+    document.getElementById('manualText').value = row.text;
+    document.getElementById('manualHeading').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
+  function closeChapterDetail() {
+    document.getElementById('chapterDetail').style.display = 'none';
+  }
+
+  // ---------------- Manual add/edit ----------------
+
+  function setSectionStatus(text, cls) {
+    const el = document.getElementById('sectionStatus');
+    el.textContent = text;
+    el.className = cls || '';
+    el.style.display = text ? 'block' : 'none';
+  }
+
+  function clearManualForm() {
+    document.getElementById('manualChapter').value = '';
+    document.getElementById('manualOrdinal').value = 0;
+    document.getElementById('manualHeading').value = '';
+    document.getElementById('manualText').value = '';
+    document.getElementById('manualRegenKeywords').checked = false;
+    setSectionStatus('', '');
+  }
+
+  async function saveManualSection() {
+    const cls = document.getElementById('manualClass').value;
+    const subject = document.getElementById('manualSubject').value;
+    const chapter = document.getElementById('manualChapter').value.trim();
+    const ordinalRaw = document.getElementById('manualOrdinal').value;
+    const heading = document.getElementById('manualHeading').value.trim();
+    const text = document.getElementById('manualText').value;
+    const regenerateKeywords = document.getElementById('manualRegenKeywords').checked;
+
+    if (!chapter || !heading || !text.trim() || ordinalRaw === '') {
+      setSectionStatus('Chapter, ordinal, heading and text are all required.', 'error');
+      return;
+    }
+
+    setSectionStatus(regenerateKeywords ? 'Saving and generating keywords...' : 'Saving...', 'info');
+    try {
+      const res = await fetch(`${API_BASE}/admin/ncert-content/section`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ class: cls, subject, chapter, ordinal: parseInt(ordinalRaw, 10), heading, text, regenerate_keywords: regenerateKeywords })
+      });
+      if (res.status === 401) { logout(); return; }
+      if (!res.ok) { setSectionStatus(await describeHttpError(res), 'error'); return; }
+      const data = await res.json();
+      if (data.error) { setSectionStatus(data.error, 'error'); return; }
+
+      setSectionStatus(data.keywords_generated ? 'Section saved with keywords.' : 'Section saved.', 'success');
+      loadChapters();
+      if (document.getElementById('chapterDetail').style.display === 'block') {
+        openChapterDetail(encodeURIComponent(cls), encodeURIComponent(subject), encodeURIComponent(chapter));
+      }
+    } catch (e) {
+      setSectionStatus('Could not reach server.', 'error');
+    }
+  }
+</script>
+</body>
+</html>

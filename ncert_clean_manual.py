@@ -343,7 +343,12 @@ def insert_tables(blocks, doc):
 def render(chapter_num, chapter_title, blocks):
     lines = []
     if chapter_num and chapter_title:
-        lines.append(f"## Chapter {chapter_num}: {title_case(chapter_title)}")
+        # Single "#" (not "##") deliberately: load_ncert_sections.py's parse_sections() only
+        # treats a "## " line as a section heading. A "## Chapter N: Title" line here used to be
+        # parsed as a real section -- an empty one, since the chapter's actual first "## " heading
+        # follows right after it -- which then failed validate_chapter's empty-section check on
+        # every chapter that has a detected title, in both the manual-paste and PDF pipelines.
+        lines.append(f"# Chapter {chapter_num}: {title_case(chapter_title)}")
         lines.append("")
     prev_type = None
     for btype, text in blocks:

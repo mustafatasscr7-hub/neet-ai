@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Header, Depends, HTTPException, Request, Response
+from fastapi import FastAPI, Header, Depends, HTTPException, Request, Response, Query
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.datastructures import MutableHeaders
 from fastapi.responses import StreamingResponse
@@ -198,6 +198,11 @@ app.add_middleware(
 #      scanned pages with no existing byte cap of their own -- set generously (60 MB raw body)
 #   /admin/pyq-diagram-upload, /admin/diagram-upload -> one admin-uploaded diagram image, no
 #      existing cap either -- 15 MB raw body
+#   /admin/ncert-content/preview -> one chapter PDF, base64-encoded in the JSON body; the admin
+#      NCERT Content page's own hard cap is 15 MB decoded (see admin_ncert_content_preview below)
+#      -> 21 MB raw body: base64's ~4/3 inflation (20 MB) plus slack for the JSON envelope itself
+#      (field names, quoting) so a PDF right at the 15 MB cap isn't rejected here before that
+#      endpoint's own decoded-size check ever runs
 DEFAULT_MAX_BODY_BYTES = 1 * 1024 * 1024
 
 _BODY_SIZE_OVERRIDES = {
@@ -211,6 +216,7 @@ _BODY_SIZE_OVERRIDES = {
     "/admin/mock-test-scan": 60 * 1024 * 1024,
     "/admin/pyq-diagram-upload": 15 * 1024 * 1024,
     "/admin/diagram-upload": 15 * 1024 * 1024,
+    "/admin/ncert-content/preview": 21 * 1024 * 1024,
 }
 
 def _max_body_bytes_for_path(path: str) -> int:
@@ -382,6 +388,8 @@ from process_mock_exam_vision import apply_vision_to_flagged_questions, MOCK_VIS
 from process_pyq_scanned import scan_scanned_pdf_bytes, estimate_scanned_pdf_cost, DEFAULT_MAX_PAGES as SCANNED_DEFAULT_MAX_PAGES
 from process_pyq_scanned_ocr import scan_ocr_pdf_bytes, start_ocr_job, get_ocr_job, ocr_job_is_live
 from utils.krutidev2unicode import kru2uni
+import ncert_ingest_core as ncert_ingest_core_mod
+import load_ncert_section_keywords as ncert_kw_mod
 
 # Shared verbatim between INERT_PAIR_GUARD and _VERIFY_MCQ_HEDGE_SYSTEM further down
 # -- kept as ONE constant specifically so the two can never drift out of sync the way they just
@@ -15667,6 +15675,378 @@ async def admin_dashboard_top_users(range: str = "30d", _: None = Depends(verify
     payload = {"available": ok, "rows": data if ok and isinstance(data, list) else []}
     _admin_dashboard_cache_set(cache_key, payload)
     return payload
+
+# ---------- Admin: NCERT Content (admin-ncert-content.html) ----------
+# See, upload and manage ncert_sections chapters. Reuses the exact extract/clean/validate
+# pipeline ncert_ingest.py's local CLI uses (now shared in ncert_ingest_core.py so neither copy
+# duplicates the other) plus ncert_clean_manual.py/load_ncert_sections.py (already plain
+# importable modules) and load_ncert_section_keywords.py's own prompt/model constants for the
+# keyword line generated on Apply. Admin-only (verify_admin, not verify_admin_or_contractor_pdf
+# -- the contractor key must never reach these routes). NCERT chapter text itself is never
+# printed to the server log and never committed to git (admin_ncert_content_preview/apply below
+# only ever log counts/costs/errors, never `text`/`sections` contents).
+NCERT_CONTENT_CLASSES = ("11", "12")
+NCERT_CONTENT_SUBJECTS = ("Biology", "Physics", "Chemistry")
+NCERT_CONTENT_MAX_PDF_BYTES = 15 * 1024 * 1024  # decoded; see the base64 body-size override above
+NCERT_CONTENT_APPLY_COST_CAP = 0.10  # DeepSeek keyword-generation spend cap per Apply request
+NCERT_CONTENT_PREVIEW_TTL_SECONDS = 1800  # how long a /preview result can still be /apply'd
+
+# preview_id -> {class, subject, chapter_title, sections, flags, created_at}. In-memory only
+# (one worker today, same caveat as _scan_jobs/_admin_login_attempts elsewhere in this file) --
+# losing a pending preview on a restart just means re-uploading, never a data-correctness issue.
+_ncert_content_previews = {}
+
+def _prune_ncert_content_previews(now: float):
+    for pid in [p for p, v in _ncert_content_previews.items() if now - v["created_at"] > NCERT_CONTENT_PREVIEW_TTL_SECONDS]:
+        del _ncert_content_previews[pid]
+
+def _invalidate_ncert_content_sections_cache():
+    """Forces the next /chat's NCERT-section picker to re-read ncert_sections instead of serving
+    up to NCERT_SECTIONS_CACHE_TTL (10 minutes) of stale data after an admin apply/edit/delete --
+    same reasoning as _invalidate_processed_pdfs_cache elsewhere in this file."""
+    _ncert_sections_cache["by_id"] = {}
+    _ncert_sections_cache["index_lines"] = []
+    _ncert_sections_cache["loaded_at"] = 0.0
+
+@app.get("/admin/ncert-content")
+async def admin_ncert_content_list(_: None = Depends(verify_admin)):
+    try:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/ncert_sections", headers=ADMIN_HEADERS,
+            params={"select": "class,subject,chapter,word_count,keywords,created_at", "order": "class,subject,chapter,ordinal"},
+        )
+        if resp.status_code >= 400:
+            return {"error": "Could not load NCERT content."}
+        rows = resp.json()
+    except Exception as e:
+        return {"error": str(e)}
+
+    chapters = {}
+    order = []
+    for r in rows:
+        key = (r["class"], r["subject"], r["chapter"])
+        if key not in chapters:
+            chapters[key] = {
+                "class": r["class"], "subject": r["subject"], "chapter": r["chapter"],
+                "section_count": 0, "total_words": 0, "keywords_done": 0, "created_at": r.get("created_at"),
+            }
+            order.append(key)
+        c = chapters[key]
+        c["section_count"] += 1
+        c["total_words"] += r.get("word_count") or 0
+        if r.get("keywords"):
+            c["keywords_done"] += 1
+        if r.get("created_at") and (not c["created_at"] or r["created_at"] < c["created_at"]):
+            c["created_at"] = r["created_at"]
+
+    chapter_list = [chapters[k] for k in order]
+    totals = {
+        "chapters": len(chapter_list),
+        "sections": sum(c["section_count"] for c in chapter_list),
+        "words": sum(c["total_words"] for c in chapter_list),
+        "keywords_done": sum(c["keywords_done"] for c in chapter_list),
+    }
+    return {"chapters": chapter_list, "totals": totals}
+
+@app.get("/admin/ncert-content/chapter")
+async def admin_ncert_content_get_chapter(
+    class_: str = Query(..., alias="class"), subject: str = Query(...), chapter: str = Query(...),
+    _: None = Depends(verify_admin),
+):
+    try:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/ncert_sections", headers=ADMIN_HEADERS,
+            params={
+                "select": "id,ordinal,heading,text,word_count,keywords",
+                "class": f"eq.{class_}", "subject": f"eq.{subject}", "chapter": f"eq.{chapter}",
+                "order": "ordinal",
+            },
+        )
+        if resp.status_code >= 400:
+            return {"error": "Could not load this chapter."}
+        rows = resp.json()
+    except Exception as e:
+        return {"error": str(e)}
+    if not rows:
+        return {"error": "No such chapter."}
+    return {"class": class_, "subject": subject, "chapter": chapter, "sections": rows}
+
+async def _ncert_content_chapter_exists(cls: str, subject: str, chapter_title: str) -> bool:
+    try:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/ncert_sections", headers=ADMIN_HEADERS,
+            params={"select": "id", "class": f"eq.{cls}", "subject": f"eq.{subject}", "chapter": f"eq.{chapter_title}", "limit": "1"},
+        )
+        return resp.status_code == 200 and len(resp.json()) > 0
+    except Exception:
+        return False
+
+@app.post("/admin/ncert-content/preview")
+async def admin_ncert_content_preview(request: Request, _: None = Depends(verify_admin), __: None = Depends(rate_limit(10, 300, by="ip"))):
+    try:
+        body = await request.json()
+    except Exception:
+        return {"error": "Invalid request body."}
+    cls = (body.get("class") or "").strip()
+    subject = (body.get("subject") or "").strip()
+    data = body.get("data") or ""
+
+    if cls not in NCERT_CONTENT_CLASSES:
+        return {"error": f"class must be one of {', '.join(NCERT_CONTENT_CLASSES)}"}
+    if subject not in NCERT_CONTENT_SUBJECTS:
+        return {"error": f"subject must be one of {', '.join(NCERT_CONTENT_SUBJECTS)}"}
+    if not data:
+        return {"error": "No PDF data was provided."}
+    try:
+        pdf_bytes = base64.b64decode(data)
+    except Exception:
+        return {"error": "Could not decode PDF data."}
+    if len(pdf_bytes) > NCERT_CONTENT_MAX_PDF_BYTES:
+        return {"error": f"This PDF is {len(pdf_bytes) // (1024 * 1024)} MB, over the {NCERT_CONTENT_MAX_PDF_BYTES // (1024 * 1024)} MB cap."}
+
+    loop = asyncio.get_event_loop()
+    try:
+        result = await loop.run_in_executor(None, ncert_ingest_core_mod.process_chapter_pdf_bytes, pdf_bytes)
+    except Exception as e:
+        return {"error": f"Could not extract this PDF: {e}"}
+
+    chapter_title = result["chapter_title"]
+    exists = await _ncert_content_chapter_exists(cls, subject, chapter_title) if chapter_title else False
+
+    now = time.time()
+    _prune_ncert_content_previews(now)
+    preview_id = uuid.uuid4().hex
+    _ncert_content_previews[preview_id] = {
+        "class": cls, "subject": subject, "chapter_title": chapter_title,
+        "sections": result["sections"], "flags": result["flags"], "created_at": now,
+    }
+    return {
+        "preview_id": preview_id, "class": cls, "subject": subject, "chapter_title": chapter_title,
+        "sections": result["sections"], "flags": result["flags"], "words": result["words"],
+        "section_count": result["section_count"], "exists": exists,
+    }
+
+def _ncert_content_generate_keywords(sections, cap: float, is_peak: bool):
+    """Runs sequentially (not in parallel) so the running cost total can short-circuit as soon as
+    the per-request cap is reached -- see NCERT_CONTENT_APPLY_COST_CAP. Returns
+    (results, total_cost, keywords_incomplete) where results is [(section_id, keywords), ...]
+    only for sections that succeeded before the cap (or a transient failure) stopped it."""
+    results = []
+    total_cost = 0.0
+    incomplete = False
+    for row in sections:
+        if total_cost >= cap:
+            incomplete = True
+            break
+        try:
+            keywords, cost = ncert_ingest_core_mod.generate_keywords_with_cost(deepseek_client, row["heading"], row["text"], is_peak)
+            total_cost += cost
+            results.append((row["id"], keywords))
+        except Exception:
+            incomplete = True
+    if len(results) < len(sections):
+        incomplete = True
+    return results, total_cost, incomplete
+
+@app.post("/admin/ncert-content/apply")
+async def admin_ncert_content_apply(request: Request, _: None = Depends(verify_admin), __: None = Depends(rate_limit(10, 300, by="ip"))):
+    try:
+        body = await request.json()
+    except Exception:
+        return {"error": "Invalid request body."}
+    preview_id = body.get("preview_id") or ""
+    overwrite = bool(body.get("overwrite"))
+
+    now = time.time()
+    _prune_ncert_content_previews(now)
+    preview = _ncert_content_previews.get(preview_id)
+    if not preview:
+        return {"error": "This preview has expired or was not found. Upload and preview the PDF again."}
+    if preview["flags"]:
+        return {"error": "This chapter failed validation and cannot be applied from the PDF route: " + "; ".join(preview["flags"]) + ". Use the manual section editor instead."}
+
+    cls, subject, chapter_title = preview["class"], preview["subject"], preview["chapter_title"]
+    sections = preview["sections"]
+    if not chapter_title:
+        return {"error": "No chapter title was found in this PDF."}
+    if not sections:
+        return {"error": "No sections were found in this PDF."}
+
+    exists = await _ncert_content_chapter_exists(cls, subject, chapter_title)
+    if exists and not overwrite:
+        return {"error": "A chapter with this class, subject and title already exists. Pass overwrite=true to replace it."}
+
+    # Safe replace: write the new rows under a temporary chapter label first (so the
+    # (class,subject,chapter,ordinal) unique constraint never collides with the still-live old
+    # rows sharing the same ordinals), verify every row landed, delete the old rows, THEN rename
+    # the temp rows back to the real chapter title. Never deletes before the new rows are
+    # confirmed written.
+    temp_label = f"{chapter_title}__ncert_content_tmp__{uuid.uuid4().hex[:8]}" if exists else None
+    write_chapter_label = temp_label or chapter_title
+
+    rows = [
+        {"class": cls, "subject": subject, "chapter": write_chapter_label,
+         "heading": s["heading"], "ordinal": s["ordinal"], "text": s["text"], "word_count": s["word_count"]}
+        for s in sections
+    ]
+    try:
+        insert_resp = await async_client.post(
+            f"{SUPABASE_URL}/rest/v1/ncert_sections",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
+            json=rows,
+        )
+        if insert_resp.status_code >= 400:
+            return {"error": f"Could not write the new sections: {insert_resp.text}"}
+        inserted = insert_resp.json()
+    except Exception as e:
+        return {"error": f"Could not write the new sections: {e}"}
+
+    if len(inserted) != len(rows):
+        try:
+            await async_client.delete(
+                f"{SUPABASE_URL}/rest/v1/ncert_sections", headers=ADMIN_HEADERS,
+                params={"class": f"eq.{cls}", "subject": f"eq.{subject}", "chapter": f"eq.{write_chapter_label}"},
+            )
+        except Exception:
+            pass
+        return {"error": f"Row count mismatch writing sections ({len(inserted)} of {len(rows)}) - nothing was changed."}
+
+    if exists:
+        try:
+            del_resp = await async_client.delete(
+                f"{SUPABASE_URL}/rest/v1/ncert_sections", headers=ADMIN_HEADERS,
+                params={"class": f"eq.{cls}", "subject": f"eq.{subject}", "chapter": f"eq.{chapter_title}"},
+            )
+            if del_resp.status_code >= 400:
+                return {"error": f"Wrote the new sections but could not remove the old chapter: {del_resp.text}. Contact an engineer before retrying."}
+        except Exception as e:
+            return {"error": f"Wrote the new sections but could not remove the old chapter: {e}. Contact an engineer before retrying."}
+        try:
+            rename_resp = await async_client.patch(
+                f"{SUPABASE_URL}/rest/v1/ncert_sections", headers={**ADMIN_HEADERS, "Content-Type": "application/json"},
+                params={"class": f"eq.{cls}", "subject": f"eq.{subject}", "chapter": f"eq.{temp_label}"},
+                json={"chapter": chapter_title},
+            )
+            if rename_resp.status_code >= 400:
+                return {"error": f"Wrote the new sections but could not finalize the chapter name: {rename_resp.text}. Contact an engineer before retrying."}
+        except Exception as e:
+            return {"error": f"Wrote the new sections but could not finalize the chapter name: {e}. Contact an engineer before retrying."}
+
+    is_peak = _is_deepseek_peak_hour()
+    loop = asyncio.get_event_loop()
+    kw_results, kw_cost, keywords_incomplete = await loop.run_in_executor(
+        None, _ncert_content_generate_keywords, inserted, NCERT_CONTENT_APPLY_COST_CAP, is_peak
+    )
+    for section_id, keywords in kw_results:
+        try:
+            await async_client.patch(
+                f"{SUPABASE_URL}/rest/v1/ncert_sections", headers={**ADMIN_HEADERS, "Content-Type": "application/json"},
+                params={"id": f"eq.{section_id}"}, json={"keywords": keywords},
+            )
+        except Exception:
+            pass
+    if kw_cost:
+        try:
+            await log_provider_usage(DEEPSEEK_MODEL, is_peak, 0, 0, kw_cost, "/admin/ncert-content/apply", "")
+        except Exception:
+            pass
+
+    del _ncert_content_previews[preview_id]
+    _invalidate_ncert_content_sections_cache()
+
+    return {
+        "written": True, "class": cls, "subject": subject, "chapter": chapter_title,
+        "sections_written": len(inserted), "keywords_generated": len(kw_results),
+        "cost": round(kw_cost, 6), "keywords_pending": keywords_incomplete,
+    }
+
+@app.post("/admin/ncert-content/section")
+async def admin_ncert_content_section(request: Request, _: None = Depends(verify_admin), __: None = Depends(rate_limit(20, 300, by="ip"))):
+    try:
+        body = await request.json()
+    except Exception:
+        return {"error": "Invalid request body."}
+    cls = (body.get("class") or "").strip()
+    subject = (body.get("subject") or "").strip()
+    chapter = (body.get("chapter") or "").strip()
+    heading = (body.get("heading") or "").strip()
+    text = body.get("text") or ""
+    ordinal = body.get("ordinal")
+    regenerate_keywords = bool(body.get("regenerate_keywords"))
+
+    if cls not in NCERT_CONTENT_CLASSES:
+        return {"error": f"class must be one of {', '.join(NCERT_CONTENT_CLASSES)}"}
+    if subject not in NCERT_CONTENT_SUBJECTS:
+        return {"error": f"subject must be one of {', '.join(NCERT_CONTENT_SUBJECTS)}"}
+    if not chapter:
+        return {"error": "chapter is required."}
+    if not heading:
+        return {"error": "heading is required."}
+    if not text.strip():
+        return {"error": "text is required."}
+    if not isinstance(ordinal, int):
+        return {"error": "ordinal must be an integer."}
+
+    row = {
+        "class": cls, "subject": subject, "chapter": chapter, "heading": heading,
+        "ordinal": ordinal, "text": text, "word_count": len(text.split()),
+    }
+
+    keywords_generated = False
+    if regenerate_keywords:
+        is_peak = _is_deepseek_peak_hour()
+        loop = asyncio.get_event_loop()
+        try:
+            keywords, cost = await loop.run_in_executor(
+                None, ncert_ingest_core_mod.generate_keywords_with_cost, deepseek_client, heading, text, is_peak
+            )
+            row["keywords"] = keywords
+            keywords_generated = True
+            if cost:
+                try:
+                    await log_provider_usage(DEEPSEEK_MODEL, is_peak, 0, 0, cost, "/admin/ncert-content/section", "")
+                except Exception:
+                    pass
+        except Exception:
+            keywords_generated = False
+
+    try:
+        resp = await async_client.post(
+            f"{SUPABASE_URL}/rest/v1/ncert_sections",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation"},
+            params={"on_conflict": "class,subject,chapter,ordinal"},
+            json=row,
+        )
+        if resp.status_code >= 400:
+            return {"error": f"Could not save this section: {resp.text}"}
+        written = resp.json()
+    except Exception as e:
+        return {"error": f"Could not save this section: {e}"}
+
+    _invalidate_ncert_content_sections_cache()
+    return {"saved": True, "section": written[0] if written else row, "keywords_generated": keywords_generated}
+
+@app.delete("/admin/ncert-content/chapter")
+async def admin_ncert_content_delete_chapter(
+    class_: str = Query(..., alias="class"), subject: str = Query(...), chapter: str = Query(...),
+    confirm: bool = Query(False), _: None = Depends(verify_admin),
+):
+    if not confirm:
+        return {"error": "Pass confirm=true to delete this chapter."}
+    try:
+        resp = await async_client.delete(
+            f"{SUPABASE_URL}/rest/v1/ncert_sections", headers={**ADMIN_HEADERS, "Prefer": "return=representation"},
+            params={"class": f"eq.{class_}", "subject": f"eq.{subject}", "chapter": f"eq.{chapter}"},
+        )
+        if resp.status_code >= 400:
+            return {"error": f"Could not delete this chapter: {resp.text}"}
+        deleted = resp.json()
+    except Exception as e:
+        return {"error": f"Could not delete this chapter: {e}"}
+    if not deleted:
+        return {"error": "No such chapter."}
+    _invalidate_ncert_content_sections_cache()
+    return {"deleted": len(deleted)}
 
 if __name__ == "__main__":
     import uvicorn
