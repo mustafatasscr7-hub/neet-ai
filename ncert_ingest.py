@@ -113,6 +113,22 @@ def fetch_existing_chapters(supabase_url, headers):
     return {(r["class"], r["subject"], r["chapter"]) for r in resp.json()}
 
 
+def write_chapter_log(supabase_url, service_key, cls, subj, chapter_title, source, cost, model_calls, model,
+                       pages, extract_seconds, sections, words):
+    """Mirrors server.py's _log_ncert_chapter_event for the CLI's own --apply writes -- see
+    ncert_chapter_log.sql. Best-effort: a failed log write never fails the chapter's own load."""
+    headers = {"apikey": service_key, "Authorization": f"Bearer {service_key}", "Content-Type": "application/json"}
+    row = {
+        "class": cls, "subject": subj, "chapter": chapter_title, "source": source,
+        "keywords_cost_usd": round(cost, 6), "model_calls": model_calls, "model": model,
+        "pages": pages, "extract_seconds": extract_seconds, "sections": sections, "words": words,
+    }
+    try:
+        requests.post(f"{supabase_url}/rest/v1/ncert_chapter_log", headers=headers, json=row)
+    except Exception as e:
+        print(f"Warning: could not write ncert_chapter_log row: {e}", file=sys.stderr)
+
+
 def write_sections(supabase_url, service_key, cls, subj, chapter_title, sections):
     headers = {
         "apikey": service_key, "Authorization": f"Bearer {service_key}",
@@ -275,6 +291,7 @@ def main():
             continue
 
         chapter_cost = 0.0
+        chapter_kw_calls = 0
         keywords_incomplete = False
         if deepseek_key:
             if deepseek_client is None:
@@ -290,6 +307,7 @@ def main():
                     keywords, cost = generate_keywords_with_cost(deepseek_client, s["heading"], s["text"], is_peak)
                     run_cost += cost
                     chapter_cost += cost
+                    chapter_kw_calls += 1
                     kw_mod.write_keywords(s["id"], keywords)
                 except Exception as e:
                     print(f"Warning: keyword generation failed for section {s['id']}: {e}", file=sys.stderr)
@@ -303,6 +321,13 @@ def main():
         }
         CHECKPOINT_PATH.parent.mkdir(parents=True, exist_ok=True)
         CHECKPOINT_PATH.write_text(json.dumps(checkpoint, indent=2), encoding="utf-8")
+
+        write_chapter_log(
+            supabase_url, service_key, cls, subj, chapter_title, source="pdf", cost=chapter_cost,
+            model_calls=chapter_kw_calls, model=(kw_mod.DEEPSEEK_MODEL if chapter_kw_calls else None),
+            pages=result.get("pages"), extract_seconds=result.get("extract_seconds"),
+            sections=len(sections), words=words,
+        )
 
         status = "LOADED (keywords incomplete)" if keywords_incomplete else "LOADED"
         row.update(status=status, flags=[], cost=chapter_cost)

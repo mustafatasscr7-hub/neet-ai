@@ -145,6 +145,42 @@ def test_recover_chapter_title():
           ing.recover_chapter_title(lines_no_caps_above, "1") is None)
 
 
+def test_write_chapter_log():
+    """write_chapter_log posts one row to ncert_chapter_log with the service key headers and the
+    fields rounded/passed through as server.py's own _log_ncert_chapter_event does. No network --
+    requests.post is monkeypatched for the duration of this test only."""
+    calls = []
+
+    class FakeResp:
+        status_code = 200
+
+    def fake_post(url, headers=None, json=None, **kw):
+        calls.append((url, headers, json))
+        return FakeResp()
+
+    orig_post = ing.requests.post
+    ing.requests.post = fake_post
+    try:
+        ing.write_chapter_log(
+            "https://example.supabase.co", "service-key", "11", "Biology", "The Living World",
+            source="pdf", cost=0.0123456, model_calls=3, model="deepseek-flash",
+            pages=5, extract_seconds=1.234, sections=3, words=500,
+        )
+    finally:
+        ing.requests.post = orig_post
+
+    check("exactly one POST made", len(calls) == 1, calls)
+    url, headers, body = calls[0]
+    check("posted to ncert_chapter_log", url.endswith("/rest/v1/ncert_chapter_log"), url)
+    check("service key used for auth", headers.get("apikey") == "service-key" and headers.get("Authorization") == "Bearer service-key", headers)
+    check("cost rounded to 6 decimals", body["keywords_cost_usd"] == round(0.0123456, 6), body)
+    check("other fields passed through", (
+        body["class"] == "11" and body["subject"] == "Biology" and body["chapter"] == "The Living World"
+        and body["source"] == "pdf" and body["model_calls"] == 3 and body["model"] == "deepseek-flash"
+        and body["pages"] == 5 and body["extract_seconds"] == 1.234 and body["sections"] == 3 and body["words"] == 500
+    ), body)
+
+
 def test_resolve_class_subject():
     from pathlib import Path
     root = Path("ncert_pdfs")
@@ -167,6 +203,7 @@ if __name__ == "__main__":
     test_skip_logic()
     test_merge_wrapped_headings()
     test_recover_chapter_title()
+    test_write_chapter_log()
     test_resolve_class_subject()
     print(f"\n{len(_passed)} passed, {len(_failed)} failed")
     sys.exit(1 if _failed else 0)

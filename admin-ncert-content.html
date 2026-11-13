@@ -75,8 +75,8 @@
   .totals-row { display: flex; gap: 18px; font-size: 12px; color: #888; margin-bottom: 12px; flex-wrap: wrap; }
   .totals-row b { color: #ececec; }
 
-  .table-wrap { background: #0d0d0d; border: 1px solid #1e1e1e; border-radius: 8px; overflow: hidden; }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .table-wrap { background: #0d0d0d; border: 1px solid #1e1e1e; border-radius: 8px; overflow-x: auto; }
+  table { width: 100%; min-width: 900px; border-collapse: collapse; font-size: 13px; }
   thead th { text-align: left; padding: 10px 12px; border-bottom: 1px solid #1e1e1e; color: #888; font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; white-space: nowrap; }
   tbody tr { border-bottom: 1px solid #1a1a1a; cursor: pointer; }
   tbody tr:last-child { border-bottom: none; }
@@ -180,11 +180,12 @@
       <table>
         <thead>
           <tr>
-            <th>Class</th><th>Subject</th><th>Chapter</th><th>Sections</th><th>Words</th><th>Keywords</th><th>Loaded</th><th></th>
+            <th>Class</th><th>Subject</th><th>Chapter</th><th>Sections</th><th>Words</th><th>Keywords</th>
+            <th>Source</th><th>Cost</th><th>Model</th><th>Pages</th><th>Extract</th><th>Loaded</th><th></th>
           </tr>
         </thead>
         <tbody id="chaptersTableBody">
-          <tr class="empty-row"><td colspan="8">Loading...</td></tr>
+          <tr class="empty-row"><td colspan="13">Loading...</td></tr>
         </tbody>
       </table>
     </div>
@@ -383,7 +384,7 @@
     document.getElementById('previewBox').style.display = 'block';
     document.getElementById('previewTitle').textContent = data.chapter_title || '(no chapter title found)';
     document.getElementById('previewMeta').textContent =
-      `Class ${data.class} · ${data.subject} · ${data.section_count} section(s) · ${data.words} words`;
+      `Class ${data.class} · ${data.subject} · ${data.section_count} section(s) · ${data.words} words · est. keywords cost ${formatCost(data.estimated_cost)}`;
 
     const existsEl = document.getElementById('existsWarning');
     if (data.exists) {
@@ -444,7 +445,7 @@
       if (data.error) { setUploadStatus(data.error, 'error'); applyBtn.disabled = false; return; }
 
       const pendingNote = data.keywords_pending ? ' Some sections are still missing keywords (DeepSeek cost cap reached this request) -- re-open the chapter and use "Generate keywords" per section to finish.' : '';
-      setUploadStatus(`Wrote ${data.sections_written} section(s) for "${data.chapter}".${pendingNote}`, data.keywords_pending ? 'info' : 'success');
+      setUploadStatus(`Wrote ${data.sections_written} section(s) for "${data.chapter}". Keywords cost: ${formatCost(data.cost)}.${pendingNote}`, data.keywords_pending ? 'info' : 'success');
       cancelPreview();
       loadChapters();
     } catch (e) {
@@ -457,18 +458,22 @@
 
   async function loadChapters() {
     const tbody = document.getElementById('chaptersTableBody');
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="8">Loading...</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="13">Loading...</td></tr>';
     try {
       const res = await fetch(`${API_BASE}/admin/ncert-content`, { headers: authHeaders() });
       if (res.status === 401) { logout(); return; }
-      if (!res.ok) { tbody.innerHTML = `<tr class="empty-row"><td colspan="8">${escapeHtml(await describeHttpError(res))}</td></tr>`; return; }
+      if (!res.ok) { tbody.innerHTML = `<tr class="empty-row"><td colspan="13">${escapeHtml(await describeHttpError(res))}</td></tr>`; return; }
       const data = await res.json();
-      if (data.error) { tbody.innerHTML = `<tr class="empty-row"><td colspan="8">${escapeHtml(data.error)}</td></tr>`; return; }
+      if (data.error) { tbody.innerHTML = `<tr class="empty-row"><td colspan="13">${escapeHtml(data.error)}</td></tr>`; return; }
       renderTotals(data.totals || {});
       renderChapters(data.chapters || []);
     } catch (e) {
-      tbody.innerHTML = '<tr class="empty-row"><td colspan="8">Could not reach server.</td></tr>';
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="13">Could not reach server.</td></tr>';
     }
+  }
+
+  function formatCost(v) {
+    return (v === null || v === undefined) ? '-' : `$${Number(v).toFixed(4)}`;
   }
 
   function renderTotals(totals) {
@@ -476,7 +481,9 @@
       `<span><b>${totals.chapters || 0}</b> chapters</span>` +
       `<span><b>${totals.sections || 0}</b> sections</span>` +
       `<span><b>${totals.words || 0}</b> words</span>` +
-      `<span><b>${totals.keywords_done || 0}</b>/${totals.sections || 0} sections have keywords</span>`;
+      `<span><b>${totals.keywords_done || 0}</b>/${totals.sections || 0} sections have keywords</span>` +
+      `<span>total keywords cost <b>${formatCost(totals.keywords_cost_usd)}</b></span>` +
+      `<span>avg cost / chapter <b>${formatCost(totals.avg_cost_usd)}</b></span>`;
   }
 
   function formatDate(iso) {
@@ -487,7 +494,7 @@
   function renderChapters(chapters) {
     const tbody = document.getElementById('chaptersTableBody');
     if (chapters.length === 0) {
-      tbody.innerHTML = '<tr class="empty-row"><td colspan="8">No NCERT chapters loaded yet.</td></tr>';
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="13">No NCERT chapters loaded yet.</td></tr>';
       return;
     }
     tbody.innerHTML = chapters.map((c, i) => `
@@ -498,6 +505,11 @@
         <td>${c.section_count}</td>
         <td>${c.total_words}</td>
         <td><span class="kw-badge ${c.keywords_done === c.section_count ? 'done' : 'pending'}">${c.keywords_done}/${c.section_count}${c.keywords_done < c.section_count ? ' keywords pending' : ' keywords'}</span></td>
+        <td>${c.source ? escapeHtml(c.source) : '-'}</td>
+        <td>${formatCost(c.cost)}</td>
+        <td>${c.model ? escapeHtml(c.model) : '-'}</td>
+        <td>${c.pages ?? '-'}</td>
+        <td>${c.extract_seconds !== null && c.extract_seconds !== undefined ? `${Number(c.extract_seconds).toFixed(1)}s` : '-'}</td>
         <td>${formatDate(c.created_at)}</td>
         <td><button type="button" class="action-btn danger" onclick="event.stopPropagation(); deleteChapter('${encodeURIComponent(c.class)}','${encodeURIComponent(c.subject)}','${encodeURIComponent(c.chapter)}')">Delete</button></td>
       </tr>

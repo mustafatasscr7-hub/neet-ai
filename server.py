@@ -15778,6 +15778,70 @@ def _invalidate_ncert_content_sections_cache():
     _ncert_sections_cache["index_lines"] = []
     _ncert_sections_cache["loaded_at"] = 0.0
 
+# Cost/load-details logging -- see ncert_chapter_log.sql. Chapters loaded before this table
+# existed simply have no rows here; every reader below treats a missing row as "-"/unknown,
+# never as zero cost.
+NCERT_CONTENT_FALLBACK_SECTION_COST = 0.002  # used only until ncert_chapter_log has real history
+
+async def _log_ncert_chapter_event(cls: str, subject: str, chapter: str, source: str, cost: float = 0.0,
+                                    model_calls: int = 0, model: str = None, pages=None, extract_seconds=None,
+                                    sections=None, words=None):
+    """Best-effort ncert_chapter_log insert. Never raises -- a lost log row only means this one
+    event doesn't show up in the page's cost/load columns, same as a pre-existing chapter that
+    predates this table."""
+    row = {
+        "class": cls, "subject": subject, "chapter": chapter, "source": source,
+        "keywords_cost_usd": round(cost, 6), "model_calls": model_calls, "model": model,
+        "pages": pages, "extract_seconds": extract_seconds, "sections": sections, "words": words,
+    }
+    try:
+        await async_client.post(
+            f"{SUPABASE_URL}/rest/v1/ncert_chapter_log",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json"}, json=row,
+        )
+    except Exception:
+        pass
+
+async def _ncert_avg_section_cost() -> float:
+    """Average DeepSeek cost per section keyword call, from every non-deleted ncert_chapter_log
+    row that actually made a call. Falls back to NCERT_CONTENT_FALLBACK_SECTION_COST when the log
+    has no such history yet (e.g. right after the table is first created)."""
+    try:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/ncert_chapter_log", headers=ADMIN_HEADERS,
+            params={"select": "keywords_cost_usd,model_calls", "model_calls": "gt.0", "deleted_at": "is.null"},
+        )
+        if resp.status_code >= 400:
+            return NCERT_CONTENT_FALLBACK_SECTION_COST
+        rows = resp.json()
+    except Exception:
+        return NCERT_CONTENT_FALLBACK_SECTION_COST
+    total_calls = sum(r.get("model_calls") or 0 for r in rows)
+    if total_calls <= 0:
+        return NCERT_CONTENT_FALLBACK_SECTION_COST
+    total_cost = sum(r.get("keywords_cost_usd") or 0 for r in rows)
+    return total_cost / total_calls
+
+def _ncert_chapter_cost_fields(log_rows):
+    """log_rows: this chapter's non-deleted ncert_chapter_log rows, oldest first. The earliest row
+    is treated as the chapter's original load event (its source/pages/extract_seconds describe how
+    the chapter got here); cost is summed across every event (load + later edits/regenerations);
+    model is the most recent model actually used for a keyword call. Returns "-"-ready None fields
+    when there is no log history at all."""
+    if not log_rows:
+        return {"source": None, "cost": None, "model": None, "pages": None, "extract_seconds": None}
+    origin = log_rows[0]
+    total_cost = sum(r.get("keywords_cost_usd") or 0 for r in log_rows)
+    model = None
+    for r in reversed(log_rows):
+        if r.get("model_calls"):
+            model = r.get("model")
+            break
+    return {
+        "source": origin.get("source"), "cost": round(total_cost, 6), "model": model,
+        "pages": origin.get("pages"), "extract_seconds": origin.get("extract_seconds"),
+    }
+
 @app.get("/admin/ncert-content")
 async def admin_ncert_content_list(_: None = Depends(verify_admin)):
     try:
@@ -15809,12 +15873,30 @@ async def admin_ncert_content_list(_: None = Depends(verify_admin)):
         if r.get("created_at") and (not c["created_at"] or r["created_at"] < c["created_at"]):
             c["created_at"] = r["created_at"]
 
-    chapter_list = [chapters[k] for k in order]
+    log_by_key = {}
+    try:
+        log_resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/ncert_chapter_log", headers=ADMIN_HEADERS,
+            params={
+                "select": "class,subject,chapter,source,keywords_cost_usd,model,model_calls,pages,extract_seconds,created_at",
+                "deleted_at": "is.null", "order": "created_at",
+            },
+        )
+        if log_resp.status_code < 400:
+            for r in log_resp.json():
+                log_by_key.setdefault((r["class"], r["subject"], r["chapter"]), []).append(r)
+    except Exception:
+        pass
+
+    chapter_list = [dict(chapters[k], **_ncert_chapter_cost_fields(log_by_key.get(k, []))) for k in order]
+    known_costs = [c["cost"] for c in chapter_list if c["cost"] is not None]
     totals = {
         "chapters": len(chapter_list),
         "sections": sum(c["section_count"] for c in chapter_list),
         "words": sum(c["total_words"] for c in chapter_list),
         "keywords_done": sum(c["keywords_done"] for c in chapter_list),
+        "keywords_cost_usd": round(sum(known_costs), 6) if known_costs else None,
+        "avg_cost_usd": round(sum(known_costs) / len(known_costs), 6) if known_costs else None,
     }
     return {"chapters": chapter_list, "totals": totals}
 
@@ -15889,11 +15971,14 @@ async def admin_ncert_content_preview(request: Request, _: None = Depends(verify
     _ncert_content_previews[preview_id] = {
         "class": cls, "subject": subject, "chapter_title": chapter_title,
         "sections": result["sections"], "flags": result["flags"], "created_at": now,
+        "pages": result["pages"], "extract_seconds": result["extract_seconds"],
     }
+    avg_section_cost = await _ncert_avg_section_cost()
+    estimated_cost = round(result["section_count"] * avg_section_cost, 4)
     return {
         "preview_id": preview_id, "class": cls, "subject": subject, "chapter_title": chapter_title,
         "sections": result["sections"], "flags": result["flags"], "words": result["words"],
-        "section_count": result["section_count"], "exists": exists,
+        "section_count": result["section_count"], "exists": exists, "estimated_cost": estimated_cost,
     }
 
 def _ncert_content_generate_keywords(sections, cap: float, is_peak: bool):
@@ -16024,6 +16109,13 @@ async def admin_ncert_content_apply(request: Request, _: None = Depends(verify_a
     del _ncert_content_previews[preview_id]
     _invalidate_ncert_content_sections_cache()
 
+    await _log_ncert_chapter_event(
+        cls, subject, chapter_title, source="pdf", cost=kw_cost,
+        model_calls=len(kw_results), model=(DEEPSEEK_MODEL if kw_results else None),
+        pages=preview.get("pages"), extract_seconds=preview.get("extract_seconds"),
+        sections=len(inserted), words=sum(s.get("word_count") or 0 for s in inserted),
+    )
+
     return {
         "written": True, "class": cls, "subject": subject, "chapter": chapter_title,
         "sections_written": len(inserted), "keywords_generated": len(kw_results),
@@ -16063,6 +16155,7 @@ async def admin_ncert_content_section(request: Request, _: None = Depends(verify
     }
 
     keywords_generated = False
+    keyword_cost = 0.0
     if regenerate_keywords:
         is_peak = _is_deepseek_peak_hour()
         loop = asyncio.get_event_loop()
@@ -16072,6 +16165,7 @@ async def admin_ncert_content_section(request: Request, _: None = Depends(verify
             )
             row["keywords"] = keywords
             keywords_generated = True
+            keyword_cost = cost
             if cost:
                 try:
                     await log_provider_usage(DEEPSEEK_MODEL, is_peak, 0, 0, cost, "/admin/ncert-content/section", "")
@@ -16094,6 +16188,13 @@ async def admin_ncert_content_section(request: Request, _: None = Depends(verify
         return {"error": f"Could not save this section: {e}"}
 
     _invalidate_ncert_content_sections_cache()
+
+    await _log_ncert_chapter_event(
+        cls, subject, chapter, source="manual", cost=keyword_cost,
+        model_calls=1 if keywords_generated else 0, model=(DEEPSEEK_MODEL if keywords_generated else None),
+        sections=1, words=row["word_count"],
+    )
+
     return {"saved": True, "section": written[0] if written else row, "keywords_generated": keywords_generated}
 
 @app.delete("/admin/ncert-content/chapter")
@@ -16116,6 +16217,16 @@ async def admin_ncert_content_delete_chapter(
     if not deleted:
         return {"error": "No such chapter."}
     _invalidate_ncert_content_sections_cache()
+
+    try:
+        await async_client.patch(
+            f"{SUPABASE_URL}/rest/v1/ncert_chapter_log", headers={**ADMIN_HEADERS, "Content-Type": "application/json"},
+            params={"class": f"eq.{class_}", "subject": f"eq.{subject}", "chapter": f"eq.{chapter}", "deleted_at": "is.null"},
+            json={"deleted_at": datetime.now(timezone.utc).isoformat()},
+        )
+    except Exception:
+        pass
+
     return {"deleted": len(deleted)}
 
 if __name__ == "__main__":

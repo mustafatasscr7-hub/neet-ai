@@ -101,8 +101,19 @@ class FakeNcertTable:
         for k, v in (params or {}).items():
             if k in ("select", "order", "limit", "on_conflict"):
                 continue
-            if isinstance(v, str) and v.startswith("eq."):
+            if not isinstance(v, str):
+                continue
+            if v.startswith("eq."):
                 if str(row.get(k)) != v[3:]:
+                    return False
+            elif v == "is.null":
+                if row.get(k) is not None:
+                    return False
+            elif v.startswith("gt."):
+                try:
+                    if not (float(row.get(k) or 0) > float(v[3:])):
+                        return False
+                except Exception:
                     return False
         return True
 
@@ -156,16 +167,21 @@ class FakeNcertTable:
 class FakeAsyncClient:
     def __init__(self):
         self.table = FakeNcertTable()
+        self.chapter_log = FakeNcertTable()
         self.calls = []
 
     async def get(self, url, headers=None, params=None, **kw):
         self.calls.append(("GET", url, params))
+        if "ncert_chapter_log" in url:
+            return FakeResp(200, self.chapter_log.get(params))
         if "ncert_sections" in url:
             return FakeResp(200, self.table.get(params))
         return FakeResp(200, [])
 
     async def post(self, url, headers=None, params=None, json=None, **kw):
         self.calls.append(("POST", url, params, json))
+        if "ncert_chapter_log" in url:
+            return FakeResp(200, self.chapter_log.insert(json))
         if "ncert_sections" in url:
             prefer = (headers or {}).get("Prefer", "")
             on_conflict = (params or {}).get("on_conflict")
@@ -177,6 +193,8 @@ class FakeAsyncClient:
 
     async def patch(self, url, headers=None, params=None, json=None, **kw):
         self.calls.append(("PATCH", url, params, json))
+        if "ncert_chapter_log" in url:
+            return FakeResp(200, self.chapter_log.update(params, json))
         if "ncert_sections" in url:
             return FakeResp(200, self.table.update(params, json))
         return FakeResp(404, [])
@@ -402,6 +420,115 @@ def test_delete_confirm():
     check("both rows actually removed", fake.table.rows == [], fake.table.rows)
 
 
+def test_chapter_log_written_on_apply():
+    print("\n# ncert_chapter_log: a row is written on Apply (source=pdf)")
+    tc, fake = setup()
+    pdf = good_chapter_pdf_b64()
+    preview_id = tc.post("/admin/ncert-content/preview", json={"class": "11", "subject": "Biology", "data": pdf}, headers={"X-Admin-Key": ADMIN_KEY}).json()["preview_id"]
+    apply_data = tc.post("/admin/ncert-content/apply", json={"preview_id": preview_id}, headers={"X-Admin-Key": ADMIN_KEY}).json()
+
+    check("exactly one log row written", len(fake.chapter_log.rows) == 1, fake.chapter_log.rows)
+    log_row = fake.chapter_log.rows[0]
+    check("log row's class/subject/chapter match the applied chapter",
+          (log_row["class"], log_row["subject"], log_row["chapter"]) == ("11", "Biology", "THE LIVING WORLD"), log_row)
+    check("source is 'pdf'", log_row["source"] == "pdf", log_row)
+    check("model_calls matches keywords_generated", log_row["model_calls"] == apply_data["keywords_generated"], (log_row, apply_data))
+    check("model is recorded", log_row["model"] == server.DEEPSEEK_MODEL, log_row)
+    check("cost matches the apply response's cost", log_row["keywords_cost_usd"] == apply_data["cost"], (log_row, apply_data))
+    check("pages recorded from the PDF extraction", log_row["pages"] == 1, log_row)
+    check("extract_seconds recorded (not null)", log_row["extract_seconds"] is not None, log_row)
+    check("sections/words recorded", log_row["sections"] == 3 and log_row["words"] > 0, log_row)
+
+
+def test_chapter_log_written_on_manual_add_and_regen():
+    print("\n# ncert_chapter_log: rows written on manual add and on keyword regeneration (source=manual)")
+    tc, fake = setup()
+    body = {"class": "12", "subject": "Chemistry", "chapter": "Solutions", "heading": "2.1 Types Of Solutions", "ordinal": 0, "text": CLEAN_PARA}
+    tc.post("/admin/ncert-content/section", json=body, headers={"X-Admin-Key": ADMIN_KEY})
+
+    check("one log row after a plain manual add", len(fake.chapter_log.rows) == 1, fake.chapter_log.rows)
+    first = fake.chapter_log.rows[0]
+    check("source is 'manual'", first["source"] == "manual", first)
+    check("no keyword call means zero cost and zero model_calls", first["keywords_cost_usd"] == 0 and first["model_calls"] == 0 and first["model"] is None, first)
+
+    body2 = dict(body, regenerate_keywords=True)
+    tc.post("/admin/ncert-content/section", json=body2, headers={"X-Admin-Key": ADMIN_KEY})
+    check("a second log row is added for the regeneration", len(fake.chapter_log.rows) == 2, fake.chapter_log.rows)
+    second = fake.chapter_log.rows[1]
+    check("regeneration row has one model call and a real model name", second["model_calls"] == 1 and second["model"] == server.DEEPSEEK_MODEL, second)
+    check("regeneration row has a positive cost", second["keywords_cost_usd"] > 0, second)
+
+
+def test_older_chapters_show_unknown_fields():
+    print("\n# A chapter with no ncert_chapter_log history reports null cost/source/model/pages fields")
+    tc, fake = setup()
+    fake.table.insert({"class": "11", "subject": "Physics", "chapter": "Motion", "heading": "1.1 X", "ordinal": 0, "text": "x", "word_count": 5})
+
+    data = tc.get("/admin/ncert-content", headers={"X-Admin-Key": ADMIN_KEY}).json()
+    check("one chapter listed", len(data.get("chapters", [])) == 1, data)
+    c = data["chapters"][0]
+    check("source/cost/model/pages/extract_seconds are all null for a pre-existing chapter",
+          c.get("source") is None and c.get("cost") is None and c.get("model") is None
+          and c.get("pages") is None and c.get("extract_seconds") is None, c)
+    check("totals cost fields are null when nothing has known cost", data["totals"].get("keywords_cost_usd") is None and data["totals"].get("avg_cost_usd") is None, data["totals"])
+
+
+def test_totals_cost_summary():
+    print("\n# Totals: total keywords cost and average cost per chapter, across listed chapters")
+    tc, fake = setup()
+    pdf = good_chapter_pdf_b64()
+    preview_id = tc.post("/admin/ncert-content/preview", json={"class": "11", "subject": "Biology", "data": pdf}, headers={"X-Admin-Key": ADMIN_KEY}).json()["preview_id"]
+    apply_data = tc.post("/admin/ncert-content/apply", json={"preview_id": preview_id}, headers={"X-Admin-Key": ADMIN_KEY}).json()
+
+    # A second, pre-existing-style chapter with no log history at all.
+    fake.table.insert({"class": "11", "subject": "Physics", "chapter": "Motion", "heading": "1.1 X", "ordinal": 0, "text": "x", "word_count": 5})
+
+    data = tc.get("/admin/ncert-content", headers={"X-Admin-Key": ADMIN_KEY}).json()
+    check("two chapters listed", len(data.get("chapters", [])) == 2, data)
+    totals = data["totals"]
+    check("total keywords cost counts only the chapter with known cost", totals.get("keywords_cost_usd") == apply_data["cost"], (totals, apply_data))
+    check("average cost per chapter is computed over chapters with known cost only (not divided by 2)",
+          totals.get("avg_cost_usd") == apply_data["cost"], (totals, apply_data))
+
+
+def test_preview_estimated_cost_and_apply_real_cost():
+    print("\n# Preview reports an estimated keywords cost; Apply reports the real cost")
+    tc, fake = setup()
+    pdf = good_chapter_pdf_b64()
+    preview_data = tc.post("/admin/ncert-content/preview", json={"class": "11", "subject": "Biology", "data": pdf}, headers={"X-Admin-Key": ADMIN_KEY}).json()
+    check("preview includes an estimated_cost", isinstance(preview_data.get("estimated_cost"), (int, float)), preview_data)
+    check("fallback estimate uses the known $0.002/section baseline (no log history yet)",
+          preview_data["estimated_cost"] == round(preview_data["section_count"] * server.NCERT_CONTENT_FALLBACK_SECTION_COST, 4), preview_data)
+
+    apply_data = tc.post("/admin/ncert-content/apply", json={"preview_id": preview_data["preview_id"]}, headers={"X-Admin-Key": ADMIN_KEY}).json()
+    check("apply reports a real cost", isinstance(apply_data.get("cost"), (int, float)) and apply_data["cost"] > 0, apply_data)
+
+
+def test_delete_marks_log_rows_deleted_not_removed():
+    print("\n# Delete marks the chapter's log rows deleted_at instead of removing them")
+    tc, fake = setup()
+    pdf = good_chapter_pdf_b64()
+    preview_id = tc.post("/admin/ncert-content/preview", json={"class": "11", "subject": "Biology", "data": pdf}, headers={"X-Admin-Key": ADMIN_KEY}).json()["preview_id"]
+    tc.post("/admin/ncert-content/apply", json={"preview_id": preview_id}, headers={"X-Admin-Key": ADMIN_KEY})
+    check("one log row exists before delete", len(fake.chapter_log.rows) == 1, fake.chapter_log.rows)
+
+    tc.delete("/admin/ncert-content/chapter?class=11&subject=Biology&chapter=THE%20LIVING%20WORLD&confirm=true", headers={"X-Admin-Key": ADMIN_KEY})
+    check("the log row still exists after delete (not removed)", len(fake.chapter_log.rows) == 1, fake.chapter_log.rows)
+    check("the log row's deleted_at is now set", fake.chapter_log.rows[0].get("deleted_at") is not None, fake.chapter_log.rows[0])
+
+    data = tc.get("/admin/ncert-content", headers={"X-Admin-Key": ADMIN_KEY}).json()
+    check("the deleted chapter no longer appears in the list", data.get("chapters") == [], data)
+
+
+def test_contractor_response_has_no_cost_fields():
+    print("\n# Contractor key never reaches a response that could carry cost data")
+    tc, fake = setup()
+    res = tc.get("/admin/ncert-content", headers={"X-Admin-Key": CONTRACTOR_KEY})
+    check("contractor key is refused outright (401)", res.status_code == 401, res.status_code)
+    body_text = res.text
+    check("the refusal body carries no cost fields", "keywords_cost_usd" not in body_text and "estimated_cost" not in body_text, body_text)
+
+
 def main():
     test_admin_auth()
     test_preview_does_not_write()
@@ -411,6 +538,13 @@ def main():
     test_apply_keyword_cost_cap()
     test_manual_add_or_edit()
     test_delete_confirm()
+    test_chapter_log_written_on_apply()
+    test_chapter_log_written_on_manual_add_and_regen()
+    test_older_chapters_show_unknown_fields()
+    test_totals_cost_summary()
+    test_preview_estimated_cost_and_apply_real_cost()
+    test_delete_marks_log_rows_deleted_not_removed()
+    test_contractor_response_has_no_cost_fields()
 
     print(f"\nTOTAL: {len(_passed)} passed, {len(_failed)} failed")
     if _failed:

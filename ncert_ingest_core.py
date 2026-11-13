@@ -6,6 +6,7 @@ importing that script's CLI-only argparse/checkpoint/folder-walking code. Delibe
 Supabase or dotenv dependency of its own (unlike ncert_ingest.py) -- callers own their own writes.
 """
 import re
+import time
 from datetime import datetime, timedelta, timezone
 
 import fitz
@@ -167,7 +168,9 @@ def process_chapter_pdf_bytes(pdf_bytes: bytes):
     """Runs the full extract -> clean -> parse-sections -> validate pipeline on one chapter PDF's
     raw bytes, matching ncert_ingest.py's own per-chapter logic byte-for-byte. No Supabase/model
     calls -- deterministic only. Returns a dict: chapter_num, chapter_title, sections, flags,
-    words, section_count."""
+    words, section_count, pages (PDF page count), extract_seconds (wall-clock time this function
+    took -- both logged to ncert_chapter_log by callers, see ncert_chapter_log.sql)."""
+    start = time.perf_counter()
     doc, pages = extract_pages_text_from_bytes(pdf_bytes)
     try:
         raw_text = "\n\n".join(pages)
@@ -201,6 +204,8 @@ def process_chapter_pdf_bytes(pdf_bytes: bytes):
         "flags": flags,
         "words": words,
         "section_count": len(sections),
+        "pages": len(pages),
+        "extract_seconds": round(time.perf_counter() - start, 3),
     }
 
 
