@@ -12461,6 +12461,52 @@ def _update_processed_pdf_row(row_id, status: str, questions_extracted=None, err
     except Exception:
         pass
 
+def _write_processed_pdf_scan_stats(row_id, result: dict, duration_seconds: float):
+    """Best-effort, same reasoning as _update_processed_pdf_row: never let a stats write fail or
+    block a scan that otherwise succeeded. Reuses whatever cost info each scan mode already
+    computes -- process_pyq_scanned.scan_scanned_pdf_bytes's cost["model"]/["pages_called"] (the
+    Gemini OCR "scanned" layout) and process_mock_exam_vision.apply_vision_to_flagged_questions's
+    cost["calls"] (the mock-exam Vision re-read pass) are the only two places that currently
+    attach real model-usage numbers to a scan result; a free-OCR cost dict never has either key
+    (cost["engine"] instead -- no LLM involved), and "standard"/"3col_book" compute no cost at
+    all. Those cases simply leave scan_cost_usd/model_calls/models null, which the Processed PDFs
+    popup shows as "no model calls" rather than guessing. Duration is timed by the caller (around
+    the scan_fn call, including any job-queue wait) rather than by the scan modules themselves, so
+    this needs no change to any of them."""
+    if row_id is None:
+        return
+    cost = result.get("cost") or {}
+    model_calls = None
+    models = None
+    if "calls" in cost:  # mock-exam Vision re-read pass
+        model_calls = cost["calls"]
+        models = cost.get("model") if model_calls else None
+    elif "model" in cost:  # Gemini OCR "scanned" layout
+        model_calls = cost.get("pages_called")
+        models = cost.get("model")
+    body = {
+        "scan_cost_usd": cost.get("usd"),
+        "model_calls": model_calls,
+        "models": models,
+        "pages": result.get("pages_scanned"),
+        "scan_seconds": round(duration_seconds, 1),
+    }
+    questions = result.get("questions")
+    if questions is not None and ("completeness" in result or "mock_name" in result):  # mock exam only
+        body["q_found"] = len(questions)
+        body["q_flagged"] = sum(1 for q in questions if q.get("needs_review"))
+        body["q_model_read"] = sum(1 for q in questions if q.get("model_read"))
+    try:
+        http_requests.patch(
+            f"{SUPABASE_URL}/rest/v1/processed_pdfs",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json"},
+            params={"id": f"eq.{row_id}"},
+            json=body
+        )
+        _invalidate_processed_pdfs_cache()  # the popup's cost summary line depends on these fields
+    except Exception:
+        pass
+
 @app.post("/admin/scan-pdf")
 def admin_scan_pdf(req: ScanPdfRequest, _: None = Depends(verify_admin_or_contractor_pdf), __: None = Depends(rate_limit(10, 300, by="ip"))):
     # Deliberately sync (not async def): FastAPI runs sync path functions in a thread pool,
@@ -12502,6 +12548,7 @@ def admin_scan_pdf(req: ScanPdfRequest, _: None = Depends(verify_admin_or_contra
     # simply never matches any chapter and is harmless to that logic.
     tracking_subject = f"Mock: {req.mock_name.strip()}" if req.layout == "mock_exam" else req.subject
     processed_pdf_id = _create_processed_pdf_row(req.filename, tracking_subject) if req.filename else None
+    t0 = time.time()
     try:
         if req.layout == "mock_exam":
             result = scan_mock_exam_pdf(pdf_bytes, req.mock_name.strip())
@@ -12518,6 +12565,8 @@ def admin_scan_pdf(req: ScanPdfRequest, _: None = Depends(verify_admin_or_contra
         return {"error": str(e)}
     if result.get("error"):
         _update_processed_pdf_row(processed_pdf_id, "failed", error_message=result["error"])
+    else:
+        _write_processed_pdf_scan_stats(processed_pdf_id, result, time.time() - t0)
     result["processed_pdf_id"] = processed_pdf_id
     return result
 
@@ -12535,10 +12584,13 @@ def admin_scan_pdf_ocr_job(req: ScanPdfRequest, _: None = Depends(verify_admin_o
     except Exception:
         return {"error": "Could not open PDF"}
     processed_pdf_id = _create_processed_pdf_row(req.filename, req.subject) if req.filename else None
+    t0 = time.time()
 
     def on_finish(result):
         if result.get("error"):
             _update_processed_pdf_row(processed_pdf_id, "failed", error_message=result["error"])
+        else:
+            _write_processed_pdf_scan_stats(processed_pdf_id, result, time.time() - t0)
         result["processed_pdf_id"] = processed_pdf_id
 
     job_id = start_ocr_job(pdf_bytes, req.subject, on_finish=on_finish)
@@ -12673,10 +12725,13 @@ def admin_scan_pdf_job(req: ScanPdfRequest, role: str = Depends(verify_admin_or_
         return {"error": "Could not open PDF"}
 
     processed_pdf_id = _create_processed_pdf_row(req.filename, req.subject) if req.filename else None
+    t0 = time.time()
 
     def on_finish(result):
         if result.get("error"):
             _update_processed_pdf_row(processed_pdf_id, "failed", error_message=result["error"])
+        else:
+            _write_processed_pdf_scan_stats(processed_pdf_id, result, time.time() - t0)
         result["processed_pdf_id"] = processed_pdf_id
 
     job_id = start_scan_job(pdf_bytes, req.subject, req.layout, role, on_finish=on_finish)
@@ -14041,6 +14096,12 @@ _PROCESSED_PDFS_DELETED_REASON = ("pyq_delete_log only records a deleted questio
                                    "not which PDF or batch it came from, so a per-PDF deleted count "
                                    "can't be computed.")
 
+# Written by _write_processed_pdf_scan_stats (see mock_scan_stats.sql) -- stripped from every
+# /admin/processed-pdfs response for role="contractor" below, same admin-only boundary as
+# can_remove on that same endpoint.
+_PDF_COST_FIELDS = ("scan_cost_usd", "model_calls", "models", "pages", "scan_seconds",
+                     "q_found", "q_flagged", "q_model_read")
+
 async def _processed_pdfs_base_rows_and_gaps() -> tuple:
     """The one cheap, unavoidable read: just the processed_pdfs rows themselves, no per-PDF
     counts. Also doubles as the full population the gap summary is computed over (every
@@ -14048,7 +14109,8 @@ async def _processed_pdfs_base_rows_and_gaps() -> tuple:
     resp = await async_client.get(
         f"{SUPABASE_URL}/rest/v1/processed_pdfs", headers=ADMIN_HEADERS,
         params={"select": "id,filename,subject,status,questions_extracted,error_message,upload_date,"
-                           "processed_at,chapter_number,processed_by",
+                           "processed_at,chapter_number,processed_by,"
+                           "scan_cost_usd,model_calls,models,pages,scan_seconds,q_found,q_flagged,q_model_read",
                 "deleted_at": "is.null",  # soft-removed rows (admin-pyq-preview.html's Remove
                                            # button) never show up, count toward the gap summary,
                                            # or count as a processed PDF again
@@ -14132,6 +14194,14 @@ async def admin_processed_pdfs(force: bool = False, offset: int = 0, limit: int 
     except Exception:
         pdfs = [_bare_pdf_row(r) for r in page]
         counts_unavailable = True
+    if role != "admin":
+        # The contractor key gets this same list (for the Processed PDFs popup in its own
+        # review page) but must never see what a scan cost -- _enrich_page/_bare_pdf_row return
+        # fresh dicts per call (never the cached base_rows themselves), so popping here can't
+        # leak into another request's cached data.
+        for p in pdfs:
+            for field in _PDF_COST_FIELDS:
+                p.pop(field, None)
     return {
         "pdfs": pdfs,
         "counts_unavailable": counts_unavailable,

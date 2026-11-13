@@ -265,7 +265,9 @@
     .pdf-history-badge { font-size: 9px; font-weight: 700; text-transform: uppercase; border: 1px solid currentColor; border-radius: 4px; padding: 1px 5px; white-space: nowrap; flex-shrink: 0; }
     .pdf-history-row-meta { color: #777; font-size: 11px; margin-top: 3px; word-break: break-word; }
     .pdf-history-row-counts { color: #888; font-size: 11px; margin-top: 4px; word-break: break-word; }
+    .pdf-history-row-cost { color: #888; font-size: 11px; margin-top: 4px; word-break: break-word; }
     .pdf-history-row-reason { color: #e0a030; font-size: 11px; margin-top: 4px; word-break: break-word; }
+    .pdf-history-cost-summary { font-size: 11px; color: #4f8ef7; padding: 6px 2px; border-bottom: 1px solid #1e1e1e; margin-bottom: 4px; }
     .pdf-history-remove-btn { margin-top: 6px; font-size: 11px; padding: 4px 10px; }
     @keyframes pdfHistorySkeletonShimmer { 0% { background-position: -120px 0; } 100% { background-position: 120px 0; } }
     .pdf-skeleton-bar { display: inline-block; border-radius: 4px; background: linear-gradient(90deg, #1a1a1a 25%, #232323 37%, #1a1a1a 63%); background-size: 240px 100%; animation: pdfHistorySkeletonShimmer 1.4s ease-in-out infinite; }
@@ -499,6 +501,7 @@
           <option value="Chemistry">Chemistry</option>
         </select>
       </div>
+      <div id="pdfHistoryCostSummary" class="pdf-history-cost-summary"></div>
       <div id="pdfHistoryList" class="pdf-history-list">Loading...</div>
     </div>
   </div>
@@ -3341,11 +3344,51 @@
       }
     }
 
+    // Totals over whatever pdfHistoryFilteredRows() currently returns, so the summary always
+    // matches the search box / status / subject filters above it -- never a separate server call.
+    function renderPdfHistoryCostSummary(rows) {
+      const el = document.getElementById('pdfHistoryCostSummary');
+      if (!el) return;
+      if (!rows.length) { el.textContent = ''; return; }
+      let totalCost = 0, withCost = 0, totalPages = 0;
+      for (const p of rows) {
+        if (typeof p.scan_cost_usd === 'number') { totalCost += p.scan_cost_usd; withCost++; }
+        if (typeof p.pages === 'number') totalPages += p.pages;
+      }
+      el.textContent = `Scan cost (filtered): $${totalCost.toFixed(3)} total - ${withCost} of ${rows.length} record${rows.length === 1 ? '' : 's'} with cost - ${totalPages} page${totalPages === 1 ? '' : 's'} scanned`;
+    }
+
+    // One muted line per record: cost + model calls (+ model name) + pages + duration, reusing
+    // whatever _write_processed_pdf_scan_stats (server.py) already attached when the scan
+    // finished -- see mock_scan_stats.sql. A record with no stats at all (scanned before this
+    // shipped) shows a bare "-" rather than a wrong zero; a layout where no model was ever
+    // involved (3col_book, free OCR, a mock scan with the Vision flag off) shows "no model
+    // calls" rather than guessing a model name. The found/flagged/model-read line only ever
+    // appears for a mock-exam record (q_found is null for every real-PYQ scan).
+    function pdfHistoryCostLineHtml(p) {
+      const hasAnyStat = p.scan_cost_usd != null || p.model_calls != null || p.models != null
+        || p.pages != null || p.scan_seconds != null;
+      if (!hasAnyStat) return '<div class="pdf-history-row-cost">Scan cost -</div>';
+      const costPart = `$${Number(p.scan_cost_usd || 0).toFixed(3)}`;
+      const callsPart = p.model_calls
+        ? `${p.model_calls} model call${p.model_calls === 1 ? '' : 's'}${p.models ? ` (${escapeHtml(p.models)})` : ''}`
+        : 'no model calls';
+      const extra = [];
+      if (p.pages != null) extra.push(`${p.pages} page${p.pages === 1 ? '' : 's'}`);
+      if (p.scan_seconds != null) extra.push(`${p.scan_seconds} s`);
+      let html = `<div class="pdf-history-row-cost">Scan cost ${costPart} - ${callsPart}${extra.length ? ' - ' + extra.join(' - ') : ''}</div>`;
+      if (p.q_found != null) {
+        html += `<div class="pdf-history-row-cost">${p.q_found} found - ${p.q_flagged ?? 0} flagged - ${p.q_model_read ?? 0} model-read</div>`;
+      }
+      return html;
+    }
+
     function renderPdfHistoryList() {
       const listEl = document.getElementById('pdfHistoryList');
       if (!pdfHistoryData) return;
       renderPdfHistoryAdminControls();
       const rows = pdfHistoryFilteredRows();
+      renderPdfHistoryCostSummary(rows);
       const unavailableNote = pdfHistoryData.counts_unavailable
         ? '<div class="pdf-history-counts-note">Counts unavailable right now. <a href="#" onclick="refreshPdfHistory(); return false;">Refresh</a></div>'
         : '';
@@ -3387,6 +3430,7 @@
           </div>
           <div class="pdf-history-row-meta">${escapeHtml(p.subject || '—')} · ${new Date(p.upload_date).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })} · ${escapeHtml(uploader)}</div>
           ${countsHtml}
+          ${pdfHistoryCostLineHtml(p)}
           ${reason ? `<div class="pdf-history-row-reason">${escapeHtml(reason)}</div>` : ''}
           ${canRemove ? `<button type="button" class="action-btn danger pdf-history-remove-btn" onclick="event.stopPropagation(); removeProcessedPdf(${p.id})">Remove record</button>` : ''}
         </div>`;
