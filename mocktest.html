@@ -419,6 +419,10 @@
             <div class="choose-test-meta" style="font-size:12.5px;font-weight:400;" data-i18n="mocktest.personalisedMeta">Pick subject, chapter & count</div>
           </button>
         </div>
+        <div id="savedMocksSection" style="margin-top:32px;display:none;">
+          <h2 style="font-size:12.5px;font-weight:700;color:#666;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:14px;" data-i18n="mocktest.savedMocksHeading">Saved Mock Tests</h2>
+          <div id="savedMocksList" style="display:flex;flex-direction:column;gap:10px;max-width:420px;margin:0 auto;"></div>
+        </div>
       </div>
     </div>
     </div>
@@ -500,6 +504,7 @@
    let startTime = Date.now();
     let savedQuestions = new Set();
     let currentMockTestId = null; // id of the official test being taken, or null for random/personalised mode
+    let currentMockName = null; // mock_name of the fixed (pyq.source='mock') exam being taken, or null
     // Server-graded tests (POST /mock-tests/attempts): questions arrive with no answer key, so
     // nothing in the browser can reveal it before submit. currentAttemptId ties the submit to the
     // attempt the server recorded; pendingSaves holds mid-test "Save" clicks (by question index),
@@ -543,6 +548,7 @@
       try {
         localStorage.setItem(currentMockProgressKey, JSON.stringify({
           mockTestId: currentMockTestId,
+          mockName: currentMockName,
           attemptId: currentAttemptId,
           questions, answers, marked, currentIndex,
           pendingSaves: [...pendingSaves],
@@ -564,6 +570,7 @@
     function resumeMockTestFromStorage(key, data) {
       currentMockProgressKey = key;
       currentMockTestId = data.mockTestId;
+      currentMockName = data.mockName || null;
       currentAttemptId = data.attemptId;
       questions = data.questions;
       answers = data.answers || {};
@@ -664,18 +671,21 @@
       }).join('');
     }
 
-    // Load questions -- mockTestId picks a specific admin-uploaded official test;
-    // omitted/null is the random 180-question draw from pyq. Both go through
+    // Load questions -- mockTestId picks a specific admin-uploaded official test (mock_tests
+    // table); mockName picks a fixed, saved mock exam instead (pyq.source='mock', mock_exams.sql);
+    // both omitted/null is the random 180-question draw from pyq. All three go through
     // POST /mock-tests/attempts: the server records the attempt and returns the questions with
     // no answer key, plus its own deadline (the timer below counts down to that).
-   async function loadQuestions(mockTestId) {
+   async function loadQuestions(mockTestId, mockName) {
       try {
         const { data: { session } } = await client.auth.getSession();
         if (!session) { showLoginRequired(); return; }
+        const body = mockName ? { kind: 'fixed_mock', mock_name: mockName }
+          : mockTestId ? { kind: 'official', mock_test_id: mockTestId } : { kind: 'random' };
         const res = await fetch(`${API_BASE}/mock-tests/attempts`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
-          body: JSON.stringify(mockTestId ? { kind: 'official', mock_test_id: mockTestId } : { kind: 'random' })
+          body: JSON.stringify(body)
         });
         if (res.status === 401) { showLoginRequired(); return; }
         const data = await res.json();
@@ -694,7 +704,7 @@
         // for, or already declined), then set up tracking so renderQuestion(0) below persists
         // this fresh attempt's own initial state.
         const identity = await getMockTestIdentity();
-        currentMockProgressKey = mockProgressKey(identity, mockTestId);
+        currentMockProgressKey = mockProgressKey(identity, mockName || mockTestId);
         localStorage.removeItem(currentMockProgressKey);
         startTime = Date.now();
         mockTestEndTimestamp = Date.now() + totalSeconds * 1000;
@@ -724,7 +734,7 @@
           <p class="secure-msg">${escapeHtmlMock(t('mocktest', 'loginToTakeTest'))}</p>
           <div style="display:flex;gap:10px;justify-content:center;margin-top:24px;">
             <button class="secure-btn" onclick="window.location.href='./login.html'">${escapeHtmlMock(t('mocktest', 'logIn'))}</button>
-            <button class="secure-btn-quiet" onclick="document.getElementById('startScreen').innerHTML = ORIGINAL_START_SCREEN_HTML; applyTranslations();">${escapeHtmlMock(t('mocktest', 'backToChoices'))}</button>
+            <button class="secure-btn-quiet" onclick="resetToStartScreen()">${escapeHtmlMock(t('mocktest', 'backToChoices'))}</button>
           </div>
         </div>
       `;
@@ -1454,6 +1464,7 @@ async function saveQuestionFromMock(index) {
         results: data.results,
         date: new Date().toISOString(),
         mockTestId: data.mock_test_id,
+        mockName: data.mock_name,
         // Already in mock_results (written by the server) -- mockresults.html must not save again.
         serverSaved: true,
         late: data.late
@@ -1546,14 +1557,63 @@ async function saveQuestionFromMock(index) {
               </button>
             `).join('')}
           </div>
-          <button onclick="document.getElementById('startScreen').innerHTML = ORIGINAL_START_SCREEN_HTML; applyTranslations();" style="margin-top:24px;background:transparent;border:1px solid #2a2a2a;color:#888;padding:8px 16px;border-radius:8px;cursor:pointer;font-size:13px;font-family:Inter,sans-serif;" data-i18n="mocktest.backToChoices">← Back</button>
+          <button onclick="resetToStartScreen()" style="margin-top:24px;background:transparent;border:1px solid #2a2a2a;color:#888;padding:8px 16px;border-radius:8px;cursor:pointer;font-size:13px;font-family:Inter,sans-serif;" data-i18n="mocktest.backToChoices">← Back</button>
         </div>
       `;
       applyTranslations();
     }
 
-    function beginLoadingQuestions(mockTestId) {
+    // Published fixed mock exams (pyq.source='mock', mock_exams.sql) -- a separate list from the
+    // mock_tests "official" picker above. Shown on the Choose Your Test screen itself rather than
+    // behind a click, so it never shadows the existing "Full Mock Test"/official-test flow, which
+    // stays completely unchanged.
+    async function loadSavedMocks() {
+      const section = document.getElementById('savedMocksSection');
+      const list = document.getElementById('savedMocksList');
+      if (!section || !list) return;
+      try {
+        const { data: { session } } = await client.auth.getSession();
+        if (!session) { section.style.display = 'none'; return; }
+        const res = await fetch(`${API_BASE}/mock-exams`, { headers: { 'Authorization': `Bearer ${session.access_token}` } });
+        if (!res.ok) { section.style.display = 'none'; return; }
+        const data = await res.json();
+        const mocks = Array.isArray(data.mocks) ? data.mocks : [];
+        if (!mocks.length) { section.style.display = 'none'; return; }
+        list.innerHTML = mocks.map(m => `
+          <button class="choose-test-card" style="text-align:left;" data-mock-name="${escapeHtmlMock(m.mock_name)}" onclick="beginLoadingQuestionsFixed(this)">
+            <div class="choose-test-title" style="font-size:16px;font-weight:800;margin-bottom:6px;">${escapeHtmlMock(m.title)}</div>
+            <div class="choose-test-meta" style="font-size:12.5px;font-weight:400;">${escapeHtmlMock(t('mocktest', 'fixedMockMeta')
+              .replace('{n}', localizeNum(m.question_count))
+              .replace('{d}', localizeNum(Math.round(m.duration_seconds / 60)))
+              .replace('{m}', localizeNum(m.total_marks)))}</div>
+            ${m.attempts > 0 ? `<div style="font-size:11.5px;color:#4f8ef7;margin-top:4px;">${escapeHtmlMock(t('mocktest', 'fixedMockAttempted')
+              .replace('{n}', localizeNum(m.attempts))
+              .replace('{score}', localizeNum(Math.max(0, m.best_score))))}</div>` : ''}
+          </button>
+        `).join('');
+        section.style.display = 'block';
+      } catch (e) {
+        section.style.display = 'none';
+      }
+    }
+
+    function beginLoadingQuestionsFixed(btn) {
+      beginLoadingQuestions(null, btn.dataset.mockName);
+    }
+
+    // Shared by every "back to choices" control (showLoginRequired, showMockTestPicker) --
+    // restores the original static markup AND re-renders the saved-mocks list into it, since that
+    // list is injected by loadSavedMocks() after the page's first paint and would otherwise come
+    // back empty.
+    function resetToStartScreen() {
+      document.getElementById('startScreen').innerHTML = ORIGINAL_START_SCREEN_HTML;
+      applyTranslations();
+      loadSavedMocks();
+    }
+
+    function beginLoadingQuestions(mockTestId, mockName) {
       currentMockTestId = mockTestId || null;
+      currentMockName = mockName || null;
       document.getElementById('startScreen').innerHTML = `
         <div style="text-align:center;">
           <h2 style="font-size:clamp(20px, 5.5vw, 24px);font-weight:700;color:#fff;margin-bottom:8px;margin-top:24px;">Preparing your test...</h2>
@@ -1582,7 +1642,7 @@ async function saveQuestionFromMock(index) {
         const el = document.getElementById('loadingDots');
         if (el) el.textContent = 'Please wait' + '.'.repeat(dots);
       }, 500);
-      loadQuestions(mockTestId).then(started => {
+      loadQuestions(mockTestId, mockName).then(started => {
         clearInterval(progressInterval);
         clearInterval(dotsInterval);
         // Only uncover the test once it really started -- otherwise the login prompt or error
@@ -1600,6 +1660,7 @@ async function saveQuestionFromMock(index) {
     // crash, refresh, or closed tab. See checkForResumableMockTest's own comment for why this is
     // a resume-or-discard choice rather than a silent auto-resume.
     checkForResumableMockTest();
+    loadSavedMocks();
 
     // Keyboard shortcuts for the question-taking screen (keyboard-shortcuts audit/rollout,
     // 2026-09-20). Gated on #startScreenOverlay being hidden -- that overlay sits on top of the

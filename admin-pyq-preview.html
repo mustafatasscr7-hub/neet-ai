@@ -73,6 +73,14 @@
     .q-auto-badge { font-size: 11px; padding: 3px 9px; border-radius: 20px; font-weight: 600; background: #4f8ef720; color: #4f8ef7; }
     .q-language-badge { font-size: 11px; padding: 3px 9px; border-radius: 20px; font-weight: 600; background: #2dd4bf20; color: #2dd4bf; }
 
+    /* Mocks panel -- publish gate for pyq.source='mock' papers (mock_exams.sql). */
+    .mock-ready-badge { font-size: 11px; padding: 3px 9px; border-radius: 20px; font-weight: 600; background: #4ade8020; color: #4ade80; white-space: nowrap; }
+    .mock-notready-badge { font-size: 11px; padding: 3px 9px; border-radius: 20px; font-weight: 600; background: #88888820; color: #888; white-space: nowrap; }
+    .mock-published-badge { font-size: 11px; padding: 3px 9px; border-radius: 20px; font-weight: 600; background: #4f8ef720; color: #4f8ef7; white-space: nowrap; }
+    .mock-title-input { background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 6px; padding: 5px 8px; color: #ececec; font-size: 12px; font-family: 'Inter', sans-serif; outline: none; width: 160px; }
+    .mock-title-input:focus { border-color: #4f8ef7; }
+    .mock-reasons { font-size: 11px; color: #888; margin-top: 2px; }
+
     /* Bulk select/action bar -- appears above the results list once 1+ question is checked via
        the corner checkbox on question-card. Only ever populated from questionCardHtml (the
        normal/review-queue card list), so it's hidden whenever duplicates/reports/diagram mode
@@ -617,6 +625,17 @@
       </div>
     </div>
 
+    <div class="collapse-panel" id="mocksPanel">
+      <div class="collapse-header" onclick="toggleMocksPanelOpen()">
+        <span class="collapse-chevron">▸</span>
+        <span>Mocks</span>
+        <span class="collapse-summary" id="mocksHeaderSummary">…</span>
+      </div>
+      <div class="collapse-body">
+        <div id="mocksBody">Loading...</div>
+      </div>
+    </div>
+
     <div class="bulk-action-bar" id="bulkActionBar">
       <label class="check-label"><input type="checkbox" id="selectAllCheckbox" onchange="toggleSelectAll(this.checked)"/> Select all on this page</label>
       <span class="bulk-count" id="bulkSelectedCount">0 selected</span>
@@ -725,6 +744,8 @@
     // (renderStatusPills) alongside contractorCountsCache, so both can update it independently.
     let reviewSummaryData = null;
     let autoApprovePanelOpen = false;
+    let mocksPanelOpen = false;
+    let mocksData = [];
 
     // Full canonical NCERT chapter list per subject (Class 11 + 12 combined, same source list
     // pyqbank.html's picker uses) -- merged into the edit form's dropdown below because the
@@ -798,6 +819,7 @@
       // so they're fetched up front rather than only when their panel is first opened.
       loadContractorCounts();
       loadContractorTally();
+      loadMocks();
       // Deferred to a fresh tick: on this page the `let`/`const` declarations further down the
       // file happen to run before any returning-session call to enterDashboard() can reach them,
       // but deferring here too matches the other two pages and removes any future ordering risk.
@@ -2138,6 +2160,115 @@
       contractorTallyOpen = !contractorTallyOpen;
       document.getElementById('contractorPayoutPanel').classList.toggle('open', contractorTallyOpen);
       if (contractorTallyOpen) loadContractorTally();
+    }
+
+    // Mocks panel -- publish gate for pyq.source='mock' papers (mock_exams.sql). Fetched up
+    // front in enterDashboard() for the header summary, same reasoning as the Contractor payout
+    // panel above.
+    function mockReasonsText(m) {
+      const reasons = [];
+      if (m.approved !== 180) reasons.push(`${m.approved}/180 approved`);
+      if (m.gaps && m.gaps.length) reasons.push(`${m.gaps.length} position${m.gaps.length === 1 ? '' : 's'} missing`);
+      if (m.duplicate_positions && m.duplicate_positions.length) reasons.push(`${m.duplicate_positions.length} duplicated position${m.duplicate_positions.length === 1 ? '' : 's'}`);
+      if (m.missing_answer) reasons.push(`${m.missing_answer} question${m.missing_answer === 1 ? '' : 's'} with no answer`);
+      return reasons.join(' · ');
+    }
+
+    function mockRowHtml(m) {
+      const targets = m.subject_targets || {};
+      const subjParts = Object.keys(targets).map(s => `${s.slice(0, 3)} ${(m.subjects && m.subjects[s]) || 0}/${targets[s]}`).join(' · ');
+      const reasons = mockReasonsText(m);
+      return `<tr data-mock-name="${escapeHtml(m.mock_name)}">
+        <td><input type="text" class="mock-title-input" value="${escapeHtml(m.title || m.mock_name)}"/>
+          <div style="font-size:10px;color:#555;margin-top:2px;">${escapeHtml(m.mock_name)}</div></td>
+        <td>${escapeHtml(subjParts)}</td>
+        <td>${m.approved}</td>
+        <td>${m.missing_answer}</td>
+        <td>${m.not_approved}</td>
+        <td>
+          <span class="${m.ready ? 'mock-ready-badge' : 'mock-notready-badge'}">${m.ready ? 'Ready' : 'Not ready'}</span>
+          ${m.published ? '<span class="mock-published-badge" style="margin-left:6px;">Published</span>' : ''}
+          ${reasons ? `<div class="mock-reasons">${escapeHtml(reasons)}</div>` : ''}
+        </td>
+        <td>${m.published
+          ? '<button type="button" class="action-btn danger" onclick="unpublishMock(this)">Unpublish</button>'
+          : `<button type="button" class="q-approve-btn" onclick="publishMock(this)"${m.ready ? '' : ' disabled style="opacity:0.4;cursor:not-allowed;"'}>Publish</button>`}</td>
+      </tr>`;
+    }
+
+    function renderMocksBody() {
+      const body = document.getElementById('mocksBody');
+      if (!mocksData.length) { body.textContent = 'No mock exam questions found yet (use the Mock exam layout in the PDF scan tool to add one).'; return; }
+      body.innerHTML = `<div class="contractor-tally-wrap"><table class="contractor-tally-table">
+        <thead><tr><th>Title / mock_name</th><th>Subjects (approved/target)</th><th>Approved</th><th>No answer</th><th>Not approved</th><th>Status</th><th></th></tr></thead>
+        <tbody>${mocksData.map(mockRowHtml).join('')}</tbody>
+      </table></div>`;
+    }
+
+    async function loadMocks() {
+      const body = document.getElementById('mocksBody');
+      const headerSummary = document.getElementById('mocksHeaderSummary');
+      try {
+        const res = await fetch(`${API_BASE}/admin/mock-exams-status`, { headers: authHeaders() });
+        if (res.status === 401) return logout();
+        const data = await res.json();
+        if (!res.ok || data.error) { body.textContent = 'Could not load: ' + (data.error || res.status); if (headerSummary) headerSummary.textContent = 'unavailable'; return; }
+        mocksData = data.mocks || [];
+        if (headerSummary) {
+          const publishedCount = mocksData.filter(m => m.published).length;
+          const readyCount = mocksData.filter(m => m.ready).length;
+          headerSummary.textContent = mocksData.length ? `${publishedCount} published, ${readyCount} ready, ${mocksData.length} total` : 'none found';
+        }
+        renderMocksBody();
+      } catch (e) {
+        body.textContent = 'Could not reach server.';
+        if (headerSummary) headerSummary.textContent = 'unavailable';
+      }
+    }
+
+    function toggleMocksPanelOpen() {
+      mocksPanelOpen = !mocksPanelOpen;
+      document.getElementById('mocksPanel').classList.toggle('open', mocksPanelOpen);
+    }
+
+    async function publishMock(btn) {
+      const tr = btn.closest('tr');
+      const mockName = tr.dataset.mockName;
+      const title = tr.querySelector('.mock-title-input').value.trim();
+      btn.disabled = true;
+      try {
+        const res = await fetch(`${API_BASE}/admin/mock-exams/publish`, {
+          method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify(title ? { mock_name: mockName, title } : { mock_name: mockName })
+        });
+        if (res.status === 401) return logout();
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.error) { alert('Could not publish: ' + (data.detail || data.error || res.status)); btn.disabled = false; return; }
+        loadMocks();
+      } catch (e) {
+        alert('Could not reach server.');
+        btn.disabled = false;
+      }
+    }
+
+    async function unpublishMock(btn) {
+      const tr = btn.closest('tr');
+      const mockName = tr.dataset.mockName;
+      if (!(await showConfirmModal(`Unpublish "${mockName}"? Students will no longer see it in the mock test list - past attempts stay as they are.`, { confirmLabel: 'Unpublish', danger: true }))) return;
+      btn.disabled = true;
+      try {
+        const res = await fetch(`${API_BASE}/admin/mock-exams/unpublish`, {
+          method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ mock_name: mockName })
+        });
+        if (res.status === 401) return logout();
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.error) { alert('Could not unpublish: ' + (data.detail || data.error || res.status)); btn.disabled = false; return; }
+        loadMocks();
+      } catch (e) {
+        alert('Could not reach server.');
+        btn.disabled = false;
+      }
     }
 
     // After an edit, the warnings shown are the ones from before it -- re-ask the server.

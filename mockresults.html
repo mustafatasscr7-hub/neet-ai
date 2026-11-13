@@ -253,6 +253,12 @@
     const MATCH_LIST_ITEM_RE = /\(\s*([a-hA-H])\s*\)|\(\s*([ivxIVX]{1,4})\s*\)|(?:^|\s)([a-hA-H]|\d{1,2})\.(?=\s|$)|(?:^|\s)([ivxIVX]{1,4})\.(?=\s|$)/g;
     const SEQ_ITEM_RE = /\(\s*([a-hA-H])\s*\)|\(\s*([ivxIVX]{1,4})\s*\)|\(\s*(\d{1,2})\s*\)/g;
     const SEQ_ROMAN_ORDER = ['i','ii','iii','iv','v','vi','vii','viii','ix','x','xi','xii'];
+    // Same TDZ bug, same fix, caught live via Playwright console capture while verifying the
+    // fixed-mock-exams feature (unrelated to it): these two were added later for the inline
+    // match-pair layout, declared right before parseMatchPairLine_MLP further down, which is
+    // exactly the "after renderQuestions('all') already ran" trap described above.
+    const MATCH_PAIR_LEFT_RE = /^\s*(?:\(\s*([a-hA-H])\s*\)|([a-hA-H])\.)\s+/;
+    const MATCH_PAIR_RIGHT_RE = /\(\s*([ivxIVX]{1,4})\s*\)|(?:^|\s)([ivxIVX]{1,4})\.(?=\s|$)/;
 
     const data = JSON.parse(sessionStorage.getItem('mockTestResults') || 'null');
 
@@ -600,9 +606,8 @@ function generateScorecard() {
     // >=2 CONSECUTIVE matching lines so a stray "(a) ... (i) ..." inside normal prose, or the
     // options block below the question, is never mistaken for this layout. Lines that already
     // have the two markers on separate lines don't match this per-line pattern and fall through
-    // to this file's normal rendering untouched.
-    const MATCH_PAIR_LEFT_RE = /^\s*(?:\(\s*([a-hA-H])\s*\)|([a-hA-H])\.)\s+/;
-    const MATCH_PAIR_RIGHT_RE = /\(\s*([ivxIVX]{1,4})\s*\)|(?:^|\s)([ivxIVX]{1,4})\.(?=\s|$)/;
+    // to this file's normal rendering untouched. (MATCH_PAIR_LEFT_RE/MATCH_PAIR_RIGHT_RE are
+    // hoisted to the top of the script, with AR_MARKER_RE and friends -- same TDZ reasoning.)
 
     function parseMatchPairLine_MLP(line) {
       const leftMatch = line.match(MATCH_PAIR_LEFT_RE);

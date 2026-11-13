@@ -4,7 +4,7 @@ from starlette.datastructures import MutableHeaders
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Union
-from collections import OrderedDict
+from collections import OrderedDict, Counter
 from contextlib import asynccontextmanager
 import asyncio
 import contextvars
@@ -8951,6 +8951,63 @@ async def get_available_mock_tests(user_id: str = "", verified_user_id: str = De
         print(f"AVAILABLE MOCK TESTS ERROR (user_id={user_id}): {e}", flush=True)
         return {"error": "Something went wrong. Please try again."}
 
+# ---------- Fixed mock exams: admin-published pyq.source='mock' papers (mock_exams.sql) ----------
+# A second kind of "fixed test" alongside the mock_tests/official pipeline above, for the newer
+# mock-exam PDF review mode (pyq.source='mock', mock_name, mock_position -- see
+# mock_exam_columns.sql / [[mock_exam_pdf_review_mode]]). Reuses the same
+# POST /mock-tests/attempts + /submit grading path via a new kind, 'fixed_mock', rather than a
+# parallel pipeline -- see MOCK_TEST_KINDS, _mock_test_duration and _fetch_fixed_mock below.
+MOCK_EXAM_DURATION_SECONDS = 180 * 60  # 180 minutes -- deliberately not mocktest.html's 3h20m
+MOCK_EXAM_TOTAL_MARKS = 180 * 4        # only ever reachable by a "ready" (180-approved) mock
+MOCK_EXAM_SUBJECT_TARGETS = {"Physics": 45, "Chemistry": 45, "Biology": 90}
+
+@app.get("/mock-exams")
+async def get_mock_exams(verified_user_id: str = Depends(_get_verified_user_id)):
+    """Published fixed mock exams, with this student's own past attempts at each -- the same kind
+    of info /mock-tests/available above gives for official tests, just keyed by mock_name instead
+    of a mock_test_id since these questions live in pyq, not a separate table. mock_exams has no
+    public RLS policies at all, so this (service-role) read is the only way to see it."""
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/mock_exams", headers=ADMIN_HEADERS,
+            params={"published": "eq.true", "select": "mock_name,title,published_at", "order": "published_at.desc"}
+        )
+        if resp.status_code >= 400:
+            return {"error": resp.text}
+        exams = resp.json()
+        # Every past attempt of this user's at ANY fixed mock, fetched once rather than one
+        # in.(...) lookup per mock -- also sidesteps ever having to comma/paren-escape a mock_name
+        # inside a PostgREST value list, since admin-entered names aren't restricted to a safe
+        # character set the way this endpoint's own input would be.
+        attempts_by_name = {}
+        results_resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/mock_results", headers=ADMIN_HEADERS,
+            params={"user_id": f"eq.{verified_user_id}", "mock_name": "not.is.null",
+                    "select": "mock_name,score,created_at", "order": "created_at.desc"}
+        )
+        if results_resp.status_code < 400:
+            for r in results_resp.json():
+                bucket = attempts_by_name.setdefault(r["mock_name"], {"attempts": 0, "best_score": None, "last_attempt_at": None})
+                bucket["attempts"] += 1
+                bucket["best_score"] = max(bucket["best_score"], r["score"]) if bucket["best_score"] is not None else r["score"]
+                if bucket["last_attempt_at"] is None:  # rows arrive created_at desc: first seen is latest
+                    bucket["last_attempt_at"] = r["created_at"]
+        empty_bucket = {"attempts": 0, "best_score": None, "last_attempt_at": None}
+        return {"mocks": [
+            {
+                "mock_name": e["mock_name"], "title": e.get("title") or e["mock_name"],
+                "question_count": 180, "duration_seconds": MOCK_EXAM_DURATION_SECONDS,
+                "total_marks": MOCK_EXAM_TOTAL_MARKS, "published_at": e.get("published_at"),
+                **attempts_by_name.get(e["mock_name"], empty_bucket),
+            }
+            for e in exams
+        ]}
+    except Exception as e:
+        print(f"MOCK EXAMS LIST ERROR: {type(e).__name__}", flush=True)
+        return {"error": "Something went wrong. Please try again."}
+
 async def _fetch_official_mock_test(mock_test_id: int):
     """The question-fetch response for a PUBLISHED official mock test (question_order), or None if
     no published test has that id. Service-role key: mock_test_questions' anon SELECT policy
@@ -8969,6 +9026,28 @@ async def _fetch_official_mock_test(mock_test_id: int):
         f"{SUPABASE_URL}/rest/v1/mock_test_questions",
         headers=ADMIN_HEADERS,
         params={"mock_test_id": f"eq.{mock_test_id}", "select": MOCK_QUESTION_COLUMNS, "order": "question_order.asc"}
+    )
+
+async def _fetch_fixed_mock(mock_name: str):
+    """The question-fetch response for a PUBLISHED fixed mock exam (mock_position order), or None
+    if no published mock_exams row has that name. Same reasoning as _fetch_official_mock_test
+    just above: mock_exams has no public RLS policy at all, so this service-role read is the only
+    way anything ever sees it, and the published check is enforced here explicitly rather than
+    trusted from the admin UI -- an unpublished (or never-published) mock's questions, answers
+    included below the line that strips them, must never be fetchable by guessing its name."""
+    exam_resp = await async_client.get(
+        f"{SUPABASE_URL}/rest/v1/mock_exams", headers=ADMIN_HEADERS,
+        params={"mock_name": f"eq.{mock_name}", "published": "eq.true", "select": "mock_name"}
+    )
+    if exam_resp.status_code >= 400 or not exam_resp.json():
+        return None
+    return await async_client.get(
+        f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
+        params={
+            "source": "eq.mock", "mock_name": f"eq.{mock_name}", "review_status": "eq.approved",
+            "is_active": "eq.true", "language": "eq.en",
+            "select": MOCK_QUESTION_COLUMNS, "order": "mock_position.asc", "limit": 200,
+        }
     )
 
 @app.get("/mock-tests/{mock_test_id}/questions")
@@ -9306,7 +9385,7 @@ MOCK_TEST_DETAIL_FIELDS = ("id", "subject", "chapter", "year", "difficulty", "qu
                            "option_c", "option_d", "correct_answer", "diagram_url", "option_a_diagram_url",
                            "option_b_diagram_url", "option_c_diagram_url", "option_d_diagram_url")
 MOCK_TEST_SUBJECTS = ("Biology", "Physics", "Chemistry")
-MOCK_TEST_KINDS = {"random": "pyq", "official": "mock_test_questions", "personalised": "pyq", "personalised_catalog": "pyq"}
+MOCK_TEST_KINDS = {"random": "pyq", "official": "mock_test_questions", "personalised": "pyq", "personalised_catalog": "pyq", "fixed_mock": "pyq"}
 MOCK_TEST_ATTEMPTS_URL = f"{SUPABASE_URL}/rest/v1/mock_test_attempts"
 MOCK_RESULTS_URL = f"{SUPABASE_URL}/rest/v1/mock_results"
 
@@ -9317,6 +9396,7 @@ class MockTestStartRequest(BaseModel):
     count: Optional[int] = None                                   # personalised
     subject: Optional[str] = None                                 # personalised_catalog
     test_number: Optional[int] = None                             # personalised_catalog
+    mock_name: Optional[str] = None                               # fixed_mock
 
 class MockTestSubmitRequest(BaseModel):
     question_ids: List[Union[str, int]]
@@ -9336,6 +9416,8 @@ def _answer_letter(raw) -> Optional[str]:
     return {"1": "a", "2": "b", "3": "c", "4": "d"}.get(value)
 
 def _mock_test_duration(kind: str, question_count: int) -> int:
+    if kind == "fixed_mock":
+        return MOCK_EXAM_DURATION_SECONDS
     if kind in ("random", "official"):
         return MOCK_TEST_FULL_DURATION_SECONDS
     return max(300, question_count * 70)  # personalised-test.html's timer
@@ -9415,6 +9497,7 @@ async def _grade_attempt(attempt: dict, answers: dict, submitted_at: datetime) -
         "subject_physics_score": max(0, tally["Physics"]["correct"] * 4 - tally["Physics"]["wrong"]),
         "subject_chemistry_score": max(0, tally["Chemistry"]["correct"] * 4 - tally["Chemistry"]["wrong"]),
         "mock_test_id": attempt.get("mock_test_id"),
+        "mock_name": attempt.get("mock_name"),
         "question_details": details,
     }
     # Same `source` the web/app inserts use: 'personalised' for personalised tests, column default
@@ -9442,7 +9525,7 @@ def _mock_test_submit_response(attempt: dict, result: dict, already_submitted: b
         sd["score"] = max(0, sd["correct"] * 4 - sd["wrong"])
     return {
         "attempt_id": attempt["id"], "result_id": result["id"], "kind": attempt["kind"],
-        "mock_test_id": attempt.get("mock_test_id"), "already_submitted": already_submitted,
+        "mock_test_id": attempt.get("mock_test_id"), "mock_name": attempt.get("mock_name"), "already_submitted": already_submitted,
         "late": bool(attempt.get("is_late")),
         # Unclamped, like the score the pages always showed; mock_results.score stores max(0, ...).
         "score": result["correct"] * 4 - result["wrong"],
@@ -9456,7 +9539,7 @@ async def mock_test_start(req: MockTestStartRequest, _: None = Depends(rate_limi
     if not verified_user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
     if req.kind not in MOCK_TEST_KINDS:
-        raise HTTPException(status_code=400, detail="kind must be random, official, personalised or personalised_catalog")
+        raise HTTPException(status_code=400, detail="kind must be random, official, personalised, personalised_catalog or fixed_mock")
     extra = {}
     if req.kind == "official" and req.mock_test_id is None:
         raise HTTPException(status_code=400, detail="mock_test_id is required")
@@ -9467,6 +9550,9 @@ async def mock_test_start(req: MockTestStartRequest, _: None = Depends(rate_limi
             raise HTTPException(status_code=400, detail="Invalid subject")
     if req.kind == "personalised_catalog" and (req.subject not in MOCK_TEST_SUBJECTS or req.test_number is None):
         raise HTTPException(status_code=400, detail="subject and test_number are required")
+    mock_name = req.mock_name.strip() if req.mock_name else ""
+    if req.kind == "fixed_mock" and not (1 <= len(mock_name) <= 120):
+        raise HTTPException(status_code=400, detail="mock_name is required")
     _check_user_rate("start", verified_user_id, MOCK_TEST_START_LIMIT)
     try:
         if req.kind == "random":
@@ -9477,6 +9563,13 @@ async def mock_test_start(req: MockTestStartRequest, _: None = Depends(rate_limi
                 raise HTTPException(status_code=404, detail="Mock test not found")
             if response.status_code >= 400:
                 raise RuntimeError(f"official questions read failed ({response.status_code})")
+            rows = response.json()
+        elif req.kind == "fixed_mock":
+            response = await _fetch_fixed_mock(mock_name)
+            if response is None:
+                raise HTTPException(status_code=404, detail="Mock test not found")
+            if response.status_code >= 400:
+                raise RuntimeError(f"fixed mock questions read failed ({response.status_code})")
             rows = response.json()
         elif req.kind == "personalised":
             rows, count, available = await _sample_personalised_questions(req.selections, req.count if req.count is not None else 10)
@@ -9506,6 +9599,7 @@ async def mock_test_start(req: MockTestStartRequest, _: None = Depends(rate_limi
         attempt = await _attempt_insert({
             "user_id": verified_user_id, "kind": req.kind,
             "mock_test_id": req.mock_test_id if req.kind == "official" else None,
+            "mock_name": mock_name if req.kind == "fixed_mock" else None,
             "question_ids": [str(q["id"]) for q in questions],
             "duration_seconds": duration, "started_at": started_at.isoformat(),
         })
@@ -9514,6 +9608,7 @@ async def mock_test_start(req: MockTestStartRequest, _: None = Depends(rate_limi
         raise HTTPException(status_code=502, detail="Could not start the test. Please try again.")
     return {
         "attempt_id": attempt["id"], "kind": req.kind, "mock_test_id": attempt.get("mock_test_id"),
+        "mock_name": attempt.get("mock_name"),
         "questions": [{f: q.get(f) for f in MOCK_TEST_PUBLIC_FIELDS} for q in questions],
         "total": len(questions), "duration_seconds": duration,
         "started_at": started_at.isoformat(),
@@ -13904,6 +13999,134 @@ async def admin_pyq_bulk_create(body: PyqBulkCreate, role: str = Depends(verify_
         return {"created": created, "batch_id": batch_id}
     except Exception as e:
         return {"error": str(e)}
+
+# ---------- Admin: Mocks panel (admin-pyq-preview.html) -- publish a fixed mock exam ----------
+# admin only (verify_admin, never verify_admin_or_contractor_pdf -- a contractor key must never
+# see or flip a publish switch), mock_exams.sql. See get_mock_exams/_fetch_fixed_mock above for the
+# student-facing side.
+
+def _mock_exam_stats(rows: list) -> dict:
+    """Readiness + the panel's per-mock numbers, recomputed from the pyq rows that currently carry
+    this mock_name -- never trusted from the client. 'ready' depends only on the APPROVED subset:
+    a rejected/pending duplicate sitting at an already-covered position doesn't block publishing,
+    matching the stated rule (exactly 180 approved questions filling 1-180, no gaps or duplicate
+    positions among them, every one of them with a real answer)."""
+    approved = [r for r in rows if r.get("review_status") == "approved"]
+    positions = [r["mock_position"] for r in approved if r.get("mock_position") is not None]
+    position_counts = Counter(positions)
+    duplicate_positions = sorted(p for p, c in position_counts.items() if c > 1)
+    gaps = sorted(set(range(1, 181)) - set(positions))
+    missing_answer = sum(1 for r in approved if _answer_letter(r.get("correct_answer")) is None)
+    approved_subject_counts = Counter(r.get("subject") for r in approved)
+    ready = len(approved) == 180 and not duplicate_positions and not gaps and missing_answer == 0
+    return {
+        "total": len(rows), "approved": len(approved), "not_approved": len(rows) - len(approved),
+        "missing_answer": missing_answer, "gaps": gaps, "duplicate_positions": duplicate_positions,
+        "subjects": {s: approved_subject_counts.get(s, 0) for s in MOCK_EXAM_SUBJECT_TARGETS},
+        "subject_targets": MOCK_EXAM_SUBJECT_TARGETS,
+        "ready": ready,
+    }
+
+async def _pyq_mock_rows(mock_name: str) -> list:
+    resp = await async_client.get(
+        f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
+        params={"source": "eq.mock", "mock_name": f"eq.{mock_name}",
+                "select": "id,subject,mock_position,review_status,correct_answer", "limit": 1000}
+    )
+    if resp.status_code >= 400:
+        raise RuntimeError(f"pyq read failed ({resp.status_code})")
+    return resp.json()
+
+@app.get("/admin/mock-exams-status")
+async def admin_mock_exams_status(_: None = Depends(verify_admin)):
+    try:
+        pyq_resp, exams_resp = await asyncio.gather(
+            async_client.get(f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
+                              params={"source": "eq.mock", "select": "id,mock_name,subject,mock_position,review_status,correct_answer", "limit": 5000}),
+            async_client.get(f"{SUPABASE_URL}/rest/v1/mock_exams", headers=ADMIN_HEADERS,
+                              params={"select": "mock_name,title,published,published_at", "order": "created_at.asc"}),
+        )
+        if pyq_resp.status_code >= 400:
+            return {"error": pyq_resp.text}
+        if exams_resp.status_code >= 400:
+            return {"error": exams_resp.text}
+        by_name = {}
+        for r in pyq_resp.json():
+            by_name.setdefault(r["mock_name"], []).append(r)
+        exams_by_name = {e["mock_name"]: e for e in exams_resp.json()}
+        mocks = []
+        for name in sorted(set(by_name) | set(exams_by_name)):
+            exam = exams_by_name.get(name) or {}
+            mocks.append({
+                "mock_name": name, "title": exam.get("title") or name,
+                "published": bool(exam.get("published")), "published_at": exam.get("published_at"),
+                **_mock_exam_stats(by_name.get(name, [])),
+            })
+        return {"mocks": mocks}
+    except Exception as e:
+        print(f"MOCK EXAMS STATUS ERROR: {type(e).__name__}", flush=True)
+        return {"error": "Something went wrong. Please try again."}
+
+class MockExamPublishRequest(BaseModel):
+    mock_name: str
+    title: Optional[str] = None
+
+@app.post("/admin/mock-exams/publish")
+async def admin_mock_exams_publish(body: MockExamPublishRequest, _: None = Depends(verify_admin)):
+    name = (body.mock_name or "").strip()
+    if not (1 <= len(name) <= 120):
+        raise HTTPException(status_code=400, detail="mock_name is required")
+    try:
+        stats = _mock_exam_stats(await _pyq_mock_rows(name))
+        if not stats["ready"]:
+            reasons = []
+            if stats["approved"] != 180:
+                reasons.append(f"only {stats['approved']} of 180 approved")
+            if stats["gaps"]:
+                reasons.append(f"{len(stats['gaps'])} position(s) with no approved question")
+            if stats["duplicate_positions"]:
+                reasons.append(f"{len(stats['duplicate_positions'])} position(s) with more than one approved question")
+            if stats["missing_answer"]:
+                reasons.append(f"{stats['missing_answer']} approved question(s) have no answer")
+            raise HTTPException(status_code=400, detail="Not ready to publish: " + ("; ".join(reasons) if reasons else "not ready"))
+        title = (body.title or "").strip()[:200] or name
+        write = await async_client.post(
+            f"{SUPABASE_URL}/rest/v1/mock_exams",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=representation"},
+            params={"on_conflict": "mock_name"},
+            json={"mock_name": name, "title": title, "published": True, "published_at": datetime.now(timezone.utc).isoformat()}
+        )
+        if write.status_code >= 400:
+            return {"error": write.text}
+        return {"ok": True, "mock_name": name, "title": title, "published": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"MOCK EXAMS PUBLISH ERROR: {type(e).__name__}", flush=True)
+        return {"error": "Something went wrong. Please try again."}
+
+class MockExamUnpublishRequest(BaseModel):
+    mock_name: str
+
+@app.post("/admin/mock-exams/unpublish")
+async def admin_mock_exams_unpublish(body: MockExamUnpublishRequest, _: None = Depends(verify_admin)):
+    name = (body.mock_name or "").strip()
+    if not (1 <= len(name) <= 120):
+        raise HTTPException(status_code=400, detail="mock_name is required")
+    try:
+        # Existing attempts/results keep their own mock_name (ON DELETE SET NULL only fires if the
+        # mock_exams row itself is ever deleted, which nothing here does) -- unpublishing only
+        # hides it from GET /mock-exams and blocks new starts, never touches past ones.
+        resp = await async_client.patch(
+            f"{SUPABASE_URL}/rest/v1/mock_exams", headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
+            params={"mock_name": f"eq.{name}"}, json={"published": False, "published_at": None}
+        )
+        if resp.status_code >= 400:
+            return {"error": resp.text}
+        return {"ok": True, "mock_name": name, "published": False}
+    except Exception as e:
+        print(f"MOCK EXAMS UNPUBLISH ERROR: {type(e).__name__}", flush=True)
+        return {"error": "Something went wrong. Please try again."}
 
 @app.post("/admin/pdf-mark-processed")
 def admin_pdf_mark_processed(req: PdfMarkProcessedRequest, _: None = Depends(verify_admin_or_contractor_pdf)):

@@ -44,7 +44,7 @@ AUTH_B = {"Authorization": "Bearer token-b"}
 FORBIDDEN_KEYS = {"correct_answer", "correctanswer", "solution", "solutions", "explanation", "answer", "answer_key", "embedding"}
 # Exactly what existing mock_results rows / question_details items look like in production.
 RESULT_ROW_KEYS = {"id", "user_id", "score", "correct", "wrong", "skipped", "total", "time_taken", "subject_biology_score",
-                   "subject_physics_score", "subject_chemistry_score", "created_at", "source", "mock_test_id", "question_details"}
+                   "subject_physics_score", "subject_chemistry_score", "created_at", "source", "mock_test_id", "mock_name", "question_details"}
 DETAIL_KEYS = {"chapter", "correct_answer", "diagram_url", "difficulty", "id", "option_a", "option_a_diagram_url", "option_b",
                "option_b_diagram_url", "option_c", "option_c_diagram_url", "option_d", "option_d_diagram_url", "question",
                "status", "subject", "userAnswer", "year"}
@@ -159,7 +159,15 @@ def seed(fake):
                 "option_b_diagram_url": None, "option_c_diagram_url": None, "option_d_diagram_url": None,
                 "is_active": True, "embedding": [0.1] * 4, "source_pdf_filename": "secret.pdf", "source_tag": "t",
                 "reviewed": True, "class": 11, "has_diagram": False, "question_type": "mcq",
-                "review_status": "approved"}  # add_pyq_review_status.sql: only approved rows reach students
+                "review_status": "approved",  # add_pyq_review_status.sql: only approved rows reach students
+                # mock_exam_columns.sql / pyq_language.sql: PYQ_STUDENT_VISIBLE (used by
+                # _sample_random_mock_questions, _sample_personalised_questions and
+                # _catalog_test_questions) filters on both -- pre-existing gap in this fixture
+                # (same class of bug already fixed in test_pyq_review_gate.py's pyq_row() for
+                # `source` alone; this file needs `language` too since its three endpoints go
+                # through the full PYQ_STUDENT_VISIBLE filter set), confirmed on a pristine
+                # origin/main checkout before this feature branch touched anything here.
+                "source": "pyq", "language": "en"}
     for subject, n in (("Biology", 120), ("Physics", 60), ("Chemistry", 60)):
         for i in range(n):
             fake.tables["pyq"].append(q(subject, i, letters[i % len(letters)]))
