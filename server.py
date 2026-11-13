@@ -198,11 +198,11 @@ app.add_middleware(
 #      scanned pages with no existing byte cap of their own -- set generously (60 MB raw body)
 #   /admin/pyq-diagram-upload, /admin/diagram-upload -> one admin-uploaded diagram image, no
 #      existing cap either -- 15 MB raw body
-#   /admin/ncert-content/preview -> one chapter PDF, base64-encoded in the JSON body; the admin
-#      NCERT Content page's own hard cap is 15 MB decoded (see admin_ncert_content_preview below)
-#      -> 21 MB raw body: base64's ~4/3 inflation (20 MB) plus slack for the JSON envelope itself
-#      (field names, quoting) so a PDF right at the 15 MB cap isn't rejected here before that
-#      endpoint's own decoded-size check ever runs
+#   /admin/ncert-content/preview, /admin/ncert-content/verify -> one chapter PDF, base64-encoded
+#      in the JSON body; the admin NCERT Content page's own hard cap is 15 MB decoded (see
+#      admin_ncert_content_preview below) -> 21 MB raw body: base64's ~4/3 inflation (20 MB) plus
+#      slack for the JSON envelope itself (field names, quoting) so a PDF right at the 15 MB cap
+#      isn't rejected here before that endpoint's own decoded-size check ever runs
 DEFAULT_MAX_BODY_BYTES = 1 * 1024 * 1024
 
 _BODY_SIZE_OVERRIDES = {
@@ -217,6 +217,7 @@ _BODY_SIZE_OVERRIDES = {
     "/admin/pyq-diagram-upload": 15 * 1024 * 1024,
     "/admin/diagram-upload": 15 * 1024 * 1024,
     "/admin/ncert-content/preview": 21 * 1024 * 1024,
+    "/admin/ncert-content/verify": 21 * 1024 * 1024,
 }
 
 def _max_body_bytes_for_path(path: str) -> int:
@@ -389,6 +390,7 @@ from process_pyq_scanned import scan_scanned_pdf_bytes, estimate_scanned_pdf_cos
 from process_pyq_scanned_ocr import scan_ocr_pdf_bytes, start_ocr_job, get_ocr_job, ocr_job_is_live
 from utils.krutidev2unicode import kru2uni
 import ncert_ingest_core as ncert_ingest_core_mod
+import ncert_verify as ncert_verify_mod
 import load_ncert_section_keywords as ncert_kw_mod
 
 # Shared verbatim between INERT_PAIR_GUARD and _VERIFY_MCQ_HEDGE_SYSTEM further down
@@ -16008,15 +16010,26 @@ NCERT_CONTENT_FALLBACK_SECTION_COST = 0.002  # used only until ncert_chapter_log
 
 async def _log_ncert_chapter_event(cls: str, subject: str, chapter: str, source: str, cost: float = 0.0,
                                     model_calls: int = 0, model: str = None, pages=None, extract_seconds=None,
-                                    sections=None, words=None):
+                                    sections=None, words=None, verify: dict = None):
     """Best-effort ncert_chapter_log insert. Never raises -- a lost log row only means this one
     event doesn't show up in the page's cost/load columns, same as a pre-existing chapter that
-    predates this table."""
+    predates this table.
+
+    verify: the dict ncert_verify.verify_text_coverage returned for this same Apply (see
+    ncert_chapter_verify.sql) -- None for events that never ran a PDF cross-check (manual section
+    add/edit)."""
     row = {
         "class": cls, "subject": subject, "chapter": chapter, "source": source,
         "keywords_cost_usd": round(cost, 6), "model_calls": model_calls, "model": model,
         "pages": pages, "extract_seconds": extract_seconds, "sections": sections, "words": words,
     }
+    if verify:
+        row.update({
+            "source_words": verify.get("total_words"), "kept_words": verify.get("kept_words"),
+            "coverage_pct": verify.get("coverage_pct"), "dropped_lines_count": verify.get("dropped_lines_count"),
+            "verified_at": datetime.now(timezone.utc).isoformat(),
+            "verify_status": verify.get("status"), "verify_summary": verify.get("summary"),
+        })
     try:
         await async_client.post(
             f"{SUPABASE_URL}/rest/v1/ncert_chapter_log",
@@ -16049,10 +16062,18 @@ def _ncert_chapter_cost_fields(log_rows):
     """log_rows: this chapter's non-deleted ncert_chapter_log rows, oldest first. The earliest row
     is treated as the chapter's original load event (its source/pages/extract_seconds describe how
     the chapter got here); cost is summed across every event (load + later edits/regenerations);
-    model is the most recent model actually used for a keyword call. Returns "-"-ready None fields
-    when there is no log history at all."""
+    model is the most recent model actually used for a keyword call. coverage_pct/source_words/
+    kept_words/dropped_lines_count come from the most recent row that has them (a later re-apply
+    overwrites them; manual edits don't, so the last known coverage survives those). verify_status/
+    verified_at/verify_summary likewise come from the most recent row that has them -- "Verify
+    against PDF" (see admin_ncert_content_verify) stamps these onto every existing row for the
+    chapter, independently of coverage_pct, so a later verify always wins here without needing a
+    fresh Apply. Returns "-"-ready None fields when there is no log history at all."""
     if not log_rows:
-        return {"source": None, "cost": None, "model": None, "pages": None, "extract_seconds": None}
+        return {
+            "source": None, "cost": None, "model": None, "pages": None, "extract_seconds": None,
+            "coverage_pct": None, "verify_status": None, "verified_at": None,
+        }
     origin = log_rows[0]
     total_cost = sum(r.get("keywords_cost_usd") or 0 for r in log_rows)
     model = None
@@ -16060,9 +16081,21 @@ def _ncert_chapter_cost_fields(log_rows):
         if r.get("model_calls"):
             model = r.get("model")
             break
+    coverage_pct = None
+    for r in reversed(log_rows):
+        if r.get("coverage_pct") is not None:
+            coverage_pct = r.get("coverage_pct")
+            break
+    verify_status = verified_at = None
+    for r in reversed(log_rows):
+        if r.get("verify_status") is not None:
+            verify_status = r.get("verify_status")
+            verified_at = r.get("verified_at")
+            break
     return {
         "source": origin.get("source"), "cost": round(total_cost, 6), "model": model,
         "pages": origin.get("pages"), "extract_seconds": origin.get("extract_seconds"),
+        "coverage_pct": coverage_pct, "verify_status": verify_status, "verified_at": verified_at,
     }
 
 @app.get("/admin/ncert-content")
@@ -16101,7 +16134,8 @@ async def admin_ncert_content_list(_: None = Depends(verify_admin)):
         log_resp = await async_client.get(
             f"{SUPABASE_URL}/rest/v1/ncert_chapter_log", headers=ADMIN_HEADERS,
             params={
-                "select": "class,subject,chapter,source,keywords_cost_usd,model,model_calls,pages,extract_seconds,created_at",
+                "select": "class,subject,chapter,source,keywords_cost_usd,model,model_calls,pages,extract_seconds,"
+                          "coverage_pct,verify_status,verified_at,created_at",
                 "deleted_at": "is.null", "order": "created_at",
             },
         )
@@ -16156,6 +16190,93 @@ async def _ncert_content_chapter_exists(cls: str, subject: str, chapter_title: s
     except Exception:
         return False
 
+@app.post("/admin/ncert-content/verify")
+async def admin_ncert_content_verify(request: Request, _: None = Depends(verify_admin), __: None = Depends(rate_limit(10, 300, by="ip"))):
+    """"Verify against PDF" for a chapter already loaded into ncert_sections -- re-extracts and
+    cleans the uploaded PDF and cross-checks it against the chapter's CURRENTLY STORED sections
+    (not the PDF that originally loaded it, which may have changed since, or may never have gone
+    through the PDF route at all). Never writes to ncert_sections; the PDF itself is never stored.
+    Stamps verified_at/verify_status/verify_summary onto every non-deleted ncert_chapter_log row
+    for this chapter -- coverage_pct/source_words/kept_words/dropped_lines_count are left
+    untouched here; those only ever come from the PDF-route Apply that loaded the chapter (see
+    ncert_chapter_verify.sql)."""
+    try:
+        body = await request.json()
+    except Exception:
+        return {"error": "Invalid request body."}
+    cls = (body.get("class") or "").strip()
+    subject = (body.get("subject") or "").strip()
+    chapter = (body.get("chapter") or "").strip()
+    data = body.get("data") or ""
+
+    if cls not in NCERT_CONTENT_CLASSES:
+        return {"error": f"class must be one of {', '.join(NCERT_CONTENT_CLASSES)}"}
+    if subject not in NCERT_CONTENT_SUBJECTS:
+        return {"error": f"subject must be one of {', '.join(NCERT_CONTENT_SUBJECTS)}"}
+    if not chapter:
+        return {"error": "chapter is required."}
+    if not data:
+        return {"error": "No PDF data was provided."}
+    try:
+        pdf_bytes = base64.b64decode(data)
+    except Exception:
+        return {"error": "Could not decode PDF data."}
+    if len(pdf_bytes) > NCERT_CONTENT_MAX_PDF_BYTES:
+        return {"error": f"This PDF is {len(pdf_bytes) // (1024 * 1024)} MB, over the {NCERT_CONTENT_MAX_PDF_BYTES // (1024 * 1024)} MB cap."}
+
+    try:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/ncert_sections", headers=ADMIN_HEADERS,
+            params={
+                "select": "heading,text", "class": f"eq.{cls}", "subject": f"eq.{subject}",
+                "chapter": f"eq.{chapter}", "order": "ordinal",
+            },
+        )
+        if resp.status_code >= 400:
+            return {"error": "Could not load this chapter."}
+        sections = resp.json()
+    except Exception as e:
+        return {"error": str(e)}
+    if not sections:
+        return {"error": "No such chapter."}
+
+    loop = asyncio.get_event_loop()
+    try:
+        verify = await loop.run_in_executor(None, ncert_verify_mod.verify_text_coverage, pdf_bytes, sections)
+    except Exception as e:
+        return {"error": f"Could not extract this PDF: {e}"}
+
+    patch_json = {
+        "verified_at": datetime.now(timezone.utc).isoformat(),
+        "verify_status": verify["status"], "verify_summary": verify["summary"],
+    }
+    patched = []
+    try:
+        patch_resp = await async_client.patch(
+            f"{SUPABASE_URL}/rest/v1/ncert_chapter_log",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
+            params={"class": f"eq.{cls}", "subject": f"eq.{subject}", "chapter": f"eq.{chapter}", "deleted_at": "is.null"},
+            json=patch_json,
+        )
+        if patch_resp.status_code < 400:
+            patched = patch_resp.json()
+    except Exception:
+        pass
+    if not patched:
+        # A chapter with no ncert_chapter_log history at all (loaded before that table existed, or
+        # entered entirely by hand before this feature) has no row to stamp -- write one so the
+        # chapters table has somewhere to read the verify result back from.
+        try:
+            await async_client.post(
+                f"{SUPABASE_URL}/rest/v1/ncert_chapter_log",
+                headers={**ADMIN_HEADERS, "Content-Type": "application/json"},
+                json={"class": cls, "subject": subject, "chapter": chapter, "source": "manual", **patch_json},
+            )
+        except Exception:
+            pass
+
+    return {"class": cls, "subject": subject, "chapter": chapter, "verify": verify}
+
 @app.post("/admin/ncert-content/preview")
 async def admin_ncert_content_preview(request: Request, _: None = Depends(verify_admin), __: None = Depends(rate_limit(10, 300, by="ip"))):
     try:
@@ -16188,13 +16309,28 @@ async def admin_ncert_content_preview(request: Request, _: None = Depends(verify
     chapter_title = result["chapter_title"]
     exists = await _ncert_content_chapter_exists(cls, subject, chapter_title) if chapter_title else False
 
+    # The text cross-check only runs once the chapter has already cleared validate_chapter's own
+    # flags -- same gating order as ncert_ingest.py's CLI. A chapter the admin can't apply anyway
+    # (missing title, too few headings, ...) doesn't need a second report explaining why not.
+    verify = None
+    if not result["flags"]:
+        try:
+            verify = await loop.run_in_executor(None, ncert_verify_mod.verify_text_coverage, pdf_bytes, result["sections"])
+        except Exception as e:
+            verify = {
+                "status": "FAIL", "summary": f"Could not run the text cross-check: {e}",
+                "total_words": 0, "kept_words": 0, "coverage_pct": 0.0, "word_diff": 0, "word_diff_pct": 0.0,
+                "dropped_lines": [], "dropped_lines_count": 0, "dropped_by_reason": {},
+                "sentence_mismatches": [], "missing_paragraphs": [],
+            }
+
     now = time.time()
     _prune_ncert_content_previews(now)
     preview_id = uuid.uuid4().hex
     _ncert_content_previews[preview_id] = {
         "class": cls, "subject": subject, "chapter_title": chapter_title,
         "sections": result["sections"], "flags": result["flags"], "created_at": now,
-        "pages": result["pages"], "extract_seconds": result["extract_seconds"],
+        "pages": result["pages"], "extract_seconds": result["extract_seconds"], "verify": verify,
     }
     avg_section_cost = await _ncert_avg_section_cost()
     estimated_cost = round(result["section_count"] * avg_section_cost, 4)
@@ -16202,6 +16338,7 @@ async def admin_ncert_content_preview(request: Request, _: None = Depends(verify
         "preview_id": preview_id, "class": cls, "subject": subject, "chapter_title": chapter_title,
         "sections": result["sections"], "flags": result["flags"], "words": result["words"],
         "section_count": result["section_count"], "exists": exists, "estimated_cost": estimated_cost,
+        "verify": verify,
     }
 
 def _ncert_content_generate_keywords(sections, cap: float, is_peak: bool):
@@ -16234,6 +16371,7 @@ async def admin_ncert_content_apply(request: Request, _: None = Depends(verify_a
         return {"error": "Invalid request body."}
     preview_id = body.get("preview_id") or ""
     overwrite = bool(body.get("overwrite"))
+    override_verify_fail = bool(body.get("override_verify_fail"))
 
     now = time.time()
     _prune_ncert_content_previews(now)
@@ -16242,6 +16380,10 @@ async def admin_ncert_content_apply(request: Request, _: None = Depends(verify_a
         return {"error": "This preview has expired or was not found. Upload and preview the PDF again."}
     if preview["flags"]:
         return {"error": "This chapter failed validation and cannot be applied from the PDF route: " + "; ".join(preview["flags"]) + ". Use the manual section editor instead."}
+
+    verify = preview.get("verify")
+    if verify and verify.get("status") == "FAIL" and not override_verify_fail:
+        return {"error": "This chapter's text cross-check failed: " + verify.get("summary", "") + ". Check \"Apply anyway\" to override, or fix the chapter and re-upload."}
 
     cls, subject, chapter_title = preview["class"], preview["subject"], preview["chapter_title"]
     sections = preview["sections"]
@@ -16332,11 +16474,16 @@ async def admin_ncert_content_apply(request: Request, _: None = Depends(verify_a
     del _ncert_content_previews[preview_id]
     _invalidate_ncert_content_sections_cache()
 
+    verify_to_log = dict(verify) if verify else None
+    if verify_to_log and verify_to_log.get("status") == "FAIL" and override_verify_fail:
+        verify_to_log["summary"] = (verify_to_log.get("summary") or "") + " - applied anyway (override used)"
+
     await _log_ncert_chapter_event(
         cls, subject, chapter_title, source="pdf", cost=kw_cost,
         model_calls=len(kw_results), model=(DEEPSEEK_MODEL if kw_results else None),
         pages=preview.get("pages"), extract_seconds=preview.get("extract_seconds"),
         sections=len(inserted), words=sum(s.get("word_count") or 0 for s in inserted),
+        verify=verify_to_log,
     )
 
     return {

@@ -72,6 +72,45 @@
   .preview-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   .overwrite-check { font-size: 12px; color: #f5c518; display: flex; align-items: center; gap: 6px; }
 
+  /* Text cross-check (coverage/dropped-lines/mismatches) -- upload-time preview and the
+     per-chapter "Verify against PDF" action share these classes via renderVerifyBlock(). */
+  .crosscheck-box { margin-top: 12px; border: 1px solid #2a2a2a; border-radius: 8px; padding: 12px; display: none; }
+  .verify-banner { font-size: 13px; font-weight: 700; padding: 8px 10px; border-radius: 6px; margin-bottom: 10px; }
+  .verify-banner.PASS { background: #4ade8020; color: #4ade80; border: 1px solid #4ade8050; }
+  .verify-banner.FAIL { background: #ef444420; color: #ef4444; border: 1px solid #ef444450; }
+  .crosscheck-stats { font-size: 11px; color: #888; margin-bottom: 10px; display: flex; gap: 14px; flex-wrap: wrap; }
+  .crosscheck-stats b { color: #ececec; }
+  .mismatch-box { font-size: 12px; color: #ef4444; background: #ef444415; border: 1px solid #ef444450; border-radius: 6px; padding: 8px 10px; margin-bottom: 10px; }
+  .mismatch-box h4 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px; }
+  .mismatch-box ul { margin: 0 0 8px 18px; }
+  .mismatch-box ul:last-child { margin-bottom: 0; }
+  .dropped-section { border: 1px solid #1e1e1e; border-radius: 6px; }
+  .dropped-header { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 10px; cursor: pointer; font-size: 12px; color: #ccc; flex-wrap: wrap; }
+  .dropped-reason-counts { display: flex; gap: 6px; flex-wrap: wrap; }
+  .reason-chip { font-size: 10px; padding: 2px 7px; border-radius: 20px; background: #1a1a1a; color: #888; white-space: nowrap; }
+  .reason-chip.check-this { background: #f5c51820; color: #f5c518; }
+  .dropped-body { display: none; border-top: 1px solid #1e1e1e; padding: 8px 10px; }
+  .dropped-body.open { display: block; }
+  .dropped-body input[type="text"] { width: 100%; background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 6px; padding: 6px 10px; color: #ececec; font-size: 12px; font-family: 'Inter', sans-serif; outline: none; margin-bottom: 8px; }
+  .dropped-body input[type="text"]:focus { border-color: #4f8ef7; }
+  .dropped-list { max-height: 220px; overflow-y: auto; }
+  .dropped-line-row { display: flex; justify-content: space-between; gap: 10px; padding: 5px 2px; border-bottom: 1px solid #1a1a1a; font-size: 11px; color: #aaa; }
+  .dropped-line-row:last-child { border-bottom: none; }
+  .dropped-line-row.check-this { background: #f5c51810; }
+  .dropped-line-row .reason { color: #666; white-space: nowrap; }
+  .dropped-line-row.check-this .reason { color: #f5c518; }
+  .dropped-empty { font-size: 11px; color: #555; padding: 10px 0; text-align: center; }
+
+  .coverage-pct { font-size: 12px; color: #ececec; }
+  .verify-badge { font-size: 10px; padding: 2px 7px; border-radius: 20px; font-weight: 600; display: inline-block; margin-right: 4px; }
+  .verify-badge.PASS { background: #4ade8020; color: #4ade80; }
+  .verify-badge.FAIL { background: #ef444420; color: #ef4444; }
+  .verify-badge.never { background: #1a1a1a; color: #666; }
+  .verify-date { font-size: 11px; color: #666; }
+
+  .verify-upload-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+  .verify-upload-row input[type="file"] { font-size: 12px; color: #888; }
+
   .totals-row { display: flex; gap: 18px; font-size: 12px; color: #888; margin-bottom: 12px; flex-wrap: wrap; }
   .totals-row b { color: #ececec; }
 
@@ -163,9 +202,13 @@
       <div class="exists-warning" id="existsWarning" style="display:none"></div>
       <div class="flags-box" id="flagsBox" style="display:none"></div>
       <div class="preview-sections" id="previewSections"></div>
+      <div class="crosscheck-box" id="previewCrosscheckBox"></div>
       <div class="preview-actions">
         <label class="overwrite-check" id="overwriteRow" style="display:none">
           <input type="checkbox" id="overwriteCheckbox"/> Overwrite the existing chapter
+        </label>
+        <label class="overwrite-check" id="overrideVerifyRow" style="display:none; color:#ef4444;">
+          <input type="checkbox" id="overrideVerifyCheckbox" onchange="updateApplyButtonState()"/> Apply anyway (text cross-check failed)
         </label>
         <button type="button" class="primary-btn" id="applyBtn" onclick="applyChapter()">Apply</button>
         <button type="button" class="secondary-btn" onclick="cancelPreview(); setUploadStatus('', '')">Cancel</button>
@@ -181,11 +224,11 @@
         <thead>
           <tr>
             <th>Class</th><th>Subject</th><th>Chapter</th><th>Sections</th><th>Words</th><th>Keywords</th>
-            <th>Source</th><th>Cost</th><th>Model</th><th>Pages</th><th>Extract</th><th>Loaded</th><th></th>
+            <th>Source</th><th>Cost</th><th>Model</th><th>Pages</th><th>Extract</th><th>Coverage</th><th>Verified</th><th>Loaded</th><th></th>
           </tr>
         </thead>
         <tbody id="chaptersTableBody">
-          <tr class="empty-row"><td colspan="13">Loading...</td></tr>
+          <tr class="empty-row"><td colspan="15">Loading...</td></tr>
         </tbody>
       </table>
     </div>
@@ -199,6 +242,12 @@
       </div>
       <button type="button" class="secondary-btn" onclick="closeChapterDetail()">Close</button>
     </div>
+    <div class="verify-upload-row">
+      <input type="file" id="verifyChapterFile" accept="application/pdf"/>
+      <button type="button" class="secondary-btn" id="verifyChapterBtn" onclick="verifyChapterAgainstPdf()">Verify against PDF</button>
+      <span id="verifyChapterStatus" style="font-size:12px;color:#888;"></span>
+    </div>
+    <div class="crosscheck-box" id="detailCrosscheckBox"></div>
     <div class="detail-sections" id="detailSections"></div>
   </div>
 
@@ -275,6 +324,80 @@
     const div = document.createElement('div');
     div.textContent = s == null ? '' : String(s);
     return div.innerHTML;
+  }
+
+  // ---------------- Text cross-check (coverage/dropped-lines/mismatches) ----------------
+  // Shared between the upload preview (prefix "previewCrosscheck") and the per-chapter
+  // "Verify against PDF" action (prefix "detailCrosscheck") -- same markup, same classes.
+
+  let _droppedLinesCache = {};
+
+  function renderVerifyBlock(prefix, verify) {
+    const box = document.getElementById(prefix + 'Box');
+    if (!verify) { box.style.display = 'none'; box.innerHTML = ''; return; }
+    box.style.display = 'block';
+    _droppedLinesCache[prefix] = verify.dropped_lines || [];
+
+    const reasonCounts = verify.dropped_by_reason || {};
+    const reasonChips = Object.keys(reasonCounts).map(r => {
+      const hasCheckThis = (verify.dropped_lines || []).some(d => d.reason === r && d.check_this);
+      return `<span class="reason-chip${hasCheckThis ? ' check-this' : ''}">${escapeHtml(r)}: ${reasonCounts[r]}</span>`;
+    }).join('');
+
+    let mismatchHtml = '';
+    if (verify.status === 'FAIL') {
+      const sm = verify.sentence_mismatches || [];
+      const mp = verify.missing_paragraphs || [];
+      mismatchHtml = '<div class="mismatch-box">';
+      if (sm.length) {
+        mismatchHtml += `<h4>Sentences not found in the PDF (${sm.length})</h4><ul>` + sm.map(s => `<li>${escapeHtml(s)}</li>`).join('') + '</ul>';
+      }
+      if (mp.length) {
+        mismatchHtml += `<h4>PDF paragraphs missing from the stored sections (${mp.length})</h4><ul>` + mp.map(s => `<li>${escapeHtml(s)}</li>`).join('') + '</ul>';
+      }
+      mismatchHtml += '</div>';
+    }
+
+    box.innerHTML = `
+      <div class="verify-banner ${escapeHtml(verify.status)}">${escapeHtml(verify.summary || verify.status)}</div>
+      <div class="crosscheck-stats">
+        <span>Coverage <b>${verify.coverage_pct != null ? Number(verify.coverage_pct).toFixed(1) : '-'}%</b></span>
+        <span><b>${verify.kept_words ?? '-'}</b> / <b>${verify.total_words ?? '-'}</b> words kept</span>
+        <span><b>${verify.dropped_lines_count ?? 0}</b> dropped line(s)</span>
+      </div>
+      ${mismatchHtml}
+      <div class="dropped-section">
+        <div class="dropped-header" onclick="toggleDroppedLines('${prefix}')">
+          <span>Dropped lines (${verify.dropped_lines_count ?? 0}) - click to search</span>
+          <span class="dropped-reason-counts">${reasonChips}</span>
+        </div>
+        <div class="dropped-body" id="${prefix}DroppedBody">
+          <input type="text" id="${prefix}DroppedSearch" placeholder="Search dropped lines or a reason..." oninput="filterDroppedLines('${prefix}')"/>
+          <div class="dropped-list" id="${prefix}DroppedList"></div>
+        </div>
+      </div>
+    `;
+    filterDroppedLines(prefix);
+  }
+
+  function toggleDroppedLines(prefix) {
+    const body = document.getElementById(prefix + 'DroppedBody');
+    if (body) body.classList.toggle('open');
+  }
+
+  function filterDroppedLines(prefix) {
+    const list = document.getElementById(prefix + 'DroppedList');
+    if (!list) return;
+    const searchEl = document.getElementById(prefix + 'DroppedSearch');
+    const q = (searchEl ? searchEl.value : '').trim().toLowerCase();
+    const lines = (_droppedLinesCache[prefix] || []).filter(d => !q || d.text.toLowerCase().includes(q) || d.reason.toLowerCase().includes(q));
+    if (!lines.length) { list.innerHTML = '<div class="dropped-empty">No dropped lines match.</div>'; return; }
+    list.innerHTML = lines.map(d => `
+      <div class="dropped-line-row${d.check_this ? ' check-this' : ''}">
+        <span class="text">${escapeHtml(d.text)}</span>
+        <span class="reason">${escapeHtml(d.reason)}${d.check_this ? ' - check this' : ''}</span>
+      </div>
+    `).join('');
   }
 
   async function verifyPassword() {
@@ -413,7 +536,24 @@
 
     document.getElementById('overwriteRow').style.display = data.exists ? 'flex' : 'none';
     document.getElementById('overwriteCheckbox').checked = false;
-    document.getElementById('applyBtn').disabled = flags.length > 0;
+
+    renderVerifyBlock('previewCrosscheck', data.verify);
+    const verifyFailed = data.verify && data.verify.status === 'FAIL';
+    document.getElementById('overrideVerifyRow').style.display = verifyFailed ? 'flex' : 'none';
+    document.getElementById('overrideVerifyCheckbox').checked = false;
+    updateApplyButtonState();
+  }
+
+  // Disabled when validate_chapter itself flagged the chapter (always, no override for that), or
+  // when the text cross-check failed and "Apply anyway" isn't checked.
+  function updateApplyButtonState() {
+    const applyBtn = document.getElementById('applyBtn');
+    if (!currentPreview) { applyBtn.disabled = true; return; }
+    const flags = currentPreview.flags || [];
+    const verify = currentPreview.verify;
+    const overrideChecked = document.getElementById('overrideVerifyCheckbox').checked;
+    const verifyBlocked = !!(verify && verify.status === 'FAIL' && !overrideChecked);
+    applyBtn.disabled = flags.length > 0 || verifyBlocked;
   }
 
   // Does NOT touch #uploadStatus -- applyChapter() below calls this right after setting its own
@@ -429,6 +569,7 @@
   async function applyChapter() {
     if (!currentPreview || !currentPreview.preview_id) return;
     const overwrite = document.getElementById('overwriteCheckbox').checked;
+    const overrideVerifyFail = document.getElementById('overrideVerifyCheckbox').checked;
     const applyBtn = document.getElementById('applyBtn');
     applyBtn.disabled = true;
     setUploadStatus('Writing sections and generating keywords...', 'info');
@@ -437,12 +578,12 @@
       const res = await fetch(`${API_BASE}/admin/ncert-content/apply`, {
         method: 'POST',
         headers: authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ preview_id: currentPreview.preview_id, overwrite })
+        body: JSON.stringify({ preview_id: currentPreview.preview_id, overwrite, override_verify_fail: overrideVerifyFail })
       });
       if (res.status === 401) { logout(); return; }
-      if (!res.ok) { setUploadStatus(await describeHttpError(res), 'error'); applyBtn.disabled = false; return; }
+      if (!res.ok) { setUploadStatus(await describeHttpError(res), 'error'); updateApplyButtonState(); return; }
       const data = await res.json();
-      if (data.error) { setUploadStatus(data.error, 'error'); applyBtn.disabled = false; return; }
+      if (data.error) { setUploadStatus(data.error, 'error'); updateApplyButtonState(); return; }
 
       const pendingNote = data.keywords_pending ? ' Some sections are still missing keywords (DeepSeek cost cap reached this request) -- re-open the chapter and use "Generate keywords" per section to finish.' : '';
       setUploadStatus(`Wrote ${data.sections_written} section(s) for "${data.chapter}". Keywords cost: ${formatCost(data.cost)}.${pendingNote}`, data.keywords_pending ? 'info' : 'success');
@@ -458,17 +599,17 @@
 
   async function loadChapters() {
     const tbody = document.getElementById('chaptersTableBody');
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="13">Loading...</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="15">Loading...</td></tr>';
     try {
       const res = await fetch(`${API_BASE}/admin/ncert-content`, { headers: authHeaders() });
       if (res.status === 401) { logout(); return; }
-      if (!res.ok) { tbody.innerHTML = `<tr class="empty-row"><td colspan="13">${escapeHtml(await describeHttpError(res))}</td></tr>`; return; }
+      if (!res.ok) { tbody.innerHTML = `<tr class="empty-row"><td colspan="15">${escapeHtml(await describeHttpError(res))}</td></tr>`; return; }
       const data = await res.json();
-      if (data.error) { tbody.innerHTML = `<tr class="empty-row"><td colspan="13">${escapeHtml(data.error)}</td></tr>`; return; }
+      if (data.error) { tbody.innerHTML = `<tr class="empty-row"><td colspan="15">${escapeHtml(data.error)}</td></tr>`; return; }
       renderTotals(data.totals || {});
       renderChapters(data.chapters || []);
     } catch (e) {
-      tbody.innerHTML = '<tr class="empty-row"><td colspan="13">Could not reach server.</td></tr>';
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="15">Could not reach server.</td></tr>';
     }
   }
 
@@ -491,10 +632,21 @@
     try { return new Date(iso).toLocaleDateString(); } catch (e) { return iso; }
   }
 
+  function renderCoverageCell(c) {
+    return c.coverage_pct !== null && c.coverage_pct !== undefined
+      ? `<span class="coverage-pct">${Number(c.coverage_pct).toFixed(1)}%</span>` : '-';
+  }
+
+  function renderVerifiedCell(c) {
+    if (!c.verify_status) return '<span class="verify-badge never">never</span>';
+    return `<span class="verify-badge ${escapeHtml(c.verify_status)}">${escapeHtml(c.verify_status)}</span>` +
+      `<span class="verify-date">${formatDate(c.verified_at)}</span>`;
+  }
+
   function renderChapters(chapters) {
     const tbody = document.getElementById('chaptersTableBody');
     if (chapters.length === 0) {
-      tbody.innerHTML = '<tr class="empty-row"><td colspan="13">No NCERT chapters loaded yet.</td></tr>';
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="15">No NCERT chapters loaded yet.</td></tr>';
       return;
     }
     tbody.innerHTML = chapters.map((c, i) => `
@@ -510,6 +662,8 @@
         <td>${c.model ? escapeHtml(c.model) : '-'}</td>
         <td>${c.pages ?? '-'}</td>
         <td>${c.extract_seconds !== null && c.extract_seconds !== undefined ? `${Number(c.extract_seconds).toFixed(1)}s` : '-'}</td>
+        <td>${renderCoverageCell(c)}</td>
+        <td>${renderVerifiedCell(c)}</td>
         <td>${formatDate(c.created_at)}</td>
         <td><button type="button" class="action-btn danger" onclick="event.stopPropagation(); deleteChapter('${encodeURIComponent(c.class)}','${encodeURIComponent(c.subject)}','${encodeURIComponent(c.chapter)}')">Delete</button></td>
       </tr>
@@ -542,6 +696,10 @@
     document.getElementById('detailTitle').textContent = chapter;
     document.getElementById('detailMeta').textContent = `Class ${cls} · ${subject}`;
     document.getElementById('detailSections').innerHTML = 'Loading...';
+    window._currentDetailChapter = { cls, subject, chapter };
+    document.getElementById('verifyChapterFile').value = '';
+    document.getElementById('verifyChapterStatus').textContent = '';
+    renderVerifyBlock('detailCrosscheck', null);
     panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
     try {
@@ -598,6 +756,42 @@
 
   function closeChapterDetail() {
     document.getElementById('chapterDetail').style.display = 'none';
+  }
+
+  async function verifyChapterAgainstPdf() {
+    const file = document.getElementById('verifyChapterFile').files[0];
+    const statusEl = document.getElementById('verifyChapterStatus');
+    if (!file) { statusEl.textContent = 'Choose this chapter\'s PDF first.'; return; }
+    if (file.size > 15 * 1024 * 1024) {
+      statusEl.textContent = `This PDF is too large (${(file.size / (1024 * 1024)).toFixed(1)} MB) - the cap is 15 MB.`;
+      return;
+    }
+    const target = window._currentDetailChapter;
+    if (!target) return;
+
+    const btn = document.getElementById('verifyChapterBtn');
+    btn.disabled = true;
+    statusEl.textContent = 'Extracting and checking against the stored sections...';
+    try {
+      const base64 = await fileToBase64(file);
+      const res = await fetch(`${API_BASE}/admin/ncert-content/verify`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ class: target.cls, subject: target.subject, chapter: target.chapter, data: base64 })
+      });
+      if (res.status === 401) { logout(); return; }
+      if (!res.ok) { statusEl.textContent = await describeHttpError(res); return; }
+      const data = await res.json();
+      if (data.error) { statusEl.textContent = data.error; return; }
+
+      statusEl.textContent = '';
+      renderVerifyBlock('detailCrosscheck', data.verify);
+      loadChapters();
+    } catch (e) {
+      statusEl.textContent = 'Could not reach server.';
+    } finally {
+      btn.disabled = false;
+    }
   }
 
   // ---------------- Manual add/edit ----------------

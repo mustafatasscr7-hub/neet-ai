@@ -268,6 +268,7 @@ def test_admin_auth():
         ("GET", "/admin/ncert-content", None),
         ("POST", "/admin/ncert-content/preview", {"class": "11", "subject": "Biology", "data": good_pdf}),
         ("POST", "/admin/ncert-content/apply", {"preview_id": "nonexistent"}),
+        ("POST", "/admin/ncert-content/verify", {"class": "11", "subject": "Biology", "chapter": "X", "data": good_pdf}),
         ("POST", "/admin/ncert-content/section", {"class": "11", "subject": "Biology", "chapter": "X", "heading": "1.1 X", "ordinal": 0, "text": "some text here"}),
         ("DELETE", "/admin/ncert-content/chapter?class=11&subject=Biology&chapter=X", None),
     ]
@@ -299,6 +300,22 @@ def test_preview_does_not_write():
     check("nothing was written to ncert_sections", fake.table.rows == [], fake.table.rows)
     write_calls = [c for c in fake.calls if c[0] in ("POST", "PATCH", "DELETE") and "ncert_sections" in c[1]]
     check("no write call touched ncert_sections during preview", write_calls == [], write_calls)
+
+
+def test_preview_includes_verify():
+    print("\n# Preview includes the text cross-check (coverage/dropped-lines/mismatches)")
+    tc, fake = setup()
+    res = tc.post("/admin/ncert-content/preview", json={"class": "11", "subject": "Biology", "data": good_chapter_pdf_b64()}, headers={"X-Admin-Key": ADMIN_KEY})
+    data = res.json()
+    verify = data.get("verify") or {}
+    check("verify block is present", bool(verify), data)
+    check("a clean round-tripped chapter passes the cross-check", verify.get("status") == "PASS", verify)
+    check("no sentence mismatches", verify.get("sentence_mismatches") == [], verify)
+    check("no missing paragraphs", verify.get("missing_paragraphs") == [], verify)
+    check("coverage_pct is a positive number", isinstance(verify.get("coverage_pct"), (int, float)) and verify["coverage_pct"] > 0, verify)
+    check("dropped_lines_count matches the dropped_lines list", verify.get("dropped_lines_count") == len(verify.get("dropped_lines") or []), verify)
+    check("verify is not run for a chapter that already failed validate_chapter",
+          tc.post("/admin/ncert-content/preview", json={"class": "11", "subject": "Biology", "data": bad_chapter_pdf_b64()}, headers={"X-Admin-Key": ADMIN_KEY}).json().get("verify") is None)
 
 
 def test_size_cap():
@@ -379,6 +396,139 @@ def test_apply_keyword_cost_cap():
     check("cost stayed near the $0.10 cap, not the full 3-section cost", apply_data.get("cost", 0) < 0.15, apply_data.get("cost"))
     check("fewer than all 3 sections got keywords (cap reached)", 0 < apply_data.get("keywords_generated", 0) < 3, apply_data)
     check("keywords_pending is true", apply_data.get("keywords_pending") is True, apply_data)
+
+
+def test_apply_blocked_on_verify_fail_and_override_allows_it():
+    print("\n# Apply is blocked when the text cross-check fails, unless overridden")
+    tc, fake = setup()
+    pdf = good_chapter_pdf_b64()
+
+    fake_fail = {
+        "status": "FAIL", "summary": "FAIL - 42.0% coverage, 1 sentence mismatch(es)",
+        "total_words": 100, "kept_words": 42, "coverage_pct": 42.0, "word_diff": 58, "word_diff_pct": 58.0,
+        "dropped_lines": [{"text": "some dropped line", "reason": "other", "words": 3, "check_this": False}],
+        "dropped_lines_count": 1, "dropped_by_reason": {"other": 1},
+        "sentence_mismatches": ["a sentence not found"], "missing_paragraphs": [],
+    }
+    orig_verify = server.ncert_verify_mod.verify_text_coverage
+    server.ncert_verify_mod.verify_text_coverage = lambda pdf_bytes, sections: dict(fake_fail)
+    try:
+        preview_id = tc.post("/admin/ncert-content/preview", json={"class": "11", "subject": "Biology", "data": pdf}, headers={"X-Admin-Key": ADMIN_KEY}).json()["preview_id"]
+    finally:
+        server.ncert_verify_mod.verify_text_coverage = orig_verify
+
+    apply_res = tc.post("/admin/ncert-content/apply", json={"preview_id": preview_id}, headers={"X-Admin-Key": ADMIN_KEY})
+    apply_data = apply_res.json()
+    check("apply refuses a chapter that failed the text cross-check",
+          isinstance(apply_data.get("error"), str) and "cross-check" in apply_data["error"].lower(), apply_data)
+    check("nothing was written", fake.table.rows == [], fake.table.rows)
+
+    apply_res2 = tc.post("/admin/ncert-content/apply", json={"preview_id": preview_id, "override_verify_fail": True}, headers={"X-Admin-Key": ADMIN_KEY})
+    apply_data2 = apply_res2.json()
+    check("apply succeeds with the override", apply_data2.get("written") is True, apply_data2)
+    check("3 sections written despite the FAIL", len(fake.table.rows) == 3, fake.table.rows)
+
+    check("exactly one log row (the blocked attempt never logged anything)", len(fake.chapter_log.rows) == 1, fake.chapter_log.rows)
+    log_row = fake.chapter_log.rows[0]
+    check("the log row records the FAIL status", log_row.get("verify_status") == "FAIL", log_row)
+    check("the log row's summary notes the override was used", "override" in (log_row.get("verify_summary") or "").lower(), log_row)
+    check("source_words/kept_words/coverage_pct are stored from the verify result",
+          log_row.get("source_words") == 100 and log_row.get("kept_words") == 42 and log_row.get("coverage_pct") == 42.0, log_row)
+    check("dropped lines and excerpts themselves are never stored in the log row",
+          "dropped_lines" not in log_row and "sentence_mismatches" not in log_row and "missing_paragraphs" not in log_row
+          and "dropped_by_reason" not in log_row, log_row)
+
+
+def test_verify_endpoint_checks_existing_chapter_and_stamps_log():
+    print("\n# 'Verify against PDF' checks an already-loaded chapter and stamps the log row")
+    tc, fake = setup()
+    pdf = good_chapter_pdf_b64()
+    preview_id = tc.post("/admin/ncert-content/preview", json={"class": "11", "subject": "Biology", "data": pdf}, headers={"X-Admin-Key": ADMIN_KEY}).json()["preview_id"]
+    tc.post("/admin/ncert-content/apply", json={"preview_id": preview_id}, headers={"X-Admin-Key": ADMIN_KEY})
+    check("coverage_pct was stored by Apply", fake.chapter_log.rows[0].get("coverage_pct") is not None, fake.chapter_log.rows)
+    original_coverage = fake.chapter_log.rows[0]["coverage_pct"]
+
+    res = tc.post("/admin/ncert-content/verify", json={"class": "11", "subject": "Biology", "chapter": "THE LIVING WORLD", "data": pdf}, headers={"X-Admin-Key": ADMIN_KEY})
+    data = res.json()
+    verify = data.get("verify") or {}
+    check("verify succeeds against the stored chapter", verify.get("status") == "PASS", data)
+    check("still exactly 3 rows in ncert_sections (no writes)", len(fake.table.rows) == 3, fake.table.rows)
+
+    log_row = fake.chapter_log.rows[0]
+    check("the existing log row's verify_status is stamped", log_row.get("verify_status") == "PASS", log_row)
+    check("verified_at is stamped", log_row.get("verified_at") is not None, log_row)
+    check("coverage_pct from the original Apply is untouched by Verify", log_row.get("coverage_pct") == original_coverage, (log_row, original_coverage))
+
+
+def test_verify_endpoint_no_such_chapter():
+    print("\n# 'Verify against PDF' refuses when the chapter doesn't exist")
+    tc, fake = setup()
+    res = tc.post("/admin/ncert-content/verify", json={"class": "11", "subject": "Biology", "chapter": "Nonexistent", "data": good_chapter_pdf_b64()}, headers={"X-Admin-Key": ADMIN_KEY})
+    data = res.json()
+    check("a plain string error for a missing chapter", isinstance(data.get("error"), str), data)
+    check("nothing written", fake.table.rows == [], fake.table.rows)
+
+
+def test_verify_endpoint_inserts_fallback_log_row_for_legacy_chapter():
+    print("\n# 'Verify against PDF' writes a fresh log row when the chapter predates ncert_chapter_log")
+    tc, fake = setup()
+    fake.table.insert({"class": "11", "subject": "Physics", "chapter": "Motion", "heading": "1.1 X", "ordinal": 0, "text": CLEAN_PARA, "word_count": len(CLEAN_PARA.split())})
+    check("no log rows exist yet for this legacy chapter", fake.chapter_log.rows == [])
+
+    pdf_bytes = make_chapter_pdf(["CHAPTER 1", "MOTION", "1.1 X", CLEAN_PARA])
+    res = tc.post("/admin/ncert-content/verify", json={"class": "11", "subject": "Physics", "chapter": "Motion", "data": base64.b64encode(pdf_bytes).decode()}, headers={"X-Admin-Key": ADMIN_KEY})
+    data = res.json()
+    check("verify still runs", "verify" in data, data)
+    check("a fallback log row was written", len(fake.chapter_log.rows) == 1, fake.chapter_log.rows)
+    row = fake.chapter_log.rows[0]
+    check("the fallback row carries the verify stamp", row.get("verify_status") in ("PASS", "FAIL") and row.get("verified_at") is not None, row)
+    check("the fallback row has no coverage data (this never went through the PDF-route Apply)", row.get("coverage_pct") is None, row)
+
+
+def test_verify_endpoint_no_writes_to_sections_even_on_fail():
+    print("\n# 'Verify against PDF' never writes to ncert_sections, even on a FAIL")
+    tc, fake = setup()
+    pdf = good_chapter_pdf_b64()
+    preview_id = tc.post("/admin/ncert-content/preview", json={"class": "11", "subject": "Biology", "data": pdf}, headers={"X-Admin-Key": ADMIN_KEY}).json()["preview_id"]
+    tc.post("/admin/ncert-content/apply", json={"preview_id": preview_id}, headers={"X-Admin-Key": ADMIN_KEY})
+
+    mismatched_pdf = base64.b64encode(make_chapter_pdf([
+        "CHAPTER 1", "THE LIVING WORLD", "1.1 Diversity In The Living World",
+        "A completely different sentence that was never stored anywhere before this.",
+    ])).decode()
+    calls_before = len(fake.calls)
+    res = tc.post("/admin/ncert-content/verify", json={"class": "11", "subject": "Biology", "chapter": "THE LIVING WORLD", "data": mismatched_pdf}, headers={"X-Admin-Key": ADMIN_KEY})
+    data = res.json()
+    check("this mismatched PDF fails verification", (data.get("verify") or {}).get("status") == "FAIL", data)
+    check("still exactly 3 rows (Verify never writes sections, even on FAIL)", len(fake.table.rows) == 3, fake.table.rows)
+    calls_during_verify = fake.calls[calls_before:]
+    write_calls = [c for c in calls_during_verify if c[0] in ("POST", "PATCH", "DELETE") and "ncert_sections" in c[1]]
+    check("no write call touched ncert_sections during verify", write_calls == [], write_calls)
+
+
+def test_list_surfaces_coverage_and_verify_status():
+    print("\n# The chapters list surfaces coverage_pct, verify_status and verified_at")
+    tc, fake = setup()
+    pdf = good_chapter_pdf_b64()
+    preview_id = tc.post("/admin/ncert-content/preview", json={"class": "11", "subject": "Biology", "data": pdf}, headers={"X-Admin-Key": ADMIN_KEY}).json()["preview_id"]
+    tc.post("/admin/ncert-content/apply", json={"preview_id": preview_id}, headers={"X-Admin-Key": ADMIN_KEY})
+
+    data = tc.get("/admin/ncert-content", headers={"X-Admin-Key": ADMIN_KEY}).json()
+    chapter = data["chapters"][0]
+    check("coverage_pct is surfaced", isinstance(chapter.get("coverage_pct"), (int, float)), chapter)
+    check("verify_status is PASS", chapter.get("verify_status") == "PASS", chapter)
+    check("verified_at is set", chapter.get("verified_at") is not None, chapter)
+
+    tc.post("/admin/ncert-content/verify", json={"class": "11", "subject": "Biology", "chapter": "THE LIVING WORLD", "data": pdf}, headers={"X-Admin-Key": ADMIN_KEY})
+    data2 = tc.get("/admin/ncert-content", headers={"X-Admin-Key": ADMIN_KEY}).json()
+    chapter2 = data2["chapters"][0]
+    check("coverage_pct is unchanged by a later Verify call", chapter2.get("coverage_pct") == chapter.get("coverage_pct"), (chapter, chapter2))
+
+    fake.table.insert({"class": "11", "subject": "Physics", "chapter": "Motion", "heading": "1.1 X", "ordinal": 0, "text": "x", "word_count": 5})
+    data3 = tc.get("/admin/ncert-content", headers={"X-Admin-Key": ADMIN_KEY}).json()
+    legacy = next(c for c in data3["chapters"] if c["chapter"] == "Motion")
+    check("a never-verified chapter has null verify_status/verified_at/coverage_pct",
+          legacy.get("verify_status") is None and legacy.get("verified_at") is None and legacy.get("coverage_pct") is None, legacy)
 
 
 def test_manual_add_or_edit():
@@ -532,10 +682,17 @@ def test_contractor_response_has_no_cost_fields():
 def main():
     test_admin_auth()
     test_preview_does_not_write()
+    test_preview_includes_verify()
     test_size_cap()
     test_validation_failure_blocks_apply()
     test_apply_writes_and_overwrite_replaces_safely()
     test_apply_keyword_cost_cap()
+    test_apply_blocked_on_verify_fail_and_override_allows_it()
+    test_verify_endpoint_checks_existing_chapter_and_stamps_log()
+    test_verify_endpoint_no_such_chapter()
+    test_verify_endpoint_inserts_fallback_log_row_for_legacy_chapter()
+    test_verify_endpoint_no_writes_to_sections_even_on_fail()
+    test_list_surfaces_coverage_and_verify_status()
     test_manual_add_or_edit()
     test_delete_confirm()
     test_chapter_log_written_on_apply()

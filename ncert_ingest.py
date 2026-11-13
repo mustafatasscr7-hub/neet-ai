@@ -14,6 +14,13 @@ Every chapter is validated by deterministic checks only (no model calls) -
 see validate_chapter(). A chapter that fails any check is NOT loaded; it is
 reported with the reason(s) and the run moves on to the next one.
 
+A chapter that passes validate_chapter is then cross-checked against its own
+PDF text layer (ncert_verify.verify_text_coverage - see that module and
+ncert_chapter_verify.sql): sentences in the cleaned sections that aren't in
+the PDF, PDF paragraphs that aren't in any section, and a dropped-line/
+coverage report. A FAIL here is also a rejection, in dry-run too (the run's
+summary table is this script's version of the admin page's preview).
+
 Dry-run by default: prints the summary table, writes nothing. --apply writes
 sections into ncert_sections (load_ncert_sections.py's own upsert pattern),
 then generates each section's one-line keyword summary with DeepSeek exactly
@@ -45,6 +52,7 @@ from dotenv import load_dotenv
 
 import load_ncert_section_keywords as kw_mod
 import ncert_ingest_core as core
+import ncert_verify as verify_mod
 from ncert_ingest_core import (
     DEEPSEEK_RATES,
     CST,
@@ -114,15 +122,25 @@ def fetch_existing_chapters(supabase_url, headers):
 
 
 def write_chapter_log(supabase_url, service_key, cls, subj, chapter_title, source, cost, model_calls, model,
-                       pages, extract_seconds, sections, words):
+                       pages, extract_seconds, sections, words, verify=None):
     """Mirrors server.py's _log_ncert_chapter_event for the CLI's own --apply writes -- see
-    ncert_chapter_log.sql. Best-effort: a failed log write never fails the chapter's own load."""
+    ncert_chapter_log.sql and ncert_chapter_verify.sql. Best-effort: a failed log write never
+    fails the chapter's own load.
+
+    verify: the dict ncert_verify.verify_text_coverage returned for this chapter, or None."""
     headers = {"apikey": service_key, "Authorization": f"Bearer {service_key}", "Content-Type": "application/json"}
     row = {
         "class": cls, "subject": subj, "chapter": chapter_title, "source": source,
         "keywords_cost_usd": round(cost, 6), "model_calls": model_calls, "model": model,
         "pages": pages, "extract_seconds": extract_seconds, "sections": sections, "words": words,
     }
+    if verify:
+        row.update({
+            "source_words": verify.get("total_words"), "kept_words": verify.get("kept_words"),
+            "coverage_pct": verify.get("coverage_pct"), "dropped_lines_count": verify.get("dropped_lines_count"),
+            "verified_at": datetime.now(timezone.utc).isoformat(),
+            "verify_status": verify.get("status"), "verify_summary": verify.get("summary"),
+        })
     try:
         requests.post(f"{supabase_url}/rest/v1/ncert_chapter_log", headers=headers, json=row)
     except Exception as e:
@@ -247,8 +265,9 @@ def main():
             })
             continue
 
+        pdf_bytes = pdf_path.read_bytes()
         try:
-            result = core.process_chapter_pdf_bytes(pdf_path.read_bytes())
+            result = core.process_chapter_pdf_bytes(pdf_bytes)
         except Exception as e:
             results.append({
                 "chapter_title": pdf_path.name, "status": "REJECTED", "sections": 0, "words": 0,
@@ -270,6 +289,17 @@ def main():
         key = (cls, subj, chapter_title)
         if should_skip(key, existing, checkpoint, args.force):
             row.update(status="SKIPPED (already in ncert_sections)", flags=[], cost=0.0)
+            results.append(row)
+            continue
+
+        try:
+            verify = verify_mod.verify_text_coverage(pdf_bytes, sections)
+        except Exception as e:
+            row.update(status="REJECTED", flags=[f"could not run text cross-check: {e}"], cost=0.0)
+            results.append(row)
+            continue
+        if verify["status"] == "FAIL":
+            row.update(status="REJECTED", flags=[f"text cross-check failed: {verify['summary']}"], cost=0.0)
             results.append(row)
             continue
 
@@ -326,7 +356,7 @@ def main():
             supabase_url, service_key, cls, subj, chapter_title, source="pdf", cost=chapter_cost,
             model_calls=chapter_kw_calls, model=(kw_mod.DEEPSEEK_MODEL if chapter_kw_calls else None),
             pages=result.get("pages"), extract_seconds=result.get("extract_seconds"),
-            sections=len(sections), words=words,
+            sections=len(sections), words=words, verify=verify,
         )
 
         status = "LOADED (keywords incomplete)" if keywords_incomplete else "LOADED"
