@@ -72,34 +72,41 @@
   .preview-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   .overwrite-check { font-size: 12px; color: #f5c518; display: flex; align-items: center; gap: 6px; }
 
-  /* Text cross-check (coverage/dropped-lines/mismatches) -- upload-time preview and the
-     per-chapter "Verify against PDF" action share these classes via renderVerifyBlock(). */
+  /* Verify-against-PDF result -- upload-time preview and the per-chapter "Verify against PDF"
+     action share these classes via renderVerifyBlock(). Every difference the engine finds is
+     either "real" (needs attention, red accent) or "harmless" (cosmetic noise, grouped and
+     collapsed). Blue is used for every highlight -- no purple anywhere in this block. */
   .crosscheck-box { margin-top: 12px; border: 1px solid #2a2a2a; border-radius: 8px; padding: 12px; display: none; }
   .verify-banner { font-size: 13px; font-weight: 700; padding: 8px 10px; border-radius: 6px; margin-bottom: 10px; }
   .verify-banner.PASS { background: #4ade8020; color: #4ade80; border: 1px solid #4ade8050; }
   .verify-banner.FAIL { background: #ef444420; color: #ef4444; border: 1px solid #ef444450; }
-  .crosscheck-stats { font-size: 11px; color: #888; margin-bottom: 10px; display: flex; gap: 14px; flex-wrap: wrap; }
+  .crosscheck-stats { font-size: 11px; color: #888; margin-bottom: 10px; display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
   .crosscheck-stats b { color: #ececec; }
-  .mismatch-box { font-size: 12px; color: #ef4444; background: #ef444415; border: 1px solid #ef444450; border-radius: 6px; padding: 8px 10px; margin-bottom: 10px; }
-  .mismatch-box h4 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px; }
-  .mismatch-box ul { margin: 0 0 8px 18px; }
-  .mismatch-box ul:last-child { margin-bottom: 0; }
-  .dropped-section { border: 1px solid #1e1e1e; border-radius: 6px; }
-  .dropped-header { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 10px; cursor: pointer; font-size: 12px; color: #ccc; flex-wrap: wrap; }
-  .dropped-reason-counts { display: flex; gap: 6px; flex-wrap: wrap; }
-  .reason-chip { font-size: 10px; padding: 2px 7px; border-radius: 20px; background: #1a1a1a; color: #888; white-space: nowrap; }
-  .reason-chip.check-this { background: #f5c51820; color: #f5c518; }
-  .dropped-body { display: none; border-top: 1px solid #1e1e1e; padding: 8px 10px; }
-  .dropped-body.open { display: block; }
-  .dropped-body input[type="text"] { width: 100%; background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 6px; padding: 6px 10px; color: #ececec; font-size: 12px; font-family: 'Inter', sans-serif; outline: none; margin-bottom: 8px; }
-  .dropped-body input[type="text"]:focus { border-color: #4f8ef7; }
-  .dropped-list { max-height: 220px; overflow-y: auto; }
-  .dropped-line-row { display: flex; justify-content: space-between; gap: 10px; padding: 5px 2px; border-bottom: 1px solid #1a1a1a; font-size: 11px; color: #aaa; }
-  .dropped-line-row:last-child { border-bottom: none; }
-  .dropped-line-row.check-this { background: #f5c51810; }
-  .dropped-line-row .reason { color: #666; white-space: nowrap; }
-  .dropped-line-row.check-this .reason { color: #f5c518; }
-  .dropped-empty { font-size: 11px; color: #555; padding: 10px 0; text-align: center; }
+  .type-chip { font-size: 10px; padding: 2px 7px; border-radius: 20px; background: #1a1a1a; color: #888; white-space: nowrap; }
+
+  .diff-group-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: #666; margin: 12px 0 6px; }
+  .diff-cards { display: flex; flex-direction: column; gap: 8px; }
+  .diff-card { border: 1px solid #2a2a2a; border-radius: 8px; padding: 10px 12px; font-size: 12px; }
+  .diff-card.real { border-color: #ef444450; background: #ef444410; }
+  .diff-card.real.marked { border-color: #2a2a2a; background: transparent; opacity: 0.6; }
+  .diff-card.harmless { border-color: #1e1e1e; background: #0d0d0d; }
+  .diff-card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 6px; flex-wrap: wrap; }
+  .diff-card-type { font-weight: 600; color: #ececec; }
+  .diff-card.real .diff-card-type { color: #ef4444; }
+  .diff-card-where { color: #666; font-size: 11px; white-space: nowrap; }
+  .diff-card-line { display: flex; gap: 6px; margin-top: 4px; line-height: 1.5; }
+  .diff-card-line .diff-line-label { color: #666; white-space: nowrap; flex-shrink: 0; }
+  .diff-card-line .diff-text { color: #aaa; word-break: break-word; }
+  .diff-text.empty { color: #555; font-style: italic; }
+  .diff-highlight { background: #4f8ef730; color: #4f8ef7; border-radius: 3px; padding: 0 2px; }
+  .diff-card-actions { display: flex; gap: 8px; margin-top: 8px; }
+  .diff-ok-note { font-size: 11px; color: #4ade80; margin-top: 8px; }
+
+  .harmless-group { border: 1px solid #1e1e1e; border-radius: 6px; margin-top: 10px; }
+  .harmless-toggle { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 10px; cursor: pointer; font-size: 12px; color: #ccc; flex-wrap: wrap; }
+  .harmless-body { display: none; border-top: 1px solid #1e1e1e; padding: 10px; }
+  .harmless-body.open { display: block; }
+  .diff-empty { font-size: 11px; color: #555; padding: 10px 0; text-align: center; }
 
   .coverage-pct { font-size: 12px; color: #ececec; }
   .verify-badge { font-size: 10px; padding: 2px 7px; border-radius: 20px; font-weight: 600; display: inline-block; margin-right: 4px; }
@@ -115,7 +122,7 @@
   .totals-row b { color: #ececec; }
 
   .table-wrap { background: #0d0d0d; border: 1px solid #1e1e1e; border-radius: 8px; overflow-x: auto; }
-  table { width: 100%; min-width: 900px; border-collapse: collapse; font-size: 13px; }
+  table { width: 100%; min-width: 680px; border-collapse: collapse; font-size: 13px; }
   thead th { text-align: left; padding: 10px 12px; border-bottom: 1px solid #1e1e1e; color: #888; font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; white-space: nowrap; }
   tbody tr { border-bottom: 1px solid #1a1a1a; cursor: pointer; }
   tbody tr:last-child { border-bottom: none; }
@@ -145,6 +152,8 @@
   .detail-section-body { display: none; font-size: 12px; color: #aaa; margin-top: 8px; white-space: pre-wrap; line-height: 1.5; }
   .detail-section-body.open { display: block; }
   .detail-section-kw { font-size: 11px; color: #4f8ef7; margin-top: 6px; }
+  .detail-cost-row { font-size: 11px; color: #888; margin-bottom: 14px; display: flex; gap: 14px; flex-wrap: wrap; }
+  .detail-cost-row b { color: #ececec; }
 </style>
 </head>
 <body>
@@ -224,11 +233,11 @@
         <thead>
           <tr>
             <th>Class</th><th>Subject</th><th>Chapter</th><th>Sections</th><th>Words</th><th>Keywords</th>
-            <th>Source</th><th>Cost</th><th>Model</th><th>Pages</th><th>Extract</th><th>Coverage</th><th>Verified</th><th>Loaded</th><th></th>
+            <th>Coverage</th><th>Verified</th><th>Loaded</th><th></th>
           </tr>
         </thead>
         <tbody id="chaptersTableBody">
-          <tr class="empty-row"><td colspan="15">Loading...</td></tr>
+          <tr class="empty-row"><td colspan="10">Loading...</td></tr>
         </tbody>
       </table>
     </div>
@@ -242,6 +251,7 @@
       </div>
       <button type="button" class="secondary-btn" onclick="closeChapterDetail()">Close</button>
     </div>
+    <div class="detail-cost-row" id="detailCostRow"></div>
     <div class="verify-upload-row">
       <input type="file" id="verifyChapterFile" accept="application/pdf"/>
       <button type="button" class="secondary-btn" id="verifyChapterBtn" onclick="verifyChapterAgainstPdf()">Verify against PDF</button>
@@ -326,78 +336,171 @@
     return div.innerHTML;
   }
 
-  // ---------------- Text cross-check (coverage/dropped-lines/mismatches) ----------------
-  // Shared between the upload preview (prefix "previewCrosscheck") and the per-chapter
-  // "Verify against PDF" action (prefix "detailCrosscheck") -- same markup, same classes.
+  // ---------------- Verify against PDF: result panel ----------------
+  // Shared between the upload preview (prefix "previewCrosscheck", ctx without canEdit) and the
+  // per-chapter "Verify against PDF" action (prefix "detailCrosscheck", full ctx) -- same markup,
+  // same classes. ctx identifies which chapter "Mark as OK" and "Open this section to edit" act
+  // on, and (via ctx.rerun) how to refresh this exact panel after a mark-ok.
 
-  let _droppedLinesCache = {};
+  const DIFF_TYPE_LABELS = {
+    missing: 'Missing from storage',
+    extra: 'Added text not in the PDF',
+    changed: 'Wording changed',
+    heading_missing: 'Heading missing from storage',
+    heading_extra: 'Extra heading in storage',
+    heading_reordered: 'Section order differs from the PDF',
+    word_count_mismatch: 'Word count differs from the PDF',
+    'hyphenation or line-break join': 'Hyphenation / line-break join',
+    'dash or quote style': 'Dash or quote style',
+    'extra or missing whitespace': 'Extra or missing whitespace',
+    'running header or page number': 'Leftover running header or page number',
+    'ligature or soft-hyphen difference': 'Ligature or soft-hyphen difference',
+  };
 
-  function renderVerifyBlock(prefix, verify) {
-    const box = document.getElementById(prefix + 'Box');
-    if (!verify) { box.style.display = 'none'; box.innerHTML = ''; return; }
-    box.style.display = 'block';
-    _droppedLinesCache[prefix] = verify.dropped_lines || [];
+  let _verifyCtx = {}; // prefix -> {class, subject, chapter, rerun}
 
-    const reasonCounts = verify.dropped_by_reason || {};
-    const reasonChips = Object.keys(reasonCounts).map(r => {
-      const hasCheckThis = (verify.dropped_lines || []).some(d => d.reason === r && d.check_this);
-      return `<span class="reason-chip${hasCheckThis ? ' check-this' : ''}">${escapeHtml(r)}: ${reasonCounts[r]}</span>`;
-    }).join('');
-
-    let mismatchHtml = '';
-    if (verify.status === 'FAIL') {
-      const sm = verify.sentence_mismatches || [];
-      const mp = verify.missing_paragraphs || [];
-      mismatchHtml = '<div class="mismatch-box">';
-      if (sm.length) {
-        mismatchHtml += `<h4>Sentences not found in the PDF (${sm.length})</h4><ul>` + sm.map(s => `<li>${escapeHtml(s)}</li>`).join('') + '</ul>';
-      }
-      if (mp.length) {
-        mismatchHtml += `<h4>PDF paragraphs missing from the stored sections (${mp.length})</h4><ul>` + mp.map(s => `<li>${escapeHtml(s)}</li>`).join('') + '</ul>';
-      }
-      mismatchHtml += '</div>';
-    }
-
-    box.innerHTML = `
-      <div class="verify-banner ${escapeHtml(verify.status)}">${escapeHtml(verify.summary || verify.status)}</div>
-      <div class="crosscheck-stats">
-        <span>Coverage <b>${verify.coverage_pct != null ? Number(verify.coverage_pct).toFixed(1) : '-'}%</b></span>
-        <span><b>${verify.kept_words ?? '-'}</b> / <b>${verify.total_words ?? '-'}</b> words kept</span>
-        <span><b>${verify.dropped_lines_count ?? 0}</b> dropped line(s)</span>
-      </div>
-      ${mismatchHtml}
-      <div class="dropped-section">
-        <div class="dropped-header" onclick="toggleDroppedLines('${prefix}')">
-          <span>Dropped lines (${verify.dropped_lines_count ?? 0}) - click to search</span>
-          <span class="dropped-reason-counts">${reasonChips}</span>
-        </div>
-        <div class="dropped-body" id="${prefix}DroppedBody">
-          <input type="text" id="${prefix}DroppedSearch" placeholder="Search dropped lines or a reason..." oninput="filterDroppedLines('${prefix}')"/>
-          <div class="dropped-list" id="${prefix}DroppedList"></div>
-        </div>
-      </div>
-    `;
-    filterDroppedLines(prefix);
+  function diffTypeLabel(t) {
+    return DIFF_TYPE_LABELS[t] || t;
   }
 
-  function toggleDroppedLines(prefix) {
-    const body = document.getElementById(prefix + 'DroppedBody');
+  // diff_spans: [{op: "equal"|"removed"|"added", text}, ...]. Reconstructs one side of a
+  // "changed" difference, highlighting (blue) only the words that actually differ.
+  function renderDiffSpans(spans, side) {
+    return (spans || [])
+      .filter(s => side === 'pdf' ? s.op !== 'added' : s.op !== 'removed')
+      .map(s => (s.op === 'equal') ? escapeHtml(s.text) : `<span class="diff-highlight">${escapeHtml(s.text)}</span>`)
+      .join(' ');
+  }
+
+  function renderDiffLine(label, excerpt, spans, side) {
+    let html;
+    if (spans && spans.length) {
+      html = `<span class="diff-text">${renderDiffSpans(spans, side)}</span>`;
+    } else if (excerpt) {
+      html = `<span class="diff-text">${escapeHtml(excerpt)}</span>`;
+    } else {
+      html = `<span class="diff-text empty">(not present)</span>`;
+    }
+    return `<div class="diff-card-line"><span class="diff-line-label">${label}</span>${html}</div>`;
+  }
+
+  function renderDiffCard(d, ctx) {
+    const where = [d.section ? escapeHtml(d.section) : null, d.page ? `page ${d.page}` : null].filter(Boolean).join(' - ') || '-';
+    const marked = !!d.marked_ok;
+    let actions = '';
+    if (d.category === 'real' && ctx && ctx.chapter) {
+      if (marked) {
+        actions = `<div class="diff-ok-note">Marked OK</div>`;
+      } else {
+        const editBtn = d.section
+          ? `<button type="button" class="action-btn" onclick="openSectionEditor('${encodeURIComponent(ctx.class)}','${encodeURIComponent(ctx.subject)}','${encodeURIComponent(ctx.chapter)}','${encodeURIComponent(d.section)}')">Open this section to edit</button>`
+          : '';
+        actions = `<div class="diff-card-actions">${editBtn}<button type="button" class="action-btn" onclick="markDiffOk('${prefixOf(ctx)}','${d.diff_key}')">Mark as OK</button></div>`;
+      }
+    }
+    return `
+      <div class="diff-card ${d.category}${marked ? ' marked' : ''}">
+        <div class="diff-card-head">
+          <span class="diff-card-type">${escapeHtml(diffTypeLabel(d.type))}</span>
+          <span class="diff-card-where">${where}</span>
+        </div>
+        ${renderDiffLine('In the PDF:', d.pdf_excerpt, d.diff_spans, 'pdf')}
+        ${renderDiffLine('Stored:', d.stored_excerpt, d.diff_spans, 'stored')}
+        ${actions}
+      </div>
+    `;
+  }
+
+  function prefixOf(ctx) {
+    return ctx && ctx.prefix || '';
+  }
+
+  function renderVerifyBlock(prefix, verify, ctx) {
+    const box = document.getElementById(prefix + 'Box');
+    if (!verify) { box.style.display = 'none'; box.innerHTML = ''; _verifyCtx[prefix] = null; return; }
+    box.style.display = 'block';
+    _verifyCtx[prefix] = Object.assign({ prefix }, ctx || {});
+
+    const differences = verify.differences || [];
+    const real = differences.filter(d => d.category === 'real');
+    const harmless = differences.filter(d => d.category === 'harmless');
+    const counts = verify.counts || { real: real.length, harmless: harmless.length, by_type: {} };
+
+    const typeChips = Object.keys(counts.by_type || {}).map(t =>
+      `<span class="type-chip">${escapeHtml(diffTypeLabel(t))}: ${counts.by_type[t]}</span>`
+    ).join('');
+
+    const realHtml = real.length
+      ? `<div class="diff-group-label">Real differences (${real.length})</div><div class="diff-cards">${real.map(d => renderDiffCard(d, _verifyCtx[prefix])).join('')}</div>`
+      : '';
+
+    const harmlessHtml = harmless.length ? `
+      <div class="harmless-group">
+        <div class="harmless-toggle" onclick="toggleHarmless('${prefix}')">
+          <span>${harmless.length} harmless difference(s) - click to see</span>
+        </div>
+        <div class="harmless-body" id="${prefix}HarmlessBody">
+          <div class="diff-cards">${harmless.map(d => renderDiffCard(d, _verifyCtx[prefix])).join('')}</div>
+        </div>
+      </div>
+    ` : '';
+
+    const emptyHtml = (!real.length && !harmless.length) ? '<div class="diff-empty">No differences found.</div>' : '';
+
+    box.innerHTML = `
+      <div class="verify-banner ${escapeHtml(verify.status)}">${escapeHtml(verify.verdict_line || verify.summary || verify.status)}</div>
+      <div class="crosscheck-stats">
+        <span>Coverage <b>${verify.coverage_pct != null ? Number(verify.coverage_pct).toFixed(1) : '-'}%</b></span>
+        <span><b>${counts.real}</b> real</span>
+        <span><b>${counts.harmless}</b> harmless</span>
+        ${typeChips}
+      </div>
+      ${emptyHtml}
+      ${realHtml}
+      ${harmlessHtml}
+    `;
+  }
+
+  function toggleHarmless(prefix) {
+    const body = document.getElementById(prefix + 'HarmlessBody');
     if (body) body.classList.toggle('open');
   }
 
-  function filterDroppedLines(prefix) {
-    const list = document.getElementById(prefix + 'DroppedList');
-    if (!list) return;
-    const searchEl = document.getElementById(prefix + 'DroppedSearch');
-    const q = (searchEl ? searchEl.value : '').trim().toLowerCase();
-    const lines = (_droppedLinesCache[prefix] || []).filter(d => !q || d.text.toLowerCase().includes(q) || d.reason.toLowerCase().includes(q));
-    if (!lines.length) { list.innerHTML = '<div class="dropped-empty">No dropped lines match.</div>'; return; }
-    list.innerHTML = lines.map(d => `
-      <div class="dropped-line-row${d.check_this ? ' check-this' : ''}">
-        <span class="text">${escapeHtml(d.text)}</span>
-        <span class="reason">${escapeHtml(d.reason)}${d.check_this ? ' - check this' : ''}</span>
-      </div>
-    `).join('');
+  async function markDiffOk(prefix, diffKey) {
+    const ctx = _verifyCtx[prefix];
+    if (!ctx || !ctx.class) return;
+    try {
+      const res = await fetch(`${API_BASE}/admin/ncert-content/verify/mark-ok`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ class: ctx.class, subject: ctx.subject, chapter: ctx.chapter, diff_key: diffKey })
+      });
+      if (res.status === 401) { logout(); return; }
+      if (!res.ok) { alert(await describeHttpError(res)); return; }
+      const data = await res.json();
+      if (data.error) { alert(data.error); return; }
+      if (ctx.rerun) await ctx.rerun();
+    } catch (e) {
+      alert('Could not reach server.');
+    }
+  }
+
+  // "Open this section to edit" -- jumps to that section's editor in the manual add/edit form
+  // below. If the section already exists in the currently-open chapter detail, pre-fills its
+  // real ordinal/text (edit in place); otherwise pre-fills a fresh row for that heading (e.g. a
+  // heading the PDF has that storage is missing) so the admin can type the text straight in.
+  function openSectionEditor(clsEnc, subjectEnc, chapterEnc, headingEnc) {
+    const cls = decodeURIComponent(clsEnc), subject = decodeURIComponent(subjectEnc);
+    const chapter = decodeURIComponent(chapterEnc), heading = decodeURIComponent(headingEnc);
+    const cache = window._detailSectionsCache || [];
+    const row = cache.find(s => s.heading === heading);
+    document.getElementById('manualClass').value = cls;
+    document.getElementById('manualSubject').value = subject;
+    document.getElementById('manualChapter').value = chapter;
+    document.getElementById('manualHeading').value = heading;
+    document.getElementById('manualOrdinal').value = row ? row.ordinal : cache.length;
+    document.getElementById('manualText').value = row ? row.text : '';
+    document.getElementById('manualHeading').scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
 
   async function verifyPassword() {
@@ -465,6 +568,8 @@
     el.style.display = text ? 'block' : 'none';
   }
 
+  let _previewPdfBase64 = null; // cached so a "Mark as OK" during preview can re-run the check
+
   async function previewChapter() {
     const file = document.getElementById('chapterFile').files[0];
     if (!file) return;
@@ -483,6 +588,7 @@
 
     try {
       const base64 = await fileToBase64(file);
+      _previewPdfBase64 = { base64, cls, subject };
       const res = await fetch(`${API_BASE}/admin/ncert-content/preview`, {
         method: 'POST',
         headers: authHeaders({ 'Content-Type': 'application/json' }),
@@ -501,6 +607,23 @@
     } finally {
       previewBtn.disabled = !document.getElementById('chapterFile').files.length;
     }
+  }
+
+  async function rerunPreviewVerify() {
+    if (!_previewPdfBase64) return;
+    const { base64, cls, subject } = _previewPdfBase64;
+    try {
+      const res = await fetch(`${API_BASE}/admin/ncert-content/preview`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ class: cls, subject, data: base64 })
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.error) return;
+      currentPreview = data;
+      renderPreview(data);
+    } catch (e) { /* leave the panel as-is on a transient network error */ }
   }
 
   function renderPreview(data) {
@@ -537,7 +660,9 @@
     document.getElementById('overwriteRow').style.display = data.exists ? 'flex' : 'none';
     document.getElementById('overwriteCheckbox').checked = false;
 
-    renderVerifyBlock('previewCrosscheck', data.verify);
+    renderVerifyBlock('previewCrosscheck', data.verify, {
+      class: data.class, subject: data.subject, chapter: data.chapter_title, rerun: rerunPreviewVerify,
+    });
     const verifyFailed = data.verify && data.verify.status === 'FAIL';
     document.getElementById('overrideVerifyRow').style.display = verifyFailed ? 'flex' : 'none';
     document.getElementById('overrideVerifyCheckbox').checked = false;
@@ -597,20 +722,36 @@
 
   // ---------------- Chapters list ----------------
 
+  let _lastChaptersList = []; // so the detail panel can show Source/Cost/Model/Pages/Extract
+                               // without a second round-trip -- see renderDetailCostRow().
+
   async function loadChapters() {
     const tbody = document.getElementById('chaptersTableBody');
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="15">Loading...</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="10">Loading...</td></tr>';
     try {
       const res = await fetch(`${API_BASE}/admin/ncert-content`, { headers: authHeaders() });
       if (res.status === 401) { logout(); return; }
-      if (!res.ok) { tbody.innerHTML = `<tr class="empty-row"><td colspan="15">${escapeHtml(await describeHttpError(res))}</td></tr>`; return; }
+      if (!res.ok) { tbody.innerHTML = `<tr class="empty-row"><td colspan="10">${escapeHtml(await describeHttpError(res))}</td></tr>`; return; }
       const data = await res.json();
-      if (data.error) { tbody.innerHTML = `<tr class="empty-row"><td colspan="15">${escapeHtml(data.error)}</td></tr>`; return; }
+      if (data.error) { tbody.innerHTML = `<tr class="empty-row"><td colspan="10">${escapeHtml(data.error)}</td></tr>`; return; }
+      _lastChaptersList = data.chapters || [];
       renderTotals(data.totals || {});
-      renderChapters(data.chapters || []);
+      renderChapters(_lastChaptersList);
     } catch (e) {
-      tbody.innerHTML = '<tr class="empty-row"><td colspan="15">Could not reach server.</td></tr>';
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="10">Could not reach server.</td></tr>';
     }
+  }
+
+  function renderDetailCostRow(cls, subject, chapter) {
+    const row = document.getElementById('detailCostRow');
+    const c = _lastChaptersList.find(x => x.class === cls && x.subject === subject && x.chapter === chapter);
+    if (!c) { row.innerHTML = ''; return; }
+    row.innerHTML =
+      `<span>Source <b>${c.source ? escapeHtml(c.source) : '-'}</b></span>` +
+      `<span>Cost <b>${formatCost(c.cost)}</b></span>` +
+      `<span>Model <b>${c.model ? escapeHtml(c.model) : '-'}</b></span>` +
+      `<span>Pages <b>${c.pages ?? '-'}</b></span>` +
+      `<span>Extract <b>${c.extract_seconds !== null && c.extract_seconds !== undefined ? `${Number(c.extract_seconds).toFixed(1)}s` : '-'}</b></span>`;
   }
 
   function formatCost(v) {
@@ -646,7 +787,7 @@
   function renderChapters(chapters) {
     const tbody = document.getElementById('chaptersTableBody');
     if (chapters.length === 0) {
-      tbody.innerHTML = '<tr class="empty-row"><td colspan="15">No NCERT chapters loaded yet.</td></tr>';
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="10">No NCERT chapters loaded yet.</td></tr>';
       return;
     }
     tbody.innerHTML = chapters.map((c, i) => `
@@ -657,11 +798,6 @@
         <td>${c.section_count}</td>
         <td>${c.total_words}</td>
         <td><span class="kw-badge ${c.keywords_done === c.section_count ? 'done' : 'pending'}">${c.keywords_done}/${c.section_count}${c.keywords_done < c.section_count ? ' keywords pending' : ' keywords'}</span></td>
-        <td>${c.source ? escapeHtml(c.source) : '-'}</td>
-        <td>${formatCost(c.cost)}</td>
-        <td>${c.model ? escapeHtml(c.model) : '-'}</td>
-        <td>${c.pages ?? '-'}</td>
-        <td>${c.extract_seconds !== null && c.extract_seconds !== undefined ? `${Number(c.extract_seconds).toFixed(1)}s` : '-'}</td>
         <td>${renderCoverageCell(c)}</td>
         <td>${renderVerifiedCell(c)}</td>
         <td>${formatDate(c.created_at)}</td>
@@ -699,7 +835,9 @@
     window._currentDetailChapter = { cls, subject, chapter };
     document.getElementById('verifyChapterFile').value = '';
     document.getElementById('verifyChapterStatus').textContent = '';
+    _detailVerifyPdfBase64 = null;
     renderVerifyBlock('detailCrosscheck', null);
+    renderDetailCostRow(cls, subject, chapter);
     panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
     try {
@@ -758,6 +896,8 @@
     document.getElementById('chapterDetail').style.display = 'none';
   }
 
+  let _detailVerifyPdfBase64 = null; // cached so a "Mark as OK" in the detail panel can re-run it
+
   async function verifyChapterAgainstPdf() {
     const file = document.getElementById('verifyChapterFile').files[0];
     const statusEl = document.getElementById('verifyChapterStatus');
@@ -774,24 +914,32 @@
     statusEl.textContent = 'Extracting and checking against the stored sections...';
     try {
       const base64 = await fileToBase64(file);
-      const res = await fetch(`${API_BASE}/admin/ncert-content/verify`, {
-        method: 'POST',
-        headers: authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ class: target.cls, subject: target.subject, chapter: target.chapter, data: base64 })
-      });
-      if (res.status === 401) { logout(); return; }
-      if (!res.ok) { statusEl.textContent = await describeHttpError(res); return; }
-      const data = await res.json();
-      if (data.error) { statusEl.textContent = data.error; return; }
-
-      statusEl.textContent = '';
-      renderVerifyBlock('detailCrosscheck', data.verify);
+      _detailVerifyPdfBase64 = base64;
+      await runDetailVerify(target, statusEl);
       loadChapters();
     } catch (e) {
       statusEl.textContent = 'Could not reach server.';
     } finally {
       btn.disabled = false;
     }
+  }
+
+  async function runDetailVerify(target, statusEl) {
+    const res = await fetch(`${API_BASE}/admin/ncert-content/verify`, {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ class: target.cls, subject: target.subject, chapter: target.chapter, data: _detailVerifyPdfBase64 })
+    });
+    if (res.status === 401) { logout(); return; }
+    if (!res.ok) { if (statusEl) statusEl.textContent = await describeHttpError(res); return; }
+    const data = await res.json();
+    if (data.error) { if (statusEl) statusEl.textContent = data.error; return; }
+
+    if (statusEl) statusEl.textContent = '';
+    renderVerifyBlock('detailCrosscheck', data.verify, {
+      class: target.cls, subject: target.subject, chapter: target.chapter,
+      rerun: () => runDetailVerify(target, null),
+    });
   }
 
   // ---------------- Manual add/edit ----------------

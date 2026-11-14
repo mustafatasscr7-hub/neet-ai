@@ -16190,6 +16190,45 @@ async def _ncert_content_chapter_exists(cls: str, subject: str, chapter_title: s
     except Exception:
         return False
 
+async def _ncert_verify_decided_keys(cls: str, subject: str, chapter: str) -> set:
+    """diff_keys an admin has already marked "OK" for this chapter (see
+    ncert_verify_decisions.sql) -- never the chapter's text, just the hashes. An empty set (never
+    decided, or the lookup failed) just means every real difference still counts, same as before
+    this feature existed."""
+    try:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/ncert_verify_decisions", headers=ADMIN_HEADERS,
+            params={"select": "diff_key", "class": f"eq.{cls}", "subject": f"eq.{subject}", "chapter": f"eq.{chapter}"},
+        )
+        if resp.status_code >= 400:
+            return set()
+        return {r["diff_key"] for r in resp.json() if r.get("diff_key")}
+    except Exception:
+        return set()
+
+def _apply_verify_decisions(verify: dict, decided_keys: set) -> dict:
+    """Marks each real difference's `marked_ok` and overwrites verify["status"]/["summary"] with
+    the POST-decision verdict actually shown to the admin and logged to ncert_chapter_log --
+    ncert_verify.verify_text_coverage's own status/summary are the raw, pre-decision picture (every
+    real difference counts); this is the "PASS when no real differences remain unmarked" rule.
+    verify["counts"] (the raw per-type totals) is left untouched. Mutates and returns verify."""
+    unresolved_real = 0
+    for d in verify.get("differences", []):
+        d["marked_ok"] = d["category"] == "real" and d["diff_key"] in decided_keys
+        if d["category"] == "real" and not d["marked_ok"]:
+            unresolved_real += 1
+    status = "PASS" if unresolved_real == 0 else "FAIL"
+    harmless_count = (verify.get("counts") or {}).get("harmless", 0)
+    if status == "PASS":
+        verdict_line = f"Stored text matches the PDF. {harmless_count} harmless difference(s), {unresolved_real} real difference(s)."
+    else:
+        verdict_line = f"FAIL: {unresolved_real} real difference(s) need your attention."
+    verify["status"] = status
+    verify["summary"] = verdict_line[:500]
+    verify["verdict_line"] = verdict_line
+    verify["unresolved_real_count"] = unresolved_real
+    return verify
+
 @app.post("/admin/ncert-content/verify")
 async def admin_ncert_content_verify(request: Request, _: None = Depends(verify_admin), __: None = Depends(rate_limit(10, 300, by="ip"))):
     """"Verify against PDF" for a chapter already loaded into ncert_sections -- re-extracts and
@@ -16245,6 +16284,8 @@ async def admin_ncert_content_verify(request: Request, _: None = Depends(verify_
         verify = await loop.run_in_executor(None, ncert_verify_mod.verify_text_coverage, pdf_bytes, sections)
     except Exception as e:
         return {"error": f"Could not extract this PDF: {e}"}
+    decided_keys = await _ncert_verify_decided_keys(cls, subject, chapter)
+    _apply_verify_decisions(verify, decided_keys)
 
     patch_json = {
         "verified_at": datetime.now(timezone.utc).isoformat(),
@@ -16276,6 +16317,42 @@ async def admin_ncert_content_verify(request: Request, _: None = Depends(verify_
             pass
 
     return {"class": cls, "subject": subject, "chapter": chapter, "verify": verify}
+
+@app.post("/admin/ncert-content/verify/mark-ok")
+async def admin_ncert_content_verify_mark_ok(request: Request, _: None = Depends(verify_admin), __: None = Depends(rate_limit(20, 300, by="ip"))):
+    """Persists one "Mark as OK" decision (see ncert_verify_decisions.sql) -- never the chapter's
+    text, only diff_key (a hash) plus which chapter it's scoped to. Upserts: marking the same
+    difference twice is a no-op, not a duplicate row."""
+    try:
+        body = await request.json()
+    except Exception:
+        return {"error": "Invalid request body."}
+    cls = (body.get("class") or "").strip()
+    subject = (body.get("subject") or "").strip()
+    chapter = (body.get("chapter") or "").strip()
+    diff_key = (body.get("diff_key") or "").strip()
+
+    if cls not in NCERT_CONTENT_CLASSES:
+        return {"error": f"class must be one of {', '.join(NCERT_CONTENT_CLASSES)}"}
+    if subject not in NCERT_CONTENT_SUBJECTS:
+        return {"error": f"subject must be one of {', '.join(NCERT_CONTENT_SUBJECTS)}"}
+    if not chapter:
+        return {"error": "chapter is required."}
+    if not diff_key:
+        return {"error": "diff_key is required."}
+
+    try:
+        resp = await async_client.post(
+            f"{SUPABASE_URL}/rest/v1/ncert_verify_decisions",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=minimal"},
+            params={"on_conflict": "class,subject,chapter,diff_key"},
+            json={"class": cls, "subject": subject, "chapter": chapter, "diff_key": diff_key},
+        )
+        if resp.status_code >= 400:
+            return {"error": "Could not save this decision."}
+    except Exception as e:
+        return {"error": str(e)}
+    return {"ok": True}
 
 @app.post("/admin/ncert-content/preview")
 async def admin_ncert_content_preview(request: Request, _: None = Depends(verify_admin), __: None = Depends(rate_limit(10, 300, by="ip"))):
@@ -16316,12 +16393,13 @@ async def admin_ncert_content_preview(request: Request, _: None = Depends(verify
     if not result["flags"]:
         try:
             verify = await loop.run_in_executor(None, ncert_verify_mod.verify_text_coverage, pdf_bytes, result["sections"])
+            decided_keys = await _ncert_verify_decided_keys(cls, subject, chapter_title) if chapter_title else set()
+            _apply_verify_decisions(verify, decided_keys)
         except Exception as e:
             verify = {
                 "status": "FAIL", "summary": f"Could not run the text cross-check: {e}",
                 "total_words": 0, "kept_words": 0, "coverage_pct": 0.0, "word_diff": 0, "word_diff_pct": 0.0,
-                "dropped_lines": [], "dropped_lines_count": 0, "dropped_by_reason": {},
-                "sentence_mismatches": [], "missing_paragraphs": [],
+                "dropped_lines_count": 0, "differences": [], "counts": {"real": 0, "harmless": 0, "by_type": {}},
             }
 
     now = time.time()

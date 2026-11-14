@@ -20,6 +20,7 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import fitz
+import ncert_ingest_core as ncert_core_mod
 import server
 from fastapi.testclient import TestClient
 
@@ -168,12 +169,15 @@ class FakeAsyncClient:
     def __init__(self):
         self.table = FakeNcertTable()
         self.chapter_log = FakeNcertTable()
+        self.verify_decisions = FakeNcertTable()
         self.calls = []
 
     async def get(self, url, headers=None, params=None, **kw):
         self.calls.append(("GET", url, params))
         if "ncert_chapter_log" in url:
             return FakeResp(200, self.chapter_log.get(params))
+        if "ncert_verify_decisions" in url:
+            return FakeResp(200, self.verify_decisions.get(params))
         if "ncert_sections" in url:
             return FakeResp(200, self.table.get(params))
         return FakeResp(200, [])
@@ -182,6 +186,11 @@ class FakeAsyncClient:
         self.calls.append(("POST", url, params, json))
         if "ncert_chapter_log" in url:
             return FakeResp(200, self.chapter_log.insert(json))
+        if "ncert_verify_decisions" in url:
+            prefer = (headers or {}).get("Prefer", "")
+            on_conflict = (params or {}).get("on_conflict")
+            merge = "merge-duplicates" in prefer
+            return FakeResp(200, self.verify_decisions.insert(json, on_conflict=on_conflict, merge=merge))
         if "ncert_sections" in url:
             prefer = (headers or {}).get("Prefer", "")
             on_conflict = (params or {}).get("on_conflict")
@@ -269,6 +278,7 @@ def test_admin_auth():
         ("POST", "/admin/ncert-content/preview", {"class": "11", "subject": "Biology", "data": good_pdf}),
         ("POST", "/admin/ncert-content/apply", {"preview_id": "nonexistent"}),
         ("POST", "/admin/ncert-content/verify", {"class": "11", "subject": "Biology", "chapter": "X", "data": good_pdf}),
+        ("POST", "/admin/ncert-content/verify/mark-ok", {"class": "11", "subject": "Biology", "chapter": "X", "diff_key": "abc123"}),
         ("POST", "/admin/ncert-content/section", {"class": "11", "subject": "Biology", "chapter": "X", "heading": "1.1 X", "ordinal": 0, "text": "some text here"}),
         ("DELETE", "/admin/ncert-content/chapter?class=11&subject=Biology&chapter=X", None),
     ]
@@ -303,17 +313,16 @@ def test_preview_does_not_write():
 
 
 def test_preview_includes_verify():
-    print("\n# Preview includes the text cross-check (coverage/dropped-lines/mismatches)")
+    print("\n# Preview includes the verify-against-PDF classification (real vs harmless differences)")
     tc, fake = setup()
     res = tc.post("/admin/ncert-content/preview", json={"class": "11", "subject": "Biology", "data": good_chapter_pdf_b64()}, headers={"X-Admin-Key": ADMIN_KEY})
     data = res.json()
     verify = data.get("verify") or {}
     check("verify block is present", bool(verify), data)
     check("a clean round-tripped chapter passes the cross-check", verify.get("status") == "PASS", verify)
-    check("no sentence mismatches", verify.get("sentence_mismatches") == [], verify)
-    check("no missing paragraphs", verify.get("missing_paragraphs") == [], verify)
+    check("no differences at all", verify.get("differences") == [], verify)
+    check("counts.real is 0", (verify.get("counts") or {}).get("real") == 0, verify)
     check("coverage_pct is a positive number", isinstance(verify.get("coverage_pct"), (int, float)) and verify["coverage_pct"] > 0, verify)
-    check("dropped_lines_count matches the dropped_lines list", verify.get("dropped_lines_count") == len(verify.get("dropped_lines") or []), verify)
     check("verify is not run for a chapter that already failed validate_chapter",
           tc.post("/admin/ncert-content/preview", json={"class": "11", "subject": "Biology", "data": bad_chapter_pdf_b64()}, headers={"X-Admin-Key": ADMIN_KEY}).json().get("verify") is None)
 
@@ -404,11 +413,14 @@ def test_apply_blocked_on_verify_fail_and_override_allows_it():
     pdf = good_chapter_pdf_b64()
 
     fake_fail = {
-        "status": "FAIL", "summary": "FAIL - 42.0% coverage, 1 sentence mismatch(es)",
+        "status": "FAIL", "summary": "FAIL - 42.0% coverage, 1 real difference(s), 0 harmless difference(s)",
         "total_words": 100, "kept_words": 42, "coverage_pct": 42.0, "word_diff": 58, "word_diff_pct": 58.0,
-        "dropped_lines": [{"text": "some dropped line", "reason": "other", "words": 3, "check_this": False}],
-        "dropped_lines_count": 1, "dropped_by_reason": {"other": 1},
-        "sentence_mismatches": ["a sentence not found"], "missing_paragraphs": [],
+        "dropped_lines_count": 1,
+        "differences": [{
+            "type": "extra", "category": "real", "section": "1.1 Diversity In The Living World", "page": None,
+            "pdf_excerpt": None, "stored_excerpt": "a sentence not found", "diff_spans": None, "diff_key": "fakekey123",
+        }],
+        "counts": {"real": 1, "harmless": 0, "by_type": {"extra": 1}},
     }
     orig_verify = server.ncert_verify_mod.verify_text_coverage
     server.ncert_verify_mod.verify_text_coverage = lambda pdf_bytes, sections: dict(fake_fail)
@@ -434,9 +446,8 @@ def test_apply_blocked_on_verify_fail_and_override_allows_it():
     check("the log row's summary notes the override was used", "override" in (log_row.get("verify_summary") or "").lower(), log_row)
     check("source_words/kept_words/coverage_pct are stored from the verify result",
           log_row.get("source_words") == 100 and log_row.get("kept_words") == 42 and log_row.get("coverage_pct") == 42.0, log_row)
-    check("dropped lines and excerpts themselves are never stored in the log row",
-          "dropped_lines" not in log_row and "sentence_mismatches" not in log_row and "missing_paragraphs" not in log_row
-          and "dropped_by_reason" not in log_row, log_row)
+    check("differences and their excerpts are never stored in the log row",
+          "differences" not in log_row and "counts" not in log_row, log_row)
 
 
 def test_verify_endpoint_checks_existing_chapter_and_stamps_log():
@@ -504,6 +515,65 @@ def test_verify_endpoint_no_writes_to_sections_even_on_fail():
     calls_during_verify = fake.calls[calls_before:]
     write_calls = [c for c in calls_during_verify if c[0] in ("POST", "PATCH", "DELETE") and "ncert_sections" in c[1]]
     check("no write call touched ncert_sections during verify", write_calls == [], write_calls)
+
+
+def test_mark_ok_persists_and_only_resolves_its_own_difference():
+    print("\n# 'Mark as OK' persists a decision, resolves only its own diff_key, and PASS follows the verdict rule")
+    tc, fake = setup()
+    pdf = good_chapter_pdf_b64()
+    preview_id = tc.post("/admin/ncert-content/preview", json={"class": "11", "subject": "Biology", "data": pdf}, headers={"X-Admin-Key": ADMIN_KEY}).json()["preview_id"]
+    tc.post("/admin/ncert-content/apply", json={"preview_id": preview_id}, headers={"X-Admin-Key": ADMIN_KEY})
+
+    # A second PDF for the same stored chapter with exactly two real differences: a one-word
+    # change in 1.2 ("changed"), and 1.3's whole paragraph missing from this PDF ("extra" -- the
+    # stored text has it, this PDF doesn't).
+    mismatched_pdf = base64.b64encode(make_chapter_pdf([
+        "CHAPTER 1", "THE LIVING WORLD", "1.1 Diversity In The Living World", CLEAN_PARA,
+        "1.2 Taxonomic Categories", CLEAN_PARA.replace("wonderful", "amazing"),
+        "1.3 Taxonomical Aids",
+    ])).decode()
+
+    def run_verify():
+        res = tc.post("/admin/ncert-content/verify", json={"class": "11", "subject": "Biology", "chapter": "THE LIVING WORLD", "data": mismatched_pdf}, headers={"X-Admin-Key": ADMIN_KEY})
+        return res.json()["verify"]
+
+    verify1 = run_verify()
+    check("exactly 2 real differences, 0 harmless", verify1["counts"]["real"] == 2 and verify1["counts"]["harmless"] == 0, verify1)
+    check("FAILs with both unresolved", verify1["status"] == "FAIL", verify1)
+    real_diffs = [d for d in verify1["differences"] if d["category"] == "real"]
+    check("neither difference is marked_ok yet", not any(d["marked_ok"] for d in real_diffs), real_diffs)
+    changed_key = next(d["diff_key"] for d in real_diffs if d["type"] == "changed")
+    extra_key = next(d["diff_key"] for d in real_diffs if d["type"] == "extra")
+
+    mark_res = tc.post("/admin/ncert-content/verify/mark-ok", json={"class": "11", "subject": "Biology", "chapter": "THE LIVING WORLD", "diff_key": changed_key}, headers={"X-Admin-Key": ADMIN_KEY})
+    check("mark-ok succeeds", mark_res.status_code == 200 and mark_res.json().get("ok") is True, mark_res.json())
+    check("exactly one decision row stored", len(fake.verify_decisions.rows) == 1, fake.verify_decisions.rows)
+
+    tc.post("/admin/ncert-content/verify/mark-ok", json={"class": "11", "subject": "Biology", "chapter": "THE LIVING WORLD", "diff_key": changed_key}, headers={"X-Admin-Key": ADMIN_KEY})
+    check("marking the same difference twice stays one row (upsert, not a duplicate)", len(fake.verify_decisions.rows) == 1, fake.verify_decisions.rows)
+
+    verify2 = run_verify()
+    check("still FAIL -- the other difference remains unresolved", verify2["status"] == "FAIL", verify2)
+    marked = next(d for d in verify2["differences"] if d["diff_key"] == changed_key)
+    other = next(d for d in verify2["differences"] if d["diff_key"] == extra_key)
+    check("the marked difference now reports marked_ok", marked["marked_ok"] is True, marked)
+    check("marking one difference does not mark/hide the other one", other["marked_ok"] is False, other)
+    log_row_after_one_mark = fake.chapter_log.rows[0]
+    check("the log row's verify_status still reflects FAIL after only one mark", log_row_after_one_mark.get("verify_status") == "FAIL", log_row_after_one_mark)
+
+    tc.post("/admin/ncert-content/verify/mark-ok", json={"class": "11", "subject": "Biology", "chapter": "THE LIVING WORLD", "diff_key": extra_key}, headers={"X-Admin-Key": ADMIN_KEY})
+    verify3 = run_verify()
+    check("PASS once every real difference is marked OK", verify3["status"] == "PASS", verify3)
+    check("counts.real still reports the raw total (decisions don't erase the raw count)", verify3["counts"]["real"] == 2, verify3)
+    log_row_after_both_marks = fake.chapter_log.rows[0]
+    check("the log row's verify_status now reflects the final PASS verdict", log_row_after_both_marks.get("verify_status") == "PASS", log_row_after_both_marks)
+
+    bad_res = tc.post("/admin/ncert-content/verify/mark-ok", json={"class": "11", "subject": "Biology", "chapter": "THE LIVING WORLD"}, headers={"X-Admin-Key": ADMIN_KEY})
+    check("mark-ok rejects a request missing diff_key", isinstance(bad_res.json().get("error"), str), bad_res.json())
+
+    check("ncert_sections was never touched by any verify or mark-ok call (still exactly 3 rows)", len(fake.table.rows) == 3, fake.table.rows)
+    check("exactly 2 decision rows total -- nothing else got written to that table", len(fake.verify_decisions.rows) == 2, fake.verify_decisions.rows)
+    check("exactly one chapter_log row -- every verify call stamped the SAME row, nothing extra", len(fake.chapter_log.rows) == 1, fake.chapter_log.rows)
 
 
 def test_list_surfaces_coverage_and_verify_status():
@@ -692,6 +762,7 @@ def main():
     test_verify_endpoint_no_such_chapter()
     test_verify_endpoint_inserts_fallback_log_row_for_legacy_chapter()
     test_verify_endpoint_no_writes_to_sections_even_on_fail()
+    test_mark_ok_persists_and_only_resolves_its_own_difference()
     test_list_surfaces_coverage_and_verify_status()
     test_manual_add_or_edit()
     test_delete_confirm()
