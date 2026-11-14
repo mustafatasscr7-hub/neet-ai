@@ -39,6 +39,14 @@ SECTION_WORD_RE = re.compile(r"^(SUMMARY|EXERCISES)\s*$", re.IGNORECASE)
 LIST_ITEM_RE = re.compile(r"^(?:\d+\.\s+\D|\([a-zA-Z0-9]+\)\s+)")
 TABLE_REF_RE = re.compile(r"\bTable\s+(\d+\.\d+)\b")
 
+# A heading's title must look like one: real words (capitalized or uppercase), not a figure/table
+# caption or its "a)."/"b)." letter-in-parentheses continuation. Lines starting with "Figure",
+# "Fig." or "Table" are captions, never headings (e.g. a wrapped "Figure\n6.3 b). It has
+# epidermis..." must not become a fake heading "6.3 b)...").
+CAPTION_PREFIX_RE = re.compile(r"^(?:Figure|Fig\.|Table)\b", re.IGNORECASE)
+LETTER_PAREN_RE = re.compile(r"^\(?[a-zA-Z]\)\.?(?:\s|$)")
+TITLE_MAX_WORDS = 12
+
 
 def title_case(s: str) -> str:
     words = s.split()
@@ -78,6 +86,97 @@ def is_junk_line(line: str) -> bool:
     return False
 
 
+def _extract_heading_body_pairs(lines):
+    """Scan a line list for (heading_num, heading_line, body_lines) entries: a numbered heading
+    line followed by whatever comes after it up to the next heading-looking line (or the end)."""
+    pairs = []
+    i, n = 0, len(lines)
+    while i < n:
+        stripped = lines[i].strip()
+        m = HEADING_RE.match(stripped)
+        if m:
+            num = m.group(1)
+            heading_line = lines[i]
+            i += 1
+            body = []
+            while i < n and not HEADING_RE.match(lines[i].strip()):
+                body.append(lines[i])
+                i += 1
+            pairs.append((num, heading_line, body))
+        else:
+            i += 1
+    return pairs
+
+
+def _recover_dropped_headings(dropped_lines, later_lines):
+    """A numbered heading (and its body) that strip_front_matter is about to discard as "front
+    matter" sometimes isn't really front matter at all. A chapter-opening sidebar/contents box
+    can land, in the PDF's raw text layer, after the real body has already started (observed
+    live: the box's own "CHAPTER n" line reads out mid-page-1, after the chapter's real first
+    heading and part of its body) -- so treating everything before that line as front matter
+    silently drops real sections. For each numbered heading found in the dropped span: if the
+    same heading number recurs later in the kept body (the sidebar box duplicates top-level
+    headings, just with a shorter/truncated title that dedupe_headings will later prefer the
+    fuller form of), splice this real body text in right after that later occurrence instead of
+    losing it. If the number never recurs later (a subheading the sidebar box doesn't list at
+    all, e.g. "6.1.1"), there is no later occurrence to attach to, so reinsert the heading and
+    its body as-is, right after the nearest earlier heading that did have one. Any un-headed
+    preamble text before the first heading in the dropped span (the chapter's own opening
+    paragraph, e.g. "You can very easily see...") has nowhere of its own to live -- sections are
+    always heading-keyed -- so it is attached as the first paragraph of whichever heading starts
+    the kept body, the closest thing to where it was actually read."""
+    first_heading_idx = None
+    for idx, ln in enumerate(dropped_lines):
+        if HEADING_RE.match(ln.strip()):
+            first_heading_idx = idx
+            break
+    preamble = dropped_lines[:first_heading_idx] if first_heading_idx is not None else list(dropped_lines)
+    pairs = _extract_heading_body_pairs(dropped_lines[first_heading_idx:] if first_heading_idx is not None else [])
+
+    if not pairs and not any(ln.strip() for ln in preamble):
+        return later_lines
+
+    later_idx_by_num = {}
+    first_later_heading_idx = None
+    for idx, ln in enumerate(later_lines):
+        m = HEADING_RE.match(ln.strip())
+        if m:
+            if m.group(1) not in later_idx_by_num:
+                later_idx_by_num[m.group(1)] = idx
+            if first_later_heading_idx is None:
+                first_later_heading_idx = idx
+
+    chunks = defaultdict(list)
+    start_chunk = []
+    current_anchor = None
+    for num, heading_line, body in pairs:
+        if not any(b.strip() for b in body):
+            continue
+        if num in later_idx_by_num:
+            current_anchor = later_idx_by_num[num]
+            chunks[current_anchor].extend(body)
+        elif current_anchor is not None:
+            chunks[current_anchor].extend([heading_line] + body)
+        else:
+            start_chunk.extend([heading_line] + body)
+
+    if any(ln.strip() for ln in preamble):
+        if first_later_heading_idx is not None:
+            chunks[first_later_heading_idx] = list(preamble) + chunks.get(first_later_heading_idx, [])
+        else:
+            start_chunk = list(preamble) + start_chunk
+
+    if not chunks and not start_chunk:
+        return later_lines
+
+    out = []
+    for idx, ln in enumerate(later_lines):
+        out.append(ln)
+        if idx in chunks:
+            out.extend(chunks[idx])
+    return start_chunk + out
+
+
 def strip_front_matter(raw_lines):
     """Return (chapter_num, title_text, body_lines) dropping everything
     before the real ALL-CAPS 'CHAPTER n' title and the contents lines
@@ -95,6 +194,7 @@ def strip_front_matter(raw_lines):
 
     j = start_idx + 1
     title_parts = []
+    title_words = 0
     while j < len(raw_lines):
         stripped = raw_lines[j].strip()
         if not stripped:
@@ -102,10 +202,33 @@ def strip_front_matter(raw_lines):
             continue
         if HEADING_RE.match(stripped) or SECTION_WORD_RE.match(stripped):
             break
+        extra_words = len(stripped.split())
+        if title_parts and title_words + extra_words > TITLE_MAX_WORDS:
+            break
         title_parts.append(stripped)
+        title_words += extra_words
         j += 1
     chapter_title = normalize_ws_quotes(" ".join(title_parts))
-    return chapter_num, chapter_title, raw_lines[j:]
+
+    body_lines = _recover_dropped_headings(raw_lines[:start_idx], raw_lines[j:])
+    return chapter_num, chapter_title, body_lines
+
+
+def _is_real_heading_title(title):
+    """Reject a HEADING_RE match whose "title" is actually a figure/table caption fragment: a
+    "b)." / "(a)" letter-in-parentheses continuation, or text that doesn't start with a real
+    capitalized word. Lines like "6.3 b). It has epidermis, cortex, endodermis," are a caption
+    that happens to start with a heading-shaped number after a PDF line wrap ("Figure\\n6.3 b).
+    ..."), never an actual heading."""
+    title = title.strip()
+    if not title:
+        return False
+    if CAPTION_PREFIX_RE.match(title):
+        return False
+    if LETTER_PAREN_RE.match(title):
+        return False
+    first_word = title.split()[0]
+    return first_word[:1].isalpha() and first_word[:1].isupper()
 
 
 def build_blocks(body_lines):
@@ -142,7 +265,8 @@ def build_blocks(body_lines):
             blocks.append(("heading", title_case(line)))
             continue
 
-        if HEADING_RE.match(line):
+        m = HEADING_RE.match(line)
+        if m and _is_real_heading_title(m.group(2)):
             flush()
             blocks.append(("heading", line))
             continue
@@ -168,8 +292,12 @@ def build_blocks(body_lines):
 def dedupe_headings(blocks):
     """Numbered headings that appear twice (once in a contents-style
     listing right under the chapter title, once as the real body heading)
-    collapse to a single heading at the later position, using whichever
-    casing is not all-uppercase."""
+    collapse to a single heading at the later position, preferring
+    whichever occurrence's title is the most complete (most words) -- a
+    contents-box duplicate is usually a shorter, line-wrap-truncated
+    fragment (e.g. "Anatomy of" vs the real "ANATOMY OF DICOTYLEDONOUS AND
+    MONOCOTYLEDONOUS PLANTS"), so picking the longest beats always
+    preferring whichever happens to not be all-uppercase."""
     occurrences = defaultdict(list)
     for idx, (btype, text) in enumerate(blocks):
         if btype != "heading":
@@ -182,8 +310,8 @@ def dedupe_headings(blocks):
     keep_idx = {}
     for num, occ in occurrences.items():
         candidates = [t for _, t in occ]
-        non_caps = [t for t in candidates if t != t.upper()]
-        best_text[num] = non_caps[0] if non_caps else title_case(candidates[-1])
+        normalized = [t if t != t.upper() else title_case(t) for t in candidates]
+        best_text[num] = max(normalized, key=lambda t: len(t.split()))
         keep_idx[num] = occ[-1][0]
 
     new_blocks = []

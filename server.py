@@ -15985,15 +15985,26 @@ NCERT_CONTENT_SUBJECTS = ("Biology", "Physics", "Chemistry")
 NCERT_CONTENT_MAX_PDF_BYTES = 15 * 1024 * 1024  # decoded; see the base64 body-size override above
 NCERT_CONTENT_APPLY_COST_CAP = 0.10  # DeepSeek keyword-generation spend cap per Apply request
 NCERT_CONTENT_PREVIEW_TTL_SECONDS = 1800  # how long a /preview result can still be /apply'd
+NCERT_CONTENT_MAX_PREVIEW_SESSIONS = 5  # oldest is evicted to make room for a new preview past this
 
-# preview_id -> {class, subject, chapter_title, sections, flags, created_at}. In-memory only
-# (one worker today, same caveat as _scan_jobs/_admin_login_attempts elsewhere in this file) --
-# losing a pending preview on a restart just means re-uploading, never a data-correctness issue.
+# preview_id -> {class, subject, chapter_title, sections, flags, verify, pdf_bytes, edited,
+# created_at}. In-memory only (one worker today, same caveat as _scan_jobs/_admin_login_attempts
+# elsewhere in this file) -- losing a pending preview on a restart just means re-uploading, never a
+# data-correctness issue. pdf_bytes is kept only so the editable-preview endpoints below can re-run
+# the PDF cross-check after each edit -- never written to disk/database, never logged, and it (like
+# every other field here) is gone the moment the preview is pruned, applied, or evicted.
 _ncert_content_previews = {}
 
 def _prune_ncert_content_previews(now: float):
     for pid in [p for p, v in _ncert_content_previews.items() if now - v["created_at"] > NCERT_CONTENT_PREVIEW_TTL_SECONDS]:
         del _ncert_content_previews[pid]
+
+def _evict_oldest_ncert_content_preview_if_full():
+    """Keeps at most NCERT_CONTENT_MAX_PREVIEW_SESSIONS previews in memory at once -- an admin who
+    opens a 6th preview tab just means the longest-idle one of the first 5 quietly goes away."""
+    while len(_ncert_content_previews) >= NCERT_CONTENT_MAX_PREVIEW_SESSIONS:
+        oldest_pid = min(_ncert_content_previews, key=lambda p: _ncert_content_previews[p]["created_at"])
+        del _ncert_content_previews[oldest_pid]
 
 def _invalidate_ncert_content_sections_cache():
     """Forces the next /chat's NCERT-section picker to re-read ncert_sections instead of serving
@@ -16404,11 +16415,13 @@ async def admin_ncert_content_preview(request: Request, _: None = Depends(verify
 
     now = time.time()
     _prune_ncert_content_previews(now)
+    _evict_oldest_ncert_content_preview_if_full()
     preview_id = uuid.uuid4().hex
     _ncert_content_previews[preview_id] = {
         "class": cls, "subject": subject, "chapter_title": chapter_title,
         "sections": result["sections"], "flags": result["flags"], "created_at": now,
         "pages": result["pages"], "extract_seconds": result["extract_seconds"], "verify": verify,
+        "pdf_bytes": pdf_bytes, "edited": False,
     }
     avg_section_cost = await _ncert_avg_section_cost()
     estimated_cost = round(result["section_count"] * avg_section_cost, 4)
@@ -16440,6 +16453,307 @@ def _ncert_content_generate_keywords(sections, cap: float, is_peak: bool):
     if len(results) < len(sections):
         incomplete = True
     return results, total_cost, incomplete
+
+NCERT_EDIT_ACTIONS = (
+    "save", "delete", "merge_prev", "merge_next",
+    "move_up", "move_down", "insert_above", "insert_below",
+)
+
+def _renumber_sections(sections: list) -> list:
+    """Recomputes ordinal/word_count for every section after an edit -- delete/merge/move/insert
+    all shift positions and word counts, and downstream code (Apply's row-building, the preview
+    panel's word-count display) expects both fields to always be present and correct."""
+    for i, s in enumerate(sections):
+        s["ordinal"] = i
+        s["word_count"] = len((s.get("text") or "").split())
+    return sections
+
+
+def _apply_section_edit_action(sections: list, action: str, index, heading: str = None, text: str = None):
+    """Pure list transform shared by the preview-session editor (admin_ncert_content_preview_edit)
+    and the already-loaded-chapter editor (admin_ncert_content_chapter_edit): sections is a plain
+    list of {"heading", "text"} dicts (no ordinal/id -- callers renumber/rewrite those themselves),
+    index is the 0-based position of the section row the admin clicked on. Returns
+    (new_sections, error) -- error is always a plain string (never an exception, never a raw
+    object), covering a bad index, an out-of-range move/merge, or an insert with no heading."""
+    if action not in NCERT_EDIT_ACTIONS:
+        return None, f"Unknown action '{action}'."
+    if not isinstance(index, int) or isinstance(index, bool):
+        return None, "A section index is required."
+
+    sections = [dict(s) for s in sections]  # never mutate the caller's own list
+    n = len(sections)
+
+    if action == "save":
+        if not (0 <= index < n):
+            return None, "Invalid section index."
+        new_heading = (heading or "").strip()
+        if not new_heading:
+            return None, "Heading is required."
+        sections[index]["heading"] = new_heading
+        sections[index]["text"] = text or ""
+        sections[index].pop("keywords", None)  # stale once the text under it has changed
+        return _renumber_sections(sections), None
+
+    if action == "delete":
+        if not (0 <= index < n):
+            return None, "Invalid section index."
+        if n <= 1:
+            return None, "Cannot delete the only remaining section."
+        del sections[index]
+        return _renumber_sections(sections), None
+
+    if action == "merge_prev":
+        if not (0 < index < n):
+            return None, "No previous section to merge with."
+        prev, cur = sections[index - 1], sections[index]
+        prev["text"] = (prev.get("text") or "").rstrip() + "\n" + (cur.get("text") or "").lstrip()
+        prev.pop("keywords", None)
+        del sections[index]
+        return _renumber_sections(sections), None
+
+    if action == "merge_next":
+        if not (0 <= index < n - 1):
+            return None, "No next section to merge with."
+        cur, nxt = sections[index], sections[index + 1]
+        cur["text"] = (cur.get("text") or "").rstrip() + "\n" + (nxt.get("text") or "").lstrip()
+        cur.pop("keywords", None)
+        del sections[index + 1]
+        return _renumber_sections(sections), None
+
+    if action == "move_up":
+        if not (0 < index < n):
+            return None, "Already at the top."
+        sections[index - 1], sections[index] = sections[index], sections[index - 1]
+        return _renumber_sections(sections), None
+
+    if action == "move_down":
+        if not (0 <= index < n - 1):
+            return None, "Already at the bottom."
+        sections[index], sections[index + 1] = sections[index + 1], sections[index]
+        return _renumber_sections(sections), None
+
+    # insert_above / insert_below
+    new_heading = (heading or "").strip()
+    if not new_heading:
+        return None, "Heading is required for the new section."
+    if not (0 <= index < n) and n > 0:
+        return None, "Invalid section index."
+    insert_at = index if action == "insert_above" else index + 1
+    insert_at = max(0, min(insert_at, len(sections)))
+    sections.insert(insert_at, {"heading": new_heading, "text": text or ""})
+    return _renumber_sections(sections), None
+
+
+def _sections_for_verify(sections: list):
+    """ncert_verify.verify_text_coverage only reads heading/text -- strips ordinal/id/keywords so
+    an edited in-memory or DB-backed list can be passed to it the same way."""
+    return [{"heading": s.get("heading"), "text": s.get("text") or ""} for s in sections]
+
+
+@app.post("/admin/ncert-content/preview/reverify")
+async def admin_ncert_content_preview_reverify(request: Request, _: None = Depends(verify_admin), __: None = Depends(rate_limit(40, 300, by="ip"))):
+    """Re-runs the PDF cross-check for a pending preview's CURRENT (possibly already-edited)
+    sections against its cached PDF bytes, re-applying any "Mark as OK" decisions -- used after a
+    mark-ok so the preview's verify panel reflects the decision without re-extracting the PDF
+    (which would discard any edits made since the preview was created). Admin-only."""
+    try:
+        body = await request.json()
+    except Exception:
+        return {"error": "Invalid request body."}
+    preview_id = (body.get("preview_id") or "").strip()
+
+    now = time.time()
+    _prune_ncert_content_previews(now)
+    preview = _ncert_content_previews.get(preview_id)
+    if not preview:
+        return {"error": "This preview has expired or was not found. Upload and preview the PDF again."}
+
+    loop = asyncio.get_event_loop()
+    try:
+        verify = await loop.run_in_executor(
+            None, ncert_verify_mod.verify_text_coverage, preview["pdf_bytes"],
+            _sections_for_verify(preview["sections"]), bool(preview.get("edited")),
+        )
+    except Exception as e:
+        return {"error": f"Could not run the text cross-check: {e}"}
+    decided_keys = await _ncert_verify_decided_keys(preview["class"], preview["subject"], preview["chapter_title"]) if preview["chapter_title"] else set()
+    _apply_verify_decisions(verify, decided_keys)
+    preview["verify"] = verify
+    return {"preview_id": preview_id, "verify": verify}
+
+
+@app.post("/admin/ncert-content/preview/edit")
+async def admin_ncert_content_preview_edit(request: Request, _: None = Depends(verify_admin), __: None = Depends(rate_limit(40, 300, by="ip"))):
+    """Edits one section of a not-yet-applied preview in place (admin-ncert-content.html's
+    per-section editor): save, delete, merge with previous/next, move up/down, or insert a new
+    section above/below. Re-runs validate_sections (structural) and, since the preview still has
+    the uploaded PDF's bytes in memory, ncert_verify's PDF cross-check, after every single action
+    -- so the banner (and Apply's own gate) always reflects the edited sections, not the original
+    extraction. Never writes anything; only this in-memory preview session changes. Admin-only
+    (verify_admin, never the contractor key)."""
+    try:
+        body = await request.json()
+    except Exception:
+        return {"error": "Invalid request body."}
+    preview_id = (body.get("preview_id") or "").strip()
+    action = (body.get("action") or "").strip()
+    index = body.get("index")
+    heading = body.get("heading")
+    text = body.get("text")
+
+    now = time.time()
+    _prune_ncert_content_previews(now)
+    preview = _ncert_content_previews.get(preview_id)
+    if not preview:
+        return {"error": "This preview has expired or was not found. Upload and preview the PDF again."}
+
+    new_sections, err = _apply_section_edit_action(preview["sections"], action, index, heading, text)
+    if err:
+        return {"error": err}
+
+    flags = ncert_ingest_core_mod.validate_sections(new_sections)
+    verify = None
+    try:
+        loop = asyncio.get_event_loop()
+        verify = await loop.run_in_executor(
+            None, ncert_verify_mod.verify_text_coverage, preview["pdf_bytes"], _sections_for_verify(new_sections), True,
+        )
+    except Exception as e:
+        verify = {
+            "status": "FAIL", "summary": f"Could not run the text cross-check: {e}",
+            "total_words": 0, "kept_words": 0, "coverage_pct": 0.0, "word_diff": 0, "word_diff_pct": 0.0,
+            "dropped_lines_count": 0, "differences": [], "counts": {"real": 0, "harmless": 0, "informational": 0, "by_type": {}},
+        }
+
+    preview["sections"] = new_sections
+    preview["flags"] = flags
+    preview["verify"] = verify
+    preview["edited"] = True
+
+    words = sum(len((s.get("text") or "").split()) for s in new_sections)
+    return {
+        "preview_id": preview_id, "sections": new_sections, "flags": flags,
+        "words": words, "section_count": len(new_sections), "verify": verify,
+    }
+
+
+@app.post("/admin/ncert-content/chapter/edit")
+async def admin_ncert_content_chapter_edit(request: Request, _: None = Depends(verify_admin), __: None = Depends(rate_limit(40, 300, by="ip"))):
+    """The same per-section editor (save/delete/merge/move/insert), applied to a chapter already
+    loaded into ncert_sections instead of a pending preview -- reuses the existing manual-section
+    write path (on_conflict upsert keyed by class/subject/chapter/ordinal) so a chapter that failed
+    validation when it was first loaded can be fixed by editing, then re-applied, without going
+    back through the PDF. There is no cached PDF for an already-loaded chapter, so this only
+    re-runs structural validation; use "Verify against PDF" (re-uploading the PDF) for the text
+    cross-check. Admin-only (verify_admin, never the contractor key)."""
+    try:
+        body = await request.json()
+    except Exception:
+        return {"error": "Invalid request body."}
+    cls = (body.get("class") or "").strip()
+    subject = (body.get("subject") or "").strip()
+    chapter = (body.get("chapter") or "").strip()
+    action = (body.get("action") or "").strip()
+    index = body.get("index")
+    heading = body.get("heading")
+    text = body.get("text")
+
+    if cls not in NCERT_CONTENT_CLASSES:
+        return {"error": f"class must be one of {', '.join(NCERT_CONTENT_CLASSES)}"}
+    if subject not in NCERT_CONTENT_SUBJECTS:
+        return {"error": f"subject must be one of {', '.join(NCERT_CONTENT_SUBJECTS)}"}
+    if not chapter:
+        return {"error": "chapter is required."}
+
+    try:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/ncert_sections", headers=ADMIN_HEADERS,
+            params={
+                "select": "heading,text,keywords", "class": f"eq.{cls}", "subject": f"eq.{subject}",
+                "chapter": f"eq.{chapter}", "order": "ordinal",
+            },
+        )
+        if resp.status_code >= 400:
+            return {"error": "Could not load this chapter."}
+        sections = resp.json()
+    except Exception as e:
+        return {"error": str(e)}
+    if not sections:
+        return {"error": "No such chapter."}
+
+    new_sections, err = _apply_section_edit_action(sections, action, index, heading, text)
+    if err:
+        return {"error": err}
+
+    flags = ncert_ingest_core_mod.validate_sections(new_sections)
+
+    # Safe replace, same pattern as Apply: write under a temporary chapter label first (so the
+    # unique (class,subject,chapter,ordinal) constraint never collides with the still-live old
+    # rows), verify every row landed, delete the old rows, then rename the temp rows back. Never
+    # deletes before the new rows are confirmed written, so a failed insert leaves the chapter
+    # exactly as it was.
+    temp_label = f"{chapter}__ncert_content_tmp__{uuid.uuid4().hex[:8]}"
+    rows = [
+        {"class": cls, "subject": subject, "chapter": temp_label, "heading": s["heading"],
+         "ordinal": i, "text": s.get("text") or "", "word_count": len((s.get("text") or "").split()),
+         "keywords": s.get("keywords")}
+        for i, s in enumerate(new_sections)
+    ]
+    try:
+        insert_resp = await async_client.post(
+            f"{SUPABASE_URL}/rest/v1/ncert_sections",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
+            json=rows,
+        )
+        if insert_resp.status_code >= 400:
+            return {"error": f"Could not save these changes: {insert_resp.text}"}
+        inserted = insert_resp.json()
+    except Exception as e:
+        return {"error": f"Could not save these changes: {e}"}
+
+    if len(inserted) != len(rows):
+        try:
+            await async_client.delete(
+                f"{SUPABASE_URL}/rest/v1/ncert_sections", headers=ADMIN_HEADERS,
+                params={"class": f"eq.{cls}", "subject": f"eq.{subject}", "chapter": f"eq.{temp_label}"},
+            )
+        except Exception:
+            pass
+        return {"error": f"Row count mismatch saving changes ({len(inserted)} of {len(rows)}) - nothing was changed."}
+
+    try:
+        del_resp = await async_client.delete(
+            f"{SUPABASE_URL}/rest/v1/ncert_sections", headers=ADMIN_HEADERS,
+            params={"class": f"eq.{cls}", "subject": f"eq.{subject}", "chapter": f"eq.{chapter}"},
+        )
+        if del_resp.status_code >= 400:
+            return {"error": f"Wrote the edited sections but could not remove the old ones: {del_resp.text}. Contact an engineer before retrying."}
+    except Exception as e:
+        return {"error": f"Wrote the edited sections but could not remove the old ones: {e}. Contact an engineer before retrying."}
+    try:
+        rename_resp = await async_client.patch(
+            f"{SUPABASE_URL}/rest/v1/ncert_sections", headers={**ADMIN_HEADERS, "Content-Type": "application/json"},
+            params={"class": f"eq.{cls}", "subject": f"eq.{subject}", "chapter": f"eq.{temp_label}"},
+            json={"chapter": chapter},
+        )
+        if rename_resp.status_code >= 400:
+            return {"error": f"Wrote the edited sections but could not finalize the chapter name: {rename_resp.text}. Contact an engineer before retrying."}
+    except Exception as e:
+        return {"error": f"Wrote the edited sections but could not finalize the chapter name: {e}. Contact an engineer before retrying."}
+
+    _invalidate_ncert_content_sections_cache()
+    await _log_ncert_chapter_event(
+        cls, subject, chapter, source="manual", sections=len(inserted),
+        words=sum(r.get("word_count") or 0 for r in inserted),
+    )
+
+    words = sum(len((s.get("text") or "").split()) for s in new_sections)
+    return {
+        "class": cls, "subject": subject, "chapter": chapter, "sections": inserted,
+        "flags": flags, "words": words, "section_count": len(inserted),
+    }
+
 
 @app.post("/admin/ncert-content/apply")
 async def admin_ncert_content_apply(request: Request, _: None = Depends(verify_admin), __: None = Depends(rate_limit(10, 300, by="ip"))):
@@ -16557,7 +16871,7 @@ async def admin_ncert_content_apply(request: Request, _: None = Depends(verify_a
         verify_to_log["summary"] = (verify_to_log.get("summary") or "") + " - applied anyway (override used)"
 
     await _log_ncert_chapter_event(
-        cls, subject, chapter_title, source="pdf", cost=kw_cost,
+        cls, subject, chapter_title, source=("pdf (edited)" if preview.get("edited") else "pdf"), cost=kw_cost,
         model_calls=len(kw_results), model=(DEEPSEEK_MODEL if kw_results else None),
         pages=preview.get("pages"), extract_seconds=preview.get("extract_seconds"),
         sections=len(inserted), words=sum(s.get("word_count") or 0 for s in inserted),

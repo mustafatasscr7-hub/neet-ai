@@ -90,6 +90,8 @@
   .diff-card.real { border-color: #ef444450; background: #ef444410; }
   .diff-card.real.marked { border-color: #2a2a2a; background: transparent; opacity: 0.6; }
   .diff-card.harmless { border-color: #1e1e1e; background: #0d0d0d; }
+  .diff-card.informational { border-color: #4f8ef750; background: #4f8ef710; }
+  .diff-card.informational .diff-card-type { color: #4f8ef7; }
   .diff-card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 6px; flex-wrap: wrap; }
   .diff-card-type { font-weight: 600; color: #ececec; }
   .diff-card.real .diff-card-type { color: #ef4444; }
@@ -154,6 +156,35 @@
   .detail-section-kw { font-size: 11px; color: #4f8ef7; margin-top: 6px; }
   .detail-cost-row { font-size: 11px; color: #888; margin-bottom: 14px; display: flex; gap: 14px; flex-wrap: wrap; }
   .detail-cost-row b { color: #ececec; }
+
+  /* Editable preview/chapter section rows -- clicking a row expands an inline editor below it.
+     Shared by the upload preview (#previewSections) and the already-loaded chapter detail
+     (#detailSections), via renderEditableSections(). */
+  .edit-section-row { border-bottom: 1px solid #1a1a1a; }
+  .edit-section-row:last-child { border-bottom: none; }
+  .edit-section-row-head { padding: 8px 10px; display: flex; justify-content: space-between; gap: 10px; align-items: center; cursor: pointer; font-size: 12px; }
+  .edit-section-row-head:hover { background: #151515; }
+  .edit-section-row-head .heading { color: #ececec; }
+  .edit-section-row-head .meta { color: #666; white-space: nowrap; display: flex; gap: 8px; align-items: center; }
+  .edit-section-editor { display: none; padding: 10px 12px 12px; border-top: 1px solid #1a1a1a; background: #0d0d0d; }
+  .edit-section-editor.open { display: block; }
+  .edit-section-editor input[type="text"] {
+    width: 100%; background: #111; border: 1px solid #2a2a2a; border-radius: 6px; padding: 7px 9px;
+    color: #ececec; font-size: 13px; font-weight: 600; font-family: 'Inter', sans-serif; outline: none; margin-bottom: 8px;
+  }
+  .edit-section-editor textarea {
+    width: 100%; min-height: 110px; background: #111; border: 1px solid #2a2a2a; border-radius: 6px; padding: 8px 9px;
+    color: #ececec; font-size: 12px; font-family: 'Inter', sans-serif; outline: none; resize: vertical; line-height: 1.5;
+  }
+  .edit-section-editor input:focus, .edit-section-editor textarea:focus { border-color: #4f8ef7; }
+  .edit-wc-live { font-size: 11px; color: #666; margin: 4px 0 8px; }
+  .edit-section-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .edit-section-status { font-size: 11px; margin-top: 8px; min-height: 14px; }
+  .edit-section-status.error { color: #ef4444; }
+  .edit-section-status.success { color: #4ade80; }
+  .insert-row { padding: 8px 10px; text-align: center; }
+  .insert-row .action-btn { font-size: 11px; }
+  .added-by-you-note { font-size: 11px; color: #4f8ef7; margin-top: 6px; }
 </style>
 </head>
 <body>
@@ -252,6 +283,7 @@
       <button type="button" class="secondary-btn" onclick="closeChapterDetail()">Close</button>
     </div>
     <div class="detail-cost-row" id="detailCostRow"></div>
+    <div class="flags-box" id="detailFlagsBox" style="display:none"></div>
     <div class="verify-upload-row">
       <input type="file" id="verifyChapterFile" accept="application/pdf"/>
       <button type="button" class="secondary-btn" id="verifyChapterBtn" onclick="verifyChapterAgainstPdf()">Verify against PDF</button>
@@ -336,6 +368,13 @@
     return div.innerHTML;
   }
 
+  // escapeHtml() alone is not safe inside a quoted HTML attribute (innerHTML serialization of a
+  // text node does not escape '"') -- used wherever a heading/text value is embedded as
+  // value="..." rather than as element content.
+  function escapeAttr(s) {
+    return escapeHtml(s).replace(/"/g, '&quot;');
+  }
+
   // ---------------- Verify against PDF: result panel ----------------
   // Shared between the upload preview (prefix "previewCrosscheck", ctx without canEdit) and the
   // per-chapter "Verify against PDF" action (prefix "detailCrosscheck", full ctx) -- same markup,
@@ -359,7 +398,8 @@
 
   let _verifyCtx = {}; // prefix -> {class, subject, chapter, rerun}
 
-  function diffTypeLabel(t) {
+  function diffTypeLabel(t, category) {
+    if (category === 'informational') return 'Added by you';
     return DIFF_TYPE_LABELS[t] || t;
   }
 
@@ -401,7 +441,7 @@
     return `
       <div class="diff-card ${d.category}${marked ? ' marked' : ''}">
         <div class="diff-card-head">
-          <span class="diff-card-type">${escapeHtml(diffTypeLabel(d.type))}</span>
+          <span class="diff-card-type">${escapeHtml(diffTypeLabel(d.type, d.category))}</span>
           <span class="diff-card-where">${where}</span>
         </div>
         ${renderDiffLine('In the PDF:', d.pdf_excerpt, d.diff_spans, 'pdf')}
@@ -424,7 +464,8 @@
     const differences = verify.differences || [];
     const real = differences.filter(d => d.category === 'real');
     const harmless = differences.filter(d => d.category === 'harmless');
-    const counts = verify.counts || { real: real.length, harmless: harmless.length, by_type: {} };
+    const informational = differences.filter(d => d.category === 'informational');
+    const counts = verify.counts || { real: real.length, harmless: harmless.length, informational: informational.length, by_type: {} };
 
     const typeChips = Object.keys(counts.by_type || {}).map(t =>
       `<span class="type-chip">${escapeHtml(diffTypeLabel(t))}: ${counts.by_type[t]}</span>`
@@ -432,6 +473,10 @@
 
     const realHtml = real.length
       ? `<div class="diff-group-label">Real differences (${real.length})</div><div class="diff-cards">${real.map(d => renderDiffCard(d, _verifyCtx[prefix])).join('')}</div>`
+      : '';
+
+    const informationalHtml = informational.length
+      ? `<div class="diff-group-label">Added by you (${informational.length}) - informational, not a failure</div><div class="diff-cards">${informational.map(d => renderDiffCard(d, _verifyCtx[prefix])).join('')}</div>`
       : '';
 
     const harmlessHtml = harmless.length ? `
@@ -445,7 +490,7 @@
       </div>
     ` : '';
 
-    const emptyHtml = (!real.length && !harmless.length) ? '<div class="diff-empty">No differences found.</div>' : '';
+    const emptyHtml = (!real.length && !harmless.length && !informational.length) ? '<div class="diff-empty">No differences found.</div>' : '';
 
     box.innerHTML = `
       <div class="verify-banner ${escapeHtml(verify.status)}">${escapeHtml(verify.verdict_line || verify.summary || verify.status)}</div>
@@ -453,10 +498,12 @@
         <span>Coverage <b>${verify.coverage_pct != null ? Number(verify.coverage_pct).toFixed(1) : '-'}%</b></span>
         <span><b>${counts.real}</b> real</span>
         <span><b>${counts.harmless}</b> harmless</span>
+        ${informational.length ? `<span><b>${counts.informational || informational.length}</b> added by you</span>` : ''}
         ${typeChips}
       </div>
       ${emptyHtml}
       ${realHtml}
+      ${informationalHtml}
       ${harmlessHtml}
     `;
   }
@@ -485,22 +532,240 @@
     }
   }
 
-  // "Open this section to edit" -- jumps to that section's editor in the manual add/edit form
-  // below. If the section already exists in the currently-open chapter detail, pre-fills its
-  // real ordinal/text (edit in place); otherwise pre-fills a fresh row for that heading (e.g. a
-  // heading the PDF has that storage is missing) so the admin can type the text straight in.
+  // "Open this section to edit" (from a verify diff card) -- opens that section's own inline
+  // editor row in whichever panel currently has it (the upload preview or the loaded-chapter
+  // detail). If the heading isn't found in either (e.g. a heading the PDF has that storage is
+  // entirely missing), this is a no-op -- there is nothing yet to open.
   function openSectionEditor(clsEnc, subjectEnc, chapterEnc, headingEnc) {
-    const cls = decodeURIComponent(clsEnc), subject = decodeURIComponent(subjectEnc);
-    const chapter = decodeURIComponent(chapterEnc), heading = decodeURIComponent(headingEnc);
-    const cache = window._detailSectionsCache || [];
-    const row = cache.find(s => s.heading === heading);
-    document.getElementById('manualClass').value = cls;
-    document.getElementById('manualSubject').value = subject;
-    document.getElementById('manualChapter').value = chapter;
-    document.getElementById('manualHeading').value = heading;
-    document.getElementById('manualOrdinal').value = row ? row.ordinal : cache.length;
-    document.getElementById('manualText').value = row ? row.text : '';
-    document.getElementById('manualHeading').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const heading = decodeURIComponent(headingEnc);
+    for (const containerId of ['detailSections', 'previewSections']) {
+      const state = window._editState && window._editState[containerId];
+      if (!state) continue;
+      const idx = state.sections.findIndex(s => s.heading === heading);
+      if (idx >= 0) {
+        state.openIndex = idx;
+        state.insertAt = null;
+        renderEditableSectionsList(containerId);
+        document.getElementById(containerId).scrollIntoView({ behavior: 'smooth', block: 'center' });
+        return;
+      }
+    }
+  }
+
+  // ---------------- Editable section rows (preview + loaded chapter) ----------------
+  // Shared between the upload preview (#previewSections, mode {type:'preview', previewId}) and
+  // the loaded-chapter detail (#detailSections, mode {type:'chapter', cls, subject, chapter}).
+  // Each section row expands into an inline editor (heading + body text, live word count, Save/
+  // Delete/Merge/Move/Insert) that posts to /admin/ncert-content/preview/edit or
+  // /admin/ncert-content/chapter/edit and re-renders from the response -- the server re-runs
+  // structural validation (and, for a preview, the PDF cross-check) after every single action.
+  window._editState = {};
+
+  function wordCount(text) {
+    const t = (text || '').trim();
+    return t ? t.split(/\s+/).length : 0;
+  }
+
+  function renderFlagsBox(elId, flags) {
+    const el = document.getElementById(elId);
+    if (!flags || !flags.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
+    el.style.display = 'block';
+    el.innerHTML = 'Structural validation failed -- Apply/Save is disabled until this is fixed:<ul>' +
+      flags.map(f => `<li>${escapeHtml(f)}</li>`).join('') + '</ul>Edit a section below (or use the manual section form) to fix it.';
+  }
+
+  function renderEditableSections(containerId, sections, mode) {
+    window._editState[containerId] = { sections: sections || [], mode, openIndex: null, insertAt: null };
+    renderEditableSectionsList(containerId);
+  }
+
+  function renderEditableSectionsList(containerId) {
+    const state = window._editState[containerId];
+    const container = document.getElementById(containerId);
+    if (!state) { container.innerHTML = ''; return; }
+    const sections = state.sections;
+    if (!sections.length) {
+      container.innerHTML = '<div class="edit-section-row"><div class="edit-section-row-head"><span class="heading">No sections found.</span></div></div>' +
+        renderInsertForm(containerId, 0, state.insertAt === 0);
+      return;
+    }
+    let html = '';
+    for (let i = 0; i < sections.length; i++) {
+      if (state.insertAt === i) html += renderInsertForm(containerId, i, true);
+      const s = sections[i];
+      const open = state.openIndex === i;
+      html += `
+        <div class="edit-section-row">
+          <div class="edit-section-row-head" onclick="toggleSectionEditor('${containerId}', ${i})">
+            <span class="heading">${escapeHtml(s.heading)}</span>
+            <span class="meta">${wordCount(s.text)} words</span>
+          </div>
+          <div class="edit-section-editor${open ? ' open' : ''}">${open ? renderSectionEditorForm(containerId, i, s) : ''}</div>
+        </div>`;
+    }
+    if (state.insertAt === sections.length) html += renderInsertForm(containerId, sections.length, true);
+    container.innerHTML = html;
+  }
+
+  function renderSectionEditorForm(containerId, i, s) {
+    return `
+      <input type="text" id="${containerId}-heading-${i}" value="${escapeAttr(s.heading)}"/>
+      <textarea id="${containerId}-text-${i}" oninput="updateLiveWc('${containerId}', ${i})">${escapeHtml(s.text)}</textarea>
+      <div class="edit-wc-live" id="${containerId}-wc-${i}">${wordCount(s.text)} words</div>
+      <div class="edit-section-actions">
+        <button type="button" class="action-btn" onclick="runSectionAction('${containerId}', ${i}, 'save')">Save</button>
+        <button type="button" class="action-btn danger" onclick="runSectionAction('${containerId}', ${i}, 'delete')">Delete</button>
+        <button type="button" class="action-btn" onclick="runSectionAction('${containerId}', ${i}, 'merge_prev')">Merge with previous</button>
+        <button type="button" class="action-btn" onclick="runSectionAction('${containerId}', ${i}, 'merge_next')">Merge with next</button>
+        <button type="button" class="action-btn" onclick="runSectionAction('${containerId}', ${i}, 'move_up')">Move up</button>
+        <button type="button" class="action-btn" onclick="runSectionAction('${containerId}', ${i}, 'move_down')">Move down</button>
+        <button type="button" class="secondary-btn" onclick="showInsertForm('${containerId}', ${i})">Insert section above</button>
+        <button type="button" class="secondary-btn" onclick="showInsertForm('${containerId}', ${i + 1})">Insert section below</button>
+      </div>
+      <div class="edit-section-status" id="${containerId}-status-${i}"></div>
+    `;
+  }
+
+  function renderInsertForm(containerId, atIndex, open) {
+    if (!open) return '';
+    return `
+      <div class="edit-section-row">
+        <div class="edit-section-editor open">
+          <input type="text" id="${containerId}-insert-heading" placeholder="Heading, e.g. 6.1.4 New Topic"/>
+          <textarea id="${containerId}-insert-text" placeholder="Section text" oninput="updateInsertWc('${containerId}')"></textarea>
+          <div class="edit-wc-live" id="${containerId}-insert-wc">0 words</div>
+          <div class="edit-section-actions">
+            <button type="button" class="action-btn" onclick="runInsertAction('${containerId}', ${atIndex})">Add section</button>
+            <button type="button" class="secondary-btn" onclick="cancelInsertForm('${containerId}')">Cancel</button>
+          </div>
+          <div class="edit-section-status" id="${containerId}-insert-status"></div>
+        </div>
+      </div>`;
+  }
+
+  function toggleSectionEditor(containerId, i) {
+    const state = window._editState[containerId];
+    if (!state) return;
+    state.insertAt = null;
+    state.openIndex = state.openIndex === i ? null : i;
+    renderEditableSectionsList(containerId);
+  }
+
+  function showInsertForm(containerId, atIndex) {
+    const state = window._editState[containerId];
+    if (!state) return;
+    state.openIndex = null;
+    state.insertAt = atIndex;
+    renderEditableSectionsList(containerId);
+  }
+
+  function cancelInsertForm(containerId) {
+    const state = window._editState[containerId];
+    if (!state) return;
+    state.insertAt = null;
+    renderEditableSectionsList(containerId);
+  }
+
+  function updateLiveWc(containerId, i) {
+    const ta = document.getElementById(`${containerId}-text-${i}`);
+    const wc = document.getElementById(`${containerId}-wc-${i}`);
+    if (ta && wc) wc.textContent = `${wordCount(ta.value)} words`;
+  }
+
+  function updateInsertWc(containerId) {
+    const ta = document.getElementById(`${containerId}-insert-text`);
+    const wc = document.getElementById(`${containerId}-insert-wc`);
+    if (ta && wc) wc.textContent = `${wordCount(ta.value)} words`;
+  }
+
+  async function postSectionEdit(mode, action, index, heading, text) {
+    let url, body;
+    if (mode.type === 'preview') {
+      url = `${API_BASE}/admin/ncert-content/preview/edit`;
+      body = { preview_id: mode.previewId, action, index, heading, text };
+    } else {
+      url = `${API_BASE}/admin/ncert-content/chapter/edit`;
+      body = { class: mode.cls, subject: mode.subject, chapter: mode.chapter, action, index, heading, text };
+    }
+    try {
+      const res = await fetch(url, { method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify(body) });
+      if (res.status === 401) { logout(); return { error: 'Logged out.' }; }
+      if (!res.ok) return { error: await describeHttpError(res) };
+      return await res.json();
+    } catch (e) {
+      return { error: 'Could not reach server.' };
+    }
+  }
+
+  async function runSectionAction(containerId, i, action) {
+    const state = window._editState[containerId];
+    if (!state) return;
+    const statusEl = document.getElementById(`${containerId}-status-${i}`);
+    let heading, text;
+    if (action === 'save') {
+      heading = document.getElementById(`${containerId}-heading-${i}`).value;
+      text = document.getElementById(`${containerId}-text-${i}`).value;
+    }
+    if (statusEl) { statusEl.textContent = 'Saving...'; statusEl.className = 'edit-section-status'; }
+    const data = await postSectionEdit(state.mode, action, i, heading, text);
+    if (data.error) {
+      if (statusEl) { statusEl.textContent = data.error; statusEl.className = 'edit-section-status error'; }
+      return;
+    }
+    const nextOpen = action === 'delete' ? null : (action === 'move_down' ? i + 1 : (action === 'move_up' ? i - 1 : i));
+    applyEditResult(containerId, data, nextOpen);
+  }
+
+  async function runInsertAction(containerId, atIndex) {
+    const state = window._editState[containerId];
+    if (!state) return;
+    const heading = document.getElementById(`${containerId}-insert-heading`).value;
+    const text = document.getElementById(`${containerId}-insert-text`).value;
+    const statusEl = document.getElementById(`${containerId}-insert-status`);
+    if (statusEl) { statusEl.textContent = 'Adding...'; statusEl.className = 'edit-section-status'; }
+    const data = await postSectionEdit(state.mode, 'insert_above', atIndex, heading, text);
+    if (data.error) {
+      if (statusEl) { statusEl.textContent = data.error; statusEl.className = 'edit-section-status error'; }
+      return;
+    }
+    applyEditResult(containerId, data, atIndex);
+  }
+
+  function applyEditResult(containerId, data, newOpenIndex) {
+    const state = window._editState[containerId];
+    state.sections = data.sections || [];
+    state.openIndex = (newOpenIndex != null && newOpenIndex >= 0 && newOpenIndex < state.sections.length) ? newOpenIndex : null;
+    state.insertAt = null;
+    renderEditableSectionsList(containerId);
+
+    if (state.mode.type === 'preview') {
+      if (currentPreview) {
+        currentPreview.sections = state.sections;
+        currentPreview.flags = data.flags || [];
+        currentPreview.words = data.words;
+        currentPreview.section_count = data.section_count;
+        currentPreview.verify = data.verify;
+      }
+      refreshPreviewBanner();
+    } else {
+      window._detailSectionsCache = state.sections;
+      renderFlagsBox('detailFlagsBox', data.flags || []);
+      loadChapters();
+    }
+  }
+
+  function refreshPreviewBanner() {
+    const data = currentPreview;
+    if (!data) return;
+    document.getElementById('previewMeta').textContent =
+      `Class ${data.class} · ${data.subject} · ${data.section_count} section(s) · ${data.words} words · est. keywords cost ${formatCost(data.estimated_cost)}`;
+    renderFlagsBox('flagsBox', data.flags || []);
+    renderVerifyBlock('previewCrosscheck', data.verify, {
+      class: data.class, subject: data.subject, chapter: data.chapter_title, rerun: rerunPreviewVerify,
+    });
+    const verifyFailed = data.verify && data.verify.status === 'FAIL';
+    document.getElementById('overrideVerifyRow').style.display = verifyFailed ? 'flex' : 'none';
+    updateApplyButtonState();
   }
 
   async function verifyPassword() {
@@ -568,8 +833,6 @@
     el.style.display = text ? 'block' : 'none';
   }
 
-  let _previewPdfBase64 = null; // cached so a "Mark as OK" during preview can re-run the check
-
   async function previewChapter() {
     const file = document.getElementById('chapterFile').files[0];
     if (!file) return;
@@ -588,7 +851,6 @@
 
     try {
       const base64 = await fileToBase64(file);
-      _previewPdfBase64 = { base64, cls, subject };
       const res = await fetch(`${API_BASE}/admin/ncert-content/preview`, {
         method: 'POST',
         headers: authHeaders({ 'Content-Type': 'application/json' }),
@@ -609,20 +871,22 @@
     }
   }
 
+  // Re-runs the cross-check for the preview's CURRENT (possibly already-edited) sections, e.g.
+  // after "Mark as OK" -- deliberately does NOT re-POST /preview (that would re-extract the PDF
+  // from scratch and silently discard any edits made since the preview was created).
   async function rerunPreviewVerify() {
-    if (!_previewPdfBase64) return;
-    const { base64, cls, subject } = _previewPdfBase64;
+    if (!currentPreview || !currentPreview.preview_id) return;
     try {
-      const res = await fetch(`${API_BASE}/admin/ncert-content/preview`, {
+      const res = await fetch(`${API_BASE}/admin/ncert-content/preview/reverify`, {
         method: 'POST',
         headers: authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ class: cls, subject, data: base64 })
+        body: JSON.stringify({ preview_id: currentPreview.preview_id })
       });
       if (!res.ok) return;
       const data = await res.json();
       if (data.error) return;
-      currentPreview = data;
-      renderPreview(data);
+      currentPreview.verify = data.verify;
+      refreshPreviewBanner();
     } catch (e) { /* leave the panel as-is on a transient network error */ }
   }
 
@@ -640,22 +904,9 @@
       existsEl.style.display = 'none';
     }
 
-    const flagsEl = document.getElementById('flagsBox');
-    const flags = data.flags || [];
-    if (flags.length) {
-      flagsEl.style.display = 'block';
-      flagsEl.innerHTML = 'This chapter failed validation and cannot be applied from the PDF route:<ul>' +
-        flags.map(f => `<li>${escapeHtml(f)}</li>`).join('') + '</ul>Use the manual section form below instead.';
-    } else {
-      flagsEl.style.display = 'none';
-    }
+    renderFlagsBox('flagsBox', data.flags || []);
 
-    document.getElementById('previewSections').innerHTML = (data.sections || []).map(s => `
-      <div class="preview-section-row">
-        <span class="heading">${escapeHtml(s.heading)}</span>
-        <span class="wc">${s.word_count} words</span>
-      </div>
-    `).join('') || '<div class="preview-section-row"><span class="heading">No sections found.</span></div>';
+    renderEditableSections('previewSections', data.sections || [], { type: 'preview', previewId: data.preview_id });
 
     document.getElementById('overwriteRow').style.display = data.exists ? 'flex' : 'none';
     document.getElementById('overwriteCheckbox').checked = false;
@@ -854,42 +1105,10 @@
   }
 
   function renderChapterDetail(data, cls, subject, chapter) {
-    document.getElementById('detailSections').innerHTML = (data.sections || []).map((s, i) => `
-      <div class="detail-section">
-        <div class="detail-section-head" onclick="toggleDetailSection(${i})">
-          <span class="heading">${escapeHtml(s.heading)}</span>
-          <span class="meta">
-            ${s.word_count} words
-            <span class="kw-badge ${s.keywords ? 'done' : 'pending'}">${s.keywords ? 'keywords' : 'no keywords'}</span>
-            <button type="button" class="action-btn" onclick="event.stopPropagation(); editSectionFromDetail('${encodeURIComponent(cls)}','${encodeURIComponent(subject)}','${encodeURIComponent(chapter)}',${s.ordinal},'${encodeURIComponent(s.heading)}')">Edit</button>
-          </span>
-        </div>
-        <div class="detail-section-body" id="detail-section-body-${i}">
-          ${escapeHtml(s.text)}
-          ${s.keywords ? `<div class="detail-section-kw">Keywords: ${escapeHtml(s.keywords)}</div>` : ''}
-        </div>
-      </div>
-    `).join('') || '<div class="detail-section">No sections.</div>';
-    // Stash the raw rows for editSectionFromDetail -- re-encoding full text through the onclick
-    // attribute above (which only carries the heading) would risk breaking on quotes/newlines.
+    renderEditableSections('detailSections', data.sections || [], { type: 'chapter', cls, subject, chapter });
+    renderFlagsBox('detailFlagsBox', data.flags || []);
+    // Stash the raw rows -- openSectionEditor() (from a verify diff card) looks a heading up here.
     window._detailSectionsCache = data.sections || [];
-  }
-
-  function toggleDetailSection(i) {
-    const el = document.getElementById(`detail-section-body-${i}`);
-    if (el) el.classList.toggle('open');
-  }
-
-  function editSectionFromDetail(clsEnc, subjectEnc, chapterEnc, ordinal) {
-    const row = (window._detailSectionsCache || []).find(s => s.ordinal === ordinal);
-    if (!row) return;
-    document.getElementById('manualClass').value = decodeURIComponent(clsEnc);
-    document.getElementById('manualSubject').value = decodeURIComponent(subjectEnc);
-    document.getElementById('manualChapter').value = decodeURIComponent(chapterEnc);
-    document.getElementById('manualOrdinal').value = ordinal;
-    document.getElementById('manualHeading').value = row.heading;
-    document.getElementById('manualText').value = row.text;
-    document.getElementById('manualHeading').scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
 
   function closeChapterDetail() {

@@ -16,7 +16,16 @@ import load_ncert_sections as load_mod
 import load_ncert_section_keywords as kw_mod
 
 BARE_HEADING_NUM_RE = re.compile(r"^(\d+(?:\.\d+)+)\s*$")
+FULL_HEADING_RE = re.compile(r"^(\d+(?:\.\d+)+)\s+(.+)$")
 STANDALONE_CAPS_RE = re.compile(r"^[A-Z][A-Z\s']{2,59}$")
+
+# A heading's title must look like one: real words, not a figure/table caption's "a)." / "b)."
+# letter-in-parentheses continuation, and not a caption line itself ("Figure 6.3 b). It has...").
+CAPTION_PREFIX_RE = re.compile(r"^(?:Figure|Fig\.|Table)\b", re.IGNORECASE)
+LETTER_PAREN_RE = re.compile(r"^\(?[a-zA-Z]\)\.?(?:\s|$)")
+CONTINUATION_END_WORDS = {"of", "and", "the"}
+HEADING_CONT_MAX_LINES = 5
+HEADING_CONT_SHORT_WORDS = 3
 
 # Private-use-area and dingbat ranges: real NCERT body text should never contain these. A high
 # share usually means a broken font/encoding in the PDF's text layer (common in scanned-then-OCR'd
@@ -58,31 +67,107 @@ def extract_pages_text_from_bytes(pdf_bytes: bytes):
     return doc, pages
 
 
+def _is_heading_fragment(candidate):
+    """True if a line plausibly continues a heading title: short, starts with a capital letter,
+    not a sentence (no terminal punctuation), and not a figure/table caption, its "a)."/"b)."
+    letter-in-parentheses continuation, or a page-footer reprint line -- none of those are ever
+    headings."""
+    if not candidate:
+        return False
+    if CAPTION_PREFIX_RE.match(candidate):
+        return False
+    if LETTER_PAREN_RE.match(candidate):
+        return False
+    if clean_mod.REPRINT_RE.match(candidate):
+        return False
+    words = candidate.split()
+    if not (1 <= len(words) <= 8):
+        return False
+    if not candidate[0].isupper():
+        return False
+    if candidate.endswith((".", "?", "!")):
+        return False
+    return True
+
+
 def merge_wrapped_headings(lines):
-    """A PDF's raw text layer often splits a numbered heading across lines (the section number
-    alone, then its title on the very next non-blank line) where ncert_clean_manual.py's
-    HEADING_RE expects both on one line - that module was built for already-typed/pasted text,
-    where a human naturally keeps a heading on a single line. Rejoins that one case (confirmed
-    against a real NCERT chapter PDF: "1.2.2\\nGenus\\nGenus comprises...") so real body headings
-    get recognised the same way. Leaves anything that doesn't look like a short heading title
-    alone."""
+    """A PDF's raw text layer often splits a numbered heading across lines - either the section
+    number alone with its title on the next non-blank line ("1.2.2\\nGenus\\nGenus comprises..."),
+    or the number and the start of its title together with the rest wrapping onto one or more
+    further lines ("6.2\\nANATOMY OF DICOTYLEDONOUS AND\\nMONOCOTYLEDONOUS PLANTS",
+    "6.2.5\\nDorsiventral\\n(Dicotyledonous) Leaf") - where ncert_clean_manual.py's HEADING_RE
+    expects it all on one line (that module was built for already-typed/pasted text, where a
+    human naturally keeps a heading on a single line). Rejoins both cases so real body headings
+    get recognised the same way, while rejecting figure/table captions (never headings) so a
+    caption fragment like "Figure\\n6.3 b). It has..." doesn't get mistaken for one."""
     out = []
     i, n = 0, len(lines)
     while i < n:
-        m = BARE_HEADING_NUM_RE.match(lines[i].strip())
-        if m:
+        stripped = lines[i].strip()
+        bare_m = BARE_HEADING_NUM_RE.match(stripped)
+        full_m = None if bare_m else FULL_HEADING_RE.match(stripped)
+
+        if bare_m:
+            heading_num = bare_m.group(1)
             j = i + 1
             while j < n and not lines[j].strip():
                 j += 1
-            if j < n:
-                candidate = lines[j].strip()
-                words = candidate.split()
-                if candidate and candidate[0].isupper() and 1 <= len(words) <= 8 and not candidate.endswith((".", "?", "!")):
-                    out.append(f"{m.group(1)} {candidate}")
-                    i = j + 1
-                    continue
-        out.append(lines[i])
-        i += 1
+            if j >= n or not _is_heading_fragment(lines[j].strip()):
+                out.append(lines[i])
+                i += 1
+                continue
+            parts = [lines[j].strip()]
+            j += 1
+        elif full_m:
+            title = full_m.group(2).strip()
+            if CAPTION_PREFIX_RE.match(title) or LETTER_PAREN_RE.match(title):
+                out.append(lines[i])
+                i += 1
+                continue
+            heading_num = full_m.group(1)
+            parts = [title]
+            j = i + 1
+        else:
+            out.append(lines[i])
+            i += 1
+            continue
+
+        extra = 0
+        while extra < HEADING_CONT_MAX_LINES and j < n:
+            joined = " ".join(parts)
+            joined_words = joined.split()
+            last_word = re.sub(r"[^A-Za-z]", "", joined_words[-1]).lower() if joined_words else ""
+            ends_open = last_word in CONTINUATION_END_WORDS or joined.rstrip().endswith(",")
+            all_caps = bool(joined_words) and joined == joined.upper() and joined != joined.lower()
+            nxt = lines[j].strip()
+            if not nxt:
+                break
+            if ends_open and _is_heading_fragment(nxt):
+                pass
+            elif all_caps and nxt == nxt.upper() and _is_heading_fragment(nxt):
+                pass
+            elif (
+                len(joined_words) <= HEADING_CONT_SHORT_WORDS
+                and nxt.startswith("(")
+                and len(nxt.split()) <= 4
+                and not nxt.rstrip().endswith((".", "?", "!"))
+                and not CAPTION_PREFIX_RE.match(nxt)
+            ):
+                # A short parenthetical qualifier right after a short heading start, e.g.
+                # "Dorsiventral" + "(Dicotyledonous) Leaf". Deliberately narrower than the
+                # ends_open/all_caps rules above (must literally start with "(") -- a looser
+                # "any short capitalised line" rule here previously absorbed unrelated repeated
+                # words (a sidebar echo of the same short heading, a stray page-footer line) into
+                # the heading text on other chapters.
+                pass
+            else:
+                break
+            parts.append(nxt)
+            j += 1
+            extra += 1
+
+        out.append(f"{heading_num} {' '.join(parts)}")
+        i = j
     return out
 
 
@@ -158,6 +243,74 @@ def validate_chapter(chapter_num, chapter_title, blocks, sections, pages):
                 + ".".join(map(str, numbered[i]))
                 + " appears after "
                 + ".".join(map(str, numbered[i - 1]))
+            )
+            break
+
+    return flags
+
+
+MIN_SECTION_WORDS = 3
+
+
+def validate_sections(sections):
+    """Deterministic, PDF-independent revalidation for a hand-edited list of sections (the
+    editable-preview flow in server.py, both for a not-yet-applied preview and for a chapter
+    already loaded into ncert_sections). Mirrors validate_chapter's own rules (too few headings,
+    empty sections, a minimum word count, duplicate headings, out-of-order numbered headings,
+    garbled characters) but works directly off {"heading", "text"} dicts instead of the PDF's own
+    blocks/pages -- an edit has no PDF page structure to re-check. Any flag means the edited
+    sections can't be applied/saved yet. Never raises on malformed input; a missing field is just
+    treated as empty."""
+    flags = []
+    if len(sections) < MIN_HEADINGS:
+        flags.append(f"only {len(sections)} heading(s) found (minimum {MIN_HEADINGS})")
+
+    empty = [s.get("heading") or "(no heading)" for s in sections if not (s.get("text") or "").strip()]
+    if empty:
+        flags.append("empty section(s): " + ", ".join(empty))
+
+    too_short = [
+        s.get("heading") or "(no heading)" for s in sections
+        if (s.get("text") or "").strip() and len((s.get("text") or "").split()) < MIN_SECTION_WORDS
+    ]
+    if too_short:
+        flags.append(f"section(s) under {MIN_SECTION_WORDS} words: " + ", ".join(too_short))
+
+    seen = set()
+    dupes = []
+    for s in sections:
+        h = (s.get("heading") or "").strip()
+        if h in seen and h not in dupes:
+            dupes.append(h)
+        seen.add(h)
+    if dupes:
+        flags.append("duplicate heading(s): " + ", ".join(dupes))
+
+    full_text = "\n".join((s.get("text") or "") for s in sections)
+    total_chars = len(full_text) or 1
+    garbled_pct = len(GARBLED_CHAR_RE.findall(full_text)) / total_chars * 100
+    if garbled_pct > GARBLED_CHAR_PCT_MAX:
+        flags.append(f"garbled font: {garbled_pct:.2f}% private-use/dingbat characters")
+
+    tokens = re.findall(r"[A-Za-z']+", full_text.lower())
+    if tokens:
+        common_pct = sum(1 for t in tokens if t in COMMON_WORDS) / len(tokens) * 100
+        if common_pct < COMMON_WORD_PCT_MIN:
+            flags.append(f"garbled font: common English words only {common_pct:.2f}% of tokens")
+
+    numbered = []
+    for s in sections:
+        m = clean_mod.HEADING_RE.match((s.get("heading") or "").strip())
+        if m:
+            try:
+                numbered.append(tuple(int(x) for x in m.group(1).split(".")))
+            except ValueError:
+                continue
+    for i in range(1, len(numbered)):
+        if numbered[i] < numbered[i - 1]:
+            flags.append(
+                "section order: heading " + ".".join(map(str, numbered[i]))
+                + " appears after " + ".".join(map(str, numbered[i - 1]))
             )
             break
 

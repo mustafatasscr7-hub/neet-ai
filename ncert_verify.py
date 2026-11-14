@@ -98,6 +98,26 @@ def classify_dropped_line(line: str) -> str:
     return "other"
 
 
+def _real_content_word_total(raw_lines):
+    """How many words of the PDF's (merge_wrapped_headings-cleaned) raw text are real body
+    content, as opposed to structural overhead that is never stored as section text by design:
+    the chapter title line, every numbered heading's own label text (headings live in their own
+    field, not a section's "text"), and anything is_junk_line would drop (running headers, page
+    numbers, the Reprint footer, stray caps-phrase fragments). Used as coverage's denominator
+    instead of the PDF's raw total word count, which otherwise structurally caps coverage below
+    100% for every chapter purely from its headings and page furniture, with no real content ever
+    missing."""
+    overhead = 0
+    for ln in raw_lines:
+        s = ln.strip()
+        if not s:
+            continue
+        if clean_mod.CHAPTER_TITLE_RE.match(s) or clean_mod.HEADING_RE.match(s) or clean_mod.is_junk_line(s):
+            overhead += len(s.split())
+    total = sum(len(ln.split()) for ln in raw_lines)
+    return total - overhead
+
+
 def _collect_dropped(front_lines, body_lines):
     """front_lines: raw lines before the 'CHAPTER n' marker (title, contents listing, unit intro --
     never stored in any section). body_lines: raw lines after it, as strip_front_matter returns
@@ -237,7 +257,7 @@ def _classify_pair(pdf_text, stored_text, pdf_norm, stored_norm):
     }
 
 
-def _compare_paragraphs(pdf_paras, stored_paras):
+def _compare_paragraphs(pdf_paras, stored_paras, informational_extra=False):
     """Greedy best-match alignment between one section's PDF-cleaned paragraphs and its stored
     paragraphs. Paragraphs equal after normalize_ws_quotes are matched for free (via
     SequenceMatcher, so repeated identical paragraphs line up in order); everything left over is
@@ -269,11 +289,16 @@ def _compare_paragraphs(pdf_paras, stored_paras):
         else:
             diffs.append({"type": "missing", "category": "real", "pdf_text": pdf_paras[i], "stored_text": None})
     for j in sorted(stored_left):
-        diffs.append({"type": "extra", "category": "real", "pdf_text": None, "stored_text": stored_paras[j]})
+        # "extra" is normally real (text stored that the PDF doesn't have, a sign of drift from
+        # the source) -- but for a chapter being hand-edited in the preview editor, new text an
+        # admin deliberately typed is exactly this shape and is not a failure, just something to
+        # show as "added by you" (see server.py's preview/chapter edit endpoints).
+        category = "informational" if informational_extra else "real"
+        diffs.append({"type": "extra", "category": category, "pdf_text": None, "stored_text": stored_paras[j]})
     return diffs
 
 
-def _check_word_count(pdf_paras, stored_paras, heading_display, pdf_heading_text, pages_norm):
+def _check_word_count(pdf_paras, stored_paras, heading_display, pdf_heading_text, pages_norm, informational_extra=False):
     pdf_wc = sum(len(p.split()) for p in pdf_paras)
     stored_wc = sum(len(p.split()) for p in stored_paras)
     if pdf_wc == 0:
@@ -285,7 +310,9 @@ def _check_word_count(pdf_paras, stored_paras, heading_display, pdf_heading_text
     pdf_excerpt = f"{pdf_wc} word(s) in this section in the PDF"
     stored_excerpt = f"{stored_wc} word(s) stored"
     return {
-        "type": "word_count_mismatch", "category": "real", "section": heading_display,
+        "type": "word_count_mismatch",
+        "category": "informational" if informational_extra else "real",
+        "section": heading_display,
         "page": _page_for_text(pages_norm, pdf_heading_text), "pdf_excerpt": pdf_excerpt,
         "stored_excerpt": stored_excerpt, "diff_spans": None,
         "diff_key": _diff_key("word_count_mismatch", pdf_excerpt, stored_excerpt),
@@ -316,7 +343,7 @@ def _group_pdf_blocks_by_heading(pdf_blocks):
     return groups
 
 
-def _compare_headings_and_sections(pdf_blocks, sections, pages_norm):
+def _compare_headings_and_sections(pdf_blocks, sections, pages_norm, informational_extra=False):
     differences = []
     groups = _group_pdf_blocks_by_heading(pdf_blocks)
 
@@ -349,7 +376,9 @@ def _compare_headings_and_sections(pdf_blocks, sections, pages_norm):
         if key not in pdf_key_to_heading:
             heading = stored_key_to_heading[key]
             differences.append({
-                "type": "heading_extra", "category": "real", "section": heading, "page": None,
+                "type": "heading_extra",
+                "category": "informational" if informational_extra else "real",
+                "section": heading, "page": None,
                 "pdf_excerpt": None, "stored_excerpt": heading[:MAX_EXCERPT_CHARS],
                 "diff_spans": None, "diff_key": _diff_key("heading_extra", None, heading),
             })
@@ -380,11 +409,11 @@ def _compare_headings_and_sections(pdf_blocks, sections, pages_norm):
         pdf_paras = pdf_paras_by_key[key]
         stored_paras = stored_paras_by_key[key]
 
-        wc_diff = _check_word_count(pdf_paras, stored_paras, heading_display, pdf_key_to_heading[key], pages_norm)
+        wc_diff = _check_word_count(pdf_paras, stored_paras, heading_display, pdf_key_to_heading[key], pages_norm, informational_extra)
         if wc_diff:
             differences.append(wc_diff)
 
-        for raw in _compare_paragraphs(pdf_paras, stored_paras):
+        for raw in _compare_paragraphs(pdf_paras, stored_paras, informational_extra):
             pdf_text, stored_text = raw.get("pdf_text"), raw.get("stored_text")
             differences.append({
                 "type": raw["type"], "category": raw["category"], "section": heading_display,
@@ -415,13 +444,19 @@ def _build_summary(status, coverage_pct, real_count, harmless_count):
     return ", ".join(parts)[:500]
 
 
-def verify_text_coverage(pdf_bytes: bytes, sections: list) -> dict:
+def verify_text_coverage(pdf_bytes: bytes, sections: list, informational_extra: bool = False) -> dict:
     """sections: [{"heading": ..., "text": ...}, ...] -- either a fresh preview's sections (not
     yet written) or a chapter's existing ncert_sections rows (the "Verify against PDF" action).
     Never raises for a readable PDF; returns a dict, never writes anything, never stores or logs
     any excerpt. `status`/`counts` here are the RAW pre-decisions picture (every real difference
     counts against PASS); the caller applies any persisted "Mark as OK" decisions on top of
-    `differences` before deciding the final verdict shown to the admin."""
+    `differences` before deciding the final verdict shown to the admin.
+
+    informational_extra: set by server.py's editable-preview endpoints after a hand edit -- text
+    (or a whole section) present in storage but not in the PDF is then "added by you", shown to
+    the admin but never counted against PASS/FAIL, as opposed to the default (False) behaviour for
+    an unedited PDF-sourced chapter, where the same gap is real drift from the source and must
+    still fail."""
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     try:
         pages_raw = [page.get_text() for page in doc]
@@ -433,14 +468,14 @@ def verify_text_coverage(pdf_bytes: bytes, sections: list) -> dict:
 
         dropped = _collect_dropped(front_lines, body_lines)
         pdf_blocks = clean_mod.dedupe_headings(clean_mod.build_blocks(body_lines))
-        total_words = sum(len(p.split()) for p in pages_raw)
+        total_words = _real_content_word_total(raw_lines)
 
         differences = [
             _make_harmless_dropped_diff(text, heading, pages_norm)
             for text, reason, _wc, heading in dropped
             if reason in ("running header", "page number")
         ]
-        differences += _compare_headings_and_sections(pdf_blocks, sections, pages_norm)
+        differences += _compare_headings_and_sections(pdf_blocks, sections, pages_norm, informational_extra)
     finally:
         doc.close()
 
@@ -450,9 +485,12 @@ def verify_text_coverage(pdf_bytes: bytes, sections: list) -> dict:
     word_diff_pct = round(abs(word_diff) / total_words * 100, 2) if total_words else 0.0
 
     real_count = sum(1 for d in differences if d["category"] == "real")
-    harmless_count = len(differences) - real_count
+    informational_count = sum(1 for d in differences if d["category"] == "informational")
+    harmless_count = len(differences) - real_count - informational_count
     status = "PASS" if real_count == 0 else "FAIL"
     summary = _build_summary(status, coverage_pct, real_count, harmless_count)
+    if informational_count:
+        summary = (summary + f", {informational_count} added-by-you")[:500]
     by_type = dict(Counter(d["type"] for d in differences))
 
     return {
@@ -465,5 +503,8 @@ def verify_text_coverage(pdf_bytes: bytes, sections: list) -> dict:
         "word_diff_pct": word_diff_pct,
         "dropped_lines_count": len(dropped),
         "differences": differences,
-        "counts": {"real": real_count, "harmless": harmless_count, "by_type": by_type},
+        "counts": {
+            "real": real_count, "harmless": harmless_count,
+            "informational": informational_count, "by_type": by_type,
+        },
     }
