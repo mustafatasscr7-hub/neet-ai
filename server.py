@@ -3896,10 +3896,11 @@ def _locate_source_span(normalized_candidate: str, source_text: str):
     normalized_candidate, so the student is shown the textbook's own exact wording -- not the
     model's copy of it, which the verifier accepts even when it differs from the source in case
     or whitespace (that's the whole point of normalizing before comparing). Returns (matched_text,
-    end_offset) -- end_offset is the position in source_text right after the match, which
-    _verify_ncert_quotes uses to look for a sentence-ending extension when matched_text itself
-    doesn't end its sentence (see _extend_quote_to_sentence_end). Falls back to
-    (normalized_candidate, len(source_text)) if the mapping doesn't find it (should not happen:
+    start_offset, end_offset) -- the match's position in source_text, which _verify_ncert_quotes
+    uses both to look for a sentence-boundary extension when matched_text doesn't already start
+    or end its own sentence (see _extend_quote_to_sentence_start/_end) and to detect overlap
+    between separate quotes matched against the same section. Falls back to
+    (normalized_candidate, 0, len(source_text)) if the mapping doesn't find it (should not happen:
     the caller only calls this after already confirming normalized_candidate is a substring of
     the same-normalized source)."""
     out_chars, offsets = [], []
@@ -3921,10 +3922,10 @@ def _locate_source_span(normalized_candidate: str, source_text: str):
     mapped_source = "".join(out_chars)
     idx = mapped_source.find(normalized_candidate)
     if idx == -1 or not normalized_candidate:
-        return normalized_candidate, len(source_text)
+        return normalized_candidate, 0, len(source_text)
     start = offsets[idx]
     end = offsets[idx + len(normalized_candidate) - 1] + 1
-    return source_text[start:end], end
+    return source_text[start:end], start, end
 
 # A verified quote that got cut off mid-sentence (the picker/model stopped at a word like "or" or
 # "and" instead of the sentence's real end) reads as broken to a student even though every word in
@@ -3962,6 +3963,41 @@ def _extend_quote_to_sentence_end(quote_text: str, end_offset: int, source_text:
         return None
     return extended
 
+# Mirror of the end-extension above, for a quote that starts mid-sentence instead -- the model
+# copied a span that begins partway through a sentence (missing the words that would make its
+# own opening read as a complete unit, e.g. starting on "process of glycolysis..." instead of
+# "The process of glycolysis..."), which reads to a student as carrying a leftover fragment from
+# whatever came just before it in the textbook. Same drop-rather-than-show-broken policy and
+# max_words cap as _extend_quote_to_sentence_end.
+def _starts_after_sentence_boundary(start_offset: int, source_text: str) -> bool:
+    """True when the quote beginning at start_offset in source_text starts right after a
+    sentence boundary -- the very start of the text, or immediately preceded (ignoring
+    whitespace) by one of .!? -- rather than mid-sentence."""
+    before = source_text[:start_offset].rstrip()
+    return not before or before[-1] in ".!?"
+
+def _extend_quote_to_sentence_start(quote_text: str, start_offset: int, source_text: str, max_words: int):
+    """quote_text is the verbatim span of source_text starting at start_offset, which does NOT
+    yet begin at a sentence boundary (caller already checked _starts_after_sentence_boundary).
+    Extends it backward through source_text's own preceding content, back to and including the
+    start of that sentence (right after the previous terminal mark, skipping the whitespace gap
+    between sentences; or the very start of source_text if there's no earlier terminal mark at
+    all AND start_offset is 0 -- but that case never reaches here since it already satisfies
+    _starts_after_sentence_boundary). Returns None -- the caller must drop the quote entirely
+    rather than ever show one still missing a clean start -- when source_text has no earlier
+    sentence boundary to extend back to, or when the extended quote would exceed max_words."""
+    preceding = source_text[:start_offset]
+    matches = list(_NCERT_SENTENCE_END_RE.finditer(preceding))
+    if not matches:
+        return None
+    cut = matches[-1].end()
+    while cut < start_offset and source_text[cut].isspace():
+        cut += 1
+    extended = source_text[cut:start_offset] + quote_text
+    if len(extended.split()) > max_words:
+        return None
+    return extended
+
 def _verify_ncert_quotes(raw_block: str, sections: list):
     """No model involved -- a quote (at least 6 words) is shown only if it is a verbatim
     substring of one of `sections`' own text, once both sides are normalized (curly/straight
@@ -3978,13 +4014,17 @@ def _verify_ncert_quotes(raw_block: str, sections: list):
     in (first match wins when more than one section was picked). A quote that is not an exact
     substring of any picked section -- too short, paraphrased, one changed word, invented -- is
     dropped regardless of what it was captioned with. A shown quote is rendered with the matched
-    section's own exact text (see _locate_source_span), extended to its sentence's real end when
-    it was verified cut off mid-sentence (see _extend_quote_to_sentence_end) -- a verified quote
-    that can't be cleanly extended is dropped, never shown still cut off. Returns (shown, dropped),
-    each a list of {quote, citation} dicts; a shown citation is always "<section.chapter>,
-    <section.heading>"."""
+    section's own exact text (see _locate_source_span), extended to its sentence's real start and
+    end when verified cut off mid-sentence on either side (see _extend_quote_to_sentence_start/
+    _end) -- a verified quote that can't be cleanly extended on a side that needs it is dropped,
+    never shown still cut off. Two accepted quotes whose spans overlap in the same section's text
+    (the model quoted the same or overlapping material twice) keep only the first; once that's
+    resolved, every remaining quote must cite the same chapter as the first one -- a quote citing
+    a second, different chapter is dropped too, so one answer never shows two chapters. Returns
+    (shown, dropped), each a list of {quote, citation} dicts; a shown citation is always
+    "<section.chapter>, <section.heading>"."""
     normalized_sections = [(_normalize_ncert_quote_text(s.get("text") or ""), s) for s in (sections or [])]
-    shown, dropped = [], []
+    accepted, dropped = [], []
     for quote_raw, model_citation in _split_ncert_candidate_lines(raw_block):
         word_count = len(quote_raw.split())
         normalized_quote = _normalize_ncert_quote_text(quote_raw)
@@ -3994,20 +4034,53 @@ def _verify_ncert_quotes(raw_block: str, sections: list):
                 if normalized_quote in normalized_source:
                     matched_section = section
                     break
-        if matched_section:
-            quote_text, end_offset = _locate_source_span(normalized_quote, matched_section["text"])
-            if not _ends_with_terminal_punctuation(quote_text):
-                extended_quote = _extend_quote_to_sentence_end(
-                    quote_text, end_offset, matched_section["text"], _NCERT_QUOTE_EXTEND_MAX_WORDS
-                )
-                if extended_quote is None:
-                    dropped.append({"quote": quote_raw, "citation": model_citation})
-                    continue
-                quote_text = extended_quote
-            citation = f"{matched_section.get('chapter', '')}, {matched_section.get('heading', '')}"
-            shown.append({"quote": quote_text, "citation": citation})
-        else:
+        if not matched_section:
             dropped.append({"quote": quote_raw, "citation": model_citation})
+            continue
+        source_text = matched_section["text"]
+        quote_text, start, end = _locate_source_span(normalized_quote, source_text)
+        if not _ends_with_terminal_punctuation(quote_text):
+            extended_quote = _extend_quote_to_sentence_end(quote_text, end, source_text, _NCERT_QUOTE_EXTEND_MAX_WORDS)
+            if extended_quote is None:
+                dropped.append({"quote": quote_raw, "citation": model_citation})
+                continue
+            quote_text = extended_quote
+            end = start + len(quote_text)
+        if not _starts_after_sentence_boundary(start, source_text):
+            extended_quote = _extend_quote_to_sentence_start(quote_text, start, source_text, _NCERT_QUOTE_EXTEND_MAX_WORDS)
+            if extended_quote is None:
+                dropped.append({"quote": quote_raw, "citation": model_citation})
+                continue
+            quote_text = extended_quote
+            start = end - len(quote_text)
+        chapter = matched_section.get("chapter", "")
+        citation = f"{chapter}, {matched_section.get('heading', '')}"
+        accepted.append({
+            "quote_raw": quote_raw, "model_citation": model_citation, "quote": quote_text,
+            "citation": citation, "chapter": chapter, "section": matched_section, "start": start, "end": end,
+        })
+
+    kept = []
+    for cand in accepted:
+        overlaps_existing = any(
+            cand["section"] is k["section"] and cand["start"] < k["end"] and cand["end"] > k["start"]
+            for k in kept
+        )
+        if overlaps_existing:
+            dropped.append({"quote": cand["quote_raw"], "citation": cand["model_citation"]})
+        else:
+            kept.append(cand)
+
+    if kept:
+        primary_chapter = kept[0]["chapter"]
+        same_chapter, other_chapter = [], []
+        for cand in kept:
+            (same_chapter if cand["chapter"] == primary_chapter else other_chapter).append(cand)
+        for cand in other_chapter:
+            dropped.append({"quote": cand["quote_raw"], "citation": cand["model_citation"]})
+        kept = same_chapter
+
+    shown = [{"quote": c["quote"], "citation": c["citation"]} for c in kept]
     return shown[:3], dropped
 
 # ---------- Block retry (B): one follow-up call when the main answer's quote block is unusable ----------

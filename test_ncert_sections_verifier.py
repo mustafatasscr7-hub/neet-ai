@@ -362,6 +362,109 @@ def test_figure_label_wedged_mid_sentence_rejected_unless_text_matches():
     check("nothing dropped once clean", len(dropped2) == 0, dropped2)
 
 
+def test_quote_starting_mid_sentence_extended_to_sentence_start():
+    print("\n27. a quote starting mid-sentence (leftover fragment) is extended back to the sentence's start")
+    source = (
+        "Enzymes are biocatalysts that speed up the rate of biochemical reactions. "
+        "The process of glycolysis takes place in the cytoplasm and produces pyruvate."
+    )
+    section = {"chapter": "Chapter 9", "heading": "Biomolecules", "text": source}
+    raw = '"process of glycolysis takes place in the cytoplasm and produces pyruvate."'
+    shown, dropped = server._verify_ncert_quotes(raw, [section])
+    check("one quote shown", len(shown) == 1, (shown, dropped))
+    check("nothing dropped", len(dropped) == 0, dropped)
+    check(
+        "quote extended back to the start of its own sentence",
+        shown and shown[0]["quote"] == "The process of glycolysis takes place in the cytoplasm and produces pyruvate.",
+        shown,
+    )
+
+
+def test_quote_dropped_when_no_sentence_start_precedes():
+    print("\n28. a mid-sentence-start quote is dropped when no earlier sentence boundary exists")
+    source = "along with the cytoplasm and produces pyruvate at the end of the pathway."
+    section = {"chapter": "Chapter 9", "heading": "Biomolecules", "text": source}
+    raw = '"cytoplasm and produces pyruvate at the end of the pathway."'
+    shown, dropped = server._verify_ncert_quotes(raw, [section])
+    check("nothing shown (no earlier sentence boundary to extend back to)", len(shown) == 0, (shown, dropped))
+    check("one dropped", len(dropped) == 1, dropped)
+
+
+def test_quote_dropped_when_start_extension_exceeds_word_cap():
+    print("\n29. a mid-sentence-start quote is dropped when extending to the sentence start would exceed 40 words")
+    source = "Enzymes are biocatalysts." + " filler" * 40 + " and the process of glycolysis takes place in the cytoplasm."
+    section = {"chapter": "Chapter 9", "heading": "Biomolecules", "text": source}
+    raw = '"process of glycolysis takes place in the cytoplasm."'
+    shown, dropped = server._verify_ncert_quotes(raw, [section])
+    check("nothing shown (extension would exceed the 40-word cap)", len(shown) == 0, (shown, dropped))
+    check("one dropped", len(dropped) == 1, dropped)
+
+
+def test_quote_already_at_sentence_start_not_extended():
+    print("\n30. a quote that already begins at the very start of the section text is shown unchanged (regression guard)")
+    source = "The process of glycolysis takes place in the cytoplasm. This is followed by the Krebs cycle."
+    section = {"chapter": "Chapter 9", "heading": "Biomolecules", "text": source}
+    raw = '"The process of glycolysis takes place in the cytoplasm."'
+    shown, dropped = server._verify_ncert_quotes(raw, [section])
+    check("one quote shown", len(shown) == 1, (shown, dropped))
+    check(
+        "quote is exactly the first sentence only, not extended backward",
+        shown and shown[0]["quote"] == "The process of glycolysis takes place in the cytoplasm.",
+        shown,
+    )
+
+
+def test_overlapping_quotes_only_first_kept():
+    print("\n31. two quoted spans that overlap in the source text keep only the first, the second is dropped")
+    source = (
+        "Enzymes are biocatalysts that speed up the rate of biochemical reactions in living cells. "
+        "Most enzymes are proteins that act on a specific substrate."
+    )
+    section = {"chapter": "Chapter 9", "heading": "Biomolecules", "text": source}
+    raw = (
+        '"Enzymes are biocatalysts that speed up the rate of biochemical reactions in living cells."\n'
+        '"speed up the rate of biochemical reactions in living cells."'
+    )
+    shown, dropped = server._verify_ncert_quotes(raw, [section])
+    check("only one quote shown", len(shown) == 1, (shown, dropped))
+    check("the second, overlapping quote is dropped", len(dropped) == 1, dropped)
+    check(
+        "the first (longer) quote is the one kept",
+        shown and shown[0]["quote"].startswith("Enzymes are biocatalysts"),
+        shown,
+    )
+
+
+def test_non_overlapping_quotes_both_kept():
+    print("\n32. two quotes from different, non-overlapping sentences in the same section both survive (regression guard)")
+    source = (
+        "Enzymes are biocatalysts that speed up the rate of biochemical reactions in living cells. "
+        "Most enzymes are proteins that act on a specific substrate."
+    )
+    section = {"chapter": "Chapter 9", "heading": "Biomolecules", "text": source}
+    raw = (
+        '"Enzymes are biocatalysts that speed up the rate of biochemical reactions in living cells."\n'
+        '"Most enzymes are proteins that act on a specific substrate."'
+    )
+    shown, dropped = server._verify_ncert_quotes(raw, [section])
+    check("both quotes shown", len(shown) == 2, (shown, dropped))
+    check("nothing dropped", len(dropped) == 0, dropped)
+
+
+def test_quotes_from_two_chapters_only_first_chapter_kept():
+    print("\n33. quotes matched against two DIFFERENT chapters: only the first quote's chapter survives")
+    chapter9_section = {"chapter": "Chapter 9", "heading": "Biomolecules", "text": SOURCE_TEXT}
+    chapter3_section = {"chapter": "Chapter 3", "heading": "Plant Kingdom", "text": OTHER_SOURCE_TEXT}
+    raw = (
+        '"The wide range of living types is amazing."\n'
+        '"Taxonomic studies help in differentiating useful organisms from harmful ones."'
+    )
+    shown, dropped = server._verify_ncert_quotes(raw, [chapter9_section, chapter3_section])
+    check("only one quote shown", len(shown) == 1, (shown, dropped))
+    check("the second quote (a different chapter) is dropped", len(dropped) == 1, dropped)
+    check("the surviving quote cites chapter 9 (the first quote's chapter)", shown and shown[0]["citation"].startswith("Chapter 9"), shown)
+
+
 async def _collect(gen):
     out = []
     async for chunk in gen:
@@ -512,6 +615,13 @@ if __name__ == "__main__":
     test_cutoff_quote_dropped_when_extension_exceeds_word_cap()
     test_quote_already_ending_in_punctuation_not_extended()
     test_figure_label_wedged_mid_sentence_rejected_unless_text_matches()
+    test_quote_starting_mid_sentence_extended_to_sentence_start()
+    test_quote_dropped_when_no_sentence_start_precedes()
+    test_quote_dropped_when_start_extension_exceeds_word_cap()
+    test_quote_already_at_sentence_start_not_extended()
+    test_overlapping_quotes_only_first_kept()
+    test_non_overlapping_quotes_both_kept()
+    test_quotes_from_two_chapters_only_first_chapter_kept()
     test_strip_ncert_block_passthrough_when_no_marker()
     test_strip_ncert_block_captures_and_hides_real_block()
     test_strip_ncert_block_merges_two_separate_blocks()
