@@ -465,6 +465,87 @@ def test_quotes_from_two_chapters_only_first_chapter_kept():
     check("the surviving quote cites chapter 9 (the first quote's chapter)", shown and shown[0]["citation"].startswith("Chapter 9"), shown)
 
 
+def test_ceiling_respected_default_three():
+    print("\n34. more real, non-overlapping quotes than NCERT_QUOTE_MAX are capped at the ceiling")
+    sentences = [f"Sentence number {i} states a genuinely distinct fact about this topic today." for i in range(1, 11)]
+    source = " ".join(sentences)
+    section = {"chapter": "Chapter 9", "heading": "Biomolecules", "text": source}
+    raw = "\n".join(f'"{s}"' for s in sentences)
+    shown, dropped = server._verify_ncert_quotes(raw, [section])
+    # Default is 3, not the 8 this feature was first tried with -- a live 30-question eval
+    # (2026-11-16) found coverage on list-type questions stayed well under the 90% gate at 8, so
+    # the ceiling shipped dormant at the original default. See NCERT_QUOTE_MAX's own comment.
+    check("default ceiling is 3", server.NCERT_QUOTE_MAX == 3, server.NCERT_QUOTE_MAX)
+    check("exactly NCERT_QUOTE_MAX quotes shown out of 10 real candidates", len(shown) == server.NCERT_QUOTE_MAX, (len(shown), shown))
+    check("the first NCERT_QUOTE_MAX sentences (in order) are the ones kept", all(shown[i]["quote"] == sentences[i] for i in range(server.NCERT_QUOTE_MAX)), shown)
+
+
+def test_list_question_coverage_all_items_survive_when_ceiling_raised():
+    print("\n35. four distinct quotes (one per listed item) all survive together when NCERT_QUOTE_MAX is raised past the default")
+    items = [
+        "Porifera are multicellular organisms with a cellular level of organisation and no true tissues.",
+        "Coelenterates are aquatic, sessile or free-swimming, radially symmetrical animals with a gastro-vascular cavity.",
+        "Platyhelminthes are dorsoventrally flattened worms commonly called flatworms found in diverse habitats.",
+        "Annelids are bilaterally symmetrical, metamerically segmented organisms found in marine, fresh water habitats.",
+    ]
+    source = " ".join(items)
+    section = {"chapter": "Chapter 4", "heading": "Animal Kingdom", "text": source}
+    raw = "\n".join(f'"{s}"' for s in items)
+    original = server.NCERT_QUOTE_MAX
+    try:
+        server.NCERT_QUOTE_MAX = 8
+        shown, dropped = server._verify_ncert_quotes(raw, [section])
+        check("all four listed-item quotes shown once the ceiling allows it", len(shown) == 4, (shown, dropped))
+        check("nothing dropped", len(dropped) == 0, dropped)
+        shown_texts = {q["quote"] for q in shown}
+        check("every listed item has its own supporting quote", all(item in shown_texts for item in items), shown)
+    finally:
+        server.NCERT_QUOTE_MAX = original
+    # At the shipped default (3), the same four-item answer can only ever show 3 of the 4 -- the
+    # exact under-coverage this feature set out to fix, now configurable rather than hardcoded.
+    shown_default, _ = server._verify_ncert_quotes(raw, [section])
+    check("at the default ceiling (3), only 3 of the 4 items survive -- configurable, not hardcoded", len(shown_default) == 3, shown_default)
+
+
+def test_ceiling_configurable_via_env_constant():
+    print("\n36. raising NCERT_QUOTE_MAX (monkeypatched, same pattern as NCERT_SECTIONS_RETRY_ENABLED elsewhere) lets more quotes through")
+    sentences = [f"This is a distinct standalone fact number {i} written for this one test." for i in range(1, 6)]
+    source = " ".join(sentences)
+    section = {"chapter": "Chapter 9", "heading": "Biomolecules", "text": source}
+    raw = "\n".join(f'"{s}"' for s in sentences)
+    original = server.NCERT_QUOTE_MAX
+    shown_default, _ = server._verify_ncert_quotes(raw, [section])
+    check("capped at the default ceiling (3) before raising it", len(shown_default) == 3, shown_default)
+    try:
+        server.NCERT_QUOTE_MAX = 5
+        shown, dropped = server._verify_ncert_quotes(raw, [section])
+        check("capped at the raised ceiling (5), not 3", len(shown) == 5, shown)
+    finally:
+        server.NCERT_QUOTE_MAX = original
+    check("ceiling restored after the test", server.NCERT_QUOTE_MAX == original)
+
+
+def test_second_section_quotes_share_the_ceiling():
+    print("\n37. quotes from a SECOND section (same chapter, different heading) count toward the same ceiling, not a separate one")
+    section_a_sentences = [f"Section A fact {i} is a genuinely distinct standalone statement here." for i in range(1, 6)]
+    section_b_sentences = [f"Section B fact {i} is a different genuinely distinct standalone statement." for i in range(1, 6)]
+    section_a = {"chapter": "Chapter 2", "heading": "Kingdom Protista", "text": " ".join(section_a_sentences)}
+    section_b = {"chapter": "Chapter 2", "heading": "Kingdom Fungi", "text": " ".join(section_b_sentences)}
+    raw = "\n".join(f'"{s}"' for s in section_a_sentences + section_b_sentences)
+    original = server.NCERT_QUOTE_MAX
+    try:
+        server.NCERT_QUOTE_MAX = 8
+        shown, dropped = server._verify_ncert_quotes(raw, [section_a, section_b])
+        check("capped at NCERT_QUOTE_MAX across both sections combined, not per-section", len(shown) == 8, (len(shown), shown))
+        citations = {q["citation"] for q in shown}
+        check("kept quotes include at least one from each section (first 8 in appearance order)",
+              any("Kingdom Protista" in c for c in citations) and any("Kingdom Fungi" in c for c in citations), shown)
+        check("none rejected for citing a different heading within the SAME chapter",
+              not any("Section A fact" in d["quote"] or "Section B fact" in d["quote"] for d in dropped), dropped)
+    finally:
+        server.NCERT_QUOTE_MAX = original
+
+
 async def _collect(gen):
     out = []
     async for chunk in gen:
@@ -622,6 +703,10 @@ if __name__ == "__main__":
     test_overlapping_quotes_only_first_kept()
     test_non_overlapping_quotes_both_kept()
     test_quotes_from_two_chapters_only_first_chapter_kept()
+    test_ceiling_respected_default_three()
+    test_list_question_coverage_all_items_survive_when_ceiling_raised()
+    test_ceiling_configurable_via_env_constant()
+    test_second_section_quotes_share_the_ceiling()
     test_strip_ncert_block_passthrough_when_no_marker()
     test_strip_ncert_block_captures_and_hides_real_block()
     test_strip_ncert_block_merges_two_separate_blocks()

@@ -1388,6 +1388,11 @@
     .ncert-sections-card-title { font-weight: 600; color: #4f8ef7; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 5px; }
     .ncert-sections-card-quote { margin: 3px 0; }
     .ncert-sections-card-citation { color: #8a8a8a; font-size: 12px; }
+    /* "Show N more" toggle for a card carrying more than NCERT_CARD_VISIBLE quotes -- see
+       renderNcertSectionsCardHtml. Same blue accent as the title, not the muted citation color,
+       so it still reads as an actionable control rather than more metadata. */
+    .ncert-sections-card-toggle { margin-top: 5px; color: #4f8ef7; font-size: 12px; cursor: pointer; display: inline-block; }
+    .ncert-sections-card-toggle:hover { text-decoration: underline; }
     body.light-mode .ncert-sections-card { background: rgba(79,142,247,0.06) !important; color: #3a3a3a !important; }
     body.light-mode .ncert-sections-card-citation { color: #6b6b6b !important; }
     /* Scoped to .message-bubble.ai so the same wrapper class parseWithMath() also produces for
@@ -3669,13 +3674,30 @@ let selectedImages = [];
     // payload, never assumed safe just because they passed the substring-verification check
     // (that check only guarantees the quote's WORDS are real, not that it's free of HTML-special
     // characters). Hoisted to top-level scope (was previously local to streamAIResponse) so
-    // addMessageRow/switchVersion can render the same saved card on reload/version-switch.
+    // addMessageRow/switchVersion can render the same saved card on reload/version-switch --
+    // and so this one function, not three separate render sites, is what gives the toggle below
+    // identical behavior on a live stream and on a history reload.
+    //
+    // NCERT_QUOTE_MAX (server.py) raised the card's own ceiling well past what reads well inline
+    // -- only the first NCERT_CARD_VISIBLE quotes show by default, with the rest behind a small
+    // "Show N more" toggle rather than ever growing the card unbounded. _ncertCardSeq gives each
+    // card's hidden block its own id (a message can carry more than one card across its
+    // versions), plain incrementing counter rather than Math.random() so it's deterministic.
+    const NCERT_CARD_VISIBLE = 5;
+    let _ncertCardSeq = 0;
     function renderNcertSectionsCardHtml(quotes) {
       if (!quotes || !quotes.length) return '';
-      const lines = quotes.map(q =>
-        `<div class="ncert-sections-card-quote">&ldquo;${escapeHtml(q.quote || '')}&rdquo; <span class="ncert-sections-card-citation">(${escapeHtml(q.citation || '')})</span></div>`
-      ).join('');
-      return `<div class="ncert-sections-card"><div class="ncert-sections-card-title">From NCERT</div>${lines}</div>`;
+      const lineHtml = q =>
+        `<div class="ncert-sections-card-quote">&ldquo;${escapeHtml(q.quote || '')}&rdquo; <span class="ncert-sections-card-citation">(${escapeHtml(q.citation || '')})</span></div>`;
+      const visibleHtml = quotes.slice(0, NCERT_CARD_VISIBLE).map(lineHtml).join('');
+      const rest = quotes.slice(NCERT_CARD_VISIBLE);
+      if (!rest.length) {
+        return `<div class="ncert-sections-card"><div class="ncert-sections-card-title">From NCERT</div>${visibleHtml}</div>`;
+      }
+      const restId = `ncert-sections-rest-${++_ncertCardSeq}`;
+      const restHtml = rest.map(lineHtml).join('');
+      const toggleHtml = `<div class="ncert-sections-card-toggle" onclick="var r=document.getElementById('${restId}');var h=r.style.display==='none';r.style.display=h?'':'none';this.textContent=h?'Show less':'Show ${rest.length} more';">Show ${rest.length} more</div>`;
+      return `<div class="ncert-sections-card"><div class="ncert-sections-card-title">From NCERT</div>${visibleHtml}<div class="ncert-sections-card-rest" id="${restId}" style="display:none">${restHtml}</div>${toggleHtml}</div>`;
     }
 
     // The saved "From NCERT" quotes for whichever version of `msgObj` is currently active --

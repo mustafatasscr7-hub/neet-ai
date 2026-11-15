@@ -3583,6 +3583,21 @@ NCERT_SECTIONS_RETRY_ENABLED = True
 NCERT_SECTIONS_CACHE_TTL = 600  # 10 minutes -- see _get_ncert_sections_cache
 _ncert_sections_cache = {"loaded_at": 0.0, "index_lines": [], "by_id": {}}
 
+# Ceiling on how many quotes one "From NCERT" card can carry -- was a flat 3 (both in the prompt
+# and as _verify_ncert_quotes' own hard slice), which under-served any question whose answer
+# genuinely needs more supporting lines than that (e.g. "what are the four major groups of
+# protozoans" only ever got 2 of the 4 quoted back). Raising the default to 8 was tried and
+# measured on a 30-question DeepSeek+Qwen eval (2026-11-16, $0.049 spent): the mechanism works
+# (quotes per card rose, list-question coverage improved 61%->77% DeepSeek / 56%->76% Qwen), but
+# coverage stayed well short of the >=90% quality gate on both models -- the bottleneck is model
+# compliance and the verifier's own exact-verbatim-substring requirement (unchanged, see
+# _verify_ncert_quotes), not the ceiling's numeric value: neither model's average quotes/card
+# (4.36 / 3.14) even reached 8 in the first place. Per that gate's own fallback, the default stays
+# the original 3 -- the higher ceiling, the strengthened per-listed-item prompt instruction, and
+# the chat.html "Show N more" card all still ship, just dormant at the default; set this env var
+# higher to use them.
+NCERT_QUOTE_MAX = int(os.getenv("NCERT_QUOTE_MAX", "3"))
+
 def _ncert_sections_rule_applies_for_model(model_label: str) -> bool:
     """False for any Gemini-served answer -- the quote block is never appended to/generated for
     an answer Gemini serves. In production this is already structurally guaranteed: the picker
@@ -3819,16 +3834,21 @@ _NCERT_SECTIONS_RULE = f"""
 13. EXACT-QUOTE CHECK -- applies whenever "NCERT Exact Section Text" reference data is present
 above. After writing your complete normal answer exactly as the rules above already specify,
 check whether any line in that reference text directly states or supports a point you made in
-your answer. If at least one does, append a "From NCERT" block with 1 to 3 SHORT passages copied
-WORD FOR WORD from the reference text (never paraphrased, summarized, or combined from different
-sentences). Each quoted line must be at least 6 words long and copied EXACTLY as written in the
-reference text -- changing even one word makes it invalid and worthless to the student. Append
-the block after your answer, with nothing else before or after it:
+your answer. If at least one does, append a "From NCERT" block with up to {NCERT_QUOTE_MAX} SHORT
+passages copied WORD FOR WORD from the reference text (never paraphrased, summarized, or combined
+from different sentences). Quote EVERY passage that directly supports a key point in your answer
+-- if the question asks for a list of items, types, groups, or steps, quote one supporting
+passage for EACH listed item, not just one or two of them. Skip generic filler that does not back
+a specific point, and never quote the same words in more than one passage. Each quoted line must
+be at least 6 words long and copied EXACTLY as written in the reference text -- changing even one
+word makes it invalid and worthless to the student. Append the block after your answer, with
+nothing else before or after it:
 {_NCERT_BLOCK_START}
 "<line copied exactly from the reference text>"
 {_NCERT_BLOCK_END}
-(add a second and/or third quoted line the same way, each on its own line between the two
-markers above, if a genuinely distinct line also directly supports your answer)
+(add another quoted line the same way, each on its own line between the two markers above, for
+every further genuinely distinct line that also directly supports your answer, up to
+{NCERT_QUOTE_MAX} total)
 Do not add a citation, chapter name, heading, or any other text to a quoted line -- just the
 quoted line itself, nothing else.
 If, after checking carefully, no line in the reference text directly states or supports a point
@@ -4081,7 +4101,7 @@ def _verify_ncert_quotes(raw_block: str, sections: list):
         kept = same_chapter
 
     shown = [{"quote": c["quote"], "citation": c["citation"]} for c in kept]
-    return shown[:3], dropped
+    return shown[:NCERT_QUOTE_MAX], dropped
 
 # ---------- Block retry (B): one follow-up call when the main answer's quote block is unusable ----------
 # Triggered only when a section was picked (never on picker NONE, since the caller only reaches
@@ -4092,20 +4112,28 @@ def _verify_ncert_quotes(raw_block: str, sections: list):
 # failover, which is out of scope for a single follow-up call) for just the quote block, nothing
 # else, so it's cheap and fast relative to a full regenerated answer. Run through the exact same
 # verifier as the main attempt. At most one retry per answer; silent on any failure.
+# Was 150 (enough for the old 1-to-3-quote cap) -- raised in step with NCERT_QUOTE_MAX so a retry
+# that genuinely needs the full ceiling isn't cut off mid-quote; ~55 tokens/quote x the ceiling.
+_NCERT_RETRY_MAX_TOKENS = 55 * NCERT_QUOTE_MAX
 _NCERT_RETRY_SYSTEM = (
     "A student asked a NEET exam question. Below is the exact NCERT textbook section text that "
     "applies to it. Check whether any line in that reference text directly states or supports a "
     "correct answer to the question. If at least one does, reply with ONLY a \"From NCERT\" "
-    "block: 1 to 3 SHORT passages copied WORD FOR WORD from the reference text (never "
-    "paraphrased, summarized, or combined from different sentences). Each quoted line must be at "
-    "least 6 words long and copied EXACTLY as written. Do not add a citation, chapter name, "
-    "heading, or any other text to a quoted line -- just the quoted line itself. Format, nothing "
-    "else before or after it:\n"
+    f"block: up to {NCERT_QUOTE_MAX} SHORT passages copied WORD FOR WORD from the reference text "
+    "(never paraphrased, summarized, or combined from different sentences). Quote EVERY passage "
+    "that directly supports a key point in the answer -- if the question asks for a list of "
+    "items, types, groups, or steps, quote one supporting passage for EACH listed item, not just "
+    "one or two of them. Skip generic filler that does not back a specific point, and never "
+    "quote the same words in more than one passage. Each quoted line must be at least 6 words "
+    "long and copied EXACTLY as written. Do not add a citation, chapter name, heading, or any "
+    "other text to a quoted line -- just the quoted line itself. Format, nothing else before or "
+    "after it:\n"
     f"{_NCERT_BLOCK_START}\n"
     "\"<line copied exactly from the reference text>\"\n"
     f"{_NCERT_BLOCK_END}\n"
-    "(add a second and/or third quoted line the same way, each on its own line between the two "
-    "markers, if a genuinely distinct line also directly supports the answer)\n"
+    f"(add another quoted line the same way, each on its own line between the two markers, for "
+    f"every further genuinely distinct line that also directly supports the answer, up to "
+    f"{NCERT_QUOTE_MAX} total)\n"
     "If, after checking carefully, no line in the reference text directly states or supports a "
     "correct answer to the question, reply with just the word NONE. No other text, no explanation."
 )
@@ -4141,7 +4169,7 @@ async def _retry_ncert_block(text: str, combined_section_text: str, use_qwen: bo
         if use_qwen:
             resp = await asyncio.wait_for(
                 qwen_async_client.chat.completions.create(
-                    model="qwen-flash", max_tokens=150, temperature=0,
+                    model="qwen-flash", max_tokens=_NCERT_RETRY_MAX_TOKENS, temperature=0,
                     messages=[{"role": "system", "content": _NCERT_RETRY_SYSTEM}, {"role": "user", "content": ref_message}],
                 ),
                 timeout=3,
@@ -4159,7 +4187,7 @@ async def _retry_ncert_block(text: str, combined_section_text: str, use_qwen: bo
             is_peak = _is_deepseek_peak_hour()
             resp = await asyncio.wait_for(
                 deepseek_async_client.messages.create(
-                    model=DEEPSEEK_MODEL, max_tokens=150, thinking={"type": "disabled"},
+                    model=DEEPSEEK_MODEL, max_tokens=_NCERT_RETRY_MAX_TOKENS, thinking={"type": "disabled"},
                     system=_NCERT_RETRY_SYSTEM,
                     messages=[{"role": "user", "content": ref_message}],
                 ),
