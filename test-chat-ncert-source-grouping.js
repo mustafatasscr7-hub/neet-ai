@@ -1,0 +1,126 @@
+// Regression test for grouping "From NCERT" quotes by section instead of repeating the citation
+// after every quote (renderNcertSectionsCardHtml in chat.html). Run with:
+//   node test-chat-ncert-source-grouping.js
+//
+// Same no-framework convention as test-chat-ncert-citation-conflict.js: loads the real function
+// straight out of chat.html via Node's `vm` module rather than a hand-copied duplicate.
+'use strict';
+const fs = require('fs');
+const path = require('path');
+const vm = require('vm');
+const assert = require('assert');
+
+const html = fs.readFileSync(path.join(__dirname, 'chat.html'), 'utf8');
+
+function extractBlock(startMarker, endMarker) {
+  const startIdx = html.indexOf(startMarker);
+  const endIdx = html.indexOf(endMarker);
+  assert(startIdx !== -1 && endIdx !== -1 && endIdx > startIdx,
+    `could not locate block in chat.html -- did a surrounding comment move? start=${startIdx} end=${endIdx}`);
+  return html.slice(startIdx, endIdx);
+}
+
+const mainBlock = extractBlock(
+  '// For short inline labels (like the chapter pill below) that may contain $...$ math --',
+  '// Parses the CLARIFY_TYPE/QUESTION/OPTION lines that follow an AMBIGUOUS: yes first line'
+);
+const escapeHtmlBlock = extractBlock(
+  '    function escapeHtml(str) {',
+  '    // ---------------- Match List-I / List-II formatting ----------------'
+);
+
+const exportNames = ['renderNcertSectionsCardHtml'];
+const sandbox = {
+  document: {
+    createElement() {
+      let text = '';
+      return {
+        set textContent(v) { text = v == null ? '' : String(v); },
+        get textContent() { return text; },
+        get innerHTML() { return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+      };
+    }
+  }
+};
+vm.createContext(sandbox);
+const wrapped = `(function() { ${escapeHtmlBlock}\n${mainBlock}\nreturn { ${exportNames.join(', ')} }; })()`;
+const mod = vm.runInContext(wrapped, sandbox, { filename: 'chat.html (extracted NCERT-grouping block)' });
+
+let passed = 0, failed = 0;
+function test(name, fn) {
+  try {
+    fn();
+    passed++;
+    console.log(`  ok - ${name}`);
+  } catch (e) {
+    failed++;
+    console.log(`  FAIL - ${name}`);
+    console.log('    ' + e.message);
+  }
+}
+
+function countOccurrences(haystack, needle) {
+  return haystack.split(needle).length - 1;
+}
+
+console.log('renderNcertSectionsCardHtml: source grouping');
+
+test('a single section shows its citation line once, not after every quote', () => {
+  const quotes = [
+    { quote: 'First quote from the section', citation: 'Biological Classification - 2.2.5 Protozoans' },
+    { quote: 'Second quote from the same section', citation: 'Biological Classification - 2.2.5 Protozoans' },
+    { quote: 'Third quote from the same section', citation: 'Biological Classification - 2.2.5 Protozoans' }
+  ];
+  const out = mod.renderNcertSectionsCardHtml(quotes);
+  assert.strictEqual(countOccurrences(out, 'ncert-sections-card-citation'), 1,
+    'expected exactly one citation group line: ' + out);
+  assert(out.includes('Biological Classification - 2.2.5 Protozoans'), 'citation text missing: ' + out);
+  assert.strictEqual(countOccurrences(out, 'ncert-sections-card-quote'), 3, 'all 3 quotes should render: ' + out);
+});
+
+test('two sections show two citation lines, each above its own group', () => {
+  const quotes = [
+    { quote: 'Quote from section A', citation: 'Section A' },
+    { quote: 'Another quote from section A', citation: 'Section A' },
+    { quote: 'Quote from section B', citation: 'Section B' }
+  ];
+  const out = mod.renderNcertSectionsCardHtml(quotes);
+  assert.strictEqual(countOccurrences(out, 'ncert-sections-card-citation'), 2,
+    'expected exactly two citation group lines: ' + out);
+  const idxA = out.indexOf('Section A');
+  const idxB = out.indexOf('Section B');
+  const idxQA2 = out.indexOf('Another quote from section A');
+  const idxQB = out.indexOf('Quote from section B');
+  assert(idxA !== -1 && idxA < idxQA2, 'Section A header must precede its own quotes: ' + out);
+  assert(idxB !== -1 && idxB < idxQB && idxQA2 < idxB, 'Section B header must come after section A\'s quotes, before its own: ' + out);
+});
+
+test('no per-quote citation markup remains (old inline "(citation)" after each quote is gone)', () => {
+  const quotes = [{ quote: 'Some quoted text', citation: 'Some Chapter, Some Heading' }];
+  const out = mod.renderNcertSectionsCardHtml(quotes);
+  assert(!/&rdquo;\s*\(/.test(out), 'citation must not trail the quote inline any more: ' + out);
+});
+
+test('toggle still works: beyond the 5 visible quotes, "Show N more" wraps the rest in a hidden block', () => {
+  const quotes = Array.from({ length: 7 }, (_, i) => ({ quote: `Quote number ${i + 1} of seven total`, citation: 'Same Section' }));
+  const out = mod.renderNcertSectionsCardHtml(quotes);
+  assert(out.includes('Show 2 more'), 'expected a toggle for the remaining 2 quotes: ' + out);
+  assert(out.includes('ncert-sections-card-rest'), 'hidden rest block missing: ' + out);
+  assert(out.includes('style="display:none"'), 'rest block should start hidden: ' + out);
+  assert.strictEqual(countOccurrences(out, 'ncert-sections-card-quote'), 7, 'all 7 quotes should still be present in the markup: ' + out);
+});
+
+test('toggle across a section boundary: 2 sections, first visible-then-hidden split keeps both headers', () => {
+  const quotes = [
+    ...Array.from({ length: 4 }, (_, i) => ({ quote: `A quote ${i + 1}`, citation: 'Section A' })),
+    { quote: 'A fifth quote still in section A', citation: 'Section A' },
+    { quote: 'First quote in section B', citation: 'Section B' }
+  ];
+  const out = mod.renderNcertSectionsCardHtml(quotes);
+  assert.strictEqual(countOccurrences(out, 'Section A'), 1, 'Section A is fully within the visible 5, one header: ' + out);
+  assert(out.includes('Section B'), 'Section B header should appear in the hidden "rest" block: ' + out);
+  assert(out.includes('Show 1 more'), 'expected a toggle for the single remaining quote: ' + out);
+});
+
+console.log(`\n${passed} passed, ${failed} failed`);
+process.exit(failed > 0 ? 1 : 0);

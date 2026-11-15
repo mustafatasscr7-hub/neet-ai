@@ -1387,7 +1387,9 @@
     .ncert-sections-card { margin-top: 12px; padding: 8px 12px; border-left: 3px solid #4f8ef7; background: rgba(79,142,247,0.07); border-radius: 0 6px 6px 0; font-size: 13px; line-height: 1.55; color: #bdbdbd; }
     .ncert-sections-card-title { font-weight: 600; color: #4f8ef7; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 5px; }
     .ncert-sections-card-quote { margin: 3px 0; }
-    .ncert-sections-card-citation { color: #8a8a8a; font-size: 12px; }
+    /* One per section group (see renderNcertSectionsCardHtml's groupsHtml), not once per quote --
+       sits above the group's quotes rather than trailing each individual one. */
+    .ncert-sections-card-citation { color: #8a8a8a; font-size: 12px; margin: 8px 0 3px; }
     /* "Show N more" toggle for a card carrying more than NCERT_CARD_VISIBLE quotes -- see
        renderNcertSectionsCardHtml. Same blue accent as the title, not the muted citation color,
        so it still reads as an actionable control rather than more metadata. */
@@ -3687,15 +3689,29 @@ let selectedImages = [];
     let _ncertCardSeq = 0;
     function renderNcertSectionsCardHtml(quotes) {
       if (!quotes || !quotes.length) return '';
-      const lineHtml = q =>
-        `<div class="ncert-sections-card-quote">&ldquo;${escapeHtml(q.quote || '')}&rdquo; <span class="ncert-sections-card-citation">(${escapeHtml(q.citation || '')})</span></div>`;
-      const visibleHtml = quotes.slice(0, NCERT_CARD_VISIBLE).map(lineHtml).join('');
+      const quoteHtml = q => `<div class="ncert-sections-card-quote">&ldquo;${escapeHtml(q.quote || '')}&rdquo;</div>`;
+      // Groups consecutive quotes sharing the same citation so the source shows once above the
+      // group instead of repeating after every quote. A run-based group (rather than a full
+      // group-by) is enough since the quotes already arrive ordered by section.
+      const groupsHtml = list => {
+        const groups = [];
+        for (const q of list) {
+          const citation = q.citation || '';
+          const last = groups[groups.length - 1];
+          if (last && last.citation === citation) last.quotes.push(q);
+          else groups.push({ citation, quotes: [q] });
+        }
+        return groups.map(g =>
+          `<div class="ncert-sections-card-citation">${escapeHtml(g.citation)}</div>${g.quotes.map(quoteHtml).join('')}`
+        ).join('');
+      };
+      const visibleHtml = groupsHtml(quotes.slice(0, NCERT_CARD_VISIBLE));
       const rest = quotes.slice(NCERT_CARD_VISIBLE);
       if (!rest.length) {
         return `<div class="ncert-sections-card"><div class="ncert-sections-card-title">From NCERT</div>${visibleHtml}</div>`;
       }
       const restId = `ncert-sections-rest-${++_ncertCardSeq}`;
-      const restHtml = rest.map(lineHtml).join('');
+      const restHtml = groupsHtml(rest);
       const toggleHtml = `<div class="ncert-sections-card-toggle" onclick="var r=document.getElementById('${restId}');var h=r.style.display==='none';r.style.display=h?'':'none';this.textContent=h?'Show less':'Show ${rest.length} more';">Show ${rest.length} more</div>`;
       return `<div class="ncert-sections-card"><div class="ncert-sections-card-title">From NCERT</div>${visibleHtml}<div class="ncert-sections-card-rest" id="${restId}" style="display:none">${restHtml}</div>${toggleHtml}</div>`;
     }
