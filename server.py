@@ -24,6 +24,7 @@ import hmac
 import io
 import ipaddress
 import json
+import math
 import random
 import re
 import shutil
@@ -3568,12 +3569,132 @@ async def _get_ncert_sections_cache() -> dict:
         # that the heading text alone can't disambiguate; see ncert_sections_keywords.sql. Falls
         # back to "id: chapter - heading" (no trailing keywords segment) when a row's `keywords`
         # is still NULL (not yet generated for that row).
-        _ncert_sections_cache["index_lines"] = [
-            f"{r['id']}: {r['chapter']} - {r['heading']}" + (f" - {r['keywords']}" if r.get("keywords") else "")
-            for r in rows
-        ]
+        _ncert_sections_cache["index_lines"] = [_ncert_section_index_line(r) for r in rows]
         _ncert_sections_cache["loaded_at"] = now
     return _ncert_sections_cache
+
+def _ncert_section_index_line(row: dict) -> str:
+    """"id: chapter - heading" or "id: chapter - heading - keywords" -- the exact per-row format
+    _get_ncert_sections_cache uses for its own index_lines, factored out so the shortlisted
+    picker prompt (see _ncert_sections_cache_for_ids) can build the same format for a subset of
+    ids without duplicating the string."""
+    return f"{row['id']}: {row['chapter']} - {row['heading']}" + (f" - {row['keywords']}" if row.get("keywords") else "")
+
+# ---------- Section shortlist step (NCERT_SHORTLIST_ENABLED, default true) ----------
+# Keeps _pick_ncert_sections' own prompt (and so its cost) flat as more NCERT chapters get loaded
+# into ncert_sections: once the cache holds more than NCERT_SHORTLIST_MIN_SECTIONS rows, a free,
+# local, zero-model BM25-style lexical rank narrows the picker's own index_lines down to
+# NCERT_SHORTLIST_SIZE candidates before the picker ever sees them, instead of listing every
+# loaded section regardless of how many chapters are in. At or below the threshold this never
+# runs -- the picker sees the full, unfiltered cache exactly as before this feature existed.
+NCERT_SHORTLIST_ENABLED = os.getenv("NCERT_SHORTLIST_ENABLED", "true").strip().lower() == "true"
+NCERT_SHORTLIST_MIN_SECTIONS = int(os.getenv("NCERT_SHORTLIST_MIN_SECTIONS", "80"))
+NCERT_SHORTLIST_SIZE = int(os.getenv("NCERT_SHORTLIST_SIZE", "12"))
+
+_BM25_K1 = 1.5
+_BM25_B = 0.75
+# Heading/keywords carry far more disambiguating vocabulary per section than the chapter name
+# does (every section of the same chapter shares the same chapter tokens) -- weighted above it so
+# two sections of one chapter still separate on their own heading/keyword words.
+_SHORTLIST_CHAPTER_WEIGHT = 1
+_SHORTLIST_HEADING_WEIGHT = 3
+_SHORTLIST_KEYWORDS_WEIGHT = 2
+# How many extra copies of the old retrieval's cited chapter name are folded into the BM25 query
+# -- a boost (these pseudo-terms compete through the same scoring as any real query term, weighted
+# by their own IDF) rather than a hard filter, so a genuinely better-matching section in a
+# different chapter can still outrank it.
+_SHORTLIST_CHAPTER_HINT_REPEATS = 4
+
+def _shortlist_tokenize(text: str) -> list:
+    """Same normalization _tokenize_for_dup_check uses (lowercased, non-alphanumeric stripped,
+    DUP_CHECK_STOPWORDS and single-char tokens dropped) but returns a list, not a set -- BM25
+    scoring needs term frequency, which a deduplicated set throws away."""
+    words = re.sub(r"[^a-z0-9\s]", " ", (text or "").lower()).split()
+    return [w for w in words if len(w) > 1 and w not in DUP_CHECK_STOPWORDS]
+
+def _bm25_score_docs(query_tokens: list, docs: list) -> dict:
+    """Textbook BM25 (k1=1.5, b=0.75), no model or embedding call -- `docs` is
+    [(key, token_list), ...]; returns {key: score}. Every key scores 0.0 when `docs` or
+    `query_tokens` is empty, or for a key with no query-token overlap at all."""
+    n_docs = len(docs)
+    if n_docs == 0 or not query_tokens:
+        return {key: 0.0 for key, _ in docs}
+    doc_term_freqs, doc_lens = {}, {}
+    for key, tokens in docs:
+        tf = {}
+        for t in tokens:
+            tf[t] = tf.get(t, 0) + 1
+        doc_term_freqs[key] = tf
+        doc_lens[key] = len(tokens)
+    avg_len = (sum(doc_lens.values()) / n_docs) or 1.0
+    query_term_set = set(query_tokens)
+    doc_freq = {term: sum(1 for key, _ in docs if term in doc_term_freqs[key]) for term in query_term_set}
+    scores = {}
+    for key, _tokens in docs:
+        tf_map = doc_term_freqs[key]
+        dl = doc_lens[key] or 1
+        score = 0.0
+        for term in query_term_set:
+            tf = tf_map.get(term, 0)
+            if not tf:
+                continue
+            df = doc_freq[term]
+            idf = math.log(1 + (n_docs - df + 0.5) / (df + 0.5))
+            norm = tf + _BM25_K1 * (1 - _BM25_B + _BM25_B * dl / avg_len)
+            score += idf * (tf * (_BM25_K1 + 1)) / norm
+        scores[key] = score
+    return scores
+
+def _shortlist_ncert_sections(text: str, cache: dict, chapter_hint: Optional[str] = None) -> list:
+    """Ranks every row in `cache` with _bm25_score_docs over each section's own chapter/heading/
+    keywords (heading and keywords weighted above chapter -- see the weights above) and returns
+    the top NCERT_SHORTLIST_SIZE ids, highest score first. `chapter_hint` -- the chapter the OLD
+    NCERT-chunk retrieval already cited for this same question, if any -- is folded into the BM25
+    query itself as extra repeated terms, so it boosts same-chapter sections through the normal
+    scoring rather than restricting the shortlist to that chapter alone. Returns [] only when
+    `cache` holds no rows at all; never raises on a bad/empty `text` or `chapter_hint` (everything
+    just scores 0 and an arbitrary-but-stable top N comes back)."""
+    rows = list(cache["by_id"].values())
+    if not rows:
+        return []
+    query_tokens = _shortlist_tokenize(text)
+    if chapter_hint:
+        query_tokens = query_tokens + _shortlist_tokenize(chapter_hint) * _SHORTLIST_CHAPTER_HINT_REPEATS
+    docs = [
+        (r["id"], (
+            _shortlist_tokenize(r.get("chapter") or "") * _SHORTLIST_CHAPTER_WEIGHT +
+            _shortlist_tokenize(r.get("heading") or "") * _SHORTLIST_HEADING_WEIGHT +
+            _shortlist_tokenize(r.get("keywords") or "") * _SHORTLIST_KEYWORDS_WEIGHT
+        ))
+        for r in rows
+    ]
+    scores = _bm25_score_docs(query_tokens, docs)
+    ranked_ids = sorted((r["id"] for r in rows), key=lambda i: scores.get(i, 0.0), reverse=True)
+    return ranked_ids[:NCERT_SHORTLIST_SIZE]
+
+def _should_shortlist_sections(section_count: int) -> bool:
+    """Whether the shortlist step should run for a cache holding `section_count` rows -- the kill
+    switch (NCERT_SHORTLIST_ENABLED) and the size threshold (NCERT_SHORTLIST_MIN_SECTIONS) in one
+    place, so the chat handler's own branch and this file's tests read the exact same rule."""
+    return NCERT_SHORTLIST_ENABLED and section_count > NCERT_SHORTLIST_MIN_SECTIONS
+
+def _safe_shortlist_ncert_sections(text: str, cache: dict, chapter_hint: Optional[str] = None) -> list:
+    """_shortlist_ncert_sections, caught: a scoring error must never affect the main answer, so
+    the chat handler calls this instead of the raw function -- any exception just falls back to
+    [] (picker_cache then stays the full, unrestricted cache, exactly like today)."""
+    try:
+        return _shortlist_ncert_sections(text, cache, chapter_hint)
+    except Exception:
+        return []
+
+def _ncert_sections_cache_for_ids(cache: dict, ids: list) -> dict:
+    """A {"by_id", "index_lines"} cache restricted to `ids`, in that order -- what
+    _pick_ncert_sections' prompt sees once the shortlist step above has narrowed the full cache
+    down. Every id in the result is still a member of the full cache, so section-text lookups
+    after the picker runs keep reading the full, untouched cache -- only the picker's own prompt
+    (and its id-validity check) is scoped to the subset."""
+    by_id = {i: cache["by_id"][i] for i in ids if i in cache["by_id"]}
+    return {"by_id": by_id, "index_lines": [_ncert_section_index_line(by_id[i]) for i in ids if i in by_id]}
 
 NCERT_SECTIONS_PICKER_SYSTEM = (
     "A student asked a NEET exam question. Below is a numbered list of sections from one NCERT "
@@ -3955,7 +4076,7 @@ def _encode_ncert_sections_marker(quotes_shown: list) -> str:
     encoded = base64.b64encode(json.dumps(quotes_shown).encode("utf-8")).decode("ascii")
     return f"{NCERT_SECTIONS_MARKER_PREFIX}{encoded}{NCERT_SECTIONS_MARKER_SUFFIX}"
 
-async def _log_ncert_sections_event(language: str, picked_ids: list, quotes_shown: list, quotes_dropped: list, picker_latency_ms: int, total_latency_ms: int, retried: bool = False, retry_latency_ms: int = 0):
+async def _log_ncert_sections_event(language: str, picked_ids: list, quotes_shown: list, quotes_dropped: list, picker_latency_ms: int, total_latency_ms: int, retried: bool = False, retry_latency_ms: int = 0, shortlist_size: int = 0, shortlist_hit: Optional[bool] = None):
     """Same table as _log_ncert_retrieval (no new table), tagged version="sections" in `chunks`
     instead of a dedicated column. Ids and counts only -- never the question text; quote/citation
     text is kept here (unlike the v1 log) since these are short, mechanically-verified NCERT
@@ -3964,12 +4085,21 @@ async def _log_ncert_sections_event(language: str, picked_ids: list, quotes_show
     retried/retry_latency_ms (added for the block-retry feature): retried is True whenever the
     main answer's own block was missing/empty/all-dropped and a follow-up call was attempted
     (regardless of whether it fixed anything) -- quotes_shown/quotes_dropped already reflect
-    the retry's own result when one ran, so a reader doesn't need a separate pre/post-retry pair."""
+    the retry's own result when one ran, so a reader doesn't need a separate pre/post-retry pair.
+
+    shortlist_size/shortlist_hit (added for the section-shortlist step, NCERT_SHORTLIST_ENABLED):
+    shortlist_size is 0 whenever the shortlist step didn't run (NCERT_SHORTLIST_MIN_SECTIONS not
+    exceeded, the flag is off, or scoring fell back) -- the picker saw the full cache that
+    request, same as before this feature existed. shortlist_hit is None in that same case, and
+    otherwise True/False: whether every id in `picked_ids` was actually a member of the
+    shortlist offered to the picker (should always be True by construction -- the picker's own
+    prompt only ever lists shortlisted ids -- so False here would mean a real bug)."""
     outcome = "grounded" if quotes_shown else ("set_aside" if picked_ids else "none")
     chunks = [{"version": "sections", "section_ids": picked_ids, "quotes_shown": quotes_shown,
                "quotes_dropped": quotes_dropped, "picker_latency_ms": picker_latency_ms,
                "total_added_latency_ms": total_latency_ms, "retried": retried,
-               "retry_latency_ms": retry_latency_ms}]
+               "retry_latency_ms": retry_latency_ms,
+               **({"shortlist_size": shortlist_size, "shortlist_hit": shortlist_hit} if shortlist_size else {})}]
     try:
         await async_client.post(
             f"{SUPABASE_URL}/rest/v1/ncert_retrieval_log", headers={**ADMIN_HEADERS, "Content-Type": "application/json"},
@@ -7196,15 +7326,35 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
     picked_section_ids = []
     sections_cache_for_chat = None
     picker_latency_ms = 0
+    shortlist_size_for_log = 0
+    shortlist_hit_for_log = None
     if NCERT_SECTIONS_ENABLED and not images and not pdf and text.strip():
         plan_for_sections = await get_user_plan(user_id)
         if plan_for_sections in ("pro", "max"):
             sections_cache_for_chat = await _get_ncert_sections_cache()
             if sections_cache_for_chat["by_id"]:
+                picker_cache = sections_cache_for_chat
+                # Section shortlist step -- see NCERT_SHORTLIST_ENABLED's own comment above
+                # _shortlist_ncert_sections. Only kicks in once the cache has grown past
+                # NCERT_SHORTLIST_MIN_SECTIONS rows; below that, picker_cache stays the full,
+                # unrestricted cache exactly as before this feature existed. A scoring error
+                # here is caught (_safe_shortlist_ncert_sections) and falls back the same way --
+                # never breaks the answer.
+                if _should_shortlist_sections(len(sections_cache_for_chat["by_id"])):
+                    chapter_hint = None
+                    if results:
+                        top_hint_row = max(results, key=lambda r: r.get("similarity") or 0)
+                        chapter_hint = top_hint_row.get("chapter_name_en") or top_hint_row.get("chapter_name")
+                    shortlist_ids = _safe_shortlist_ncert_sections(text, sections_cache_for_chat, chapter_hint)
+                    if shortlist_ids:
+                        picker_cache = _ncert_sections_cache_for_ids(sections_cache_for_chat, shortlist_ids)
+                        shortlist_size_for_log = len(shortlist_ids)
                 _sections_picker_t0 = time.monotonic()
-                picked_section_ids = await _pick_ncert_sections(text, sections_cache_for_chat, user_id)
+                picked_section_ids = await _pick_ncert_sections(text, picker_cache, user_id)
                 picker_latency_ms = int((time.monotonic() - _sections_picker_t0) * 1000)
                 ncert_sections_active = bool(picked_section_ids)
+                if shortlist_size_for_log and picked_section_ids:
+                    shortlist_hit_for_log = all(i in picker_cache["by_id"] for i in picked_section_ids)
     # Sanitized once here, used in every user_message branch below -- never the raw `text` itself,
     # which stays untouched for retrieval/logging/history above (see _neutralize_ref_data_tags).
     safe_text = _neutralize_ref_data_tags(text)
@@ -7779,7 +7929,7 @@ options in the question, ignore this instruction entirely.""" if (images or pdf)
                 # retrieval_language is always defined here: ncert_sections_active requires
                 # `not images and not pdf`, which is exactly the branch that sets it (skip_ncert_search,
                 # the only branch that doesn't, requires images=True).
-                asyncio.create_task(_log_ncert_sections_event(retrieval_language, picked_section_ids, quotes_shown, quotes_dropped, picker_latency_ms, total_request_latency_ms, retried, retry_latency_ms))
+                asyncio.create_task(_log_ncert_sections_event(retrieval_language, picked_section_ids, quotes_shown, quotes_dropped, picker_latency_ms, total_request_latency_ms, retried, retry_latency_ms, shortlist_size_for_log, shortlist_hit_for_log))
                 if quotes_shown:
                     yield _encode_ncert_sections_marker(quotes_shown)
             if cache_skip_reason is None:
