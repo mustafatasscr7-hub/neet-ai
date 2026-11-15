@@ -3587,7 +3587,13 @@ let selectedImages = [];
       return text ? text.replace(LEGACY_ANSWER_MARKER_RE, '') : text;
     }
 
-    function extractAnswerMeta(text) {
+    // suppressChapter: true when a verified "From NCERT" quote card (see renderNcertSectionsCardHtml)
+    // is being shown for this same message -- the card already names its own chapter in each
+    // quote's citation, so the separate chapter pill this function would otherwise build is
+    // dropped rather than risking a second, possibly different-sounding chapter reference next to
+    // it. chapterText itself is still returned either way (it only feeds the PYQ-search-query
+    // sharpening below, never shown to the student on its own), only chapterHtml is suppressed.
+    function extractAnswerMeta(text, suppressChapter) {
       if (!text) return { cleanText: text, metaHtml: '' };
       text = stripAnswerEmojiMarkers(text);
       // Second line of defense for the same "DOUBT_TYPE: conversational" first-line marker the
@@ -3640,7 +3646,7 @@ let selectedImages = [];
         // chapterText (used to sharpen the PYQ search query below) without needing to maintain a
         // denylist of fallback phrasings -- any real chapter name comfortably clears this.
         if (chapter && chapter.length <= 60) chapterText = chapter;
-        if (chapter) chapterHtml = `<span class="answer-chapter-pill">${renderInlineMathText(chapter)}</span>`;
+        if (chapter && !suppressChapter) chapterHtml = `<span class="answer-chapter-pill">${renderInlineMathText(chapter)}</span>`;
       }
 
       const metaHtml = (starsHtml || chapterHtml) ? `<div class="answer-meta-row">${chapterHtml}${starsHtml}</div>` : '';
@@ -3655,6 +3661,35 @@ let selectedImages = [];
     // Energy and Power" dropped them) and is neutral-to-marginally-better everywhere else tested.
     function buildPyqSearchQuery(searchText, chapterText) {
       return chapterText ? `${searchText} — ${chapterText}` : searchText;
+    }
+
+    // "From NCERT" test feature card (NCERT_SECTIONS_ENABLED, default off -- see server.py).
+    // Builds the small quiet card's HTML, or '' if there's nothing to show. escapeHtml on both
+    // fields -- quote/citation are model-generated text flowing straight from server.py's JSON
+    // payload, never assumed safe just because they passed the substring-verification check
+    // (that check only guarantees the quote's WORDS are real, not that it's free of HTML-special
+    // characters). Hoisted to top-level scope (was previously local to streamAIResponse) so
+    // addMessageRow/switchVersion can render the same saved card on reload/version-switch.
+    function renderNcertSectionsCardHtml(quotes) {
+      if (!quotes || !quotes.length) return '';
+      const lines = quotes.map(q =>
+        `<div class="ncert-sections-card-quote">&ldquo;${escapeHtml(q.quote || '')}&rdquo; <span class="ncert-sections-card-citation">(${escapeHtml(q.citation || '')})</span></div>`
+      ).join('');
+      return `<div class="ncert-sections-card"><div class="ncert-sections-card-title">From NCERT</div>${lines}</div>`;
+    }
+
+    // The saved "From NCERT" quotes for whichever version of `msgObj` is currently active --
+    // only ever set on a version object (see streamAIResponse's newVersion), never mirrored onto
+    // the message itself, since a message can carry several versions (retries) with different
+    // quotes (or none). A message saved before version history shipped (ensureVersions' lazy
+    // upgrade path) never had this field either way, so this returns null for it exactly as it
+    // would have before the feature existed.
+    function getActiveNcertQuotes(msgObj) {
+      if (!msgObj) return null;
+      if (msgObj.versions && msgObj.versions[msgObj.activeVersionIndex]) {
+        return msgObj.versions[msgObj.activeVersionIndex].ncertQuotes || null;
+      }
+      return msgObj.ncertQuotes || null;
     }
 
     // Parses the CLARIFY_TYPE/QUESTION/OPTION lines that follow an AMBIGUOUS: yes first line
@@ -5926,14 +5961,19 @@ let selectedImages = [];
           return bubble;
         }
 
-        const { cleanText, metaHtml, chapterText } = extractAnswerMeta(text);
+        // From NCERT quote card for the message's currently active version, if any (see
+        // getActiveNcertQuotes) -- suppresses the separate chapter pill below the same way the
+        // live render does, and is itself restored here, so a reload never shows the card
+        // without the suppression (or the suppression without the card).
+        const activeNcertQuotes = getActiveNcertQuotes(msgObj);
+        const { cleanText, metaHtml, chapterText } = extractAnswerMeta(text, !!(activeNcertQuotes && activeNcertQuotes.length));
         // Wrapped in the same .bubble-text container the live streaming path uses (previously
         // this wrote metaHtml+content straight into `bubble` with no wrapper) -- purely
         // structural, no visual difference on its own since nothing currently scopes CSS to
         // .bubble-text specifically, but keeping every render path's DOM shape identical means a
         // future rule that DOES target .bubble-text (or a future diff-based partial re-render)
         // can't silently apply to only some of fresh/retry/reload/version-switch and not others.
-        bubble.innerHTML = '<div class="bubble-text">' + metaHtml + parseWithMath(cleanText) + '</div>';
+        bubble.innerHTML = '<div class="bubble-text">' + metaHtml + parseWithMath(cleanText) + renderNcertSectionsCardHtml(activeNcertQuotes) + '</div>';
         renderMermaidBlocksIn(bubble);
 
         // Restores a diagram that was auto-embedded live, saved onto the message (see
@@ -6549,10 +6589,13 @@ function plainTextFromMarkdown(text) {
       bubble.style.transition = 'opacity 0.12s ease';
       bubble.style.opacity = '0';
       setTimeout(() => {
-        const { cleanText, metaHtml, chapterText } = extractAnswerMeta(v.text);
+        // Each version carries its own From NCERT quotes (or none) -- see addMessageRow's
+        // identical getActiveNcertQuotes use for the full reasoning; here `v` already IS the
+        // specific version being switched to, so no lookup helper is needed.
+        const { cleanText, metaHtml, chapterText } = extractAnswerMeta(v.text, !!(v.ncertQuotes && v.ncertQuotes.length));
         // Same .bubble-text wrapper as every other render path now uses -- see addMessageRow's
         // identical change for the full reasoning.
-        bubble.innerHTML = '<div class="bubble-text">' + metaHtml + parseWithMath(cleanText) + '</div>';
+        bubble.innerHTML = '<div class="bubble-text">' + metaHtml + parseWithMath(cleanText) + renderNcertSectionsCardHtml(v.ncertQuotes) + '</div>';
         renderMermaidBlocksIn(bubble);
         if (v.diagram) insertAutoEmbedDiagram(bubble, bubble.firstChild, v.diagram);
 
@@ -9385,18 +9428,9 @@ function plainTextFromMarkdown(text) {
             return (Array.isArray(parsed) && parsed.length) ? parsed : null;
           } catch (e) { return null; }
         }
-        // Builds the small quiet "From NCERT" card's HTML, or '' if there's nothing to show.
-        // escapeHtml on both fields -- quote/citation are model-generated text flowing straight
-        // from server.py's JSON payload, never assumed safe just because they passed the
-        // substring-verification check (that check only guarantees the quote's WORDS are real,
-        // not that it's free of HTML-special characters).
-        function renderNcertSectionsCardHtml(quotes) {
-          if (!quotes || !quotes.length) return '';
-          const lines = quotes.map(q =>
-            `<div class="ncert-sections-card-quote">&ldquo;${escapeHtml(q.quote || '')}&rdquo; <span class="ncert-sections-card-citation">(${escapeHtml(q.citation || '')})</span></div>`
-          ).join('');
-          return `<div class="ncert-sections-card"><div class="ncert-sections-card-title">From NCERT</div>${lines}</div>`;
-        }
+        // renderNcertSectionsCardHtml is now top-level (see its own comment, near
+        // extractAnswerMeta) so addMessageRow/switchVersion can render the same card on
+        // reload/version-switch -- this scope still just calls it, unchanged.
 
         // server.py's second-pass verification (a narrow fix for a Qwen failure on multi-object
         // numerical problems -- see _stream_qwen_verified there) can't stream token-by-token: the
@@ -9865,7 +9899,7 @@ function plainTextFromMarkdown(text) {
         if (!fullText.trim()) {
           fullText = t('chat', 'emptyReplyFallback');
         }
-        const { cleanText: cleanFullText, metaHtml, chapterText } = extractAnswerMeta(fullText);
+        const { cleanText: cleanFullText, metaHtml, chapterText } = extractAnswerMeta(fullText, !!(newNcertSectionsQuotes && newNcertSectionsQuotes.length));
         textArea.innerHTML = metaHtml + parseWithMath(cleanFullText) + renderNcertSectionsCardHtml(newNcertSectionsQuotes);
         await renderMermaidBlocksIn(textArea);
 

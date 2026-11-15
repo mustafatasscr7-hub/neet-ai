@@ -2862,6 +2862,18 @@ NCERT_SHORT_QUERY_MAX_WORDS = 5
 def _ncert_threshold_en(query: str) -> float:
     return NCERT_MATCH_THRESHOLD_EN_SHORT if len((query or "").split()) <= NCERT_SHORT_QUERY_MAX_WORDS else NCERT_MATCH_THRESHOLD_EN
 
+# Separate, higher bar than "did retrieval find anything at all" (NCERT_MATCH_THRESHOLD_EN/HI
+# above already gate that) -- this decides whether the model's own "Chapter:" line (see
+# _force_citation_when_no_retrieval) is confident enough to show standalone, vs. a borderline
+# match that only cleared the short-query fallback (NCERT_MATCH_THRESHOLD_EN_SHORT, 0.42-0.499)
+# and should stay unlabeled rather than risk a wrong-sounding citation. Defaults to the normal
+# (non-fallback) English threshold itself: a chunk that cleared the full 0.5 bar is "confident"
+# by the same standard already used everywhere else, while a short-query fallback hit -- the one
+# documented case of a weaker match -- falls below it. Hindi's own threshold (0.62, Gemini
+# embeddings) already sits above this by a wide margin, so a Hindi match that passed retrieval
+# at all is never affected by this gate.
+NCERT_OLD_CHAPTER_MIN_SCORE = float(os.getenv("NCERT_OLD_CHAPTER_MIN_SCORE", str(NCERT_MATCH_THRESHOLD_EN)))
+
 # Hindi embeddings score systematically lower than English for genuinely correct matches --
 # same underlying text-embedding-3-small model, but Hindi's much higher tokens/word density
 # (see hindi_retrieval_rechunking memory) dilutes the signal even in well-formed, sentence-
@@ -6667,7 +6679,12 @@ async def _force_citation_when_no_retrieval(stream, has_retrieval: bool):
     """Wraps a doubt's answer stream (text -- DeepSeek/Qwen -- or image/PDF -- Gemini, both use
     this same wrapper) and deterministically strips whatever the model wrote on the Chapter:
     line when search_ncert() found nothing for this doubt, rather than trusting the model's own
-    citation. Originally replaced it with a standard "Chapter: Not
+    citation. Despite the parameter's name, callers now pass `show_old_chapter` (see its own
+    comment at the /chat call site) rather than a bare `bool(results)` -- False whenever nothing
+    was retrieved at all (as always) OR when something was retrieved but too weakly to trust a
+    standalone citation (NCERT_OLD_CHAPTER_MIN_SCORE); either way this function's own behavior
+    for that case (strip the line) is unchanged, only what counts as "untrustworthy" grew by one
+    case. Originally replaced it with a standard "Chapter: Not
     available -- answering from general knowledge..." fallback sentence instead of removing it
     -- a live audit had found the model fabricating specific wrong citations otherwise (e.g.
     "NCERT Class X, Chapter 5" for osmosis, or claiming a real NCERT topic like the
@@ -7317,6 +7334,16 @@ async def stream_response(text: str, history: list = [], images: list = [], pdf:
         # retrieved" check (citation stripping included) treats an all-unrelated set as no retrieval.
         results = _relevant_ncert_chunks(text, retrieved)
         asyncio.create_task(_log_ncert_retrieval(search_stats.get("language") or retrieval_language, _question_subject(text), search_stats.get("top_raw_score"), retrieved, results, version=search_stats.get("version")))
+    # Whether the model's own "Chapter:" line should be trusted and shown on its own -- not just
+    # "was anything retrieved" (results already guarantees that much), but "retrieved confidently
+    # enough" per NCERT_OLD_CHAPTER_MIN_SCORE. Passed to _force_citation_when_no_retrieval below in
+    # place of the old bare `bool(results)` -- a borderline match now gets the same "omit the
+    # line" treatment a total miss always got, since a low-confidence citation sitting next to (or
+    # in place of) nothing is still a citation a student can't trust. Whether a "From NCERT" quote
+    # card ends up overriding/hiding this same line when confidence IS high is decided separately,
+    # client-side in chat.html (see NCERT_SECTIONS_ENABLED's own card) -- the raw text streamed
+    # here is unaffected by that.
+    show_old_chapter = bool(results) and max((r.get("similarity") or 0) for r in results) >= NCERT_OLD_CHAPTER_MIN_SCORE
     student_context = build_student_context(mistake_rows, mock_wrong_rows, {r.get('subject') for r in results})
     # "From NCERT" exact-quote test feature -- see NCERT_SECTIONS_ENABLED's own comment above.
     # Pro/Max, text doubts only (images/pdf go to Gemini via a completely different path below
@@ -7531,7 +7558,7 @@ options in the question, ignore this instruction entirely.""" if (images or pdf)
             # citation with nothing catching it, since this branch returns before ever reaching
             # the text branch's own _force_citation_when_no_retrieval call.
             media_user_message = _format_recent_history_for_media(history) + user_message
-            async for chunk in _force_citation_when_no_retrieval(_stream_gemini_media(image_parts, "image", media_files, full_system, media_user_message, user_id, ip), bool(results)):
+            async for chunk in _force_citation_when_no_retrieval(_stream_gemini_media(image_parts, "image", media_files, full_system, media_user_message, user_id, ip), show_old_chapter):
                 yield chunk
             return
         elif pdf:
@@ -7542,7 +7569,7 @@ options in the question, ignore this instruction entirely.""" if (images or pdf)
             media_files = _hash_media_files(None, pdf)
             pdf_part = genai_types.Part.from_bytes(data=base64.b64decode(pdf), mime_type="application/pdf")
             media_user_message = _format_recent_history_for_media(history) + user_message
-            async for chunk in _force_citation_when_no_retrieval(_stream_gemini_media([pdf_part], "pdf", media_files, full_system, media_user_message, user_id, ip), bool(results)):
+            async for chunk in _force_citation_when_no_retrieval(_stream_gemini_media([pdf_part], "pdf", media_files, full_system, media_user_message, user_id, ip), show_old_chapter):
                 yield chunk
             return
         else:
@@ -7661,7 +7688,7 @@ options in the question, ignore this instruction entirely.""" if (images or pdf)
             checkpoint = 0
             override_needed = False
             override_reason = None
-            async for text_chunk in _force_citation_when_no_retrieval(_rest_of_stream(), bool(results)):
+            async for text_chunk in _force_citation_when_no_retrieval(_rest_of_stream(), show_old_chapter):
                 full_answer += text_chunk
 
                 if checkpoint == 2:
@@ -7840,7 +7867,7 @@ options in the question, ignore this instruction entirely.""" if (images or pdf)
                     # deliberately a stronger fix than a third contradicting instruction stacked on
                     # top of the same full prompt would be, per the same reasoning this whole retry
                     # exists for in the first place.
-                    wrapped_retry = _force_citation_when_no_retrieval(override_stream, bool(results))
+                    wrapped_retry = _force_citation_when_no_retrieval(override_stream, show_old_chapter)
                     retry_iter = wrapped_retry.__aiter__()
                     retry_pending = ""
                     retry_invalid = False
@@ -7868,7 +7895,7 @@ options in the question, ignore this instruction entirely.""" if (images or pdf)
                         full_answer = ""
                         billing_context = {"bill": True}
                         final_stream = _wrap_for_sections(_stream_with_peak_fallback(final_system, messages, user_id, ip, "/chat", billing_context, force_qwen, max_tokens=answer_max_tokens))
-                        async for text_chunk in _force_citation_when_no_retrieval(final_stream, bool(results)):
+                        async for text_chunk in _force_citation_when_no_retrieval(final_stream, show_old_chapter):
                             full_answer += text_chunk
                             yield text_chunk
                     else:
@@ -7882,7 +7909,7 @@ options in the question, ignore this instruction entirely.""" if (images or pdf)
                             full_answer += text_chunk
                             yield text_chunk
                 else:
-                    async for text_chunk in _force_citation_when_no_retrieval(override_stream, bool(results)):
+                    async for text_chunk in _force_citation_when_no_retrieval(override_stream, show_old_chapter):
                         full_answer += text_chunk
                         yield text_chunk
             # "From NCERT" test feature: verify (no model involved) whatever _strip_ncert_block
@@ -7946,7 +7973,7 @@ options in the question, ignore this instruction entirely.""" if (images or pdf)
                         # text -- never store visible self-correction there. This student has
                         # already seen it; a clean background regeneration takes its place instead.
                         print(f"CHAT SELF-CORRECTION DETECTED, NOT CACHED: question_hash={cache_key[:12]}", flush=True)
-                        _spawn_background(_regenerate_and_cache_chat_answer(full_system, messages, cache_key, bool(results), force_qwen, user_id, ip, language, answer_style, usable_student_name, answer_max_tokens))
+                        _spawn_background(_regenerate_and_cache_chat_answer(full_system, messages, cache_key, show_old_chapter, force_qwen, user_id, ip, language, answer_style, usable_student_name, answer_max_tokens))
             # The background summarization task (if one was fired above) has had the ENTIRE
             # main-answer generation above to run concurrently -- typically several seconds,
             # comfortably longer than a summarization call's own ~1-1.5s real measured latency --
