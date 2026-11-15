@@ -317,6 +317,146 @@ def validate_sections(sections):
     return flags
 
 
+# A figure/table caption and its multi-panel letter labels ("Figure 9.9 (a) Prophase (b)
+# Metaphase") sometimes land, in the PDF's own text-layer reading order, between two halves of the
+# SAME body sentence instead of on their own line -- the page's visual column layout interleaves
+# the figure with the paragraph wrapping around it. By the time build_blocks has already joined a
+# block's lines with spaces this noise is indistinguishable from real body text except for its own
+# shape, so it's detected here, on the final joined block text, instead. A lone "Figure N.N" is
+# NEVER removed by itself -- that's indistinguishable from a normal inline cross-reference a real
+# NCERT sentence makes all the time ("...as shown in Figure 9.9."). Only a run of 2+ ascending
+# single-letter panel markers close together ("(a) ... (b) ...", optionally preceded by the
+# "Figure N.N" caption that introduces them) is dropped, since that shape never occurs in real
+# NCERT body prose.
+FIGURE_CAPTION_PREFIX_RE = re.compile(r"\b(?:Figure|Fig\.|Table)\s+\d+(?:\.\d+)*\b", re.IGNORECASE)
+PANEL_LETTER_RE = re.compile(r"\(\s*([a-h])\s*\)", re.IGNORECASE)
+CAPTION_RUN_MAX_GAP_WORDS = 6
+CAPTION_LABEL_MAX_WORDS = 6
+_WORD_RE = re.compile(r"\S+")
+_SENTENCE_END_RE = re.compile(r"[.!?]")
+
+
+def _words_between(text, start, end):
+    return len(text[start:end].split())
+
+
+def _absorb_trailing_label(text, end, max_words):
+    """A short panel label right after the run's last marker ("(b) Metaphase") is itself part of
+    the noise, but the real sentence resuming right after it ("...before being pulled apart...")
+    must NOT be absorbed too -- the two are told apart by case, not by the nearest full stop,
+    since the resuming text is a lower-case continuation of the clause the caption interrupted
+    while an NCERT figure/panel label is always capitalised. Absorbs consecutive whitespace-
+    separated words starting at `end` for as long as each one starts with an uppercase letter
+    (stopping early if a word itself contains a sentence-ending mark), up to max_words words.
+    Returns the new end offset (unchanged if the very next word isn't capitalised, e.g. there is
+    no label at all)."""
+    pos = end
+    n = len(text)
+    for _ in range(max_words):
+        ws_end = pos
+        while ws_end < n and text[ws_end].isspace():
+            ws_end += 1
+        if ws_end >= n:
+            break
+        word = _WORD_RE.match(text, ws_end).group()
+        if not word[0].isupper():
+            break
+        pos = ws_end + len(word)
+        if _SENTENCE_END_RE.search(word):
+            break
+    return pos
+
+
+def find_caption_panel_runs(text):
+    """Returns non-overlapping (start, end) character spans in `text` covering each run of 2+
+    ascending single-letter panel markers (see module comment above), extended backward to absorb
+    an immediately-preceding 'Figure N.N' / 'Fig. N.N' / 'Table N.N' caption token if one is close
+    enough, and forward to absorb a short trailing label after the last marker. Returns [] when
+    fewer than 2 qualifying markers exist anywhere in `text` -- the common case for an ordinary
+    section, so this is a cheap no-op for almost every call. Deterministic, no model involved."""
+    panel_tokens = list(PANEL_LETTER_RE.finditer(text))
+    if len(panel_tokens) < 2:
+        return []
+    figure_tokens = list(FIGURE_CAPTION_PREFIX_RE.finditer(text))
+
+    runs = []
+    i = 0
+    while i < len(panel_tokens):
+        run = [panel_tokens[i]]
+        last_letter = panel_tokens[i].group(1).lower()
+        j = i + 1
+        while j < len(panel_tokens):
+            gap_words = _words_between(text, run[-1].end(), panel_tokens[j].start())
+            letter = panel_tokens[j].group(1).lower()
+            if gap_words > CAPTION_RUN_MAX_GAP_WORDS or letter <= last_letter:
+                break
+            run.append(panel_tokens[j])
+            last_letter = letter
+            j += 1
+        if len(run) >= 2:
+            runs.append(run)
+            i = j
+        else:
+            i += 1
+
+    spans = []
+    for run in runs:
+        start, end = run[0].start(), run[-1].end()
+        for ft in reversed(figure_tokens):
+            if ft.end() <= start:
+                if _words_between(text, ft.end(), start) <= CAPTION_RUN_MAX_GAP_WORDS:
+                    start = ft.start()
+                break
+        end = _absorb_trailing_label(text, end, CAPTION_LABEL_MAX_WORDS)
+        spans.append((start, end))
+
+    spans.sort()
+    merged = []
+    for s, e in spans:
+        if merged and s <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], e))
+        else:
+            merged.append((s, e))
+    return merged
+
+
+def strip_figure_caption_noise(text):
+    """Drops every detected caption/panel-label run (see find_caption_panel_runs) from `text`,
+    collapsing the surrounding whitespace back to a single space so the two sentence halves that
+    used to sandwich the noise read as one clean sentence again. Returns (clean_text,
+    removed_word_count); removed_word_count is 0 (and clean_text is `text` unchanged) for the
+    common case where no noise was found."""
+    spans = find_caption_panel_runs(text)
+    if not spans:
+        return text, 0
+    removed_words = 0
+    out = []
+    pos = 0
+    for start, end in spans:
+        out.append(text[pos:start])
+        removed_words += len(text[start:end].split())
+        pos = end
+    out.append(text[pos:])
+    cleaned = re.sub(r"\s+", " ", "".join(out)).strip()
+    return cleaned, removed_words
+
+
+def strip_figure_caption_noise_from_blocks(blocks):
+    """Applies strip_figure_caption_noise to every paragraph/list block's text (headings/tables are
+    never run-on sentences with wedged captions, so they're left untouched). Returns (new_blocks,
+    total_words_removed)."""
+    new_blocks = []
+    removed_total = 0
+    for btype, text in blocks:
+        if btype in ("para", "list"):
+            cleaned, removed = strip_figure_caption_noise(text)
+            removed_total += removed
+            new_blocks.append((btype, cleaned))
+        else:
+            new_blocks.append((btype, text))
+    return new_blocks, removed_total
+
+
 def process_chapter_pdf_bytes(pdf_bytes: bytes):
     """Runs the full extract -> clean -> parse-sections -> validate pipeline on one chapter PDF's
     raw bytes, matching ncert_ingest.py's own per-chapter logic byte-for-byte. No Supabase/model
@@ -344,6 +484,9 @@ def process_chapter_pdf_bytes(pdf_bytes: bytes):
                         break
         merged_text = "\n".join(raw_lines)
         cleaned_text, blocks = clean_mod.clean_text(merged_text, doc)
+        blocks, _caption_words_removed = strip_figure_caption_noise_from_blocks(blocks)
+        if _caption_words_removed:
+            cleaned_text = clean_mod.render(chapter_num, chapter_title, blocks)
         sections = load_mod.parse_sections(cleaned_text)
         flags = validate_chapter(chapter_num, chapter_title, blocks, sections, pages)
         words = sum(s["word_count"] for s in sections)

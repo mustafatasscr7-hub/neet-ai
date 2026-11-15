@@ -3891,14 +3891,17 @@ def _split_ncert_candidate_lines(raw_block: str) -> list:
             candidates.append((text, citation))
     return candidates
 
-def _exact_source_substring(normalized_candidate: str, source_text: str) -> str:
+def _locate_source_span(normalized_candidate: str, source_text: str):
     """Looks up the real, original-cased/spaced substring of source_text that normalizes to
     normalized_candidate, so the student is shown the textbook's own exact wording -- not the
     model's copy of it, which the verifier accepts even when it differs from the source in case
-    or whitespace (that's the whole point of normalizing before comparing). Falls back to
-    normalized_candidate itself if the mapping doesn't find it (should not happen: the caller
-    only calls this after already confirming normalized_candidate is a substring of the
-    same-normalized source)."""
+    or whitespace (that's the whole point of normalizing before comparing). Returns (matched_text,
+    end_offset) -- end_offset is the position in source_text right after the match, which
+    _verify_ncert_quotes uses to look for a sentence-ending extension when matched_text itself
+    doesn't end its sentence (see _extend_quote_to_sentence_end). Falls back to
+    (normalized_candidate, len(source_text)) if the mapping doesn't find it (should not happen:
+    the caller only calls this after already confirming normalized_candidate is a substring of
+    the same-normalized source)."""
     out_chars, offsets = [], []
     for i, ch in enumerate(source_text):
         if ch in "“”":
@@ -3918,10 +3921,46 @@ def _exact_source_substring(normalized_candidate: str, source_text: str) -> str:
     mapped_source = "".join(out_chars)
     idx = mapped_source.find(normalized_candidate)
     if idx == -1 or not normalized_candidate:
-        return normalized_candidate
+        return normalized_candidate, len(source_text)
     start = offsets[idx]
     end = offsets[idx + len(normalized_candidate) - 1] + 1
-    return source_text[start:end]
+    return source_text[start:end], end
+
+# A verified quote that got cut off mid-sentence (the picker/model stopped at a word like "or" or
+# "and" instead of the sentence's real end) reads as broken to a student even though every word in
+# it is genuinely verbatim. _extend_quote_to_sentence_end below pulls the rest of that same
+# sentence straight from the section's own text -- never from the model -- so a shown quote always
+# ends on real terminal punctuation. Capped at _NCERT_QUOTE_EXTEND_MAX_WORDS total words; a quote
+# that can't be extended (the section text itself runs out first) or would only fit by busting the
+# cap is dropped rather than ever shown still cut off.
+_NCERT_QUOTE_EXTEND_MAX_WORDS = 40
+_NCERT_SENTENCE_END_RE = re.compile(r"[.!?]")
+_NCERT_TRAILING_QUOTE_CHARS = "\"“”‘’'"
+
+def _ends_with_terminal_punctuation(text: str) -> bool:
+    """True when `text` already ends its own sentence -- last non-quote-mark character is one of
+    .!? -- tolerant of a trailing closing quote mark after the punctuation."""
+    stripped = (text or "").rstrip(_NCERT_TRAILING_QUOTE_CHARS)
+    return bool(stripped) and stripped[-1] in ".!?"
+
+def _extend_quote_to_sentence_end(quote_text: str, end_offset: int, source_text: str, max_words: int):
+    """quote_text is the verbatim span of source_text ending right at end_offset, which does NOT
+    yet end its sentence (caller already checked _ends_with_terminal_punctuation). Extends it
+    through source_text's own continuation up to and including the next sentence-ending mark
+    (plus any closing quote mark glued right after it). Returns None -- the caller must drop the
+    quote entirely rather than ever show one still cut off -- when source_text runs out before a
+    terminal mark is found, or when the extended quote would exceed max_words."""
+    remainder = source_text[end_offset:]
+    m = _NCERT_SENTENCE_END_RE.search(remainder)
+    if not m:
+        return None
+    cut = m.end()
+    while cut < len(remainder) and remainder[cut] in _NCERT_TRAILING_QUOTE_CHARS:
+        cut += 1
+    extended = quote_text + remainder[:cut]
+    if len(extended.split()) > max_words:
+        return None
+    return extended
 
 def _verify_ncert_quotes(raw_block: str, sections: list):
     """No model involved -- a quote (at least 6 words) is shown only if it is a verbatim
@@ -3939,8 +3978,11 @@ def _verify_ncert_quotes(raw_block: str, sections: list):
     in (first match wins when more than one section was picked). A quote that is not an exact
     substring of any picked section -- too short, paraphrased, one changed word, invented -- is
     dropped regardless of what it was captioned with. A shown quote is rendered with the matched
-    section's own exact text (see _exact_source_substring). Returns (shown, dropped), each a list
-    of {quote, citation} dicts; a shown citation is always "<section.chapter>, <section.heading>"."""
+    section's own exact text (see _locate_source_span), extended to its sentence's real end when
+    it was verified cut off mid-sentence (see _extend_quote_to_sentence_end) -- a verified quote
+    that can't be cleanly extended is dropped, never shown still cut off. Returns (shown, dropped),
+    each a list of {quote, citation} dicts; a shown citation is always "<section.chapter>,
+    <section.heading>"."""
     normalized_sections = [(_normalize_ncert_quote_text(s.get("text") or ""), s) for s in (sections or [])]
     shown, dropped = [], []
     for quote_raw, model_citation in _split_ncert_candidate_lines(raw_block):
@@ -3953,7 +3995,15 @@ def _verify_ncert_quotes(raw_block: str, sections: list):
                     matched_section = section
                     break
         if matched_section:
-            quote_text = _exact_source_substring(normalized_quote, matched_section["text"])
+            quote_text, end_offset = _locate_source_span(normalized_quote, matched_section["text"])
+            if not _ends_with_terminal_punctuation(quote_text):
+                extended_quote = _extend_quote_to_sentence_end(
+                    quote_text, end_offset, matched_section["text"], _NCERT_QUOTE_EXTEND_MAX_WORDS
+                )
+                if extended_quote is None:
+                    dropped.append({"quote": quote_raw, "citation": model_citation})
+                    continue
+                quote_text = extended_quote
             citation = f"{matched_section.get('chapter', '')}, {matched_section.get('heading', '')}"
             shown.append({"quote": quote_text, "citation": citation})
         else:

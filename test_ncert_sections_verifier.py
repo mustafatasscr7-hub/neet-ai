@@ -278,6 +278,90 @@ def test_two_quoted_spans_crammed_on_one_line():
     check("nothing dropped", len(dropped) == 0, dropped)
 
 
+def test_cutoff_quote_extended_to_sentence_end():
+    print("\n22. a quote cut off mid-sentence (no terminal punctuation) is extended to the sentence's end")
+    source = (
+        "Mitosis ensures that each daughter cell receives an identical set of chromosomes or "
+        "an equal share of the parent cell's genetic material."
+    )
+    section = {"chapter": "Chapter 5", "heading": "Cell Division", "text": source}
+    raw = '"Mitosis ensures that each daughter cell receives an identical set of chromosomes or"'
+    shown, dropped = server._verify_ncert_quotes(raw, [section])
+    check("one quote shown", len(shown) == 1, (shown, dropped))
+    check("nothing dropped", len(dropped) == 0, dropped)
+    check("quote extended through the rest of the sentence", shown and shown[0]["quote"] == source, shown)
+
+
+def test_cutoff_quote_dropped_when_no_sentence_end_follows():
+    print("\n23. a cut-off quote is dropped when the section text runs out before a sentence end")
+    source = (
+        "Photosynthesis occurs in the chloroplasts of plant cells and requires sunlight, water and "
+        "carbon dioxide along with"
+    )
+    section = {"chapter": "Chapter 6", "heading": "Photosynthesis", "text": source}
+    raw = '"Photosynthesis occurs in the chloroplasts of plant cells and requires sunlight, water and"'
+    shown, dropped = server._verify_ncert_quotes(raw, [section])
+    check("nothing shown (no terminal punctuation to extend to)", len(shown) == 0, (shown, dropped))
+    check("one dropped", len(dropped) == 1, dropped)
+
+
+def test_cutoff_quote_dropped_when_extension_exceeds_word_cap():
+    print("\n24. a cut-off quote is dropped when extending to the sentence end would exceed 40 words")
+    source = "The process begins when the cell enters the S phase and" + " filler" * 40 + "."
+    section = {"chapter": "Chapter 5", "heading": "Cell Division", "text": source}
+    raw = '"The process begins when the cell enters the S phase and"'
+    shown, dropped = server._verify_ncert_quotes(raw, [section])
+    check("nothing shown (extension would exceed the 40-word cap)", len(shown) == 0, (shown, dropped))
+    check("one dropped", len(dropped) == 1, dropped)
+
+
+def test_quote_already_ending_in_punctuation_not_extended():
+    print("\n25. a quote that already ends with terminal punctuation is shown unchanged (regression guard)")
+    source = (
+        "Mitosis ensures that each daughter cell receives an identical set of chromosomes. "
+        "This is followed by cytokinesis."
+    )
+    section = {"chapter": "Chapter 5", "heading": "Cell Division", "text": source}
+    raw = '"Mitosis ensures that each daughter cell receives an identical set of chromosomes."'
+    shown, dropped = server._verify_ncert_quotes(raw, [section])
+    check("one quote shown", len(shown) == 1, (shown, dropped))
+    check(
+        "quote is exactly the first sentence only, not extended into the next one",
+        shown and shown[0]["quote"] == "Mitosis ensures that each daughter cell receives an identical set of chromosomes.",
+        shown,
+    )
+
+
+def test_figure_label_wedged_mid_sentence_rejected_unless_text_matches():
+    print("\n26. a quote skipping wedged figure-label noise is rejected unless the stored text matches it")
+    dirty_source = (
+        "During mitosis the chromosomes condense and align at the equatorial plate "
+        "Figure 9.9 (a) Prophase (b) Metaphase "
+        "before being pulled apart towards opposite poles."
+    )
+    dirty_section = {"chapter": "Chapter 5", "heading": "Cell Division", "text": dirty_source}
+    # A "clean" candidate quote that skips over the wedged figure labels entirely -- NOT a
+    # verbatim substring of the actual (dirty) stored section text, so it must be rejected exactly
+    # as any other non-exact candidate would be (see _verify_ncert_quotes's exact-substring rule).
+    clean_raw = (
+        '"During mitosis the chromosomes condense and align at the equatorial plate before being '
+        'pulled apart towards opposite poles."'
+    )
+    shown, dropped = server._verify_ncert_quotes(clean_raw, [dirty_section])
+    check("the label-skipping quote is rejected (not a true substring of the dirty stored text)", len(shown) == 0, (shown, dropped))
+    check("one dropped", len(dropped) == 1, dropped)
+    # Once the stored text is itself clean (no wedged labels -- what a fixed ingest would produce),
+    # the identical quote now IS an exact substring and is correctly shown.
+    clean_section_text = (
+        "During mitosis the chromosomes condense and align at the equatorial plate "
+        "before being pulled apart towards opposite poles."
+    )
+    clean_section = {"chapter": "Chapter 5", "heading": "Cell Division", "text": clean_section_text}
+    shown2, dropped2 = server._verify_ncert_quotes(clean_raw, [clean_section])
+    check("the same quote is shown once the stored text is clean", len(shown2) == 1, (shown2, dropped2))
+    check("nothing dropped once clean", len(dropped2) == 0, dropped2)
+
+
 async def _collect(gen):
     out = []
     async for chunk in gen:
@@ -423,6 +507,11 @@ if __name__ == "__main__":
     test_under_six_words_without_quotes_rejected()
     test_mixed_quoted_and_unquoted_lines_in_one_block()
     test_two_quoted_spans_crammed_on_one_line()
+    test_cutoff_quote_extended_to_sentence_end()
+    test_cutoff_quote_dropped_when_no_sentence_end_follows()
+    test_cutoff_quote_dropped_when_extension_exceeds_word_cap()
+    test_quote_already_ending_in_punctuation_not_extended()
+    test_figure_label_wedged_mid_sentence_rejected_unless_text_matches()
     test_strip_ncert_block_passthrough_when_no_marker()
     test_strip_ncert_block_captures_and_hides_real_block()
     test_strip_ncert_block_merges_two_separate_blocks()
