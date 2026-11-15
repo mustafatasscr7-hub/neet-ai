@@ -16812,18 +16812,25 @@ async def admin_ncert_content_chapter_edit(request: Request, _: None = Depends(v
         return {"error": err}
 
     flags = ncert_ingest_core_mod.validate_sections(new_sections)
+    return await _write_chapter_sections_safely(cls, subject, chapter, new_sections, flags)
 
-    # Safe replace, same pattern as Apply: write under a temporary chapter label first (so the
-    # unique (class,subject,chapter,ordinal) constraint never collides with the still-live old
-    # rows), verify every row landed, delete the old rows, then rename the temp rows back. Never
-    # deletes before the new rows are confirmed written, so a failed insert leaves the chapter
-    # exactly as it was.
+
+async def _write_chapter_sections_safely(cls: str, subject: str, chapter: str, sections: list, flags: list):
+    """Safe replace of every section row for (cls,subject,chapter): write the new rows under a
+    temporary chapter label first (so the unique (class,subject,chapter,ordinal) constraint never
+    collides with the still-live old rows), verify every row landed, delete the old rows, then
+    rename the temp rows back. Never deletes before the new rows are confirmed written, so a
+    failed insert leaves the chapter exactly as it was. Shared by admin_ncert_content_chapter_edit
+    (one section at a time) and admin_ncert_content_chapter_save_all (many sections in one write)
+    so both go through the identical write path. Returns the same
+    {class,subject,chapter,sections,flags,words,section_count} shape on success, or {"error": ...}
+    on failure -- callers return this dict directly."""
     temp_label = f"{chapter}__ncert_content_tmp__{uuid.uuid4().hex[:8]}"
     rows = [
         {"class": cls, "subject": subject, "chapter": temp_label, "heading": s["heading"],
          "ordinal": i, "text": s.get("text") or "", "word_count": len((s.get("text") or "").split()),
          "keywords": s.get("keywords")}
-        for i, s in enumerate(new_sections)
+        for i, s in enumerate(sections)
     ]
     try:
         insert_resp = await async_client.post(
@@ -16873,11 +16880,83 @@ async def admin_ncert_content_chapter_edit(request: Request, _: None = Depends(v
         words=sum(r.get("word_count") or 0 for r in inserted),
     )
 
-    words = sum(len((s.get("text") or "").split()) for s in new_sections)
+    words = sum(len((s.get("text") or "").split()) for s in sections)
     return {
         "class": cls, "subject": subject, "chapter": chapter, "sections": inserted,
         "flags": flags, "words": words, "section_count": len(inserted),
     }
+
+
+@app.post("/admin/ncert-content/chapter/save-all")
+async def admin_ncert_content_chapter_save_all(request: Request, _: None = Depends(verify_admin), __: None = Depends(rate_limit(40, 300, by="ip"))):
+    """"Save all" for the loaded-chapter section editor (admin-ncert-content.html): applies every
+    edited section's heading/text in ONE write via _write_chapter_sections_safely instead of one
+    round trip per section. Body: {class, subject, chapter, edits: [{ordinal, heading, text}, ...]}.
+    Clears keywords only for an edit whose heading or text actually differs from what is currently
+    stored (same rule as a single save via _apply_section_edit_action) -- an edit identical to the
+    stored value is a no-op for that section's keywords. A bad entry (unknown ordinal, blank
+    heading) is reported for that entry only, by ordinal, and does not stop the rest; structural
+    validation (validate_sections) runs once over the whole resulting chapter, same as a single
+    save. Admin-only (verify_admin, never the contractor key)."""
+    try:
+        body = await request.json()
+    except Exception:
+        return {"error": "Invalid request body."}
+    cls = (body.get("class") or "").strip()
+    subject = (body.get("subject") or "").strip()
+    chapter = (body.get("chapter") or "").strip()
+    edits = body.get("edits")
+
+    if cls not in NCERT_CONTENT_CLASSES:
+        return {"error": f"class must be one of {', '.join(NCERT_CONTENT_CLASSES)}"}
+    if subject not in NCERT_CONTENT_SUBJECTS:
+        return {"error": f"subject must be one of {', '.join(NCERT_CONTENT_SUBJECTS)}"}
+    if not chapter:
+        return {"error": "chapter is required."}
+    if not isinstance(edits, list) or not edits:
+        return {"error": "edits must be a non-empty list."}
+
+    try:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/ncert_sections", headers=ADMIN_HEADERS,
+            params={
+                "select": "heading,text,keywords", "class": f"eq.{cls}", "subject": f"eq.{subject}",
+                "chapter": f"eq.{chapter}", "order": "ordinal",
+            },
+        )
+        if resp.status_code >= 400:
+            return {"error": "Could not load this chapter."}
+        sections = resp.json()
+    except Exception as e:
+        return {"error": str(e)}
+    if not sections:
+        return {"error": "No such chapter."}
+
+    results = []
+    for edit in edits:
+        ordinal = edit.get("ordinal")
+        heading = (edit.get("heading") or "").strip()
+        text = edit.get("text") or ""
+        if not isinstance(ordinal, int) or isinstance(ordinal, bool) or not (0 <= ordinal < len(sections)):
+            results.append({"ordinal": ordinal, "ok": False, "error": "No section at this position."})
+            continue
+        if not heading:
+            results.append({"ordinal": ordinal, "ok": False, "error": "Heading is required."})
+            continue
+        row = sections[ordinal]
+        changed = row.get("heading") != heading or (row.get("text") or "") != text
+        row["heading"] = heading
+        row["text"] = text
+        if changed:
+            row.pop("keywords", None)
+        results.append({"ordinal": ordinal, "ok": True})
+
+    flags = ncert_ingest_core_mod.validate_sections(sections)
+    written = await _write_chapter_sections_safely(cls, subject, chapter, sections, flags)
+    if written.get("error"):
+        return written
+    written["results"] = results
+    return written
 
 
 @app.post("/admin/ncert-content/apply")

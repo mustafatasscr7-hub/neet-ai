@@ -53,10 +53,10 @@
   .secondary-btn { background: #1a1a1a; border: 1px solid #2a2a2a; color: #ececec; padding: 10px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
   .secondary-btn:hover { border-color: #4f8ef7; color: #4f8ef7; }
 
-  #uploadStatus, #sectionStatus { font-size: 12px; margin-top: 10px; display: none; }
-  #uploadStatus.info, #sectionStatus.info { color: #4f8ef7; }
-  #uploadStatus.error, #sectionStatus.error { color: #ef4444; }
-  #uploadStatus.success, #sectionStatus.success { color: #4ade80; }
+  #uploadStatus { font-size: 12px; margin-top: 10px; display: none; }
+  #uploadStatus.info { color: #4f8ef7; }
+  #uploadStatus.error { color: #ef4444; }
+  #uploadStatus.success { color: #4ade80; }
 
   .preview-box { margin-top: 14px; border: 1px solid #2a2a2a; border-radius: 8px; padding: 14px; display: none; }
   .preview-box h3 { font-size: 14px; font-weight: 700; margin-bottom: 4px; }
@@ -191,6 +191,14 @@
   .insert-row { padding: 8px 10px; text-align: center; }
   .insert-row .action-btn { font-size: 11px; }
   .added-by-you-note { font-size: 11px; color: #4f8ef7; margin-top: 6px; }
+
+  /* "Save all" for the loaded-chapter editor -- editing a heading/text no longer saves itself;
+     it marks the row with a small blue dot and the change sits in memory until Save all runs. */
+  .edited-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #4f8ef7; margin-left: 7px; vertical-align: middle; }
+  .save-all-bar { padding: 10px 12px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .save-all-bar-top { border-bottom: 1px solid #1a1a1a; }
+  .save-all-bar-bottom { border-top: 1px solid #1a1a1a; }
+  .save-all-bar .edit-section-status { margin: 0; flex: 1 1 auto; min-width: 160px; }
 </style>
 </head>
 <body>
@@ -300,51 +308,6 @@
     <div class="detail-sections" id="detailSections"></div>
   </div>
 
-  <div class="panel">
-    <h2>Add or edit a section manually</h2>
-    <p style="font-size:11px;color:#666;margin-bottom:12px;">Use this when a chapter PDF fails validation, or to fix one section by hand. Saving with the same class/subject/chapter/ordinal as an existing section edits it in place.</p>
-    <div class="form-row cols-2">
-      <div class="q-field">
-        <label>Class</label>
-        <select id="manualClass">
-          <option value="11">11</option>
-          <option value="12">12</option>
-        </select>
-      </div>
-      <div class="q-field">
-        <label>Subject</label>
-        <select id="manualSubject">
-          <option value="Biology">Biology</option>
-          <option value="Physics">Physics</option>
-          <option value="Chemistry">Chemistry</option>
-        </select>
-      </div>
-    </div>
-    <div class="form-row cols-2">
-      <div class="q-field">
-        <label>Chapter</label>
-        <input type="text" id="manualChapter" placeholder="e.g. The Living World"/>
-      </div>
-      <div class="q-field">
-        <label>Ordinal (section order, 0-based)</label>
-        <input type="number" id="manualOrdinal" min="0" step="1" value="0"/>
-      </div>
-    </div>
-    <div class="q-field" style="margin-bottom:12px;">
-      <label>Heading</label>
-      <input type="text" id="manualHeading" placeholder="e.g. 1.1 Diversity In The Living World"/>
-    </div>
-    <div class="q-field" style="margin-bottom:12px;">
-      <label>Text</label>
-      <textarea id="manualText" rows="6" placeholder="Section body text"></textarea>
-    </div>
-    <div class="preview-actions">
-      <label class="overwrite-check" style="color:#888;"><input type="checkbox" id="manualRegenKeywords"/> Generate keywords for this section (DeepSeek)</label>
-      <button type="button" class="primary-btn" onclick="saveManualSection()">Save section</button>
-      <button type="button" class="secondary-btn" onclick="clearManualForm()">Clear</button>
-    </div>
-    <div id="sectionStatus"></div>
-  </div>
 </div>
 
 <script src="./confirm-modal.js"></script>
@@ -568,6 +531,16 @@
   // structural validation (and, for a preview, the PDF cross-check) after every single action.
   window._editState = {};
 
+  // Chapter mode only: warn before leaving the page (reload, close tab, navigate away) while any
+  // section has an unsaved edit sitting in memory.
+  window.addEventListener('beforeunload', function (e) {
+    const state = window._editState['detailSections'];
+    if (state && state.mode && state.mode.type === 'chapter' && state.sections.some(s => s._dirty)) {
+      e.preventDefault();
+      e.returnValue = '';
+    }
+  });
+
   function wordCount(text) {
     const t = (text || '').trim();
     return t ? t.split(/\s+/).length : 0;
@@ -581,9 +554,25 @@
       flags.map(f => `<li>${escapeHtml(f)}</li>`).join('') + '</ul>Edit a section below (or use the manual section form) to fix it.';
   }
 
+  // A section carries _dirty/_origHeading/_origText only in chapter mode -- the preview editor
+  // (not yet applied to the database) keeps its original immediate-save behavior unchanged.
+  function stampOriginals(sections, mode) {
+    if (mode.type !== 'chapter') return sections || [];
+    return (sections || []).map(s => Object.assign({}, s, { _dirty: false, _origHeading: s.heading, _origText: s.text }));
+  }
+
   function renderEditableSections(containerId, sections, mode) {
-    window._editState[containerId] = { sections: sections || [], mode, openIndex: null, insertAt: null };
+    window._editState[containerId] = { sections: stampOriginals(sections, mode), mode, openIndex: null, insertAt: null };
     renderEditableSectionsList(containerId);
+  }
+
+  function renderSaveAllBar(containerId, dirtyCount, pos) {
+    const statusDiv = pos === 'top' ? `<div class="edit-section-status" id="${containerId}-saveall-status"></div>` : '';
+    return `
+      <div class="save-all-bar save-all-bar-${pos}">
+        <button type="button" class="primary-btn" id="${containerId}-saveall-${pos}" onclick="saveAllEdited('${containerId}')" ${dirtyCount ? '' : 'disabled'}>Save all (${dirtyCount})</button>
+        ${statusDiv}
+      </div>`;
   }
 
   function renderEditableSectionsList(containerId) {
@@ -591,39 +580,53 @@
     const container = document.getElementById(containerId);
     if (!state) { container.innerHTML = ''; return; }
     const sections = state.sections;
+    const isChapterMode = state.mode.type === 'chapter';
+    const dirtyCount = isChapterMode ? sections.filter(s => s._dirty).length : 0;
+    const topBar = isChapterMode ? renderSaveAllBar(containerId, dirtyCount, 'top') : '';
+    const bottomBar = isChapterMode ? renderSaveAllBar(containerId, dirtyCount, 'bottom') : '';
+
     if (!sections.length) {
-      container.innerHTML = '<div class="edit-section-row"><div class="edit-section-row-head"><span class="heading">No sections found.</span></div></div>' +
-        renderInsertForm(containerId, 0, state.insertAt === 0);
+      container.innerHTML = topBar +
+        '<div class="edit-section-row"><div class="edit-section-row-head"><span class="heading">No sections found.</span></div></div>' +
+        renderInsertForm(containerId, 0, state.insertAt === 0) + bottomBar;
       return;
     }
-    let html = '';
+    let html = topBar;
     for (let i = 0; i < sections.length; i++) {
       if (state.insertAt === i) html += renderInsertForm(containerId, i, true);
       const s = sections[i];
       const open = state.openIndex === i;
+      const dot = isChapterMode ? `<span class="edited-dot" id="${containerId}-dot-${i}" style="${s._dirty ? '' : 'display:none;'}" title="Unsaved changes"></span>` : '';
       html += `
         <div class="edit-section-row">
           <div class="edit-section-row-head" onclick="toggleSectionEditor('${containerId}', ${i})">
-            <span class="heading">${escapeHtml(s.heading)}</span>
+            <span class="heading">${escapeHtml(s.heading)}${dot}</span>
             <span class="meta">${wordCount(s.text)} words</span>
           </div>
           <div class="edit-section-editor${open ? ' open' : ''}">${open ? renderSectionEditorForm(containerId, i, s) : ''}</div>
         </div>`;
     }
     if (state.insertAt === sections.length) html += renderInsertForm(containerId, sections.length, true);
+    html += bottomBar;
     container.innerHTML = html;
   }
 
   function renderSectionEditorForm(containerId, i, s) {
-    const regenBtn = containerId === 'detailSections'
+    const isChapterMode = containerId === 'detailSections';
+    const regenBtn = isChapterMode
       ? `<button type="button" class="action-btn" onclick="regenerateSectionKeywords('${containerId}', ${i})">Regenerate keywords</button>`
       : '';
+    const saveBtn = isChapterMode
+      ? ''
+      : `<button type="button" class="action-btn" onclick="runSectionAction('${containerId}', ${i}, 'save')">Save</button>`;
+    const headingOninput = isChapterMode ? ` oninput="onFieldEdited('${containerId}', ${i})"` : '';
+    const textOninput = isChapterMode ? `onFieldEdited('${containerId}', ${i})` : `updateLiveWc('${containerId}', ${i})`;
     return `
-      <input type="text" id="${containerId}-heading-${i}" value="${escapeAttr(s.heading)}"/>
-      <textarea id="${containerId}-text-${i}" oninput="updateLiveWc('${containerId}', ${i})">${escapeHtml(s.text)}</textarea>
+      <input type="text" id="${containerId}-heading-${i}" value="${escapeAttr(s.heading)}"${headingOninput}/>
+      <textarea id="${containerId}-text-${i}" oninput="${textOninput}">${escapeHtml(s.text)}</textarea>
       <div class="edit-wc-live" id="${containerId}-wc-${i}">${wordCount(s.text)} words</div>
       <div class="edit-section-actions">
-        <button type="button" class="action-btn" onclick="runSectionAction('${containerId}', ${i}, 'save')">Save</button>
+        ${saveBtn}
         <button type="button" class="action-btn danger" onclick="runSectionAction('${containerId}', ${i}, 'delete')">Delete</button>
         <button type="button" class="action-btn" onclick="runSectionAction('${containerId}', ${i}, 'merge_prev')">Merge with previous</button>
         <button type="button" class="action-btn" onclick="runSectionAction('${containerId}', ${i}, 'merge_next')">Merge with next</button>
@@ -635,6 +638,112 @@
       </div>
       <div class="edit-section-status" id="${containerId}-status-${i}"></div>
     `;
+  }
+
+  // Chapter mode only: typing updates the in-memory section (so the row/word-count reflect it)
+  // and marks it dirty without saving -- no network call, and no full-list re-render (that would
+  // blow away the textarea's cursor position while the admin is still typing).
+  function onFieldEdited(containerId, i) {
+    const state = window._editState[containerId];
+    if (!state) return;
+    const s = state.sections[i];
+    const headingEl = document.getElementById(`${containerId}-heading-${i}`);
+    const textEl = document.getElementById(`${containerId}-text-${i}`);
+    s.heading = headingEl.value;
+    s.text = textEl.value;
+    s._dirty = (s.heading !== s._origHeading) || (s.text !== s._origText);
+    updateLiveWc(containerId, i);
+    const dot = document.getElementById(`${containerId}-dot-${i}`);
+    if (dot) dot.style.display = s._dirty ? 'inline-block' : 'none';
+    updateSaveAllButtons(containerId);
+  }
+
+  function updateSaveAllButtons(containerId) {
+    const state = window._editState[containerId];
+    if (!state) return;
+    const dirtyCount = state.sections.filter(s => s._dirty).length;
+    ['top', 'bottom'].forEach(pos => {
+      const btn = document.getElementById(`${containerId}-saveall-${pos}`);
+      if (btn) { btn.textContent = `Save all (${dirtyCount})`; btn.disabled = dirtyCount === 0; }
+    });
+  }
+
+  // Saves every dirty section in ONE request (POST /admin/ncert-content/chapter/save-all) instead
+  // of one per section. A failed entry (reported per ordinal) stays dirty; everything else that
+  // succeeded is marked clean.
+  async function saveAllEdited(containerId) {
+    const state = window._editState[containerId];
+    if (!state || state.mode.type !== 'chapter') return;
+    const edits = [];
+    state.sections.forEach((s, ordinal) => { if (s._dirty) edits.push({ ordinal, heading: s.heading, text: s.text }); });
+    if (!edits.length) return;
+
+    const statusEl = document.getElementById(`${containerId}-saveall-status`);
+    if (statusEl) { statusEl.textContent = 'Saving all...'; statusEl.className = 'edit-section-status'; }
+
+    const { cls, subject, chapter } = state.mode;
+    let data;
+    try {
+      const res = await fetch(`${API_BASE}/admin/ncert-content/chapter/save-all`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ class: cls, subject, chapter, edits }),
+      });
+      if (res.status === 401) { logout(); return; }
+      data = res.ok ? await res.json() : { error: await describeHttpError(res) };
+    } catch (e) {
+      data = { error: 'Could not reach server.' };
+    }
+
+    const freshStatusEl = document.getElementById(`${containerId}-saveall-status`);
+    if (data.error) {
+      if (freshStatusEl) { freshStatusEl.textContent = data.error; freshStatusEl.className = 'edit-section-status error'; }
+      return;
+    }
+
+    const results = data.results || [];
+    const failed = results.filter(r => !r.ok);
+    const failedOrdinals = new Set(failed.map(r => r.ordinal));
+    state.sections.forEach((s, ordinal) => {
+      if (s._dirty && !failedOrdinals.has(ordinal)) {
+        s._dirty = false;
+        s._origHeading = s.heading;
+        s._origText = s.text;
+        s.keywords = undefined;
+      }
+    });
+
+    renderFlagsBox('detailFlagsBox', data.flags || []);
+    renderEditableSectionsList(containerId);
+    await loadChapters();
+    renderDetailKeywordsRow(cls, subject, chapter);
+
+    const resultStatusEl = document.getElementById(`${containerId}-saveall-status`);
+    if (resultStatusEl) {
+      if (failed.length) {
+        const names = failed.map(r => {
+          const s = state.sections[r.ordinal];
+          return `"${s ? s.heading : 'position ' + r.ordinal}": ${r.error}`;
+        });
+        resultStatusEl.textContent = `Saved the rest. Could not save: ${names.join('; ')}`;
+        resultStatusEl.className = 'edit-section-status error';
+      } else {
+        resultStatusEl.textContent = 'All changes saved.';
+        resultStatusEl.className = 'edit-section-status success';
+      }
+    }
+  }
+
+  // Delete/Merge/Move/Insert stay immediate, but if there are unsaved edits first, ordinals could
+  // get mixed up -- ask to Save all first and block the action until that finishes (or the admin
+  // cancels). Preview mode has no dirty-tracking, so this is always a no-op there.
+  async function ensureSavedBeforeStructuralAction(containerId) {
+    const state = window._editState[containerId];
+    if (!state || state.mode.type !== 'chapter') return true;
+    if (!state.sections.some(s => s._dirty)) return true;
+    if (!(await showConfirmModal('You have unsaved edits. Save all first?', { confirmLabel: 'Save all' }))) return false;
+    await saveAllEdited(containerId);
+    return !state.sections.some(s => s._dirty);
   }
 
   // Regenerates keywords for exactly this one already-loaded section, reusing the existing
@@ -746,6 +855,7 @@
   async function runSectionAction(containerId, i, action) {
     const state = window._editState[containerId];
     if (!state) return;
+    if (!(await ensureSavedBeforeStructuralAction(containerId))) return;
     const statusEl = document.getElementById(`${containerId}-status-${i}`);
     let heading, text;
     if (action === 'save') {
@@ -765,6 +875,7 @@
   async function runInsertAction(containerId, atIndex) {
     const state = window._editState[containerId];
     if (!state) return;
+    if (!(await ensureSavedBeforeStructuralAction(containerId))) return;
     const heading = document.getElementById(`${containerId}-insert-heading`).value;
     const text = document.getElementById(`${containerId}-insert-text`).value;
     const statusEl = document.getElementById(`${containerId}-insert-status`);
@@ -779,7 +890,7 @@
 
   function applyEditResult(containerId, data, newOpenIndex) {
     const state = window._editState[containerId];
-    state.sections = data.sections || [];
+    state.sections = stampOriginals(data.sections, state.mode);
     state.openIndex = (newOpenIndex != null && newOpenIndex >= 0 && newOpenIndex < state.sections.length) ? newOpenIndex : null;
     state.insertAt = null;
     renderEditableSectionsList(containerId);
@@ -1307,59 +1418,7 @@
     });
   }
 
-  // ---------------- Manual add/edit ----------------
 
-  function setSectionStatus(text, cls) {
-    const el = document.getElementById('sectionStatus');
-    el.textContent = text;
-    el.className = cls || '';
-    el.style.display = text ? 'block' : 'none';
-  }
-
-  function clearManualForm() {
-    document.getElementById('manualChapter').value = '';
-    document.getElementById('manualOrdinal').value = 0;
-    document.getElementById('manualHeading').value = '';
-    document.getElementById('manualText').value = '';
-    document.getElementById('manualRegenKeywords').checked = false;
-    setSectionStatus('', '');
-  }
-
-  async function saveManualSection() {
-    const cls = document.getElementById('manualClass').value;
-    const subject = document.getElementById('manualSubject').value;
-    const chapter = document.getElementById('manualChapter').value.trim();
-    const ordinalRaw = document.getElementById('manualOrdinal').value;
-    const heading = document.getElementById('manualHeading').value.trim();
-    const text = document.getElementById('manualText').value;
-    const regenerateKeywords = document.getElementById('manualRegenKeywords').checked;
-
-    if (!chapter || !heading || !text.trim() || ordinalRaw === '') {
-      setSectionStatus('Chapter, ordinal, heading and text are all required.', 'error');
-      return;
-    }
-
-    setSectionStatus(regenerateKeywords ? 'Saving and generating keywords...' : 'Saving...', 'info');
-    try {
-      const res = await fetch(`${API_BASE}/admin/ncert-content/section`, {
-        method: 'POST',
-        headers: authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ class: cls, subject, chapter, ordinal: parseInt(ordinalRaw, 10), heading, text, regenerate_keywords: regenerateKeywords })
-      });
-      if (res.status === 401) { logout(); return; }
-      if (!res.ok) { setSectionStatus(await describeHttpError(res), 'error'); return; }
-      const data = await res.json();
-      if (data.error) { setSectionStatus(data.error, 'error'); return; }
-
-      setSectionStatus(data.keywords_generated ? 'Section saved with keywords.' : 'Section saved.', 'success');
-      loadChapters();
-      if (document.getElementById('chapterDetail').style.display === 'block') {
-        openChapterDetail(encodeURIComponent(cls), encodeURIComponent(subject), encodeURIComponent(chapter));
-      }
-    } catch (e) {
-      setSectionStatus('Could not reach server.', 'error');
-    }
-  }
 </script>
 </body>
 </html>
