@@ -199,6 +199,7 @@
   .save-all-bar-top { border-bottom: 1px solid #1a1a1a; }
   .save-all-bar-bottom { border-top: 1px solid #1a1a1a; }
   .save-all-bar .edit-section-status { margin: 0; flex: 1 1 auto; min-width: 160px; }
+  #retrievalStatus { font-size: 12px; color: #4f8ef7; margin-top: 2px; }
 </style>
 </head>
 <body>
@@ -218,6 +219,7 @@
     <div>
       <h1>NEET<span>-AI</span> NCERT Content</h1>
       <p>See, upload and manage ncert_sections chapters</p>
+      <p id="retrievalStatus"></p>
     </div>
     <button class="logout-btn" onclick="logout()">Log out</button>
   </div>
@@ -962,6 +964,23 @@
     document.getElementById('gateOverlay').style.display = 'none';
     document.getElementById('dashboard').style.display = 'block';
     loadChapters();
+    loadRetrievalStatus();
+  }
+
+  async function loadRetrievalStatus() {
+    const el = document.getElementById('retrievalStatus');
+    try {
+      const res = await fetch(`${API_BASE}/admin/retrieval-status`, { headers: authHeaders() });
+      if (!res.ok) { el.textContent = ''; return; }
+      const data = await res.json();
+      const counts = data.retrieval_counts || {};
+      const countsText = `v1: ${counts.v1 || 0}, v2: ${counts.v2 || 0}`;
+      el.textContent = data.v2_enabled
+        ? `Retrieval: v2 ON (${countsText})`
+        : `Retrieval: v1 (v2 OFF, raw: ${data.v2_raw}) (${countsText})`;
+    } catch (e) {
+      el.textContent = '';
+    }
   }
 
   if (adminKey) {

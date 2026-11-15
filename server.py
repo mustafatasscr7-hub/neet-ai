@@ -3311,7 +3311,19 @@ async def search_ncert(query: str, limit: int = 3, stats: dict = None):
 # completely unchanged, and nothing calls search_ncert_v2 yet -- it's gated behind
 # NCERT_V2_ENABLED (default off) so it can be compared against search_ncert (see
 # ncert_v2_compare.py) before anything switches over.
-NCERT_V2_ENABLED = os.getenv("NCERT_V2_ENABLED", "false").strip().lower() == "true"
+def _parse_bool_env(raw: str) -> bool:
+    """Tolerant boolean parser for NCERT_V2_ENABLED: strips surrounding whitespace and one layer
+    of wrapping quote characters (a literal '"true"' pasted into Railway's env UI is a common
+    misconfig that a plain == "true" compare would silently read as false), then compares
+    case-insensitively against true/1/yes/on. Anything else, including unset or empty, is False."""
+    if raw is None:
+        return False
+    value = raw.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        value = value[1:-1].strip()
+    return value.lower() in ("true", "1", "yes", "on")
+
+NCERT_V2_ENABLED = _parse_bool_env(os.getenv("NCERT_V2_ENABLED"))
 
 async def search_ncert_v2(query: str, limit: int = 3, stats: dict = None):
     """Same return shape as search_ncert (list of dicts with id/subject/class/chapter_name/
@@ -3356,14 +3368,44 @@ async def search_ncert_v2(query: str, limit: int = 3, stats: dict = None):
         stats["version"] = "v2"
     return rows
 
+# In-process only (reset on every restart/deploy) -- /admin/retrieval-status reads this to show
+# how many English retrievals this instance has actually served from each table since it came up.
+# "v1" counts both flag-off requests and v2's own internal fallback (search_ncert_v2 sets
+# stats["version"] = "v1" when ncert_content_v2 had nothing), so this is "what actually answered",
+# not "what NCERT_V2_ENABLED says should happen".
+_ncert_retrieval_counts = {"v1": 0, "v2": 0}
+
 async def _search_ncert_for_chat(query: str, language: str, limit: int = 3, stats: dict = None):
     """The single switch point for stream_response's /chat NCERT retrieval: routes an English
     query to search_ncert_v2 when NCERT_V2_ENABLED, which itself falls back to search_ncert when
     v2 has nothing -- otherwise (flag off, or language == "hi") calls search_ncert directly,
-    exactly as before. search_ncert's own Hindi branch is never touched by this."""
+    exactly as before. search_ncert's own Hindi branch is never touched by this.
+
+    Also tallies _ncert_retrieval_counts for English queries only (Hindi never touches v2)."""
+    local_stats = stats if stats is not None else {}
     if NCERT_V2_ENABLED and language == "en":
-        return await search_ncert_v2(query, limit=limit, stats=stats)
-    return await search_ncert(query, limit=limit, stats=stats)
+        result = await search_ncert_v2(query, limit=limit, stats=local_stats)
+    else:
+        result = await search_ncert(query, limit=limit, stats=local_stats)
+    if language == "en":
+        _ncert_retrieval_counts[local_stats.get("version") or "v1"] += 1
+    return result
+
+@app.get("/admin/retrieval-status")
+async def admin_retrieval_status(_: None = Depends(verify_admin)):
+    """Read-only diagnostic for whether NCERT_V2_ENABLED actually took effect on this deployed
+    instance, and which table English /chat retrievals have actually been served from since it
+    came up -- see _parse_bool_env (a misconfigured raw value, e.g. a literal quoted '"true"' in
+    Railway's env UI, is exactly the kind of thing this exists to surface) and
+    _ncert_retrieval_counts above. Admin-only: verify_admin rejects the contractor key."""
+    raw = os.getenv("NCERT_V2_ENABLED")
+    commit = os.getenv("RAILWAY_GIT_COMMIT_SHA")
+    return {
+        "v2_enabled": NCERT_V2_ENABLED,
+        "v2_raw": repr(raw) if raw is not None else "unset",
+        "deployed_commit": commit[:7] if commit else None,
+        "retrieval_counts": dict(_ncert_retrieval_counts),
+    }
 
 def _ncert_chapter_citation(subject: str, class_num, chapter_name: str, lookup_name: str = None) -> str:
     """Builds an authoritative citation string like 'NCERT Class 12, Chapter 3 -- Current
