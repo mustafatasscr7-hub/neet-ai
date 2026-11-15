@@ -15986,6 +15986,8 @@ NCERT_CONTENT_MAX_PDF_BYTES = 15 * 1024 * 1024  # decoded; see the base64 body-s
 NCERT_CONTENT_APPLY_COST_CAP = 0.10  # DeepSeek keyword-generation spend cap per Apply request
 NCERT_CONTENT_PREVIEW_TTL_SECONDS = 1800  # how long a /preview result can still be /apply'd
 NCERT_CONTENT_MAX_PREVIEW_SESSIONS = 5  # oldest is evicted to make room for a new preview past this
+NCERT_CONTENT_KEYWORDS_COST_CAP = 0.10  # DeepSeek spend cap per /keywords request (see below)
+NCERT_CONTENT_KEYWORDS_SECTION_CAP = 60  # section-count cap per /keywords request
 
 # preview_id -> {class, subject, chapter_title, sections, flags, verify, pdf_bytes, edited,
 # created_at}. In-memory only (one worker today, same caveat as _scan_jobs/_admin_login_attempts
@@ -16165,6 +16167,9 @@ async def admin_ncert_content_list(_: None = Depends(verify_admin)):
         "keywords_done": sum(c["keywords_done"] for c in chapter_list),
         "keywords_cost_usd": round(sum(known_costs), 6) if known_costs else None,
         "avg_cost_usd": round(sum(known_costs) / len(known_costs), 6) if known_costs else None,
+        # Per-SECTION average (distinct from avg_cost_usd above, which is per chapter) -- lets the
+        # "Generate keywords" button estimate a cost before running without a separate round trip.
+        "avg_section_cost_usd": round(await _ncert_avg_section_cost(), 6),
     }
     return {"chapters": chapter_list, "totals": totals}
 
@@ -16453,6 +16458,126 @@ def _ncert_content_generate_keywords(sections, cap: float, is_peak: bool):
     if len(results) < len(sections):
         incomplete = True
     return results, total_cost, incomplete
+
+def _ncert_content_generate_keywords_detailed(sections, cap: float, is_peak: bool):
+    """Like _ncert_content_generate_keywords above, but keeps one outcome per section actually
+    attempted (success or failure) instead of only the successes -- used by the chapter-level
+    "Generate keywords" endpoint below, which reports per-section results to the admin. Stops once
+    total_cost reaches cap; sections after that point are left out of the returned list entirely
+    (never attempted, still pending). A section's own failure does not stop the rest. Returns
+    (attempted, total_cost) where attempted is [{"id", "heading", "keywords", "ok"}, ...]."""
+    attempted = []
+    total_cost = 0.0
+    for row in sections:
+        if total_cost >= cap:
+            break
+        try:
+            keywords, cost = ncert_ingest_core_mod.generate_keywords_with_cost(deepseek_client, row["heading"], row["text"], is_peak)
+            total_cost += cost
+            attempted.append({"id": row["id"], "heading": row["heading"], "keywords": keywords, "ok": True})
+        except Exception:
+            attempted.append({"id": row["id"], "heading": row["heading"], "keywords": None, "ok": False})
+    return attempted, total_cost
+
+@app.post("/admin/ncert-content/keywords")
+async def admin_ncert_content_generate_keywords(request: Request, _: None = Depends(verify_admin), __: None = Depends(rate_limit(10, 300, by="ip"))):
+    """Chapter-level keyword (re)generation -- the "Generate keywords" button in the chapter
+    detail panel and the clickable "N/M keywords pending" badge in the chapters table. mode
+    "pending" (default) only touches sections whose keywords are currently empty (e.g. after a
+    hand-edit cleared them -- see _apply_section_edit_action's stale-marking); mode "all"
+    regenerates every section regardless. Reuses generate_keywords_with_cost
+    (ncert_ingest_core_mod) -- the exact same DeepSeek call and prompt Apply already makes.
+    Sections are processed one at a time, earliest ordinal first, and a failed section is simply
+    left pending -- it never stops the rest. Capped at NCERT_CONTENT_KEYWORDS_SECTION_CAP sections
+    and NCERT_CONTENT_KEYWORDS_COST_CAP dollars per request; anything past either cap stays pending
+    for a follow-up request. Admin-only (verify_admin, never the contractor key)."""
+    try:
+        body = await request.json()
+    except Exception:
+        return {"error": "Invalid request body."}
+    cls = (body.get("class") or "").strip()
+    subject = (body.get("subject") or "").strip()
+    chapter = (body.get("chapter") or "").strip()
+    mode = (body.get("mode") or "pending").strip()
+
+    if cls not in NCERT_CONTENT_CLASSES:
+        return {"error": f"class must be one of {', '.join(NCERT_CONTENT_CLASSES)}"}
+    if subject not in NCERT_CONTENT_SUBJECTS:
+        return {"error": f"subject must be one of {', '.join(NCERT_CONTENT_SUBJECTS)}"}
+    if not chapter:
+        return {"error": "chapter is required."}
+    if mode not in ("pending", "all"):
+        return {"error": "mode must be 'pending' or 'all'."}
+
+    try:
+        resp = await async_client.get(
+            f"{SUPABASE_URL}/rest/v1/ncert_sections", headers=ADMIN_HEADERS,
+            params={
+                "select": "id,ordinal,heading,text,keywords", "class": f"eq.{cls}", "subject": f"eq.{subject}",
+                "chapter": f"eq.{chapter}", "order": "ordinal",
+            },
+        )
+        if resp.status_code >= 400:
+            return {"error": "Could not load this chapter."}
+        sections = resp.json()
+    except Exception as e:
+        return {"error": str(e)}
+    if not sections:
+        return {"error": "No such chapter."}
+
+    candidates = sections if mode == "all" else [s for s in sections if not s.get("keywords")]
+    targets = candidates[:NCERT_CONTENT_KEYWORDS_SECTION_CAP]
+    if not targets:
+        return {
+            "class": cls, "subject": subject, "chapter": chapter, "mode": mode,
+            "succeeded": 0, "failed": 0, "calls": 0, "cost": 0.0, "capped": False, "remaining": 0, "results": [],
+        }
+
+    is_peak = _is_deepseek_peak_hour()
+    loop = asyncio.get_event_loop()
+    attempted, kw_cost = await loop.run_in_executor(
+        None, _ncert_content_generate_keywords_detailed, targets, NCERT_CONTENT_KEYWORDS_COST_CAP, is_peak
+    )
+
+    results = []
+    succeeded = 0
+    for item in attempted:
+        ok = item["ok"]
+        if ok:
+            try:
+                patch_resp = await async_client.patch(
+                    f"{SUPABASE_URL}/rest/v1/ncert_sections", headers={**ADMIN_HEADERS, "Content-Type": "application/json"},
+                    params={"id": f"eq.{item['id']}"}, json={"keywords": item["keywords"]},
+                )
+                ok = patch_resp.status_code < 400
+            except Exception:
+                ok = False
+        if ok:
+            succeeded += 1
+        results.append({"heading": item["heading"], "ok": ok})
+
+    if kw_cost:
+        try:
+            await log_provider_usage(DEEPSEEK_MODEL, is_peak, 0, 0, kw_cost, "/admin/ncert-content/keywords", "")
+        except Exception:
+            pass
+
+    if succeeded:
+        _invalidate_ncert_content_sections_cache()
+    # The DB's ncert_chapter_log.source check constraint only allows 'pdf'/'manual' -- keyword
+    # regeneration already logs under 'manual' elsewhere (see admin_ncert_content_section), so this
+    # follows the same convention rather than adding a new DB-level source value for this feature.
+    await _log_ncert_chapter_event(
+        cls, subject, chapter, source="manual", cost=kw_cost,
+        model_calls=succeeded, model=(DEEPSEEK_MODEL if succeeded else None), sections=succeeded,
+    )
+
+    return {
+        "class": cls, "subject": subject, "chapter": chapter, "mode": mode,
+        "succeeded": succeeded, "failed": len(attempted) - succeeded, "calls": len(attempted),
+        "cost": round(kw_cost, 6), "capped": len(attempted) < len(candidates),
+        "remaining": max(len(candidates) - len(attempted), 0), "results": results,
+    }
 
 NCERT_EDIT_ACTIONS = (
     "save", "delete", "merge_prev", "merge_next",
@@ -16914,6 +17039,7 @@ async def admin_ncert_content_section(request: Request, _: None = Depends(verify
     row = {
         "class": cls, "subject": subject, "chapter": chapter, "heading": heading,
         "ordinal": ordinal, "text": text, "word_count": len(text.split()),
+        "keywords": None,  # stale once heading/text is (re)saved; overwritten below if regenerated now
     }
 
     keywords_generated = False

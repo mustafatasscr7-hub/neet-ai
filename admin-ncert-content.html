@@ -134,9 +134,15 @@
   .subject-chip.Physics { background: #4f8ef720; color: #4f8ef7; }
   .subject-chip.Biology { background: #4ade8020; color: #4ade80; }
   .subject-chip.Chemistry { background: #f9731620; color: #f97316; }
-  .kw-badge { font-size: 10px; padding: 2px 7px; border-radius: 20px; font-weight: 600; display: inline-block; }
+  .kw-badge { font-size: 10px; padding: 2px 7px; border-radius: 20px; font-weight: 600; display: inline-block; cursor: pointer; }
   .kw-badge.done { background: #4ade8020; color: #4ade80; }
   .kw-badge.pending { background: #f5c51820; color: #f5c518; }
+
+  .kw-generate-row { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; font-size: 12px; color: #888; margin-bottom: 10px; }
+  .kw-generate-row b { color: #ececec; }
+  .kw-mode-label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+  .kw-mode-label input[type="radio"] { accent-color: #4f8ef7; }
+  .kw-progress-line { font-size: 12px; min-height: 14px; }
   .action-btn { background: #1a1a1a; border: 1px solid #2a2a2a; color: #ececec; padding: 5px 10px; border-radius: 6px; font-size: 11px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; }
   .action-btn:hover { border-color: #4f8ef7; color: #4f8ef7; }
   .action-btn.danger:hover { border-color: #ef4444; color: #ef4444; }
@@ -283,6 +289,7 @@
       <button type="button" class="secondary-btn" onclick="closeChapterDetail()">Close</button>
     </div>
     <div class="detail-cost-row" id="detailCostRow"></div>
+    <div id="detailKeywordsRow"></div>
     <div class="flags-box" id="detailFlagsBox" style="display:none"></div>
     <div class="verify-upload-row">
       <input type="file" id="verifyChapterFile" accept="application/pdf"/>
@@ -608,6 +615,9 @@
   }
 
   function renderSectionEditorForm(containerId, i, s) {
+    const regenBtn = containerId === 'detailSections'
+      ? `<button type="button" class="action-btn" onclick="regenerateSectionKeywords('${containerId}', ${i})">Regenerate keywords</button>`
+      : '';
     return `
       <input type="text" id="${containerId}-heading-${i}" value="${escapeAttr(s.heading)}"/>
       <textarea id="${containerId}-text-${i}" oninput="updateLiveWc('${containerId}', ${i})">${escapeHtml(s.text)}</textarea>
@@ -621,9 +631,45 @@
         <button type="button" class="action-btn" onclick="runSectionAction('${containerId}', ${i}, 'move_down')">Move down</button>
         <button type="button" class="secondary-btn" onclick="showInsertForm('${containerId}', ${i})">Insert section above</button>
         <button type="button" class="secondary-btn" onclick="showInsertForm('${containerId}', ${i + 1})">Insert section below</button>
+        ${regenBtn}
       </div>
       <div class="edit-section-status" id="${containerId}-status-${i}"></div>
     `;
+  }
+
+  // Regenerates keywords for exactly this one already-loaded section, reusing the existing
+  // manual add/edit endpoint (same heading/text, regenerate_keywords: true) rather than the
+  // chapter-level /keywords endpoint -- this is a single-section action, not a batch one. Only
+  // offered for an already-loaded chapter (containerId === 'detailSections'); a not-yet-applied
+  // preview has no DB row yet for this to act on.
+  async function regenerateSectionKeywords(containerId, i) {
+    const state = window._editState[containerId];
+    if (!state || state.mode.type !== 'chapter') return;
+    const s = state.sections[i];
+    const statusEl = document.getElementById(`${containerId}-status-${i}`);
+    if (statusEl) { statusEl.textContent = 'Generating keywords...'; statusEl.className = 'edit-section-status'; }
+    try {
+      const res = await fetch(`${API_BASE}/admin/ncert-content/section`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          class: state.mode.cls, subject: state.mode.subject, chapter: state.mode.chapter,
+          ordinal: i, heading: s.heading, text: s.text, regenerate_keywords: true,
+        }),
+      });
+      if (res.status === 401) { logout(); return; }
+      if (!res.ok) { if (statusEl) { statusEl.textContent = await describeHttpError(res); statusEl.className = 'edit-section-status error'; } return; }
+      const data = await res.json();
+      if (data.error) { if (statusEl) { statusEl.textContent = data.error; statusEl.className = 'edit-section-status error'; } return; }
+      if (statusEl) {
+        statusEl.textContent = data.keywords_generated ? 'Keywords regenerated.' : 'Could not generate keywords.';
+        statusEl.className = data.keywords_generated ? 'edit-section-status success' : 'edit-section-status error';
+      }
+      await loadChapters();
+      renderDetailKeywordsRow(state.mode.cls, state.mode.subject, state.mode.chapter);
+    } catch (e) {
+      if (statusEl) { statusEl.textContent = 'Could not reach server.'; statusEl.className = 'edit-section-status error'; }
+    }
   }
 
   function renderInsertForm(containerId, atIndex, open) {
@@ -975,6 +1021,7 @@
 
   let _lastChaptersList = []; // so the detail panel can show Source/Cost/Model/Pages/Extract
                                // without a second round-trip -- see renderDetailCostRow().
+  let _lastTotals = {}; // holds avg_section_cost_usd -- see updateKeywordsEstimate()
 
   async function loadChapters() {
     const tbody = document.getElementById('chaptersTableBody');
@@ -986,7 +1033,8 @@
       const data = await res.json();
       if (data.error) { tbody.innerHTML = `<tr class="empty-row"><td colspan="10">${escapeHtml(data.error)}</td></tr>`; return; }
       _lastChaptersList = data.chapters || [];
-      renderTotals(data.totals || {});
+      _lastTotals = data.totals || {};
+      renderTotals(_lastTotals);
       renderChapters(_lastChaptersList);
     } catch (e) {
       tbody.innerHTML = '<tr class="empty-row"><td colspan="10">Could not reach server.</td></tr>';
@@ -1007,6 +1055,103 @@
 
   function formatCost(v) {
     return (v === null || v === undefined) ? '-' : `$${Number(v).toFixed(4)}`;
+  }
+
+  // ---------------- Chapter-level keyword generation ----------------
+  // "Generate keywords" button + Pending-only/Regenerate-all choice in the chapter detail panel,
+  // and the clickable "N/M keywords pending" badge in the chapters table (onKeywordsBadgeClick).
+
+  function renderDetailKeywordsRow(cls, subject, chapter) {
+    const row = document.getElementById('detailKeywordsRow');
+    const c = _lastChaptersList.find(x => x.class === cls && x.subject === subject && x.chapter === chapter);
+    const total = c ? c.section_count : 0;
+    const pending = c ? Math.max(c.section_count - c.keywords_done, 0) : 0;
+    row.innerHTML = `
+      <div class="kw-generate-row">
+        <span><b id="kwPendingCount">${pending}</b>/${total} sections pending keywords</span>
+        <label class="kw-mode-label"><input type="radio" name="kwMode" value="pending" checked onchange="updateKeywordsEstimate()"/> Pending only</label>
+        <label class="kw-mode-label"><input type="radio" name="kwMode" value="all" onchange="updateKeywordsEstimate()"/> Regenerate all</label>
+        <span>est. cost <b id="kwEstimateCost">-</b></span>
+        <button type="button" class="secondary-btn" id="generateKeywordsBtn" onclick="generateChapterKeywords()">Generate keywords</button>
+      </div>
+      <div class="kw-progress-line" id="kwProgressLine"></div>
+    `;
+    updateKeywordsEstimate();
+  }
+
+  function currentKeywordsMode() {
+    const checked = document.querySelector('input[name="kwMode"]:checked');
+    return checked ? checked.value : 'pending';
+  }
+
+  function updateKeywordsEstimate() {
+    const target = window._currentDetailChapter;
+    const el = document.getElementById('kwEstimateCost');
+    if (!target || !el) return;
+    const c = _lastChaptersList.find(x => x.class === target.cls && x.subject === target.subject && x.chapter === target.chapter);
+    if (!c) { el.textContent = '-'; return; }
+    const count = currentKeywordsMode() === 'all' ? c.section_count : Math.max(c.section_count - c.keywords_done, 0);
+    const avg = _lastTotals.avg_section_cost_usd;
+    el.textContent = (avg != null) ? formatCost(count * avg) : '-';
+  }
+
+  async function generateChapterKeywords() {
+    const target = window._currentDetailChapter;
+    if (!target) return;
+    const mode = currentKeywordsMode();
+    const btn = document.getElementById('generateKeywordsBtn');
+    const progressEl = document.getElementById('kwProgressLine');
+    if (btn) btn.disabled = true;
+    if (progressEl) { progressEl.textContent = 'Generating keywords...'; progressEl.style.color = '#4f8ef7'; }
+    try {
+      const res = await fetch(`${API_BASE}/admin/ncert-content/keywords`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ class: target.cls, subject: target.subject, chapter: target.chapter, mode }),
+      });
+      if (res.status === 401) { logout(); return; }
+      if (!res.ok) {
+        const msg = await describeHttpError(res);
+        if (progressEl) { progressEl.textContent = msg; progressEl.style.color = '#ef4444'; }
+        return;
+      }
+      const data = await res.json();
+      if (data.error) {
+        if (progressEl) { progressEl.textContent = data.error; progressEl.style.color = '#ef4444'; }
+        return;
+      }
+
+      let msg;
+      let color = '#4ade80';
+      if (data.calls === 0) {
+        msg = 'Nothing to do -- no sections matched.';
+      } else {
+        msg = `Generated keywords for ${data.succeeded} of ${data.calls} section(s). Cost: ${formatCost(data.cost)}.`;
+        if (data.failed) { msg += ` ${data.failed} failed and stayed pending.`; color = '#f5c518'; }
+        if (data.remaining) { msg += ` ${data.remaining} more section(s) still pending (cap reached) -- run again to continue.`; color = '#f5c518'; }
+      }
+
+      await loadChapters();
+      renderDetailKeywordsRow(target.cls, target.subject, target.chapter);
+      const freshProgressEl = document.getElementById('kwProgressLine');
+      if (freshProgressEl) { freshProgressEl.textContent = msg; freshProgressEl.style.color = color; }
+    } catch (e) {
+      const freshProgressEl = document.getElementById('kwProgressLine');
+      if (freshProgressEl) { freshProgressEl.textContent = 'Could not reach server.'; freshProgressEl.style.color = '#ef4444'; }
+    } finally {
+      const freshBtn = document.getElementById('generateKeywordsBtn');
+      if (freshBtn) freshBtn.disabled = false;
+    }
+  }
+
+  async function onKeywordsBadgeClick(clsEnc, subjectEnc, chapterEnc, pending) {
+    const chapter = decodeURIComponent(chapterEnc);
+    await openChapterDetail(clsEnc, subjectEnc, chapterEnc);
+    if (pending <= 0) return;
+    if (!(await showConfirmModal(`Generate keywords for ${pending} pending section(s) of "${chapter}"?`, { confirmLabel: 'Generate' }))) return;
+    const pendingInput = document.querySelector('input[name="kwMode"][value="pending"]');
+    if (pendingInput) { pendingInput.checked = true; updateKeywordsEstimate(); }
+    await generateChapterKeywords();
   }
 
   function renderTotals(totals) {
@@ -1048,7 +1193,7 @@
         <td>${escapeHtml(c.chapter)}</td>
         <td>${c.section_count}</td>
         <td>${c.total_words}</td>
-        <td><span class="kw-badge ${c.keywords_done === c.section_count ? 'done' : 'pending'}">${c.keywords_done}/${c.section_count}${c.keywords_done < c.section_count ? ' keywords pending' : ' keywords'}</span></td>
+        <td><span class="kw-badge ${c.keywords_done === c.section_count ? 'done' : 'pending'}" onclick="event.stopPropagation(); onKeywordsBadgeClick('${encodeURIComponent(c.class)}','${encodeURIComponent(c.subject)}','${encodeURIComponent(c.chapter)}', ${c.section_count - c.keywords_done})">${c.keywords_done}/${c.section_count}${c.keywords_done < c.section_count ? ' keywords pending' : ' keywords'}</span></td>
         <td>${renderCoverageCell(c)}</td>
         <td>${renderVerifiedCell(c)}</td>
         <td>${formatDate(c.created_at)}</td>
@@ -1089,6 +1234,7 @@
     _detailVerifyPdfBase64 = null;
     renderVerifyBlock('detailCrosscheck', null);
     renderDetailCostRow(cls, subject, chapter);
+    renderDetailKeywordsRow(cls, subject, chapter);
     panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
     try {
