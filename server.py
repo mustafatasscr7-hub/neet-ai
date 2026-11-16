@@ -16639,6 +16639,12 @@ async def admin_ncert_content_list(_: None = Depends(verify_admin)):
         pass
 
     chapter_list = [dict(chapters[k], **_ncert_chapter_cost_fields(log_by_key.get(k, []))) for k in order]
+    # Newest loaded first; a chapter with no created_at at all (every section row predates that
+    # column) sorts last instead of poisoning the comparison.
+    with_loaded_at = [c for c in chapter_list if c.get("created_at")]
+    without_loaded_at = [c for c in chapter_list if not c.get("created_at")]
+    with_loaded_at.sort(key=lambda c: c["created_at"], reverse=True)
+    chapter_list = with_loaded_at + without_loaded_at
     known_costs = [c["cost"] for c in chapter_list if c["cost"] is not None]
     totals = {
         "chapters": len(chapter_list),
@@ -17437,6 +17443,61 @@ async def admin_ncert_content_chapter_save_all(request: Request, _: None = Depen
         return written
     written["results"] = results
     return written
+
+
+@app.post("/admin/ncert-content/chapter/rename")
+async def admin_ncert_content_chapter_rename(request: Request, _: None = Depends(verify_admin), __: None = Depends(rate_limit(40, 300, by="ip"))):
+    """Renames a chapter already loaded into ncert_sections. Updates the `chapter` column in
+    every table keyed by (class, subject, chapter) -- ncert_sections, ncert_chapter_log (including
+    its soft-deleted rows, so cost/load history keeps matching the new name) and
+    ncert_verify_decisions (so an already-approved verify difference keeps matching too) -- in one
+    database transaction (see ncert_rename_chapter.sql's ncert_rename_chapter() function). Only
+    the `chapter` column changes; keywords are untouched. Admin-only (verify_admin, never the
+    contractor key)."""
+    try:
+        body = await request.json()
+    except Exception:
+        return {"error": "Invalid request body."}
+    cls = (body.get("class") or "").strip()
+    subject = (body.get("subject") or "").strip()
+    old_chapter = (body.get("old_chapter") or "").strip()
+    new_chapter = (body.get("new_chapter") or "").strip()
+
+    if cls not in NCERT_CONTENT_CLASSES:
+        return {"error": f"class must be one of {', '.join(NCERT_CONTENT_CLASSES)}"}
+    if subject not in NCERT_CONTENT_SUBJECTS:
+        return {"error": f"subject must be one of {', '.join(NCERT_CONTENT_SUBJECTS)}"}
+    if not old_chapter:
+        return {"error": "old_chapter is required."}
+    if not new_chapter:
+        return {"error": "new_chapter is required."}
+
+    if new_chapter == old_chapter:
+        return {"class": cls, "subject": subject, "chapter": new_chapter}
+
+    if await _ncert_content_chapter_exists(cls, subject, new_chapter):
+        return {"error": f'A chapter named "{new_chapter}" already exists for this class and subject.'}
+
+    try:
+        resp = await async_client.post(
+            f"{SUPABASE_URL}/rest/v1/rpc/ncert_rename_chapter",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json"},
+            json={"p_class": cls, "p_subject": subject, "p_old_chapter": old_chapter, "p_new_chapter": new_chapter},
+        )
+        if resp.status_code >= 400:
+            if resp.status_code == 404 or "PGRST202" in resp.text:
+                return {"error": "Chapter rename is not set up yet. Run ncert_rename_chapter.sql first."}
+            return {"error": f"Could not rename this chapter: {resp.text}"}
+        rows = resp.json()
+    except Exception as e:
+        return {"error": f"Could not rename this chapter: {e}"}
+
+    result = rows[0] if isinstance(rows, list) and rows else {}
+    if not (result.get("sections_updated") or 0):
+        return {"error": "No such chapter."}
+
+    _invalidate_ncert_content_sections_cache()
+    return {"class": cls, "subject": subject, "chapter": new_chapter}
 
 
 @app.post("/admin/ncert-content/apply")

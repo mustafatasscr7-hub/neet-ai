@@ -163,6 +163,16 @@
   .detail-cost-row { font-size: 11px; color: #888; margin-bottom: 14px; display: flex; gap: 14px; flex-wrap: wrap; }
   .detail-cost-row b { color: #ececec; }
 
+  .rename-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+  .rename-row input[type="text"] {
+    flex: 1; min-width: 200px; background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 6px;
+    padding: 8px 10px; color: #ececec; font-size: 13px; font-family: 'Inter', sans-serif; outline: none;
+  }
+  .rename-row input[type="text"]:focus { border-color: #4f8ef7; }
+  .rename-status { font-size: 12px; margin-bottom: 10px; min-height: 14px; }
+  .rename-status.error { color: #ef4444; }
+  .rename-status.success { color: #4ade80; }
+
   /* Editable preview/chapter section rows -- clicking a row expands an inline editor below it.
      Shared by the upload preview (#previewSections) and the already-loaded chapter detail
      (#detailSections), via renderEditableSections(). */
@@ -296,8 +306,17 @@
         <h2 id="detailTitle">—</h2>
         <div class="preview-meta" id="detailMeta"></div>
       </div>
-      <button type="button" class="secondary-btn" onclick="closeChapterDetail()">Close</button>
+      <div style="display:flex; gap:8px;">
+        <button type="button" class="secondary-btn" id="renameChapterBtn" onclick="startRenameChapter()">Rename</button>
+        <button type="button" class="secondary-btn" onclick="closeChapterDetail()">Close</button>
+      </div>
     </div>
+    <div class="rename-row" id="renameRow" style="display:none">
+      <input type="text" id="renameInput" placeholder="New chapter name" onkeydown="if(event.key==='Enter') saveRenameChapter();"/>
+      <button type="button" class="primary-btn" onclick="saveRenameChapter()">Save</button>
+      <button type="button" class="secondary-btn" onclick="cancelRenameChapter()">Cancel</button>
+    </div>
+    <div class="rename-status" id="renameStatus"></div>
     <div class="detail-cost-row" id="detailCostRow"></div>
     <div id="detailKeywordsRow"></div>
     <div class="flags-box" id="detailFlagsBox" style="display:none"></div>
@@ -1359,6 +1378,7 @@
     document.getElementById('detailMeta').textContent = `Class ${cls} · ${subject}`;
     document.getElementById('detailSections').innerHTML = 'Loading...';
     window._currentDetailChapter = { cls, subject, chapter };
+    cancelRenameChapter();
     document.getElementById('verifyChapterFile').value = '';
     document.getElementById('verifyChapterStatus').textContent = '';
     _detailVerifyPdfBase64 = null;
@@ -1389,6 +1409,66 @@
 
   function closeChapterDetail() {
     document.getElementById('chapterDetail').style.display = 'none';
+  }
+
+  // ---------------- Chapter rename ----------------
+
+  function startRenameChapter() {
+    const target = window._currentDetailChapter;
+    if (!target) return;
+    document.getElementById('renameInput').value = target.chapter;
+    document.getElementById('renameRow').style.display = 'flex';
+    document.getElementById('renameChapterBtn').style.display = 'none';
+    setRenameStatus('', '');
+    document.getElementById('renameInput').focus();
+  }
+
+  function cancelRenameChapter() {
+    document.getElementById('renameRow').style.display = 'none';
+    document.getElementById('renameChapterBtn').style.display = 'inline-block';
+    setRenameStatus('', '');
+  }
+
+  function setRenameStatus(text, cls) {
+    const el = document.getElementById('renameStatus');
+    el.textContent = text;
+    el.className = 'rename-status' + (cls ? ' ' + cls : '');
+  }
+
+  async function saveRenameChapter() {
+    const target = window._currentDetailChapter;
+    if (!target) return;
+    const newName = document.getElementById('renameInput').value.trim();
+    if (!newName) { setRenameStatus('Chapter name is required.', 'error'); return; }
+    if (newName === target.chapter) { cancelRenameChapter(); return; }
+
+    setRenameStatus('Renaming...', '');
+    try {
+      const res = await fetch(`${API_BASE}/admin/ncert-content/chapter/rename`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ class: target.cls, subject: target.subject, old_chapter: target.chapter, new_chapter: newName }),
+      });
+      if (res.status === 401) { logout(); return; }
+      if (!res.ok) { setRenameStatus(await describeHttpError(res), 'error'); return; }
+      const data = await res.json();
+      if (data.error) { setRenameStatus(data.error, 'error'); return; }
+
+      target.chapter = data.chapter;
+      document.getElementById('detailTitle').textContent = data.chapter;
+      const editState = window._editState['detailSections'];
+      if (editState && editState.mode) editState.mode.chapter = data.chapter;
+
+      document.getElementById('renameRow').style.display = 'none';
+      document.getElementById('renameChapterBtn').style.display = 'inline-block';
+      setRenameStatus('Renamed.', 'success');
+
+      await loadChapters();
+      renderDetailCostRow(target.cls, target.subject, target.chapter);
+      renderDetailKeywordsRow(target.cls, target.subject, target.chapter);
+    } catch (e) {
+      setRenameStatus('Could not reach server.', 'error');
+    }
   }
 
   let _detailVerifyPdfBase64 = null; // cached so a "Mark as OK" in the detail panel can re-run it

@@ -184,6 +184,21 @@ class FakeAsyncClient:
 
     async def post(self, url, headers=None, params=None, json=None, **kw):
         self.calls.append(("POST", url, params, json))
+        if "rpc/ncert_rename_chapter" in url:
+            body = json or {}
+            cls, subject = body.get("p_class"), body.get("p_subject")
+            old_chapter, new_chapter = body.get("p_old_chapter"), body.get("p_new_chapter")
+
+            def rename_in(table):
+                matched = [r for r in table.rows if r.get("class") == cls and r.get("subject") == subject and r.get("chapter") == old_chapter]
+                for r in matched:
+                    r["chapter"] = new_chapter
+                return len(matched)
+
+            sections_updated = rename_in(self.table)
+            log_updated = rename_in(self.chapter_log)
+            decisions_updated = rename_in(self.verify_decisions)
+            return FakeResp(200, [{"sections_updated": sections_updated, "log_updated": log_updated, "decisions_updated": decisions_updated}])
         if "ncert_chapter_log" in url:
             return FakeResp(200, self.chapter_log.insert(json))
         if "ncert_verify_decisions" in url:
@@ -749,6 +764,80 @@ def test_contractor_response_has_no_cost_fields():
     check("the refusal body carries no cost fields", "keywords_cost_usd" not in body_text and "estimated_cost" not in body_text, body_text)
 
 
+def test_chapter_rename_updates_all_tables():
+    print("\n# Chapter rename updates ncert_sections, ncert_chapter_log and ncert_verify_decisions together")
+    tc, fake = setup()
+    fake.table.insert({"class": "11", "subject": "Biology", "chapter": "Old Chapter", "heading": "1.1 X", "ordinal": 0, "text": "x", "word_count": 1})
+    fake.table.insert({"class": "11", "subject": "Biology", "chapter": "Old Chapter", "heading": "1.2 Y", "ordinal": 1, "text": "y", "word_count": 1})
+    fake.chapter_log.insert({"class": "11", "subject": "Biology", "chapter": "Old Chapter", "source": "manual", "deleted_at": None})
+    fake.chapter_log.insert({"class": "11", "subject": "Biology", "chapter": "Old Chapter", "source": "manual", "deleted_at": "2026-11-10T00:00:00Z"})
+    fake.verify_decisions.insert({"class": "11", "subject": "Biology", "chapter": "Old Chapter", "diff_key": "abc123"})
+    server._ncert_sections_cache["loaded_at"] = 12345.0
+    server._ncert_sections_cache["by_id"] = {1: {"id": 1}}
+
+    res = tc.post("/admin/ncert-content/chapter/rename",
+                   json={"class": "11", "subject": "Biology", "old_chapter": "Old Chapter", "new_chapter": "New Chapter"},
+                   headers={"X-Admin-Key": ADMIN_KEY})
+    data = res.json()
+    check("rename succeeds", res.status_code == 200 and not data.get("error"), data)
+    check("response carries the new name", data.get("chapter") == "New Chapter", data)
+    check("both ncert_sections rows renamed", all(r["chapter"] == "New Chapter" for r in fake.table.rows), fake.table.rows)
+    check("both ncert_chapter_log rows renamed, including the soft-deleted one", all(r["chapter"] == "New Chapter" for r in fake.chapter_log.rows), fake.chapter_log.rows)
+    check("ncert_verify_decisions row renamed", fake.verify_decisions.rows[0]["chapter"] == "New Chapter", fake.verify_decisions.rows)
+    check("the sections/picker cache was reset", server._ncert_sections_cache["loaded_at"] == 0.0 and server._ncert_sections_cache["by_id"] == {}, server._ncert_sections_cache)
+
+
+def test_chapter_rename_duplicate_and_empty_rejected():
+    print("\n# Chapter rename rejects a duplicate name and an empty name, without touching the data")
+    tc, fake = setup()
+    fake.table.insert({"class": "11", "subject": "Biology", "chapter": "Chapter A", "heading": "1.1 X", "ordinal": 0, "text": "x", "word_count": 1})
+    fake.table.insert({"class": "11", "subject": "Biology", "chapter": "Chapter B", "heading": "1.1 X", "ordinal": 0, "text": "x", "word_count": 1})
+
+    dup_res = tc.post("/admin/ncert-content/chapter/rename",
+                       json={"class": "11", "subject": "Biology", "old_chapter": "Chapter A", "new_chapter": "Chapter B"},
+                       headers={"X-Admin-Key": ADMIN_KEY})
+    dup_data = dup_res.json()
+    check("duplicate new_chapter is rejected with a plain string error", isinstance(dup_data.get("error"), str) and "already exists" in dup_data["error"], dup_data)
+    check("error is a plain string, not an object", isinstance(dup_data.get("error"), str), dup_data)
+
+    empty_res = tc.post("/admin/ncert-content/chapter/rename",
+                         json={"class": "11", "subject": "Biology", "old_chapter": "Chapter A", "new_chapter": "   "},
+                         headers={"X-Admin-Key": ADMIN_KEY})
+    empty_data = empty_res.json()
+    check("blank new_chapter is rejected", isinstance(empty_data.get("error"), str) and "required" in empty_data["error"], empty_data)
+
+    check("neither rejected request touched ncert_sections", fake.table.rows[0]["chapter"] == "Chapter A" and fake.table.rows[1]["chapter"] == "Chapter B", fake.table.rows)
+    rpc_calls = [c for c in fake.calls if "rpc/ncert_rename_chapter" in c[1]]
+    check("neither rejected request even reached the rename RPC", rpc_calls == [], rpc_calls)
+
+
+def test_chapter_rename_contractor_rejected():
+    print("\n# Chapter rename: admin ok, contractor key rejected, no key rejected")
+    tc, fake = setup()
+    fake.table.insert({"class": "11", "subject": "Biology", "chapter": "Old Chapter", "heading": "1.1 X", "ordinal": 0, "text": "x", "word_count": 1})
+    body = {"class": "11", "subject": "Biology", "old_chapter": "Old Chapter", "new_chapter": "New Chapter"}
+
+    res_none = tc.post("/admin/ncert-content/chapter/rename", json=body)
+    check("rename refuses without a key", res_none.status_code == 401, res_none.status_code)
+    res_contractor = tc.post("/admin/ncert-content/chapter/rename", json=body, headers={"X-Admin-Key": CONTRACTOR_KEY})
+    check("rename refuses the contractor key", res_contractor.status_code == 401, res_contractor.status_code)
+    check("contractor attempt left the chapter untouched", fake.table.rows[0]["chapter"] == "Old Chapter", fake.table.rows)
+    res_admin = tc.post("/admin/ncert-content/chapter/rename", json=body, headers={"X-Admin-Key": ADMIN_KEY})
+    check("rename accepts the real admin key", res_admin.status_code == 200 and not res_admin.json().get("error"), res_admin.json())
+
+
+def test_chapters_sorted_by_loaded_time_newest_first():
+    print("\n# Chapters list is sorted by loaded time, newest first, missing created_at last")
+    tc, fake = setup()
+    fake.table.insert({"class": "11", "subject": "Biology", "chapter": "B", "heading": "h", "ordinal": 0, "text": "t", "word_count": 1, "created_at": "2026-06-01T00:00:00Z"})
+    fake.table.insert({"class": "11", "subject": "Biology", "chapter": "A", "heading": "h", "ordinal": 0, "text": "t", "word_count": 1, "created_at": "2026-01-01T00:00:00Z"})
+    fake.table.insert({"class": "11", "subject": "Biology", "chapter": "C", "heading": "h", "ordinal": 0, "text": "t", "word_count": 1, "created_at": None})
+
+    data = tc.get("/admin/ncert-content", headers={"X-Admin-Key": ADMIN_KEY}).json()
+    names = [c["chapter"] for c in data["chapters"]]
+    check("newest loaded chapter first, missing created_at last", names == ["B", "A", "C"], names)
+
+
 def main():
     test_admin_auth()
     test_preview_does_not_write()
@@ -773,6 +862,10 @@ def main():
     test_preview_estimated_cost_and_apply_real_cost()
     test_delete_marks_log_rows_deleted_not_removed()
     test_contractor_response_has_no_cost_fields()
+    test_chapter_rename_updates_all_tables()
+    test_chapter_rename_duplicate_and_empty_rejected()
+    test_chapter_rename_contractor_rejected()
+    test_chapters_sorted_by_loaded_time_newest_first()
 
     print(f"\nTOTAL: {len(_passed)} passed, {len(_failed)} failed")
     if _failed:
