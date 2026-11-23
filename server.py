@@ -10931,25 +10931,29 @@ async def admin_pyq_contractor_queue_counts(_: None = Depends(verify_admin)):
     queries only, never a row download; "without" is the simple subtraction rather than a
     second, more complex negated-or count query."""
     try:
-        base = {"review_status": "eq.pending", "uploader_name": f"eq.{CONTRACTOR_UPLOADER_NAME}"}
+        # source="eq.pyq" on every review-status count below so a mock-exam row (mock_exam_
+        # columns.sql) never inflates this panel's PYQ numbers -- mock_approved is its own count.
+        base = {"review_status": "eq.pending", "uploader_name": f"eq.{CONTRACTOR_UPLOADER_NAME}", "source": "eq.pyq"}
         diagram_or = ("(diagram_url.neq.,option_a_diagram_url.neq.,"
                       "option_b_diagram_url.neq.,option_c_diagram_url.neq.,"
                       "option_d_diagram_url.neq.)")
         (total, with_diagram, approved, needs_fix, rejected, deleted,
-         uploaded_with_diagram, uploaded_without_diagram) = await asyncio.gather(
+         uploaded_with_diagram, uploaded_without_diagram, mock_approved) = await asyncio.gather(
             _pyq_count(base),
             _pyq_count({**base, "or": diagram_or}),
-            _pyq_count({"review_status": "eq.approved", "uploader_name": f"eq.{CONTRACTOR_UPLOADER_NAME}"}),
-            _pyq_count({"review_status": "eq.needs_fix", "uploader_name": f"eq.{CONTRACTOR_UPLOADER_NAME}"}),
-            _pyq_count({"review_status": "eq.rejected", "uploader_name": f"eq.{CONTRACTOR_UPLOADER_NAME}"}),
+            _pyq_count({"review_status": "eq.approved", "uploader_name": f"eq.{CONTRACTOR_UPLOADER_NAME}", "source": "eq.pyq"}),
+            _pyq_count({"review_status": "eq.needs_fix", "uploader_name": f"eq.{CONTRACTOR_UPLOADER_NAME}", "source": "eq.pyq"}),
+            _pyq_count({"review_status": "eq.rejected", "uploader_name": f"eq.{CONTRACTOR_UPLOADER_NAME}", "source": "eq.pyq"}),
             _pyq_delete_log_count(CONTRACTOR_UPLOADER_NAME),
             _pyq_upload_log_count(CONTRACTOR_UPLOADER_NAME, True),
             _pyq_upload_log_count(CONTRACTOR_UPLOADER_NAME, False),
+            _pyq_count({"uploader_name": f"eq.{CONTRACTOR_UPLOADER_NAME}", "source": "eq.mock", "review_status": "eq.approved"}),
         )
         return {
             "with_diagram": with_diagram, "without_diagram": max(0, total - with_diagram),
             "approved": approved, "needs_fix": needs_fix, "rejected": rejected, "deleted": deleted,
             "uploaded_with_diagram": uploaded_with_diagram, "uploaded_without_diagram": uploaded_without_diagram,
+            "mock_approved": mock_approved,
         }
     except Exception as e:
         return {"error": str(e)}
@@ -11230,19 +11234,23 @@ def _pyq_reject_classify(reason: Optional[str], created_at: Optional[datetime]) 
         return "duplicate_free"
     return "duplicate_deducted"
 
-async def _pyq_reject_breakdown(uploader_name: str) -> dict:
+async def _pyq_reject_breakdown(uploader_name: str, source: str = "pyq") -> dict:
     """Splits one uploader's rejected rows into what's deducted from payable and what isn't, per
     PYQ_DUP_DEDUCT_FROM: non-duplicate rejections ("errors") are always deducted; a duplicate
     rejection is deducted only if its created_at falls on or after the cutoff, otherwise it's a
-    free duplicate (rejected/hidden from students, but not counted against payable)."""
+    free duplicate (rejected/hidden from students, but not counted against payable). source="pyq"
+    (the default, every existing caller) excludes mock-exam rows so a rejected mock question never
+    deducts from the PYQ payable total (mock_exam_columns.sql) -- mock pay is a flat per-approved
+    rate, it never needs this breakdown at all."""
     cutoff_iso = PYQ_DUP_DEDUCT_FROM.isoformat()
+    source_filter = {"source": f"eq.{source}"}
     rejected_errors, duplicates_deducted, duplicates_free = await asyncio.gather(
         _pyq_count({"review_status": "eq.rejected", "uploader_name": f"eq.{uploader_name}",
-                    "reject_reason": "not.ilike.Duplicate*"}),
+                    "reject_reason": "not.ilike.Duplicate*", **source_filter}),
         _pyq_count({"review_status": "eq.rejected", "uploader_name": f"eq.{uploader_name}",
-                    "reject_reason": "ilike.Duplicate*", "created_at": f"gte.{cutoff_iso}"}),
+                    "reject_reason": "ilike.Duplicate*", "created_at": f"gte.{cutoff_iso}", **source_filter}),
         _pyq_count({"review_status": "eq.rejected", "uploader_name": f"eq.{uploader_name}",
-                    "reject_reason": "ilike.Duplicate*", "created_at": f"lt.{cutoff_iso}"}),
+                    "reject_reason": "ilike.Duplicate*", "created_at": f"lt.{cutoff_iso}", **source_filter}),
     )
     return {"rejected_errors": rejected_errors, "duplicates_deducted": duplicates_deducted,
             "duplicates_free": duplicates_free}
@@ -11263,21 +11271,27 @@ async def admin_contractor_tally(_: None = Depends(verify_admin)):
     batches."""
     try:
         async def tally_for(name):
-            # mock_count: how many of this uploader's current rows are mock-exam questions
-            # (mock_exam_columns.sql) -- already included in `uploaded`/the payable amount below
-            # (_log_pyq_upload logs any new contractor row regardless of source), this is purely
-            # a visibility breakdown, same reasoning as the rejected/needs_fix splits.
-            (uploaded, approved, pending, needs_fix, deleted, mock_count), reject_breakdown = await asyncio.gather(
+            # mock_count/mock_approved: this uploader's current source='mock' rows, kept fully
+            # separate from the PYQ figures below (mock_exam_columns.sql) -- mock questions are
+            # never added to the 5,000 PYQ target and are paid per approved mock question, not
+            # per the uploaded-minus-rejected PYQ formula.
+            (uploaded_all, approved, pending, needs_fix, deleted, mock_count, mock_approved), reject_breakdown = await asyncio.gather(
                 asyncio.gather(
                     _pyq_uploaded_total(name),
-                    _pyq_count({"review_status": "eq.approved", "uploader_name": f"eq.{name}"}),
-                    _pyq_count({"review_status": "eq.pending", "uploader_name": f"eq.{name}"}),
-                    _pyq_count({"review_status": "eq.needs_fix", "uploader_name": f"eq.{name}"}),
+                    _pyq_count({"review_status": "eq.approved", "uploader_name": f"eq.{name}", "source": "eq.pyq"}),
+                    _pyq_count({"review_status": "eq.pending", "uploader_name": f"eq.{name}", "source": "eq.pyq"}),
+                    _pyq_count({"review_status": "eq.needs_fix", "uploader_name": f"eq.{name}", "source": "eq.pyq"}),
                     _pyq_delete_log_count(name),
                     _pyq_count({"uploader_name": f"eq.{name}", "source": "eq.mock"}),
+                    _pyq_count({"uploader_name": f"eq.{name}", "source": "eq.mock", "review_status": "eq.approved"}),
                 ),
                 _pyq_reject_breakdown(name),
             )
+            # pyq_upload_log (the source of uploaded_all) has no source column and never shrinks
+            # on delete, so this subtracts the current live mock_count as an approximation -- a
+            # deleted mock row would under-subtract here, same kind of drift this log already
+            # tolerates for deleted/rejected PYQ rows.
+            uploaded = max(0, uploaded_all - mock_count)
             return {
                 "uploader_name": name, "uploaded": uploaded, "approved": approved,
                 "pending": pending, "needs_fix": needs_fix, **reject_breakdown,
@@ -11285,6 +11299,8 @@ async def admin_contractor_tally(_: None = Depends(verify_admin)):
                 **_pyq_payable_amount(uploaded, reject_breakdown["rejected_errors"],
                                        reject_breakdown["duplicates_deducted"]),
                 "target": PYQ_PAYOUT_TARGET,
+                "mock_approved": mock_approved,
+                "mock_amount_usd": round(mock_approved * PYQ_PRICE_USD_PER_Q, 2),
             }
         rows = await asyncio.gather(*(tally_for(name) for name in PYQ_CONTRACTOR_NAMES))
         return {"rows": rows}
@@ -12040,23 +12056,31 @@ async def admin_pyq_auto_formula_sample(_: None = Depends(verify_admin)):
 CONTRACTOR_FIX_COLUMNS = (
     "id,subject,chapter,class,year,question,option_a,option_b,option_c,option_d,correct_answer,"
     "has_diagram,diagram_url,option_a_diagram_url,option_b_diagram_url,option_c_diagram_url,"
-    "option_d_diagram_url,source_pdf_filename,review_status,review_note,reviewed_at,uploaded_at,batch_id"
+    "option_d_diagram_url,source_pdf_filename,review_status,review_note,reviewed_at,uploaded_at,batch_id,"
+    "source,mock_name,mock_position"
 )
 CONTRACTOR_FIXABLE_FIELDS = ("subject", "chapter", "class", "year", "question", "option_a", "option_b", "option_c",
                              "option_d", "correct_answer", "has_diagram", "diagram_url", "option_a_diagram_url",
                              "option_b_diagram_url", "option_c_diagram_url", "option_d_diagram_url")
 
+# Shared by both contractor list endpoints below -- "pyq" (the default) keeps every existing
+# caller's behavior byte-for-byte unchanged, "mock" scopes to mock-exam rows instead
+# (mock_exam_columns.sql). Never trusted beyond this allowlist.
+def _contractor_source_param(source: str) -> str:
+    return "mock" if source == "mock" else "pyq"
+
 @app.get("/contractor/pyq-needs-fix")
-async def contractor_pyq_needs_fix(_: None = Depends(verify_contractor_pdf_review)):
+async def contractor_pyq_needs_fix(source: str = "pyq", _: None = Depends(verify_contractor_pdf_review)):
     try:
+        source = _contractor_source_param(source)
         resp = await async_client.get(
             f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
-            params={"review_status": "eq.needs_fix",
+            params={"review_status": "eq.needs_fix", "source": f"eq.{source}",
                     "select": CONTRACTOR_FIX_COLUMNS, "order": "reviewed_at.desc", "limit": 500}
         )
         if resp.status_code >= 400:
             return {"error": resp.text}
-        pending = await _pyq_count({"uploaded_by": "eq.contractor", "review_status": "eq.pending"})
+        pending = await _pyq_count({"uploaded_by": "eq.contractor", "review_status": "eq.pending", "source": f"eq.{source}"})
         return {"rows": resp.json(), "pending_count": pending}
     except Exception as e:
         return {"error": str(e)}
@@ -12066,20 +12090,28 @@ async def contractor_pyq_needs_fix(_: None = Depends(verify_contractor_pdf_revie
 # from the request) means this can only ever return the contractor's own rejected questions.
 CONTRACTOR_REJECTED_COLUMNS = (
     "id,subject,chapter,class,year,question,option_a,option_b,option_c,option_d,correct_answer,"
-    "reject_reason,rejected_at,created_at"
+    "reject_reason,rejected_at,created_at,source,mock_name,mock_position"
 )
 
 @app.get("/contractor/pyq-rejected")
-async def contractor_pyq_rejected(_: None = Depends(verify_contractor_pdf_review)):
+async def contractor_pyq_rejected(source: str = "pyq", _: None = Depends(verify_contractor_pdf_review)):
     try:
-        resp, uploaded, reject_breakdown = await asyncio.gather(
+        source = _contractor_source_param(source)
+        # Pay numbers are computed for BOTH sources every time (cheap count queries) so the page
+        # can show the PYQ and Mock pay lines side by side without a second round trip -- only
+        # `rows` itself is scoped to the requested view (requirement 4: a mock view must never
+        # carry a PYQ row or vice versa).
+        resp, uploaded_all, reject_breakdown, mock_count, mock_approved = await asyncio.gather(
             async_client.get(
                 f"{SUPABASE_URL}/rest/v1/pyq", headers=ADMIN_HEADERS,
                 params={"review_status": "eq.rejected", "uploader_name": f"eq.{CONTRACTOR_UPLOADER_NAME}",
+                        "source": f"eq.{source}",
                         "select": CONTRACTOR_REJECTED_COLUMNS, "order": "rejected_at.desc", "limit": 500}
             ),
             _pyq_uploaded_total(CONTRACTOR_UPLOADER_NAME),
-            _pyq_reject_breakdown(CONTRACTOR_UPLOADER_NAME),
+            _pyq_reject_breakdown(CONTRACTOR_UPLOADER_NAME, source="pyq"),
+            _pyq_count({"uploader_name": f"eq.{CONTRACTOR_UPLOADER_NAME}", "source": "eq.mock"}),
+            _pyq_count({"uploader_name": f"eq.{CONTRACTOR_UPLOADER_NAME}", "source": "eq.mock", "review_status": "eq.approved"}),
         )
         if resp.status_code >= 400:
             return {"error": resp.text}
@@ -12090,11 +12122,17 @@ async def contractor_pyq_rejected(_: None = Depends(verify_contractor_pdf_review
             created_at = r.get("created_at")
             created_dt = datetime.fromisoformat(created_at.replace("Z", "+00:00")) if created_at else None
             r["duplicate_free"] = _pyq_reject_classify(r.get("reject_reason"), created_dt) == "duplicate_free"
+        # uploaded_all (pyq_upload_log) has no source column and never shrinks on delete, so the
+        # PYQ-only figure below subtracts the current live mock_count as an approximation -- see
+        # the same note on admin_contractor_tally.
+        uploaded = max(0, uploaded_all - mock_count)
         return {
             "rows": rows, "uploaded": uploaded, **reject_breakdown,
             **_pyq_payable_amount(uploaded, reject_breakdown["rejected_errors"],
                                    reject_breakdown["duplicates_deducted"]),
             "target": PYQ_PAYOUT_TARGET,
+            "mock_approved": mock_approved,
+            "mock_amount_usd": round(mock_approved * PYQ_PRICE_USD_PER_Q, 2),
         }
     except Exception as e:
         return {"error": str(e)}

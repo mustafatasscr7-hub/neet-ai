@@ -218,6 +218,7 @@
         <h2 style="font-size:15px;">Questions sent back for a fix</h2>
         <button type="button" class="action-btn" onclick="closeFixList()">Close</button>
       </div>
+      <select id="fixListMockFilter" style="display:none;background:#0d0d0d;border:1px solid #2a2a2a;border-radius:7px;color:#ececec;font-family:'Inter',sans-serif;font-size:12px;padding:6px 8px;margin-bottom:10px;" onchange="renderFixList()"></select>
       <div id="fixListSummary" style="font-size:12px;color:#888;margin-bottom:14px;"></div>
       <div id="fixList">Loading...</div>
     </div>
@@ -229,6 +230,7 @@
         <h2 style="font-size:15px;">Rejected by admin</h2>
         <button type="button" class="action-btn" onclick="closeRejectedList()">Close</button>
       </div>
+      <select id="rejectedListMockFilter" style="display:none;background:#0d0d0d;border:1px solid #2a2a2a;border-radius:7px;color:#ececec;font-family:'Inter',sans-serif;font-size:12px;padding:6px 8px;margin-bottom:10px;" onchange="renderRejectedList()"></select>
       <div id="rejectedListSummary" style="font-size:12px;color:#888;margin-bottom:14px;"></div>
       <div id="rejectedList">Loading...</div>
     </div>
@@ -2497,10 +2499,35 @@
   const FIX_IMAGE_FIELDS = [['diagram_url', 'Question image'], ['option_a_diagram_url', 'Option A image'],
     ['option_b_diagram_url', 'Option B image'], ['option_c_diagram_url', 'Option C image'], ['option_d_diagram_url', 'Option D image']];
 
+  // Populates a mock_name <select> from a set of rows (Mock exam mode only -- PYQ rows carry no
+  // mock_name) and shows/hides it; "All mocks" keeps the full list.
+  function populateMockFilter(selectId, rows) {
+    const sel = document.getElementById(selectId);
+    if (!sel) return;
+    if (!mockMode) { sel.style.display = 'none'; sel.innerHTML = ''; return; }
+    const names = [...new Set(rows.map(r => r.mock_name).filter(Boolean))].sort();
+    const prevValue = sel.value;
+    sel.innerHTML = `<option value="">All mocks</option>` + names.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('');
+    sel.value = names.includes(prevValue) ? prevValue : '';
+    sel.style.display = names.length ? '' : 'none';
+  }
+
+  // Mock mode: narrow to the selected mock_name (or all) and sort by mock_position ascending --
+  // Physics 1-45 / Chemistry 46-90 / Biology 91-180 is just position order, no further grouping
+  // needed. PYQ mode: unchanged (PYQ rows have no mock_position to sort by).
+  function filterAndSortRows(rows, selectId) {
+    if (!mockMode) return rows;
+    const sel = document.getElementById(selectId);
+    const chosen = sel ? sel.value : '';
+    const filtered = chosen ? rows.filter(r => r.mock_name === chosen) : rows;
+    return [...filtered].sort((a, b) => (a.mock_position ?? 9999) - (b.mock_position ?? 9999));
+  }
+
   async function loadFixList() {
     const listEl = document.getElementById('fixList');
     try {
-      const res = await fetch(`${API_BASE}/contractor/pyq-needs-fix`, { headers: authHeaders() });
+      const source = mockMode ? 'mock' : 'pyq';
+      const res = await fetch(`${API_BASE}/contractor/pyq-needs-fix?source=${source}`, { headers: authHeaders() });
       if (res.status === 401) return logout();
       if (!res.ok) { listEl.textContent = 'Could not load: ' + await describeHttpError(res); return; }
       const data = await res.json();
@@ -2510,6 +2537,7 @@
       fixRows.forEach(r => { fixImages[r.id] = Object.fromEntries(FIX_IMAGE_FIELDS.map(([f]) => [f, r[f] || null])); });
       document.getElementById('fixListSummary').textContent =
         `${fixRows.length} to fix · ${data.pending_count} of your uploads waiting for review`;
+      populateMockFilter('fixListMockFilter', fixRows);
       renderFixList();
     } catch (e) {
       listEl.textContent = 'Could not reach server.';
@@ -2548,33 +2576,50 @@
     const reasonText = r.duplicate_free ? 'Duplicate (not deducted)' : (r.reject_reason || '(no reason given)');
     return `
       <div class="q-block">
+        ${r.source === 'mock' ? `<div style="font-size:11px;color:#888;margin-bottom:6px;">Mock: ${escapeHtml(r.mock_name || '')}${r.mock_position != null ? ' · position ' + r.mock_position : ''}</div>` : ''}
         <div class="rejected-note"><b>Reason${when ? ' · ' + escapeHtml(when) : ''}:</b> ${escapeHtml(reasonText)}</div>
         <div class="rejected-q-text">${escapeHtml(r.question || '')}</div>
         <div class="rejected-options">${optsHtml}</div>
       </div>`;
   }
 
+  let rejectedRows = [];
+  let rejectedSummaryData = null;
+
   async function loadRejectedList() {
     const listEl = document.getElementById('rejectedList');
     try {
-      const res = await fetch(`${API_BASE}/contractor/pyq-rejected`, { headers: authHeaders() });
+      const source = mockMode ? 'mock' : 'pyq';
+      const res = await fetch(`${API_BASE}/contractor/pyq-rejected?source=${source}`, { headers: authHeaders() });
       if (res.status === 401) return logout();
       if (!res.ok) { listEl.textContent = 'Could not load: ' + await describeHttpError(res); return; }
       const data = await res.json();
       if (data.error) { listEl.textContent = 'Could not load: ' + data.error; return; }
-      const rows = data.rows || [];
-      document.getElementById('rejectedListSummary').innerHTML =
-        `<div class="rejected-summary">`
-        + `<span>Uploaded: <b>${data.uploaded ?? 0}</b></span>`
-        + `<span>Deducted: <b>${data.rejected_errors ?? 0}</b> errors, <b>${data.duplicates_deducted ?? 0}</b> duplicates</span>`
-        + `<span>Payable: <b>${data.payable ?? 0}</b> / ${data.target ?? 0}</span>`
-        + `<span>Amount: <b>$${Number(data.amount_usd ?? 0).toFixed(2)}</b></span>`
-        + `</div>`;
-      listEl.innerHTML = rows.length ? rows.map(rejectedCardHtml).join('') : '<div class="empty-hint">No rejected questions.</div>';
-      document.getElementById('rejectedListBtn').textContent = rows.length ? `Rejected by admin (${rows.length})` : 'Rejected by admin';
+      rejectedRows = data.rows || [];
+      rejectedSummaryData = data;
+      populateMockFilter('rejectedListMockFilter', rejectedRows);
+      renderRejectedList();
     } catch (e) {
       listEl.textContent = 'Could not reach server.';
     }
+  }
+
+  function renderRejectedList() {
+    const listEl = document.getElementById('rejectedList');
+    const data = rejectedSummaryData || {};
+    const rows = filterAndSortRows(rejectedRows, 'rejectedListMockFilter');
+    document.getElementById('rejectedListSummary').innerHTML =
+      `<div class="rejected-summary">`
+      + `<span>Uploaded: <b>${data.uploaded ?? 0}</b></span>`
+      + `<span>Deducted: <b>${data.rejected_errors ?? 0}</b> errors, <b>${data.duplicates_deducted ?? 0}</b> duplicates</span>`
+      + `<span>Payable: <b>${data.payable ?? 0}</b> / ${data.target ?? 0}</span>`
+      + `<span>Amount: <b>$${Number(data.amount_usd ?? 0).toFixed(2)}</b></span>`
+      + `</div>`
+      + `<div class="rejected-summary" style="margin-top:6px;">`
+      + `<span>Mock pay (separate, not counted toward the PYQ total above): <b>${data.mock_approved ?? 0}</b> approved, <b>$${Number(data.mock_amount_usd ?? 0).toFixed(2)}</b></span>`
+      + `</div>`;
+    listEl.innerHTML = rows.length ? rows.map(rejectedCardHtml).join('') : '<div class="empty-hint">No rejected questions.</div>';
+    document.getElementById('rejectedListBtn').textContent = rows.length ? `Rejected by admin (${rows.length})` : 'Rejected by admin';
   }
 
   function openRejectedList() {
@@ -2619,6 +2664,7 @@
     const answer = String(r.correct_answer || '').trim().toUpperCase();
     return `
       <div class="q-block" id="fix-card-${r.id}">
+        ${r.source === 'mock' ? `<div style="font-size:11px;color:#888;margin-bottom:6px;">Mock: ${escapeHtml(r.mock_name || '')}${r.mock_position != null ? ' · position ' + r.mock_position : ''}</div>` : ''}
         <div class="fix-note"><b>Reviewer's note:</b> ${escapeHtml(r.review_note || '(no note)')}</div>
         <div class="q-meta-grid" style="grid-template-columns: 1fr 1fr 90px 90px; margin-bottom:10px;">
           <div class="q-field"><label>Subject</label>
@@ -2649,8 +2695,9 @@
   function renderFixList() {
     updateFixButton();
     const listEl = document.getElementById('fixList');
-    if (!fixRows.length) { listEl.innerHTML = '<div class="empty-hint">Nothing to fix right now.</div>'; return; }
-    listEl.innerHTML = fixRows.map(fixCardHtml).join('');
+    const rows = filterAndSortRows(fixRows, 'fixListMockFilter');
+    if (!rows.length) { listEl.innerHTML = '<div class="empty-hint">Nothing to fix right now.</div>'; return; }
+    listEl.innerHTML = rows.map(fixCardHtml).join('');
     listEl.querySelectorAll('textarea').forEach(autoResizeTextarea);
   }
 

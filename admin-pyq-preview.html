@@ -1442,6 +1442,9 @@
           </span>
           <span class="status-pill${contractorDiagramFilter === 'without' ? ' active' : ''}" onclick="toggleContractorDiagramFilter('without')">
             Without diagram <span class="status-pill-num">${cc.without_diagram || 0}</span>
+          </span>
+          <span class="status-pill" title="Approved mock-exam questions -- separate from the PYQ counts above">
+            Mock approved <span class="status-pill-num">${cc.mock_approved || 0}</span>
           </span>` + contractorDupButtonHtml();
       }
       row.innerHTML = html;
@@ -2117,6 +2120,7 @@
         <td>${r.duplicates_free}</td>
         <td>${r.deleted}</td>
         <td class="payable">${r.payable} / ${r.target}</td>
+        <td class="payable" title="Approved mock-exam questions -- never counted toward the PYQ total or target (mock_exam_columns.sql)">${r.mock_approved ?? 0} ($${Number(r.mock_amount_usd ?? 0).toFixed(2)})</td>
       </tr>`;
     }
 
@@ -2135,7 +2139,9 @@
         const headerSummary = document.getElementById('contractorPayoutHeaderSummary');
         if (headerSummary) {
           const mainRow = rows.find(r => r.uploader_name === CONTRACTOR_UPLOADER_NAME) || rows[0];
-          headerSummary.textContent = mainRow ? `Payable ${mainRow.payable}, $${Number(mainRow.amount_usd ?? 0).toFixed(2)}` : '';
+          headerSummary.textContent = mainRow
+            ? `Payable ${mainRow.payable}, $${Number(mainRow.amount_usd ?? 0).toFixed(2)} | Mock: ${mainRow.mock_approved ?? 0}, $${Number(mainRow.mock_amount_usd ?? 0).toFixed(2)}`
+            : '';
         }
         body.innerHTML = `<div class="contractor-tally-wrap"><table class="contractor-tally-table">
           <thead><tr>
@@ -2146,6 +2152,7 @@
             <th title="Duplicates (deducted, from 1 Nov)">Duplicates (deducted)</th>
             <th title="Duplicates before 1 Nov (free)">Duplicates (free, pre-Nov)</th>
             <th>Deleted</th><th>Payable</th>
+            <th title="Separate from the PYQ payable -- mock-exam questions never count toward the PYQ target">Mock pay</th>
           </tr></thead>
           <tbody>${rows.map(contractorTallyRowHtml).join('')}</tbody>
         </table></div>`;
