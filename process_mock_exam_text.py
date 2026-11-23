@@ -48,6 +48,9 @@ Design, in one pass over the whole document:
 """
 import re
 import io
+import os
+import json
+import hashlib
 import base64
 import difflib
 
@@ -836,12 +839,105 @@ def _missing_numbers(found, expected):
     return sorted(set(range(1, expected + 1)) - found)
 
 
-def scan_mock_exam_pdf(pdf_bytes, mock_name):
+# ---------------------------------------------------------------- page-level speed-up
+#
+# Profiling the real sample (24 pages) found the YOLO vector-diagram inference inside
+# _get_diagram_bboxes (process_pyq_book_3col.py, reused unmodified) is ~75% of this whole module's
+# own runtime -- ~1.0-1.4s/page. A process-pool version of this (one worker per page, same idea
+# process_pyq_scanned_ocr.py's own OCR page pool uses) was built and measured live, not just
+# assumed: on this project's own dev machine (an i5-1035G1, 4 PHYSICAL cores under 8 logical via
+# hyperthreading), running 4 onnxruntime sessions at once made EVERY page SLOWER (3-5s/page,
+# worsening as the run went on) than one session processing pages one at a time (confirmed this
+# is genuine CPU contention, not a measurement artifact, by reproducing it with a bare multi-
+# process benchmark outside this module entirely) -- a single in-process session already uses
+# everything the hardware can give a compute-bound workload like this one (confirmed too: 4
+# threads and 8 threads measured the SAME per-page time, 1.05-1.08s, meaning this CPU's own
+# ceiling for this model is already reached by ONE session, not idle capacity multiple workers
+# could still harvest). Shipping that pool anyway, on the strength of a bigger machine maybe
+# having real spare cores, would be a guess this module has no way to verify for wherever it
+# actually runs (a modest Railway container is, if anything, LESS likely to have spare cores than
+# this dev machine) -- so this module stays single-process, and leans on the cache below instead,
+# which has no such downside at any core count.
+#
+# Page content (not document identity) IS memoized to disk across runs, same pattern and
+# reasoning as process_pyq_scanned_ocr.py's own OCR page cache: an admin re-scanning the same (or a
+# byte-identical) PDF page -- a common step in this review workflow -- skips the YOLO call
+# entirely rather than paying for it again. Measured live on the real sample: ~21s cold, ~1.8s
+# once every page's own diagram boxes are already cached.
+_MOCK_DIAGBBOX_CACHE_DIR = os.getenv(
+    "MOCK_SCAN_CACHE_DIR",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), ".scan_cache", "mock_diagram_bboxes"),
+)
+_MOCK_DIAGBBOX_SCHEMA = "1"
+
+
+def _mock_scan_cache_enabled():
+    return os.getenv("MOCK_SCAN_CACHE", "1") != "0"
+
+
+def _diagram_bboxes_engine_version():
+    from process_pyq_vision import _YOLO_FILENAME, _YOLO_DPI, _YOLO_IMGSZ, _YOLO_CONF
+    try:
+        from importlib.metadata import version as _pkg_version
+        ort_version = _pkg_version("onnxruntime")
+    except Exception:
+        ort_version = "unknown"
+    return (f"schema={_MOCK_DIAGBBOX_SCHEMA}|model={_YOLO_FILENAME}|dpi={_YOLO_DPI}"
+            f"|imgsz={_YOLO_IMGSZ}|conf={_YOLO_CONF}|onnxruntime={ort_version}")
+
+
+def _page_pixmap_cache_key(page, engine_version):
+    from process_pyq_vision import _YOLO_DPI
+    pix = page.get_pixmap(dpi=_YOLO_DPI)
+    h = hashlib.sha256()
+    h.update(engine_version.encode("utf-8"))
+    h.update(f"\x00{pix.width}x{pix.height}x{pix.n}\x00".encode("ascii"))
+    h.update(pix.samples)
+    return h.hexdigest()
+
+
+def _cached_diagram_bboxes(page):
+    """Same return value as process_pyq_book_3col._get_diagram_bboxes(page), memoized on disk by
+    the page's own rendered content plus the detector's own version string -- never by document
+    identity, so a byte-identical page in a DIFFERENT PDF (or the same PDF re-uploaded) still hits
+    the cache. Never fatal: any cache read/write problem just means this page's boxes are computed
+    fresh, same contract as the OCR page cache this mirrors."""
+    # _get_diagram_bboxes' own YOLO branch returns numpy.float32 coordinates (straight from the
+    # ONNX model's own output array) -- not JSON-serializable, and no behavior-visible difference
+    # from a plain Python float anywhere these are used (_bbox_overlaps comparisons, never part of
+    # any question field) -- coerced once here, for every return path below, cached or not.
+    if not _mock_scan_cache_enabled():
+        return [tuple(float(v) for v in b) for b in _get_diagram_bboxes(page)]
+    try:
+        key = _page_pixmap_cache_key(page, _diagram_bboxes_engine_version())
+    except Exception:
+        return [tuple(float(v) for v in b) for b in _get_diagram_bboxes(page)]
+    cache_path = os.path.join(_MOCK_DIAGBBOX_CACHE_DIR, f"{key}.json")
+    try:
+        with open(cache_path, "r", encoding="utf-8") as f:
+            return [tuple(b) for b in json.load(f)]
+    except (OSError, ValueError):
+        pass
+    bboxes = [tuple(float(v) for v in b) for b in _get_diagram_bboxes(page)]
+    try:
+        os.makedirs(_MOCK_DIAGBBOX_CACHE_DIR, exist_ok=True)
+        tmp = f"{cache_path}.{os.getpid()}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(bboxes, f)
+        os.replace(tmp, cache_path)
+    except OSError as e:
+        print(f"    Mock exam scan: could not write the diagram-box cache ({e}) -- non-fatal")
+    return bboxes
+
+
+def scan_mock_exam_pdf(pdf_bytes, mock_name, progress=None):
     """Callable entry point for /admin/scan-pdf's layout="mock_exam". Same output shape as the
     old process_pyq_vision.scan_mock_exam_pdf -- {"questions", "pages_scanned", "flagged_pages",
     "completeness", "mock_name"} -- so it drops straight into the existing review UI. No model
     call anywhere in this module or anything it imports is ever invoked -- see this module's own
-    docstring for why one isn't needed."""
+    docstring for why one isn't needed. progress(done, total_pages), when given, is called once
+    per page as the main scan loop below reaches it -- a caller running this as a background job
+    can show a live "page N of M" line from it."""
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     if not _doc_has_text_layer(doc):
         doc.close()
@@ -863,7 +959,7 @@ def scan_mock_exam_pdf(pdf_bytes, mock_name):
     # "after" its own heading exactly once, in document order, and never returns to "before".
     past_answers_subjects = set()
     drawings_cache = {}  # page_index -> page.get_drawings(), fetched at most once per page
-    diagram_bboxes_cache = {}  # page_index -> _get_diagram_bboxes(page), fetched at most once per page
+    diagram_bboxes_cache = {}  # page_index -> _cached_diagram_bboxes(page), fetched at most once per page
     rawdict_cache = {}  # page_index -> {bbox: chars}, fetched at most once per page
 
     def close_active():
@@ -879,6 +975,8 @@ def scan_mock_exam_pdf(pdf_bytes, mock_name):
     page_count = len(doc)
     for page_index in range(page_count):
         page = doc[page_index]
+        if progress:
+            progress(page_index + 1, page_count)
         if page_index not in drawings_cache:
             drawings_cache[page_index] = page.get_drawings()
         page_drawings = drawings_cache[page_index]
@@ -920,9 +1018,9 @@ def scan_mock_exam_pdf(pdf_bytes, mock_name):
             ordered = ordered[:cutoff] + ([trimmed] if trimmed else [])
             past_answers_subjects.add(current_subject)
 
-        diagram_bboxes = _get_diagram_bboxes(page)
+        diagram_bboxes = _cached_diagram_bboxes(page)
         diagram_bboxes_cache[page_index] = diagram_bboxes  # reused below for modulus-bar exclusion,
-        # never recomputed -- this call is the only one _get_diagram_bboxes ever makes per page.
+        # never recomputed -- this call is the only one _cached_diagram_bboxes ever makes per page.
 
         for block in ordered:
             coverage[current_subject]["total"] += _word_count(block)

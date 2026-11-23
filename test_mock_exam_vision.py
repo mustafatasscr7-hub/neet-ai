@@ -11,6 +11,8 @@ import base64
 import os
 import re
 import sys
+import threading
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import process_mock_exam_vision as pmv  # noqa: E402
@@ -360,6 +362,93 @@ def test_server_endpoint_calls_vision_pass():
         check("vision pass skipped when MOCK_VISION_FLAGGED_ENABLED is False", not mocked_vision2.called)
 
 
+# ---------------------------------------------------------------- concurrency (speed work)
+
+def test_attempts_actually_run_concurrently():
+    print("\n# apply_vision_to_flagged_questions: attempts for different questions overlap in time")
+    qs = [_flagged_q(printed_number=i, mock_position=i) for i in range(1, 5)]
+    result = {"questions": qs, "completeness": {}}
+    lock = threading.Lock()
+    in_flight = {"now": 0, "max": 0}
+
+    def slow_generate(image_bytes, prompt):
+        with lock:
+            in_flight["now"] += 1
+            in_flight["max"] = max(in_flight["max"], in_flight["now"])
+        time.sleep(0.15)
+        with lock:
+            in_flight["now"] -= 1
+        return _good_reply(), _usage()
+
+    out = pmv.apply_vision_to_flagged_questions(result, generate_fn=slow_generate, concurrency=4)
+    check("more than one attempt was in flight at the same time", in_flight["max"] > 1, in_flight["max"])
+    check("all 4 still got fixed correctly", out["cost"]["model_read"] == 4, out["cost"])
+
+
+def test_concurrency_respects_cap_with_overlap():
+    print("\n# apply_vision_to_flagged_questions: the cap still holds when attempts run concurrently")
+    qs = [_flagged_q(printed_number=i, mock_position=i) for i in range(1, 6)]
+    result = {"questions": qs, "completeness": {}}
+    calls = []
+    lock = threading.Lock()
+
+    def fake_generate(image_bytes, prompt):
+        with lock:
+            calls.append(1)
+        time.sleep(0.05)
+        return _good_reply(), _usage()
+
+    out = pmv.apply_vision_to_flagged_questions(result, max_calls=3, generate_fn=fake_generate, concurrency=4)
+    check("only 3 of 5 flagged questions attempted, even with 4-way concurrency", len(calls) == 3, len(calls))
+    check("cost.skipped_over_cap == 2", out["cost"]["skipped_over_cap"] == 2, out["cost"])
+    check("the two over-cap questions are untouched, still flagged",
+          all(q["needs_review"] for q in out["questions"][3:]), out["questions"][3:])
+    check("cost.attempted == 3", out["cost"]["attempted"] == 3, out["cost"])
+
+
+def test_concurrency_mixed_success_and_failure_each_resolve_independently():
+    print("\n# apply_vision_to_flagged_questions: concurrent success/failure/exception never cross-contaminate")
+    qs = [_flagged_q(printed_number=i, mock_position=i) for i in range(1, 5)]
+    result = {"questions": qs, "completeness": {}}
+
+    tries = {}
+
+    def mixed_generate(image_bytes, prompt):
+        # One succeeds, one always fails the gate, one always raises, one succeeds on retry --
+        # keyed by the EXACT printed_number parsed from the prompt (not call order), so
+        # concurrent completion order can't matter. A plain substring check on "question 1"
+        # would also match "question 1X" once numbers reach two digits -- matched exactly here
+        # instead so this stays correct if this fixture ever grows past 9 questions.
+        number = int(re.search(r"question (\d+)\.", prompt).group(1))
+        if number == 1:
+            return _good_reply(), _usage()
+        if number == 2:
+            return "Q: stem\nA) same\nB) same\nC) x\nD) y\n", _usage()  # duplicate -- always fails
+        if number == 3:
+            raise RuntimeError("simulated network failure")
+        if number == 4:
+            # fails once, then succeeds -- exercises the per-question retry inside a concurrent dispatch
+            tries[number] = tries.get(number, 0) + 1
+            if tries[number] == 1:
+                return "Q: stem\nA) same\nB) same\nC) x\nD) y\n", _usage()
+            return _good_reply(), _usage()
+        raise AssertionError(f"unexpected question number {number}")
+
+    out = pmv.apply_vision_to_flagged_questions(result, generate_fn=mixed_generate, concurrency=4)
+    by_num = {q["printed_number"]: q for q in out["questions"]}
+    check("question 1 fixed", by_num[1]["needs_review"] is False, by_num[1])
+    check("question 2 still flagged (gate failure)", by_num[2]["needs_review"] is True, by_num[2])
+    check("question 3 still flagged (raised exception)", by_num[3]["needs_review"] is True, by_num[3])
+    check("question 4 fixed on its own retry", by_num[4]["needs_review"] is False, by_num[4])
+    check("cost.model_read == 2", out["cost"]["model_read"] == 2, out["cost"])
+    check("cost.gate_failed == 2", out["cost"]["gate_failed"] == 2, out["cost"])
+    # retried counts every question that made 2 calls, success or not (see _attempt_question's
+    # own loop) -- only question 1 succeeded on its FIRST call; 2 and 3 exhaust both attempts
+    # failing every time, 4 exhausts both attempts and succeeds on the second -- so 3 of 4.
+    check("cost.retried == 3 (every question but the one that succeeded immediately)",
+          out["cost"]["retried"] == 3, out["cost"])
+
+
 def main():
     test_rate_mirrors_server()
     test_parse_model_reply_basic()
@@ -382,6 +471,9 @@ def main():
     test_apply_vision_wrong_option_count_reply_leaves_question_flagged()
     test_apply_vision_no_flagged_questions_is_a_no_op()
     test_server_endpoint_calls_vision_pass()
+    test_attempts_actually_run_concurrently()
+    test_concurrency_respects_cap_with_overlap()
+    test_concurrency_mixed_success_and_failure_each_resolve_independently()
 
     print(f"\n{len(_passed)} passed, {len(_failed)} failed")
     if _failed:

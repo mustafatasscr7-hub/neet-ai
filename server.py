@@ -13246,13 +13246,15 @@ def _prune_scan_jobs(now):
             del _scan_jobs[jid]
 
 
-def start_scan_job(pdf_bytes, subject, layout, role, on_finish=None, scan_fn=None):
-    """Starts a "standard" or "3col_book" scan in a background thread, returns its job id right
-    away. on_finish(result) runs in the job thread when it ends (result is the scan_pdf_bytes /
-    scan_book_pdf_bytes dict, or {"error": ...}). `role` ("admin" or "contractor", from
-    verify_admin_or_contractor_pdf) is stored on the job so only that same role can poll it back.
-    scan_fn is for tests."""
-    if scan_fn is None:
+def start_scan_job(pdf_bytes, subject, layout, role, on_finish=None, scan_fn=None, mock_name=None):
+    """Starts a "standard", "3col_book" or "mock_exam" scan in a background thread, returns its
+    job id right away. on_finish(result) runs in the job thread when it ends (result is the
+    scan_pdf_bytes / scan_book_pdf_bytes / scan_mock_exam_pdf dict, or {"error": ...}). `role`
+    ("admin" or "contractor", from verify_admin_or_contractor_pdf) is stored on the job so only
+    that same role can poll it back. scan_fn is for tests (standard/3col_book only -- mock_exam
+    always calls scan_mock_exam_pdf/apply_vision_to_flagged_questions directly, see run() below,
+    the same functions /admin/scan-pdf's own synchronous mock_exam branch calls)."""
+    if scan_fn is None and layout != "mock_exam":
         scan_fn = scan_pdf_bytes if layout == "standard" else scan_book_pdf_bytes
     with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
         total = len(doc)
@@ -13277,6 +13279,17 @@ def start_scan_job(pdf_bytes, subject, layout, role, on_finish=None, scan_fn=Non
             try:
                 if layout == "standard":
                     result = scan_fn(pdf_bytes, subject, progress=progress)
+                elif layout == "mock_exam":
+                    result = scan_mock_exam_pdf(pdf_bytes, mock_name, progress=progress)
+                    if MOCK_VISION_FLAGGED_ENABLED:
+                        flagged_n = sum(1 for q in result.get("questions", []) if q.get("needs_review"))
+                        if flagged_n:
+                            def vision_progress(done, total_, _n=flagged_n):
+                                with _scan_jobs_lock:
+                                    if job_id in _scan_jobs:
+                                        _scan_jobs[job_id]["message"] = (
+                                            f"Running a vision re-read on {_n} flagged question(s)... {done} of {total_} checked.")
+                            result = apply_vision_to_flagged_questions(result, progress=vision_progress)
                 else:
                     # 3col_book has no model call and no natural per-page checkpoint to report
                     # granular progress against (see scan_book_pdf_bytes's own docstring) -- a
@@ -13323,12 +13336,15 @@ def get_scan_job(job_id, role):
 
 @app.post("/admin/scan-pdf/job")
 def admin_scan_pdf_job(req: ScanPdfRequest, role: str = Depends(verify_admin_or_contractor_pdf), __: None = Depends(rate_limit(10, 300, by="ip"))):
-    """Background-job version of /admin/scan-pdf for the "standard" and "3col_book" layouts --
-    see start_scan_job's docstring. Same validation and processed_pdfs tracking as the old
-    endpoint, which stays untouched below for any page still caching it."""
-    if req.subject not in ("Biology", "Physics", "Chemistry"):
+    """Background-job version of /admin/scan-pdf for the "standard", "3col_book" and "mock_exam"
+    layouts -- see start_scan_job's docstring. Same validation and processed_pdfs tracking as the
+    old endpoint, which stays untouched below for any page still caching it."""
+    if req.layout == "mock_exam":
+        if not req.mock_name or not req.mock_name.strip():
+            return {"error": "Mock name is required for the mock exam layout"}
+    elif req.subject not in ("Biology", "Physics", "Chemistry"):
         return {"error": "Invalid subject"}
-    if req.layout not in ("standard", "3col_book"):
+    if req.layout not in ("standard", "3col_book", "mock_exam"):
         return {"error": "Invalid layout for a background scan job"}
     if req.uploader_name and req.uploader_name not in PYQ_UPLOADER_NAMES:
         raise HTTPException(status_code=400, detail="Invalid uploader name")
@@ -13339,7 +13355,9 @@ def admin_scan_pdf_job(req: ScanPdfRequest, role: str = Depends(verify_admin_or_
     except Exception:
         return {"error": "Could not open PDF"}
 
-    processed_pdf_id = _create_processed_pdf_row(req.filename, req.subject) if req.filename else None
+    # Same "Mock: <name>" tracking label as /admin/scan-pdf's own synchronous mock_exam branch.
+    tracking_subject = f"Mock: {req.mock_name.strip()}" if req.layout == "mock_exam" else req.subject
+    processed_pdf_id = _create_processed_pdf_row(req.filename, tracking_subject) if req.filename else None
     t0 = time.time()
 
     def on_finish(result):
@@ -13349,7 +13367,8 @@ def admin_scan_pdf_job(req: ScanPdfRequest, role: str = Depends(verify_admin_or_
             _write_processed_pdf_scan_stats(processed_pdf_id, result, time.time() - t0)
         result["processed_pdf_id"] = processed_pdf_id
 
-    job_id = start_scan_job(pdf_bytes, req.subject, req.layout, role, on_finish=on_finish)
+    job_id = start_scan_job(pdf_bytes, req.subject, req.layout, role, on_finish=on_finish,
+                             mock_name=req.mock_name.strip() if req.layout == "mock_exam" else None)
     if processed_pdf_id is not None:
         _pdf_live_jobs[processed_pdf_id] = ("scan", job_id)
     return {"job_id": job_id, "pages_total": page_count, "processed_pdf_id": processed_pdf_id}

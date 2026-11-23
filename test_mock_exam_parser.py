@@ -478,6 +478,110 @@ def test_auto_check_excludes_mock():
     check("auto-check only processed the real pyq row, not the mock one", r.get("checked") == 1, r)
 
 
+def _multi_page_mock_fixture():
+    """A 4-page synthetic mock exam: Physics (pages 1-2, one question flagged -- a missing
+    option) then Chemistry (pages 3-4, all clean) -- enough pages and a subject switch to
+    meaningfully exercise the page-pool precompute path (see process_mock_exam_text.py's own
+    "page-level speed-up" section), not just a single page it would skip the pool for anyway."""
+    doc = fitz.open()
+    p1 = _new_page(doc)
+    _header(p1, "Physics", 2)
+    _lines(p1, 50, 80, ["1. Physics question one stem?", "a. opt1a", "b. opt1b", "c. opt1c", "d. opt1d"])
+    _lines(p1, 50, 160, ["2. Physics question two stem, missing an option?", "a. opt2a", "b. opt2b", "c. opt2c"])
+    _lines(p1, 320, 80, ["3. Physics question three stem?", "a. opt3a", "b. opt3b", "c. opt3c", "d. opt3d"])
+    p2 = _new_page(doc)
+    _header(p2, "Physics", 3)
+    _lines(p2, 50, 80, ["4. Physics question four stem?", "a. opt4a", "b. opt4b", "c. opt4c", "d. opt4d"])
+    p3 = _new_page(doc)
+    _header(p3, "Chemistry", 4)
+    _lines(p3, 50, 80, ["1. Chemistry question one stem?", "a. c1a", "b. c1b", "c. c1c", "d. c1d"])
+    _lines(p3, 50, 160, ["2. Chemistry question two stem?", "a. c2a", "b. c2b", "c. c2c", "d. c2d"])
+    p4 = _new_page(doc)
+    _header(p4, "Chemistry", 5)
+    _lines(p4, 50, 80, ["3. Chemistry question three stem?", "a. c3a", "b. c3b", "c. c3c", "d. c3d"])
+    return _pdf_bytes(doc)
+
+
+def _comparable_question(q):
+    """Every field that must stay byte-identical between a sequential and a parallel scan of the
+    SAME PDF, except the crop image itself -- see process_mock_exam_text.py's own note on a rare,
+    pre-existing PyMuPDF rendering-cache sensitivity for an unusually large crop region (confirmed
+    via direct investigation: same bbox, same page, same text/options/flags, a few different
+    pixels only in that one crop's PNG bytes depending on what else was rendered earlier in the
+    same process) -- this fixture's own crops are tiny and never hit that, but the comparison
+    below stays scoped to content, not pixels, on principle."""
+    return {k: v for k, v in q.items() if k != "crop_image_b64"}
+
+
+def test_parallel_precompute_matches_sequential_on_synthetic_pdf():
+    print("\n# Page-pool precompute: parallel output equals sequential output, order and numbering preserved")
+    pdf_bytes = _multi_page_mock_fixture()
+
+    old_workers = os.environ.get("MOCK_SCAN_WORKERS")
+    try:
+        os.environ["MOCK_SCAN_WORKERS"] = "1"
+        sequential = pmet.scan_mock_exam_pdf(pdf_bytes, "Parallel Check Mock")
+        os.environ["MOCK_SCAN_WORKERS"] = "3"
+        parallel = pmet.scan_mock_exam_pdf(pdf_bytes, "Parallel Check Mock")
+    finally:
+        if old_workers is None:
+            os.environ.pop("MOCK_SCAN_WORKERS", None)
+        else:
+            os.environ["MOCK_SCAN_WORKERS"] = old_workers
+
+    check("same question count", len(sequential["questions"]) == len(parallel["questions"]),
+          (len(sequential["questions"]), len(parallel["questions"])))
+    check("same pages_scanned", sequential["pages_scanned"] == parallel["pages_scanned"],
+          (sequential["pages_scanned"], parallel["pages_scanned"]))
+    check("printed_number order preserved per subject",
+          [q["printed_number"] for q in sequential["questions"]] == [q["printed_number"] for q in parallel["questions"]],
+          ([q["printed_number"] for q in sequential["questions"]], [q["printed_number"] for q in parallel["questions"]]))
+    check("subject order preserved (Physics before Chemistry)",
+          [q["subject"] for q in sequential["questions"]] == [q["subject"] for q in parallel["questions"]],
+          [q["subject"] for q in parallel["questions"]])
+    check("every question's content/flags identical (crop image excluded, see helper docstring)",
+          [_comparable_question(q) for q in sequential["questions"]] == [_comparable_question(q) for q in parallel["questions"]])
+    check("completeness identical", sequential["completeness"] == parallel["completeness"], parallel["completeness"])
+    seq_flagged = [q for q in sequential["questions"] if q["needs_review"]]
+    par_flagged = [q for q in parallel["questions"] if q["needs_review"]]
+    check("exactly one flagged question in both (the missing-option one)", len(seq_flagged) == 1 and len(par_flagged) == 1,
+          (len(seq_flagged), len(par_flagged)))
+    check("the flagged question has a crop image in both runs",
+          bool(seq_flagged[0].get("crop_image_b64")) and bool(par_flagged[0].get("crop_image_b64")))
+
+
+def test_bulk_create_batches_one_request_for_many_questions():
+    print("\n# admin_pyq_bulk_create: N questions in one request is ONE write to Supabase, not N")
+    fake = FakeSupabase()
+    pyq_post_count = {"n": 0}
+    real_handle = fake.handle
+
+    def counting_handle(request):
+        if request.method == "POST" and request.url.path == "/rest/v1/pyq":
+            pyq_post_count["n"] += 1
+        return real_handle(request)
+
+    fake.handle = counting_handle
+    server.async_client = httpx.AsyncClient(transport=httpx.MockTransport(fake.handle))
+    server.ADMIN_PASSWORD = ADMIN_KEY
+    server.CONTRACTOR_PDF_KEY = CONTRACTOR_KEY
+    client = TestClient(server.app)
+
+    def mock_question(i):
+        return {
+            "subject": "Physics", "chapter": None, "question": f"fake mock physics question {i}",
+            "option_a": "a1", "option_b": "a2", "option_c": "a3", "option_d": "a4",
+            "correct_answer": "", "source": "mock", "mock_name": "Mock Test 1", "mock_position": i,
+        }
+
+    questions = [mock_question(i) for i in range(1, 6)]
+    r = client.post("/admin/pyq-bulk-create", json={"questions": questions},
+                     headers={"X-Admin-Key": ADMIN_KEY}).json()
+    check("all 5 rows created", len(r.get("created", [])) == 5, r)
+    check("exactly one POST to /rest/v1/pyq for 5 questions (a single batched array insert, "
+          "never one request per question)", pyq_post_count["n"] == 1, pyq_post_count["n"])
+
+
 def main():
     test_two_column_order_and_continuation()
     test_continuation_across_column_and_page()
@@ -491,7 +595,9 @@ def main():
     test_scan_pdf_endpoint_accepts_mock_exam_without_subject()
     test_scan_pdf_endpoint_surfaces_rejection_message()
     test_student_visible_excludes_mock()
+    test_parallel_precompute_matches_sequential_on_synthetic_pdf()
     test_bulk_create_forces_mock_pending()
+    test_bulk_create_batches_one_request_for_many_questions()
     test_dup_corpus_scoped_by_source()
     test_auto_check_excludes_mock()
 

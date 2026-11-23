@@ -1,16 +1,18 @@
 """Mock test for /admin/scan-pdf/job and /admin/scan-pdf/job/{job_id} -- the background-job
-version of /admin/scan-pdf for the "standard" and "3col_book" layouts (see server.py's
+version of /admin/scan-pdf for the "standard", "3col_book" and "mock_exam" layouts (see server.py's
 start_scan_job/get_scan_job and admin-pdf-review.html / contractor-pdf-review.html's runScanJob).
 
 Run with: .venv/Scripts/python.exe test_scan_job.py
 
-No real model call and no real Supabase write anywhere in this file: server.scan_pdf_bytes and
-server.scan_book_pdf_bytes are monkeypatched to fake, instant-or-controllable functions, and no
-request here sets `filename`, so _create_processed_pdf_row (the only Supabase write scan-pdf ever
-does) never fires.
+No real model call and no real Supabase write anywhere in this file: server.scan_pdf_bytes,
+server.scan_book_pdf_bytes, server.scan_mock_exam_pdf and server.apply_vision_to_flagged_questions
+are all monkeypatched to fake, instant-or-controllable functions, and no request here sets
+`filename`, so _create_processed_pdf_row (the only Supabase write scan-pdf ever does) never fires.
 
 Covers:
   * a job goes queued -> running -> done, with the same result shape /admin/scan-pdf returns;
+  * a mock_exam job runs the deterministic scan then the vision pass, in that order, before done;
+  * a mock_exam job with no mock_name is refused up front, same as the synchronous endpoint;
   * polling with the wrong key role, or an unknown job_id, is refused (both come back as the same
     "unknown or expired" error -- a caller can't tell the two apart);
   * two jobs run at once and a third queues behind them (the semaphore(2) slot limit);
@@ -88,6 +90,40 @@ def fake_scan_book_pdf_bytes(pdf_bytes, subject):
             "pages_scanned": 1, "flagged_pages": []}
 
 
+def fake_scan_mock_exam_pdf(pdf_bytes, mock_name, progress=None):
+    if progress:
+        progress(1, 2)
+        progress(2, 2)
+    flagged = {"question": "fake flagged mock Q", "option_a": "a", "option_b": "b", "option_c": "c",
+               "option_d": "d", "correct_answer": "", "question_type": "mcq", "has_diagram": False,
+               "year": None, "source_tag": None, "source_page": 1, "needs_review": True,
+               "review_reason": "fake reason", "subject": "Physics", "source": "mock",
+               "mock_name": mock_name, "mock_position": 1, "printed_number": 1,
+               "crop_image_b64": None, "_text_layer_hint": "hint"}
+    clean = {"question": f"fake clean mock Q for {mock_name}", "option_a": "a", "option_b": "b",
+             "option_c": "c", "option_d": "d", "correct_answer": "", "question_type": "mcq",
+             "has_diagram": False, "year": None, "source_tag": None, "source_page": 1,
+             "needs_review": False, "review_reason": None, "subject": "Physics", "source": "mock",
+             "mock_name": mock_name, "mock_position": 2, "printed_number": 2}
+    return {"questions": [flagged, clean], "pages_scanned": 2, "flagged_pages": [{"page": 1, "reason": "fake reason"}],
+            "completeness": {"Physics": {"expected": 45, "found_count": 2, "missing": [], "duplicates": [],
+                                          "out_of_range": [], "coverage_pct": 100.0, "red_flag_count": 1}}}
+
+
+def fake_apply_vision(result, progress=None, **kwargs):
+    attempted = [q for q in result["questions"] if q.get("needs_review")]
+    if progress:
+        progress(1, max(1, len(attempted)))
+    for q in attempted:
+        q["needs_review"] = False
+        q["model_read"] = True
+    for q in result["questions"]:
+        q.pop("_text_layer_hint", None)
+    result["cost"] = {"usd": 0.0001, "calls": 1, "attempted": len(attempted), "model_read": len(attempted),
+                       "gate_failed": 0, "retried": 0, "skipped_over_cap": 0, "model": "fake-model"}
+    return result
+
+
 _GATES = {}   # pdf_bytes -> threading.Event the fake scan waits on, if any
 _ERROR_ON = set()  # pdf_bytes that should raise instead of returning
 
@@ -110,6 +146,9 @@ def poll_until(client, headers, job_id, want_statuses, timeout=5):
 def main():
     server.scan_pdf_bytes = fake_scan_pdf_bytes
     server.scan_book_pdf_bytes = fake_scan_book_pdf_bytes
+    server.scan_mock_exam_pdf = fake_scan_mock_exam_pdf
+    server.apply_vision_to_flagged_questions = fake_apply_vision
+    server.MOCK_VISION_FLAGGED_ENABLED = True
     server.ADMIN_PASSWORD = ADMIN_KEY
     server.CONTRACTOR_PDF_KEY = CONTRACTOR_KEY
     client = TestClient(server.app)
@@ -219,6 +258,34 @@ def main():
           status_poll.get("status") in ("running", "queued"), status_poll)
     slow_gate.set()
     poll_until(client, ADMIN, slow_job_id, {"done", "error"})
+
+    # Run last, not before the TTL-pruning section above: that section's own timing margin
+    # (0.05s TTL / 0.15s sleep) is tight enough that extra work running ahead of it under load
+    # can flake it, confirmed live when this block briefly sat earlier in this same function.
+    # Also reset the rate limiter here -- /admin/scan-pdf/job is capped at 10 requests/300s per
+    # IP, and every job test above (all from the SAME TestClient "IP") has already spent most of
+    # that quota by this point in the file; confirmed live (a real 429, not a flaky timing issue)
+    # once this block's own 2 requests became the 10th and 11th.
+    server._rate_buckets.clear()
+    print("\n# A mock_exam-layout job runs the deterministic scan, then the vision pass, then done")
+    b64m = make_pdf_b64(tag="mock1")
+    r = client.post("/admin/scan-pdf/job", json={"data": b64m, "layout": "mock_exam", "mock_name": "Job Test Mock"}, headers=ADMIN)
+    check("job start returns 200", r.status_code == 200, r.text)
+    start_m = r.json()
+    check("job start carries a job_id and pages_total", bool(start_m.get("job_id")) and start_m.get("pages_total") == 2, start_m)
+    job_m = poll_until(client, ADMIN, start_m["job_id"], {"done", "error"})
+    check("mock_exam job reaches done", job_m.get("status") == "done", job_m)
+    result_m = job_m.get("result", {})
+    check("result has scan_mock_exam_pdf's own shape", result_m.get("pages_scanned") == 2 and len(result_m.get("questions", [])) == 2, result_m)
+    check("the vision pass ran and fixed the flagged question",
+          result_m["questions"][0]["needs_review"] is False and result_m["questions"][0].get("model_read") is True, result_m)
+    check("the clean question was never touched by the vision pass",
+          result_m["questions"][1]["needs_review"] is False and not result_m["questions"][1].get("model_read"), result_m)
+    check("cost dict from the vision pass is attached", result_m.get("cost", {}).get("model") == "fake-model", result_m)
+
+    print("\n# A mock_exam job without a mock_name is refused up front, same as the sync endpoint")
+    r = client.post("/admin/scan-pdf/job", json={"data": make_pdf_b64(tag="mock-noname"), "layout": "mock_exam"}, headers=ADMIN)
+    check("missing mock_name is refused", "error" in r.json() and "job_id" not in r.json(), r.json())
 
     print(f"\n{len(_passed)} passed, {len(_failed)} failed")
     if _failed:

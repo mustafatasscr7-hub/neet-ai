@@ -27,6 +27,7 @@ import os
 import re
 import base64
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from google.genai import types as genai_types
 
@@ -47,6 +48,14 @@ MOCK_VISION_FLAGGED_ENABLED = os.getenv("MOCK_VISION_FLAGGED_ENABLED", "true").s
 # has 31 flagged, comfortably under this; a PDF with more than 60 flagged questions has a bigger
 # problem than this feature can fix and should be reviewed manually past that point anyway.
 MOCK_VISION_MAX_CALLS_PER_PDF = 60
+
+# Each attempt is one or two network calls (requirement 2's own retry) with no shared state
+# between questions (_attempt_question only ever mutates its own q dict) -- a small THREAD pool is
+# enough to run them concurrently: the GIL is released for the duration of each real network call,
+# so this isn't CPU-bound the way the page-diagram detection in process_mock_exam_text.py is.
+# Capped low (not "as many as there are flagged questions") so a PDF with dozens of flagged
+# questions doesn't open dozens of simultaneous connections to Gemini at once.
+MOCK_VISION_CONCURRENCY = int(os.getenv("MOCK_VISION_CONCURRENCY", "5"))
 
 EXPECTED_OPTION_COUNT = 4
 
@@ -283,7 +292,8 @@ def _attempt_question(q, generate_fn):
     return False, last_reason, total_cost, calls_made
 
 
-def apply_vision_to_flagged_questions(result, max_calls=MOCK_VISION_MAX_CALLS_PER_PDF, generate_fn=None):
+def apply_vision_to_flagged_questions(result, max_calls=MOCK_VISION_MAX_CALLS_PER_PDF, generate_fn=None,
+                                       concurrency=None, progress=None):
     """Callable entry point: takes scan_mock_exam_pdf's own return dict and, for each question it
     already flagged needs_review (up to max_calls, document order, see module-level constant's own
     docstring for why a cap exists), tries one model-assisted re-read. Mutates and returns the SAME
@@ -293,9 +303,18 @@ def apply_vision_to_flagged_questions(result, max_calls=MOCK_VISION_MAX_CALLS_PE
 
     generate_fn(image_bytes, prompt) -> (raw_text, usage_dict) defaults to a real Gemini call
     (_default_generate); tests inject a fake here instead of monkeypatching the real client.
-    """
+
+    The attempts themselves run concurrently, up to `concurrency` (MOCK_VISION_CONCURRENCY by
+    default) at a time -- see that constant's own docstring. This changes nothing about the
+    RESULT: each attempt only ever mutates its own question dict and nothing else, cost/count
+    totals below are summed from each attempt's own return value (never a shared counter two
+    threads could race on), and the aggregate "attempted"/cap/document-order decisions above are
+    all made BEFORE any attempt starts, exactly as they were when this ran one at a time.
+    progress(done, total_attempted), when given, is called as each attempt finishes."""
     if generate_fn is None:
         generate_fn = _default_generate
+    if concurrency is None:
+        concurrency = MOCK_VISION_CONCURRENCY
     questions = result.get("questions") or []
     flagged = [q for q in questions if q.get("needs_review")]
     attempted = flagged[:max_calls]
@@ -306,19 +325,28 @@ def apply_vision_to_flagged_questions(result, max_calls=MOCK_VISION_MAX_CALLS_PE
     model_read = 0
     gate_failed = 0
     retried = 0
+    done = 0
 
-    for q in attempted:
-        success, _reason, cost, calls_made = _attempt_question(q, generate_fn)
-        total_cost += cost
-        total_calls += calls_made
-        if calls_made > 1:
-            retried += 1
-        if success:
-            model_read += 1
-        else:
-            gate_failed += 1
-            # q is untouched here -- still needs_review True, still the deterministic result, same
-            # as if this module had never run at all (see module docstring's confidence rule).
+    if attempted:
+        workers = max(1, min(concurrency, len(attempted)))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(_attempt_question, q, generate_fn): q for q in attempted}
+            for fut in as_completed(futures):
+                _success, _reason, cost, calls_made = fut.result()
+                total_cost += cost
+                total_calls += calls_made
+                if calls_made > 1:
+                    retried += 1
+                if _success:
+                    model_read += 1
+                else:
+                    gate_failed += 1
+                    # q is untouched here -- still needs_review True, still the deterministic
+                    # result, same as if this module had never run at all (see module docstring's
+                    # confidence rule).
+                done += 1
+                if progress:
+                    progress(done, len(attempted))
 
     for q in questions:
         q.pop("_text_layer_hint", None)  # internal-only hint, never meant to reach the browser

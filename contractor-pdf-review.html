@@ -2026,7 +2026,7 @@
       if (layout === 'scanned_ocr') {
         data = await runOcrJob(body, statusEl);
         if (!data) return;
-      } else if (layout === 'standard' || layout === '3col_book') {
+      } else if (layout === 'standard' || layout === '3col_book' || layout === 'mock_exam') {
         data = await runScanJob(body, statusEl);
         if (!data) return;
       } else {
