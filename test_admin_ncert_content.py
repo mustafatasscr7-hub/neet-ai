@@ -58,17 +58,22 @@ def make_chapter_pdf(lines):
     return pdf_bytes
 
 
-def good_chapter_pdf_b64():
-    pdf_bytes = make_chapter_pdf([
-        "CHAPTER 1",
-        "THE LIVING WORLD",
-        "1.1 Diversity In The Living World",
-        CLEAN_PARA,
-        "1.2 Taxonomic Categories",
-        CLEAN_PARA,
-        "1.3 Taxonomical Aids",
-        CLEAN_PARA,
-    ])
+def good_chapter_pdf_b64(n_sections=3):
+    """n_sections lets a test (e.g. a keyword-generation concurrency/cost-cap test) ask for more
+    than the default 3 sections. The first 3 are always this exact original heading/text trio --
+    test_mark_ok_persists_and_only_resolves_its_own_difference builds a second PDF by hand with
+    these same 3 headings/text for a diff-by-heading cross-check, so they must never change here.
+    Sections past 3 are appended with generic headings."""
+    lines = [
+        "CHAPTER 1", "THE LIVING WORLD",
+        "1.1 Diversity In The Living World", CLEAN_PARA,
+        "1.2 Taxonomic Categories", CLEAN_PARA,
+        "1.3 Taxonomical Aids", CLEAN_PARA,
+    ]
+    for i in range(4, n_sections + 1):
+        lines.append(f"1.{i} Extra Section {i}")
+        lines.append(CLEAN_PARA)
+    pdf_bytes = make_chapter_pdf(lines)
     return base64.b64encode(pdf_bytes).decode()
 
 
@@ -412,14 +417,42 @@ def test_apply_keyword_cost_cap():
     print("\n# DeepSeek keyword spend on Apply is capped at $0.10/request")
     # 200k input tokens/call at the (forced) peak rate (0.30/1M) costs ~$0.06/call -- 2 calls
     # cross the $0.10 cap, so the 3rd section's keywords must be skipped this request.
+    # Keyword calls now run concurrently in batches (NCERT_CONTENT_KEYWORDS_CONCURRENCY) -- with
+    # only 3 sections, a batch size >= 3 would run all of them before the cap is ever checked, so
+    # this test pins concurrency to 1 to isolate the dollar-cap arithmetic itself (unrelated to
+    # concurrency); test_keyword_cap_enforced_across_concurrent_batches below covers the cap at
+    # real (>1) concurrency.
     tc, fake = setup(deepseek_input_tokens=200_000)
-    pdf = good_chapter_pdf_b64()  # 3 sections
-    preview_id = tc.post("/admin/ncert-content/preview", json={"class": "11", "subject": "Biology", "data": pdf}, headers={"X-Admin-Key": ADMIN_KEY}).json()["preview_id"]
-    apply_data = tc.post("/admin/ncert-content/apply", json={"preview_id": preview_id}, headers={"X-Admin-Key": ADMIN_KEY}).json()
+    orig_concurrency = server.NCERT_CONTENT_KEYWORDS_CONCURRENCY
+    server.NCERT_CONTENT_KEYWORDS_CONCURRENCY = 1
+    try:
+        pdf = good_chapter_pdf_b64()  # 3 sections
+        preview_id = tc.post("/admin/ncert-content/preview", json={"class": "11", "subject": "Biology", "data": pdf}, headers={"X-Admin-Key": ADMIN_KEY}).json()["preview_id"]
+        apply_data = tc.post("/admin/ncert-content/apply", json={"preview_id": preview_id}, headers={"X-Admin-Key": ADMIN_KEY}).json()
+    finally:
+        server.NCERT_CONTENT_KEYWORDS_CONCURRENCY = orig_concurrency
     check("apply still succeeds (writing isn't blocked by the keyword cap)", apply_data.get("written") is True, apply_data)
     check("cost stayed near the $0.10 cap, not the full 3-section cost", apply_data.get("cost", 0) < 0.15, apply_data.get("cost"))
     check("fewer than all 3 sections got keywords (cap reached)", 0 < apply_data.get("keywords_generated", 0) < 3, apply_data)
     check("keywords_pending is true", apply_data.get("keywords_pending") is True, apply_data)
+
+
+def test_keyword_cap_enforced_across_concurrent_batches():
+    print("\n# DeepSeek keyword spend cap on Apply still stops a later batch at real concurrency")
+    # 9 sections, concurrency 3, 200k-token (~$0.06/call) cost -- batch 1 (3 calls, ~$0.18) already
+    # clears the $0.10 cap, so batch 2 must never start.
+    tc, fake = setup(deepseek_input_tokens=200_000)
+    orig_concurrency = server.NCERT_CONTENT_KEYWORDS_CONCURRENCY
+    server.NCERT_CONTENT_KEYWORDS_CONCURRENCY = 3
+    try:
+        pdf = good_chapter_pdf_b64(n_sections=9)
+        preview_id = tc.post("/admin/ncert-content/preview", json={"class": "11", "subject": "Biology", "data": pdf}, headers={"X-Admin-Key": ADMIN_KEY}).json()["preview_id"]
+        apply_data = tc.post("/admin/ncert-content/apply", json={"preview_id": preview_id}, headers={"X-Admin-Key": ADMIN_KEY}).json()
+    finally:
+        server.NCERT_CONTENT_KEYWORDS_CONCURRENCY = orig_concurrency
+    check("apply still succeeds", apply_data.get("written") is True, apply_data)
+    check("exactly one batch (3 calls) ran before the cap stopped the next one", apply_data.get("keywords_generated") == 3, apply_data)
+    check("keywords_pending is true (6 sections left pending)", apply_data.get("keywords_pending") is True, apply_data)
 
 
 def test_apply_blocked_on_verify_fail_and_override_allows_it():
@@ -846,6 +879,7 @@ def main():
     test_validation_failure_blocks_apply()
     test_apply_writes_and_overwrite_replaces_safely()
     test_apply_keyword_cost_cap()
+    test_keyword_cap_enforced_across_concurrent_batches()
     test_apply_blocked_on_verify_fail_and_override_allows_it()
     test_verify_endpoint_checks_existing_chapter_and_stamps_log()
     test_verify_endpoint_no_such_chapter()

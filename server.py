@@ -16468,6 +16468,7 @@ NCERT_CONTENT_PREVIEW_TTL_SECONDS = 1800  # how long a /preview result can still
 NCERT_CONTENT_MAX_PREVIEW_SESSIONS = 5  # oldest is evicted to make room for a new preview past this
 NCERT_CONTENT_KEYWORDS_COST_CAP = 0.10  # DeepSeek spend cap per /keywords request (see below)
 NCERT_CONTENT_KEYWORDS_SECTION_CAP = 60  # section-count cap per /keywords request
+NCERT_CONTENT_KEYWORDS_CONCURRENCY = 6  # DeepSeek keyword calls in flight at once (see below)
 
 # preview_id -> {class, subject, chapter_title, sections, flags, verify, pdf_bytes, edited,
 # created_at}. In-memory only (one worker today, same caveat as _scan_jobs/_admin_login_attempts
@@ -16531,10 +16532,26 @@ async def _log_ncert_chapter_event(cls: str, subject: str, chapter: str, source:
     except Exception:
         pass
 
+def _avg_section_cost_from_rows(rows) -> float:
+    """Shared aggregation behind _ncert_avg_section_cost -- also reused directly by the
+    chapters-list endpoint below, which already has these same non-deleted ncert_chapter_log rows
+    in hand (for log_by_key) and would otherwise make a second, redundant round trip to this same
+    table just to recompute this. A row with no keyword calls (model_calls 0/None, e.g. a manual
+    section edit) always has keywords_cost_usd 0 too, so it contributes nothing to either sum --
+    passing every non-deleted row in, unfiltered, gives the identical average as pre-filtering to
+    model_calls > 0 server-side."""
+    total_calls = sum(r.get("model_calls") or 0 for r in rows)
+    if total_calls <= 0:
+        return NCERT_CONTENT_FALLBACK_SECTION_COST
+    total_cost = sum(r.get("keywords_cost_usd") or 0 for r in rows)
+    return total_cost / total_calls
+
 async def _ncert_avg_section_cost() -> float:
     """Average DeepSeek cost per section keyword call, from every non-deleted ncert_chapter_log
     row that actually made a call. Falls back to NCERT_CONTENT_FALLBACK_SECTION_COST when the log
-    has no such history yet (e.g. right after the table is first created)."""
+    has no such history yet (e.g. right after the table is first created). Used by the upload
+    preview, which has no pre-fetched log rows of its own to reuse (see admin_ncert_content_list
+    for the call site that does)."""
     try:
         resp = await async_client.get(
             f"{SUPABASE_URL}/rest/v1/ncert_chapter_log", headers=ADMIN_HEADERS,
@@ -16545,11 +16562,7 @@ async def _ncert_avg_section_cost() -> float:
         rows = resp.json()
     except Exception:
         return NCERT_CONTENT_FALLBACK_SECTION_COST
-    total_calls = sum(r.get("model_calls") or 0 for r in rows)
-    if total_calls <= 0:
-        return NCERT_CONTENT_FALLBACK_SECTION_COST
-    total_cost = sum(r.get("keywords_cost_usd") or 0 for r in rows)
-    return total_cost / total_calls
+    return _avg_section_cost_from_rows(rows)
 
 def _ncert_chapter_cost_fields(log_rows):
     """log_rows: this chapter's non-deleted ncert_chapter_log rows, oldest first. The earliest row
@@ -16623,6 +16636,7 @@ async def admin_ncert_content_list(_: None = Depends(verify_admin)):
             c["created_at"] = r["created_at"]
 
     log_by_key = {}
+    log_rows = []
     try:
         log_resp = await async_client.get(
             f"{SUPABASE_URL}/rest/v1/ncert_chapter_log", headers=ADMIN_HEADERS,
@@ -16633,7 +16647,8 @@ async def admin_ncert_content_list(_: None = Depends(verify_admin)):
             },
         )
         if log_resp.status_code < 400:
-            for r in log_resp.json():
+            log_rows = log_resp.json()
+            for r in log_rows:
                 log_by_key.setdefault((r["class"], r["subject"], r["chapter"]), []).append(r)
     except Exception:
         pass
@@ -16655,7 +16670,8 @@ async def admin_ncert_content_list(_: None = Depends(verify_admin)):
         "avg_cost_usd": round(sum(known_costs) / len(known_costs), 6) if known_costs else None,
         # Per-SECTION average (distinct from avg_cost_usd above, which is per chapter) -- lets the
         # "Generate keywords" button estimate a cost before running without a separate round trip.
-        "avg_section_cost_usd": round(await _ncert_avg_section_cost(), 6),
+        # Computed from log_rows (already fetched above for log_by_key) instead of a second query.
+        "avg_section_cost_usd": round(_avg_section_cost_from_rows(log_rows), 6),
     }
     return {"chapters": chapter_list, "totals": totals}
 
@@ -16923,47 +16939,90 @@ async def admin_ncert_content_preview(request: Request, _: None = Depends(verify
         "verify": verify,
     }
 
-def _ncert_content_generate_keywords(sections, cap: float, is_peak: bool):
-    """Runs sequentially (not in parallel) so the running cost total can short-circuit as soon as
-    the per-request cap is reached -- see NCERT_CONTENT_APPLY_COST_CAP. Returns
-    (results, total_cost, keywords_incomplete) where results is [(section_id, keywords), ...]
-    only for sections that succeeded before the cap (or a transient failure) stopped it."""
-    results = []
-    total_cost = 0.0
-    incomplete = False
-    for row in sections:
-        if total_cost >= cap:
-            incomplete = True
-            break
-        try:
-            keywords, cost = ncert_ingest_core_mod.generate_keywords_with_cost(deepseek_client, row["heading"], row["text"], is_peak)
-            total_cost += cost
-            results.append((row["id"], keywords))
-        except Exception:
-            incomplete = True
-    if len(results) < len(sections):
-        incomplete = True
-    return results, total_cost, incomplete
+async def _ncert_content_generate_keywords_concurrent(sections, cap: float, is_peak: bool, concurrency: int = None):
+    """Runs generate_keywords_with_cost for `sections` in batches of up to `concurrency` calls at
+    once (each is a blocking SDK call, so each batch runs via asyncio.gather over the default
+    thread-pool executor, never more than `concurrency` threads at a time) instead of one call at
+    a time -- the dominant cost of both Apply and the chapter-level "Generate keywords" endpoint,
+    since wall-clock time there used to scale linearly with section count.
 
-def _ncert_content_generate_keywords_detailed(sections, cap: float, is_peak: bool):
-    """Like _ncert_content_generate_keywords above, but keeps one outcome per section actually
-    attempted (success or failure) instead of only the successes -- used by the chapter-level
-    "Generate keywords" endpoint below, which reports per-section results to the admin. Stops once
-    total_cost reaches cap; sections after that point are left out of the returned list entirely
-    (never attempted, still pending). A section's own failure does not stop the rest. Returns
-    (attempted, total_cost) where attempted is [{"id", "heading", "keywords", "ok"}, ...]."""
+    Still respects cap, just at batch granularity instead of per-call: once the running total
+    reaches cap, no further batch starts. A batch already in flight can push the total slightly
+    past cap before that check runs -- the same class of overshoot the old per-call check already
+    allowed (one call could already push past cap), just scaled to batch size instead of one call.
+    A single section's failure (exception) never stops the rest of its batch or any later batch.
+
+    Returns (attempted, total_cost) where attempted is [{"id", "heading", "keywords", "ok"}, ...]
+    for every section actually tried, successes and failures both, in the original input order --
+    shared by both of this module's keyword-generation call sites: chapter Apply (which keeps only
+    the successes) and the "Generate keywords" endpoint (which reports every attempt, success or
+    failure, to the admin).
+
+    concurrency defaults to None (resolved to NCERT_CONTENT_KEYWORDS_CONCURRENCY below, read fresh
+    on every call) rather than being bound as the parameter's default value, so a test can
+    monkeypatch server.NCERT_CONTENT_KEYWORDS_CONCURRENCY the same way existing tests already
+    monkeypatch NCERT_CONTENT_KEYWORDS_SECTION_CAP/NCERT_CONTENT_KEYWORDS_COST_CAP -- a plain
+    default value would instead stay frozen at whatever it was when this function was defined."""
+    if concurrency is None:
+        concurrency = NCERT_CONTENT_KEYWORDS_CONCURRENCY
+    loop = asyncio.get_event_loop()
+
+    async def run_one(row):
+        return await loop.run_in_executor(
+            None, ncert_ingest_core_mod.generate_keywords_with_cost, deepseek_client, row["heading"], row["text"], is_peak,
+        )
+
     attempted = []
     total_cost = 0.0
-    for row in sections:
-        if total_cost >= cap:
-            break
-        try:
-            keywords, cost = ncert_ingest_core_mod.generate_keywords_with_cost(deepseek_client, row["heading"], row["text"], is_peak)
+    i = 0
+    n = len(sections)
+    while i < n and total_cost < cap:
+        batch = sections[i:i + concurrency]
+        outcomes = await asyncio.gather(*(run_one(row) for row in batch), return_exceptions=True)
+        for row, outcome in zip(batch, outcomes):
+            if isinstance(outcome, Exception):
+                attempted.append({"id": row["id"], "heading": row["heading"], "keywords": None, "ok": False})
+                continue
+            keywords, cost = outcome
             total_cost += cost
             attempted.append({"id": row["id"], "heading": row["heading"], "keywords": keywords, "ok": True})
-        except Exception:
-            attempted.append({"id": row["id"], "heading": row["heading"], "keywords": None, "ok": False})
+        i += concurrency
     return attempted, total_cost
+
+
+async def _ncert_content_write_keywords_batch(cls: str, subject: str, chapter: str, sections_by_id: dict, kw_results: list):
+    """Writes every (section_id, keywords) pair in kw_results in ONE round trip instead of one
+    PATCH per section -- a POST upsert keyed on `id` (on_conflict=id, resolution=merge-duplicates)
+    so Postgres takes the ON CONFLICT DO UPDATE branch for every row (every id here already
+    exists). The NOT NULL columns below are only there because Postgres validates the candidate
+    insert row before it ever checks for a conflict -- they must be the row's CURRENT, correct
+    values (not a stale label) since merge-duplicates writes back every column present in the
+    body, not just `keywords`. sections_by_id: id -> {ordinal, heading, text} for every row in
+    kw_results (already in hand from the SELECT/insert response callers already have; no extra
+    fetch). Returns True on success; never raises -- same best-effort contract the per-section
+    PATCH loop it replaces had."""
+    if not kw_results:
+        return True
+    rows = []
+    for section_id, keywords in kw_results:
+        r = sections_by_id[section_id]
+        text = r.get("text") or ""
+        rows.append({
+            "id": section_id, "class": cls, "subject": subject, "chapter": chapter,
+            "ordinal": r["ordinal"], "heading": r["heading"], "text": text,
+            "word_count": r.get("word_count") if r.get("word_count") is not None else len(text.split()),
+            "keywords": keywords,
+        })
+    try:
+        resp = await async_client.post(
+            f"{SUPABASE_URL}/rest/v1/ncert_sections",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=minimal"},
+            params={"on_conflict": "id"},
+            json=rows,
+        )
+        return resp.status_code < 400
+    except Exception:
+        return False
 
 @app.post("/admin/ncert-content/keywords")
 async def admin_ncert_content_generate_keywords(request: Request, _: None = Depends(verify_admin), __: None = Depends(rate_limit(10, 300, by="ip"))):
@@ -17020,24 +17079,16 @@ async def admin_ncert_content_generate_keywords(request: Request, _: None = Depe
         }
 
     is_peak = _is_deepseek_peak_hour()
-    loop = asyncio.get_event_loop()
-    attempted, kw_cost = await loop.run_in_executor(
-        None, _ncert_content_generate_keywords_detailed, targets, NCERT_CONTENT_KEYWORDS_COST_CAP, is_peak
-    )
+    attempted, kw_cost = await _ncert_content_generate_keywords_concurrent(targets, NCERT_CONTENT_KEYWORDS_COST_CAP, is_peak)
+
+    sections_by_id = {s["id"]: s for s in targets}
+    kw_results = [(a["id"], a["keywords"]) for a in attempted if a["ok"]]
+    write_ok = await _ncert_content_write_keywords_batch(cls, subject, chapter, sections_by_id, kw_results)
 
     results = []
     succeeded = 0
     for item in attempted:
-        ok = item["ok"]
-        if ok:
-            try:
-                patch_resp = await async_client.patch(
-                    f"{SUPABASE_URL}/rest/v1/ncert_sections", headers={**ADMIN_HEADERS, "Content-Type": "application/json"},
-                    params={"id": f"eq.{item['id']}"}, json={"keywords": item["keywords"]},
-                )
-                ok = patch_resp.status_code < 400
-            except Exception:
-                ok = False
+        ok = item["ok"] and write_ok
         if ok:
             succeeded += 1
         results.append({"heading": item["heading"], "ok": ok})
@@ -17590,18 +17641,13 @@ async def admin_ncert_content_apply(request: Request, _: None = Depends(verify_a
             return {"error": f"Wrote the new sections but could not finalize the chapter name: {e}. Contact an engineer before retrying."}
 
     is_peak = _is_deepseek_peak_hour()
-    loop = asyncio.get_event_loop()
-    kw_results, kw_cost, keywords_incomplete = await loop.run_in_executor(
-        None, _ncert_content_generate_keywords, inserted, NCERT_CONTENT_APPLY_COST_CAP, is_peak
-    )
-    for section_id, keywords in kw_results:
-        try:
-            await async_client.patch(
-                f"{SUPABASE_URL}/rest/v1/ncert_sections", headers={**ADMIN_HEADERS, "Content-Type": "application/json"},
-                params={"id": f"eq.{section_id}"}, json={"keywords": keywords},
-            )
-        except Exception:
-            pass
+    attempted, kw_cost = await _ncert_content_generate_keywords_concurrent(inserted, NCERT_CONTENT_APPLY_COST_CAP, is_peak)
+    sections_by_id = {r["id"]: r for r in inserted}
+    kw_results = [(a["id"], a["keywords"]) for a in attempted if a["ok"]]
+    keywords_incomplete = len(kw_results) < len(inserted)
+    # chapter_title, never write_chapter_label -- by now the exists-and-overwrite rename above has
+    # already landed, so chapter_title is the row's real, current chapter value in the DB.
+    await _ncert_content_write_keywords_batch(cls, subject, chapter_title, sections_by_id, kw_results)
     if kw_cost:
         try:
             await log_provider_usage(DEEPSEEK_MODEL, is_peak, 0, 0, kw_cost, "/admin/ncert-content/apply", "")

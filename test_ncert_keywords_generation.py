@@ -6,9 +6,12 @@ is an in-memory fake table, DeepSeek is a fake client (no real network/model cal
 
 Run with: python test_ncert_keywords_generation.py
 """
+import asyncio
 import io
 import os
 import sys
+import threading
+import time
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -172,13 +175,42 @@ def test_dollar_cost_cap_enforced():
     print("\n# Dollar cost cap: a request stops once NCERT_CONTENT_KEYWORDS_COST_CAP is reached")
     # ~200k input tokens/call at the (forced) peak rate costs ~$0.06/call -- 2 calls cross the
     # $0.10 cap, so a 3rd pending section must be left untouched this request.
+    # Keyword calls now run concurrently in batches (NCERT_CONTENT_KEYWORDS_CONCURRENCY) -- with
+    # only 3 sections, a batch size >= 3 would run all of them before the cap is ever checked, so
+    # this test pins concurrency to 1 to isolate the dollar-cap arithmetic itself (unrelated to
+    # concurrency); test_dollar_cost_cap_enforced_across_concurrent_batches below covers the cap
+    # at real (>1) concurrency.
     tc, fake = setup(deepseek_input_tokens=200_000)
-    seed_chapter(fake, [{"heading": f"7.{i} Section {i}", "text": base.CLEAN_PARA, "keywords": None} for i in range(3)])
-    data = call_keywords(tc, mode="all").json()
+    orig_concurrency = server.NCERT_CONTENT_KEYWORDS_CONCURRENCY
+    server.NCERT_CONTENT_KEYWORDS_CONCURRENCY = 1
+    try:
+        seed_chapter(fake, [{"heading": f"7.{i} Section {i}", "text": base.CLEAN_PARA, "keywords": None} for i in range(3)])
+        data = call_keywords(tc, mode="all").json()
+    finally:
+        server.NCERT_CONTENT_KEYWORDS_CONCURRENCY = orig_concurrency
     check("no error", not data.get("error"), data)
     check("fewer than all 3 sections were attempted (cost cap reached)", 0 < data.get("calls", 0) < 3, data)
     check("capped is reported true", data.get("capped") is True, data)
     check("cost stayed near the $0.10 cap, not the full 3-section cost", data.get("cost", 0) < 0.15, data.get("cost"))
+
+
+def test_dollar_cost_cap_enforced_across_concurrent_batches():
+    print("\n# Dollar cost cap still stops a later batch at real (>1) concurrency")
+    # 9 sections, concurrency 3, ~$0.06/call -- batch 1 (3 calls, ~$0.18) already clears the
+    # $0.10 cap, so batch 2 (sections 4-6) and batch 3 (7-9) must never start.
+    tc, fake = setup(deepseek_input_tokens=200_000)
+    orig_concurrency = server.NCERT_CONTENT_KEYWORDS_CONCURRENCY
+    server.NCERT_CONTENT_KEYWORDS_CONCURRENCY = 3
+    try:
+        seed_chapter(fake, [{"heading": f"7.{i} Section {i}", "text": base.CLEAN_PARA, "keywords": None} for i in range(9)])
+        data = call_keywords(tc, mode="all").json()
+    finally:
+        server.NCERT_CONTENT_KEYWORDS_CONCURRENCY = orig_concurrency
+    check("no error", not data.get("error"), data)
+    check("exactly one batch (3 calls) ran before the cap stopped the next one", data.get("calls") == 3, data)
+    check("all 3 in that batch succeeded", data.get("succeeded") == 3, data)
+    check("capped is reported true", data.get("capped") is True, data)
+    check("6 sections remain for a follow-up request", data.get("remaining") == 6, data)
 
 
 def test_cost_and_model_calls_logged_to_chapter_log():
@@ -196,6 +228,72 @@ def test_cost_and_model_calls_logged_to_chapter_log():
     check("model_calls matches succeeded count", row.get("model_calls") == data.get("succeeded"), (row, data))
     check("cost matches the response's cost", row.get("keywords_cost_usd") == data.get("cost"), (row, data))
     check("model is recorded", row.get("model") == server.DEEPSEEK_MODEL, row)
+
+
+def test_concurrent_helper_runs_in_parallel_and_isolates_failures():
+    print("\n# _ncert_content_generate_keywords_concurrent: calls actually overlap, one failure doesn't block the rest")
+    setup()  # only needed to reset server globals; this test calls the helper directly
+    sections = [{"id": i, "heading": f"S{i}", "text": base.CLEAN_PARA} for i in range(6)]
+
+    lock = threading.Lock()
+    state = {"active": 0, "max_active": 0}
+
+    def fake_gen(client, heading, text, is_peak):
+        with lock:
+            state["active"] += 1
+            state["max_active"] = max(state["max_active"], state["active"])
+        try:
+            if heading == "S3":
+                raise RuntimeError("simulated DeepSeek failure")
+            time.sleep(0.05)  # long enough that overlapping calls will measurably overlap
+            return "kw", 0.001
+        finally:
+            with lock:
+                state["active"] -= 1
+
+    orig_gen = server.ncert_ingest_core_mod.generate_keywords_with_cost
+    orig_concurrency = server.NCERT_CONTENT_KEYWORDS_CONCURRENCY
+    server.ncert_ingest_core_mod.generate_keywords_with_cost = fake_gen
+    server.NCERT_CONTENT_KEYWORDS_CONCURRENCY = 4
+    try:
+        attempted, total_cost = asyncio.run(
+            server._ncert_content_generate_keywords_concurrent(sections, 10.0, False)
+        )
+    finally:
+        server.ncert_ingest_core_mod.generate_keywords_with_cost = orig_gen
+        server.NCERT_CONTENT_KEYWORDS_CONCURRENCY = orig_concurrency
+
+    check("all 6 sections attempted", len(attempted) == 6, attempted)
+    check("order preserved (same order as input)", [a["heading"] for a in attempted] == [f"S{i}" for i in range(6)], attempted)
+    failed = next(a for a in attempted if a["heading"] == "S3")
+    check("the one failing section is marked not-ok, keywords None", failed["ok"] is False and failed["keywords"] is None, failed)
+    check("the other 5 succeeded despite the failure", sum(a["ok"] for a in attempted) == 5, attempted)
+    check("cost only reflects the 5 successful calls", abs(total_cost - 0.005) < 1e-9, total_cost)
+    check("calls actually overlapped in time (concurrency > 1 observed)", state["max_active"] > 1, state)
+
+
+def test_batch_write_matches_row_by_row():
+    print("\n# _ncert_content_write_keywords_batch: one batched upsert lands the same final rows as one PATCH per section would")
+    tc, fake = setup()
+    rows = seed_chapter(fake, [
+        {"heading": "7.1 A", "text": base.CLEAN_PARA, "keywords": None},
+        {"heading": "7.2 B", "text": base.CLEAN_PARA, "keywords": None},
+        {"heading": "7.3 C", "text": base.CLEAN_PARA, "keywords": None},
+    ])
+    sections_by_id = {r["id"]: r for r in rows}
+    kw_results = [(rows[0]["id"], "kw-a"), (rows[1]["id"], "kw-b"), (rows[2]["id"], "kw-c")]
+
+    ok = asyncio.run(server._ncert_content_write_keywords_batch("11", "Biology", "Animal Kingdom", sections_by_id, kw_results))
+    check("batch write reports success", ok is True)
+
+    write_calls = [c for c in fake.calls if c[0] == "POST" and "ncert_sections" in c[1]]
+    check("exactly one DB round trip wrote all 3 rows' keywords", len(write_calls) == 1, write_calls)
+
+    final = fake.table.get({"class": "eq.11", "subject": "eq.Biology", "chapter": "eq.Animal Kingdom", "order": "ordinal"})
+    check("every row's keywords landed, matching what row-by-row PATCHes would have written",
+          [r["keywords"] for r in final] == ["kw-a", "kw-b", "kw-c"], final)
+    check("every row's other columns (heading/text/ordinal) are unchanged by the upsert",
+          [(r["heading"], r["text"], r["ordinal"]) for r in final] == [(r["heading"], r["text"], r["ordinal"]) for r in rows], (final, rows))
 
 
 def test_no_such_chapter_and_bad_inputs_are_plain_string_errors():
@@ -241,7 +339,10 @@ def main():
     test_partial_failure_keeps_failed_section_pending_and_continues()
     test_section_count_cap_enforced()
     test_dollar_cost_cap_enforced()
+    test_dollar_cost_cap_enforced_across_concurrent_batches()
     test_cost_and_model_calls_logged_to_chapter_log()
+    test_concurrent_helper_runs_in_parallel_and_isolates_failures()
+    test_batch_write_matches_row_by_row()
     test_no_such_chapter_and_bad_inputs_are_plain_string_errors()
     test_manual_edit_clears_stale_keywords_regen_overwrites_them()
 
