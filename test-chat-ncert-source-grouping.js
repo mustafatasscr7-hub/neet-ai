@@ -29,7 +29,7 @@ const escapeHtmlBlock = extractBlock(
   '    // ---------------- Match List-I / List-II formatting ----------------'
 );
 
-const exportNames = ['renderNcertSectionsCardHtml'];
+const exportNames = ['renderNcertSectionsCardHtml', 'getActiveNcertQuotes'];
 const sandbox = {
   document: {
     createElement() {
@@ -120,6 +120,32 @@ test('toggle across a section boundary: 2 sections, first visible-then-hidden sp
   assert.strictEqual(countOccurrences(out, 'Section A'), 1, 'Section A is fully within the visible 5, one header: ' + out);
   assert(out.includes('Section B'), 'Section B header should appear in the hidden "rest" block: ' + out);
   assert(out.includes('Show 1 more'), 'expected a toggle for the single remaining quote: ' + out);
+});
+
+test('5 quotes from one section show the source exactly once through every render path', () => {
+  const quotes = Array.from({ length: 5 }, (_, i) => ({
+    quote: `Quote number ${i + 1} of five total`,
+    citation: 'Biological Classification - 2.2.5 Protozoans'
+  }));
+  // "Live" path: renderNcertSectionsCardHtml called directly on the quotes the NCSEC trailer
+  // just decoded (see newNcertSectionsQuotes in chat.html's streaming completion).
+  const liveCard = mod.renderNcertSectionsCardHtml(quotes);
+  // "Version switch" path: the quotes live on the version object itself (see the versions[]
+  // render at bubble.innerHTML = ... + renderNcertSectionsCardHtml(v.ncertQuotes)).
+  const msg = { versions: [{ text: 'v0', ncertQuotes: quotes }], activeVersionIndex: 0 };
+  const versionSwitchCard = mod.renderNcertSectionsCardHtml(msg.versions[msg.activeVersionIndex].ncertQuotes);
+  // "History reload" path: same message, read back through getActiveNcertQuotes the way
+  // addMessageRow does on a fresh page load.
+  const reloadCard = mod.renderNcertSectionsCardHtml(mod.getActiveNcertQuotes(msg));
+
+  for (const [name, out] of [['live', liveCard], ['version switch', versionSwitchCard], ['reload', reloadCard]]) {
+    assert.strictEqual(countOccurrences(out, 'ncert-sections-card-citation'), 1,
+      `${name} render: expected exactly one source line: ${out}`);
+    assert(out.includes('Biological Classification - 2.2.5 Protozoans'), `${name} render: source text missing: ${out}`);
+    assert.strictEqual(countOccurrences(out, 'ncert-sections-card-quote'), 5, `${name} render: all 5 quotes should render: ${out}`);
+  }
+  assert.strictEqual(liveCard, versionSwitchCard, 'live and version-switch renders must be identical');
+  assert.strictEqual(versionSwitchCard, reloadCard, 'version-switch and reload renders must be identical');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
