@@ -289,7 +289,9 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 # Service-role key bypasses RLS for admin writes — falls back to the anon key if not set,
 # but admin updates may fail under RLS until a real service_role key is added.
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", SUPABASE_KEY)
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "neetai-admin-2027")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
+if not ADMIN_PASSWORD:
+    print("ADMIN_PASSWORD is not set -- every admin login will be refused until it is configured.", flush=True)
 # Direct, real-time channel for the one alert that can't wait for someone to next open a Sentry
 # dashboard -- see _alert_all_providers_down below. Both unset (e.g. local dev, or before a bot is
 # set up) makes that alert's Telegram half a silent no-op, same fail-open shape as SENTRY_DSN above.
@@ -8636,7 +8638,7 @@ async def stream_solve_response_with_diagram(req: SolveRequest, cached_solution,
         # fallback exists here either, same reasoning as _stream_gemini_media) -- this is that
         # path's own equivalent "fully exhausted" point.
         await _alert_all_providers_down("/solve (diagram)", e, req.user_id)
-        yield f"Error: {str(e)}"
+        yield _error_stream_chunk(req.language)
 
 @app.post("/solve")
 async def solve_question(req: SolveRequest, request: Request, _: None = Depends(rate_limit(15, 60, by="account")), verified_user_id: str = Depends(_get_verified_user_id)):
@@ -10266,7 +10268,8 @@ async def admin_set_user_plan(req: SetUserPlanRequest, _: None = Depends(verify_
                 result["referral_reward"] = referral_reward
         return result
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN SET USER PLAN ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 # ---------------- Referral program: student-facing endpoints ----------------
 @app.get("/referral/my-code")
@@ -10392,7 +10395,8 @@ async def admin_pyq_stats(_: None = Depends(verify_admin)):
             "empty_chapter": empty_chapter
         }
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN PYQ STATS ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 @app.get("/admin/pyq-chapters")
 async def admin_pyq_chapters(subject: str, _: None = Depends(verify_admin_or_contractor_pdf)):
@@ -10442,7 +10446,8 @@ async def admin_pyq_chapters(subject: str, _: None = Depends(verify_admin_or_con
         chapters = sorted(set(r["chapter"].strip() for r in rows if r.get("chapter") and r["chapter"].strip()))
         return {"chapters": chapters}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN PYQ CHAPTERS ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 @app.get("/admin/pyq-search")
 async def admin_pyq_search(
@@ -10629,7 +10634,8 @@ async def admin_pyq_search(
             await _attach_pyq_review_warnings(rows)
         return {"rows": rows, "total": total, "page": page, "page_size": page_size}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN PYQ SEARCH ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 # ---------- Contractor upload review (add_pyq_review_status.sql) ----------
 # Contractor uploads land as review_status='pending' and stay out of every student path
@@ -10956,7 +10962,8 @@ async def admin_pyq_contractor_queue_counts(_: None = Depends(verify_admin)):
             "mock_approved": mock_approved,
         }
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN PYQ CONTRACTOR QUEUE COUNTS ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 @app.get("/admin/pyq-review-summary")
 async def admin_pyq_review_summary(_: None = Depends(verify_admin)):
@@ -10992,7 +10999,8 @@ async def admin_pyq_review_summary(_: None = Depends(verify_admin)):
             "batches": list(batches.values())[:100],
         }
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN PYQ REVIEW SUMMARY ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 class PyqReviewRequest(BaseModel):
     ids: List[str]
@@ -11031,7 +11039,8 @@ async def admin_pyq_review(body: PyqReviewRequest, _: None = Depends(verify_admi
         _invalidate_processed_pdfs_cache()  # review_status changed -- affects every Processed PDFs count
         return {"updated": resp.json()}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN PYQ REVIEW ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 # ---------- Reject (error) -- pyq_reject.sql ----------
 # Unlike Delete, a rejected row is kept (full text + options) as proof of what was submitted, just
@@ -11085,7 +11094,8 @@ async def admin_pyq_reject(body: PyqRejectRequest, _: None = Depends(verify_admi
         asyncio.create_task(_recheck_duplicate_flagged_rows(pair))
         return {"updated": row}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN PYQ REJECT ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 class PyqUnrejectRequest(BaseModel):
     id: str
@@ -11121,7 +11131,8 @@ async def admin_pyq_unreject(body: PyqUnrejectRequest, _: None = Depends(verify_
         asyncio.create_task(_recheck_duplicate_flagged_rows(pair))
         return {"updated": row}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN PYQ UNREJECT ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 def _pyq_normalize_question_text(text: Optional[str]) -> str:
     return re.sub(r"\s+", " ", (text or "").strip().lower())
@@ -11210,7 +11221,8 @@ async def admin_pyq_reject_bulk(body: PyqRejectBulkRequest, _: None = Depends(ve
             "already_rejected": len(plan["already_rejected"]),
         }
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN PYQ REJECT BULK ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 async def _pyq_uploaded_total(uploader_name: str) -> int:
     """Same source as the Contractor Queue's permanent 'Uploaded so far' tile (pyq_upload_log) --
@@ -11305,7 +11317,8 @@ async def admin_contractor_tally(_: None = Depends(verify_admin)):
         rows = await asyncio.gather(*(tally_for(name) for name in PYQ_CONTRACTOR_NAMES))
         return {"rows": rows}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN CONTRACTOR TALLY ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 # ---------- PYQ auto-approve (pyq_auto_approve.sql) ----------
 # Trial mode by default: auto_check below only ever sets auto_pass/auto_reasons/auto_checked_at
@@ -11887,7 +11900,8 @@ async def admin_pyq_auto_check(recheck: bool = False, offset: int = 0, _: None =
             counts["remaining"] = len(rows) == 500
         return counts
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN PYQ AUTO CHECK ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 class PyqAutoApproveAllRequest(BaseModel):
     expected_count: int
@@ -11919,7 +11933,8 @@ async def admin_pyq_auto_approve_all(body: PyqAutoApproveAllRequest, _: None = D
         _invalidate_processed_pdfs_cache()
         return {"approved": len(resp.json())}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN PYQ AUTO APPROVE ALL ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 class PyqUnapproveRequest(BaseModel):
     id: str
@@ -11948,7 +11963,8 @@ async def admin_pyq_unapprove(body: PyqUnapproveRequest, _: None = Depends(verif
         _invalidate_processed_pdfs_cache()
         return {"updated": updated[0]}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN PYQ UNAPPROVE ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 PYQ_AUTO_STATS_SELECT = (
     "auto_pass,auto_reasons,question,option_a,option_b,option_c,option_d,language,"
@@ -12015,7 +12031,8 @@ async def admin_pyq_auto_stats(_: None = Depends(verify_admin)):
             "formula_failed": formula_eligible - formula_passed,
         }
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN PYQ AUTO STATS ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 @app.get("/admin/pyq-auto-formula-sample")
 async def admin_pyq_auto_formula_sample(_: None = Depends(verify_admin)):
@@ -12049,7 +12066,8 @@ async def admin_pyq_auto_formula_sample(_: None = Depends(verify_admin)):
         sample = random.sample(candidates, min(30, len(candidates)))
         return {"total_eligible": len(candidates), "sample": sample}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN PYQ AUTO FORMULA SAMPLE ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 # The contractor's side: only their own needs_fix rows, only through the contractor key (never
 # ADMIN_PASSWORD, same isolation as /contractor-pdf-review/verify).
@@ -12083,7 +12101,8 @@ async def contractor_pyq_needs_fix(source: str = "pyq", _: None = Depends(verify
         pending = await _pyq_count({"uploaded_by": "eq.contractor", "review_status": "eq.pending", "source": f"eq.{source}"})
         return {"rows": resp.json(), "pending_count": pending}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"CONTRACTOR PYQ NEEDS FIX ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 # Read-only mirror of /admin/pyq-reject for the contractor's own rows -- never accepts a write,
 # and the filter below (uploader_name=CONTRACTOR_UPLOADER_NAME baked in server-side, never taken
@@ -12135,7 +12154,8 @@ async def contractor_pyq_rejected(source: str = "pyq", _: None = Depends(verify_
             "mock_amount_usd": round(mock_approved * PYQ_PRICE_USD_PER_Q, 2),
         }
     except Exception as e:
-        return {"error": str(e)}
+        print(f"CONTRACTOR PYQ REJECTED ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 class ContractorPyqFix(BaseModel):
     subject: Optional[str] = None
@@ -12195,7 +12215,8 @@ async def contractor_pyq_fix(pyq_id: str, body: ContractorPyqFix, _: None = Depe
             ))
         return {"updated": row}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"CONTRACTOR PYQ FIX ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 @app.patch("/admin/pyq-update/{pyq_id}")
 async def admin_pyq_update(pyq_id: str, body: AdminPyqUpdate, _: None = Depends(verify_admin)):
@@ -12267,7 +12288,8 @@ async def admin_pyq_update(pyq_id: str, body: AdminPyqUpdate, _: None = Depends(
             asyncio.create_task(_recheck_duplicate_flagged_rows(pair))
         return {"updated": row}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN PYQ UPDATE ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 @app.patch("/admin/pyq-bulk-update")
 async def admin_pyq_bulk_update(body: AdminPyqBulkUpdate, _: None = Depends(verify_admin)):
@@ -12300,7 +12322,8 @@ async def admin_pyq_bulk_update(body: AdminPyqBulkUpdate, _: None = Depends(veri
                 asyncio.create_task(_recheck_duplicate_flagged_rows(pairs))
         return {"updated_count": len(updated)}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN PYQ BULK UPDATE ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 async def _log_pyq_delete(pyq_id: Optional[str], uploader_name: Optional[str]):
     """One pyq_delete_log row per permanently-deleted PYQ question -- id + uploader only, no
@@ -12363,7 +12386,8 @@ async def admin_pyq_delete(pyq_id: str, _: None = Depends(verify_admin)):
         # that data still exists once the request completes.
         return {"success": True, "deleted": deleted[0]}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN PYQ DELETE ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 # ---------- Difficulty classification (Easy/Moderate/Difficult), cached permanently ----------
 # Computed once per question by DeepSeek-V4-Flash, never recomputed once the difficulty column
@@ -12526,7 +12550,8 @@ async def admin_backfill_difficulty(table: str = "pyq", limit: int = 200, _: Non
             return {"error": resp.text}
         rows = resp.json()
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN BACKFILL DIFFICULTY ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
     if not rows:
         return {"classified": 0, "failed": 0, "remaining_null": 0, "tokens_used": 0}
@@ -12717,7 +12742,8 @@ async def admin_pyq_backfill_correct_answer(limit: int = 200, _: None = Depends(
             return {"error": resp.text}
         rows = resp.json()
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN PYQ BACKFILL CORRECT ANSWER ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
     if not rows:
         return {"resolved": 0, "failed": 0, "remaining_blank": 0, "tokens_used": 0}
@@ -13176,8 +13202,9 @@ def admin_scan_pdf(req: ScanPdfRequest, _: None = Depends(verify_admin_or_contra
         else:
             result = scan_book_pdf_bytes(pdf_bytes, req.subject) if req.layout == "3col_book" else scan_pdf_bytes(pdf_bytes, req.subject)
     except Exception as e:
-        _update_processed_pdf_row(processed_pdf_id, "failed", error_message=str(e))
-        return {"error": str(e)}
+        print(f"ADMIN SCAN PDF ERROR: {e}", flush=True)
+        _update_processed_pdf_row(processed_pdf_id, "failed", error_message="Something went wrong")
+        return {"error": "Something went wrong"}
     if result.get("error"):
         _update_processed_pdf_row(processed_pdf_id, "failed", error_message=result["error"])
     else:
@@ -13299,7 +13326,8 @@ def start_scan_job(pdf_bytes, subject, layout, role, on_finish=None, scan_fn=Non
                             _scan_jobs[job_id]["message"] = "Parsing pages..."
                     result = scan_fn(pdf_bytes, subject)
             except Exception as e:
-                result = {"error": str(e)}
+                print(f"SCAN JOB ERROR: {e}", flush=True)
+                result = {"error": "Something went wrong"}
             if on_finish:
                 try:
                     on_finish(result)
@@ -13395,7 +13423,8 @@ def admin_scan_pdf_estimate(req: ScanPdfEstimateRequest, _: None = Depends(verif
         pdf_bytes = base64.b64decode(req.data)
         return estimate_scanned_pdf_cost(pdf_bytes, req.subject, language=req.language)
     except Exception as e:
-        return {"error": f"Could not read PDF: {e}"}
+        print(f"ADMIN SCAN PDF ESTIMATE ERROR: {e}", flush=True)
+        return {"error": "Could not read PDF."}
 
 @app.get("/admin/pyq-classifier-data")
 async def admin_pyq_classifier_data(subject: str, source: str = "pyq", _: None = Depends(verify_admin_or_contractor_pdf)):
@@ -13458,7 +13487,8 @@ async def admin_pyq_classifier_data(subject: str, source: str = "pyq", _: None =
         # skips rows with no chapter since they're useless as labeled training examples.
         return {"rows": all_rows}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN PYQ CLASSIFIER DATA ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 # Shared by both diagram-upload endpoints below. Real cross-endpoint audit (2026-09-17): SVG's
 # storage/display path was confirmed clean end-to-end (correct content-type, byte-identical
@@ -13498,7 +13528,8 @@ async def admin_pyq_diagram_upload(body: DiagramUploadRequest, _: None = Depends
             return {"error": response.text}
         return {"url": f"{SUPABASE_URL}/storage/v1/object/public/Q-Daigrams-BIO/{path}"}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN PYQ DIAGRAM UPLOAD ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 DIAGRAMS_BUCKET = "ncert-daigrams"  # bucket name as actually created in Supabase (matches the existing Q-Daigrams-BIO typo convention)
 
@@ -13532,7 +13563,8 @@ async def admin_diagram_upload(body: DiagramUploadRequest, _: None = Depends(ver
             return {"error": f"Storage upload failed (is the '{DIAGRAMS_BUCKET}' bucket created and public?): {response.text}"}
         return {"url": f"{SUPABASE_URL}/storage/v1/object/public/{DIAGRAMS_BUCKET}/{path}"}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN DIAGRAM UPLOAD ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 class KrutiDevConvertRequest(BaseModel):
     text: str
@@ -14158,7 +14190,8 @@ async def admin_diagrams_create(body: DiagramCreate, _: None = Depends(verify_ad
         created = response.json()
         return {"diagram": created[0] if created else None}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN DIAGRAMS CREATE ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 @app.get("/admin/diagrams-list")
 async def admin_diagrams_list(_: None = Depends(verify_admin)):
@@ -14176,7 +14209,8 @@ async def admin_diagrams_list(_: None = Depends(verify_admin)):
             return {"error": response.text}
         return {"diagrams": response.json()}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN DIAGRAMS LIST ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 @app.patch("/admin/diagram-update/{diagram_id}")
 async def admin_diagram_update(diagram_id: int, body: DiagramUpdate, _: None = Depends(verify_admin)):
@@ -14251,7 +14285,8 @@ async def admin_diagram_update(diagram_id: int, body: DiagramUpdate, _: None = D
             return {"error": "Row not found"}
         return {"updated": updated[0]}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN DIAGRAM UPDATE ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 @app.delete("/admin/diagram-delete/{diagram_id}")
 async def admin_diagram_delete(diagram_id: int, _: None = Depends(verify_admin)):
@@ -14288,7 +14323,8 @@ async def admin_diagram_delete(diagram_id: int, _: None = Depends(verify_admin))
             return {"error": "Row not found"}
         return {"success": True}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN DIAGRAM DELETE ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 # One-off/ongoing backfill for diagram rows created before embedding generation existed (or any
 # future edge case, e.g. a manual DB import) -- diagrams-create and diagram-update both keep the
@@ -14318,7 +14354,8 @@ async def admin_diagrams_backfill_embeddings(_: None = Depends(verify_admin)):
                 updated += 1
         return {"updated": updated, "total_missing": len(rows)}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN DIAGRAMS BACKFILL EMBEDDINGS ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 # One-off/ongoing backfill, same role as diagrams-backfill-embeddings above -- covers rows from
 # before embedding-on-create existed (the 2026-08 gap this whole feature was built to close) and
@@ -14360,7 +14397,8 @@ async def admin_pyq_backfill_embeddings(batch_size: int = 200, _: None = Depends
                 updated += 1
         return {"updated": updated, "batch_size": len(rows), "done": len(rows) < batch_size}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN PYQ BACKFILL EMBEDDINGS ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 # Fire-and-forget embedding generation for one freshly-created pyq row -- scheduled via
 # asyncio.create_task() from admin_pyq_bulk_create below rather than awaited, same pattern
@@ -14537,7 +14575,8 @@ async def admin_pyq_bulk_create(body: PyqBulkCreate, role: str = Depends(verify_
         asyncio.create_task(_auto_check_new_rows_background(created))
         return {"created": created, "batch_id": batch_id}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN PYQ BULK CREATE ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 # ---------- Admin: Mocks panel (admin-pyq-preview.html) -- publish a fixed mock exam ----------
 # admin only (verify_admin, never verify_admin_or_contractor_pdf -- a contractor key must never
@@ -14694,7 +14733,8 @@ def admin_pdf_check_status(filename: str, _: None = Depends(verify_admin_or_cont
         rows = response.json()
         return {"previous": rows[0] if rows else None}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN PDF CHECK STATUS ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 _CHAPTER_NUM_FROM_FILENAME_RE = re.compile(r'chapter\s*[-_ ]?\s*(\d+)', re.IGNORECASE)
 
@@ -14943,7 +14983,8 @@ async def admin_processed_pdfs(force: bool = False, offset: int = 0, limit: int 
                 _processed_pdfs_base_rows_and_gaps(), _pdf_list_stats_via_rpc()
             )
         except Exception as e:
-            return {"error": str(e)}
+            print(f"ADMIN PROCESSED PDFS ERROR: {e}", flush=True)
+            return {"error": "Something went wrong"}
         _PROCESSED_PDFS_CACHE["base_rows"] = base_rows
         _PROCESSED_PDFS_CACHE["gaps"] = gaps
         _PROCESSED_PDFS_CACHE["stats_map"] = stats_map
@@ -15008,7 +15049,8 @@ async def admin_remove_processed_pdf(pdf_id: int, role: str = Depends(verify_adm
         _invalidate_processed_pdfs_cache()  # next list read re-fetches instead of showing a removed row
         return {"success": True}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN REMOVE PROCESSED PDF ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 @app.post("/admin/processed-pdfs/{pdf_id}/restore")
 async def admin_restore_processed_pdf(pdf_id: int, role: str = Depends(verify_admin_or_contractor_pdf)):
@@ -15035,7 +15077,8 @@ async def admin_restore_processed_pdf(pdf_id: int, role: str = Depends(verify_ad
         _invalidate_processed_pdfs_cache()
         return {"success": True}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN RESTORE PROCESSED PDF ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 @app.post("/admin/processed-pdfs/manual")
 async def admin_add_manual_processed_pdf(body: ManualProcessedPdfRequest, role: str = Depends(verify_admin_or_contractor_pdf)):
@@ -15068,7 +15111,8 @@ async def admin_add_manual_processed_pdf(body: ManualProcessedPdfRequest, role: 
         _invalidate_processed_pdfs_cache()
         return {"success": True, "pdf": rows[0]}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN ADD MANUAL PROCESSED PDF ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 # ---------- Admin: official mock test upload pipeline (admin-mocktest-upload.html) ----------
 
@@ -15143,8 +15187,9 @@ def admin_mock_test_scan(req: MockTestScanRequest, _: None = Depends(verify_admi
     try:
         result = scan_mock_test_pdf(pdf_bytes, ranges)
     except Exception as e:
-        _update_mock_test_row(mock_test_id, "failed", error_message=str(e))
-        return {"error": str(e)}
+        print(f"ADMIN MOCK TEST SCAN ERROR: {e}", flush=True)
+        _update_mock_test_row(mock_test_id, "failed", error_message="Something went wrong")
+        return {"error": "Something went wrong"}
     if result.get("errors"):
         import json
         _update_mock_test_row(mock_test_id, "failed", error_message=json.dumps(result["errors"]))
@@ -15191,7 +15236,8 @@ async def admin_mock_test_bulk_create(body: MockTestBulkCreate, _: None = Depend
             return {"error": response.text}
         return {"created": response.json()}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN MOCK TEST BULK CREATE ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 @app.patch("/admin/mock-test-question-update/{question_id}")
 async def admin_mock_test_question_update(question_id: int, body: MockTestQuestionUpdate, _: None = Depends(verify_admin)):
@@ -15245,7 +15291,8 @@ async def admin_mock_test_question_update(question_id: int, body: MockTestQuesti
             return {"error": "Row not found"}
         return {"updated": updated[0]}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN MOCK TEST QUESTION UPDATE ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 @app.post("/admin/mock-test-mark-processed")
 def admin_mock_test_mark_processed(req: MockTestMarkProcessedRequest, _: None = Depends(verify_admin)):
@@ -15271,7 +15318,8 @@ def admin_mock_test_publish(req: MockTestPublishRequest, _: None = Depends(verif
             return {"error": response.text}
         return {"success": True}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN MOCK TEST PUBLISH ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 @app.get("/admin/mock-test-check-status")
 def admin_mock_test_check_status(filename: str, _: None = Depends(verify_admin)):
@@ -15291,7 +15339,8 @@ def admin_mock_test_check_status(filename: str, _: None = Depends(verify_admin))
         rows = response.json()
         return {"previous": rows[0] if rows else None}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN MOCK TEST CHECK STATUS ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 @app.get("/admin/mock-tests")
 def admin_mock_tests_list(_: None = Depends(verify_admin)):
@@ -15309,7 +15358,8 @@ def admin_mock_tests_list(_: None = Depends(verify_admin)):
             return {"error": response.text}
         return {"tests": response.json()}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN MOCK TESTS LIST ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 @app.get("/admin/pdf-upload-history")
 def admin_pdf_upload_history(_: None = Depends(verify_admin)):
@@ -15352,7 +15402,8 @@ def admin_pdf_upload_history(_: None = Depends(verify_admin)):
         )
         return {"pdfs": result}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN PDF UPLOAD HISTORY ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 import re
 import uuid
@@ -15476,7 +15527,8 @@ def admin_pyq_duplicates(threshold: float = 0.5, _: None = Depends(verify_admin)
         pairs.sort(key=lambda p: p["overlap"], reverse=True)
         return {"rows": rows_by_id, "pairs": pairs, "rows_scanned": len(all_rows), "threshold": threshold}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN PYQ DUPLICATES ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 class DismissDuplicateRequest(BaseModel):
     id_a: str
@@ -15498,7 +15550,8 @@ def admin_pyq_dismiss_duplicate(req: DismissDuplicateRequest, _: None = Depends(
             return {"error": response.text}
         return {"success": True}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN PYQ DISMISS DUPLICATE ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 def _pyq_match_status(other: dict) -> str:
     """Admin-facing status label for one /admin/pyq-matches row. A soft-deactivated row
@@ -15571,7 +15624,8 @@ async def admin_pyq_matches(id: str, _: None = Depends(verify_admin)):
             return {"error": "could not read the duplicate corpus"}
         return _pyq_build_dup_matches(target, corpus)
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN PYQ MATCHES ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 class PyqClearDuplicateFlagRequest(BaseModel):
     id: str
@@ -15611,7 +15665,8 @@ async def admin_pyq_clear_duplicate_flag(body: PyqClearDuplicateFlagRequest, _: 
             return {"error": "Row not found"}
         return {"updated": updated[0]}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN PYQ CLEAR DUPLICATE FLAG ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 # ---------- Contractor Queue "Duplicates" button ----------
 # Checks the contractor's still-pending uploads against the whole bank AND the rest of the
@@ -15781,7 +15836,8 @@ async def admin_pyq_contractor_duplicates(_: None = Depends(verify_admin)):
         return {"flagged": flagged, "rows": rows_by_id, "checked": len(to_check), "flagged_count": len(flagged),
                 "threshold": CONTRACTOR_DUP_THRESHOLD}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN PYQ CONTRACTOR DUPLICATES ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 @app.get("/admin/question-reports")
 async def admin_question_reports(resolved: str = "false", _: None = Depends(verify_admin)):
@@ -15850,7 +15906,8 @@ async def admin_question_reports(resolved: str = "false", _: None = Depends(veri
         groups.sort(key=lambda g: g["count"], reverse=True)
         return {"groups": groups}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN QUESTION REPORTS ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 @app.patch("/admin/question-reports/{pyq_id}/resolve")
 async def admin_resolve_question_reports(pyq_id: str, _: None = Depends(verify_admin)):
@@ -15865,7 +15922,8 @@ async def admin_resolve_question_reports(pyq_id: str, _: None = Depends(verify_a
             return {"error": response.text}
         return {"success": True, "resolved_count": len(response.json())}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN RESOLVE QUESTION REPORTS ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 @app.patch("/admin/question-reports/{pyq_id}/approve")
 async def admin_approve_question_report(pyq_id: str, _: None = Depends(verify_admin)):
@@ -15904,7 +15962,8 @@ async def admin_approve_question_report(pyq_id: str, _: None = Depends(verify_ad
             return {"error": resolve_resp.text}
         return {"success": True, "resolved_count": len(resolve_resp.json())}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN APPROVE QUESTION REPORT ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 # Mirrors /admin/question-reports exactly, grouped by diagram_id instead of pyq_id and joined
 # against the diagrams table instead of pyq -- surfaces in admin-pyq-preview.html's existing
@@ -15967,7 +16026,8 @@ async def admin_diagram_reports(resolved: str = "false", _: None = Depends(verif
         groups.sort(key=lambda g: g["count"], reverse=True)
         return {"groups": groups}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN DIAGRAM REPORTS ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 @app.patch("/admin/diagram-reports/{diagram_id}/resolve")
 async def admin_resolve_diagram_reports(diagram_id: int, _: None = Depends(verify_admin)):
@@ -15982,7 +16042,8 @@ async def admin_resolve_diagram_reports(diagram_id: int, _: None = Depends(verif
             return {"error": response.text}
         return {"success": True, "resolved_count": len(response.json())}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN RESOLVE DIAGRAM REPORTS ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
 # ---------- Response feedback (thumbs up/down) + admin Feedback review ----------
 # chat.html votes go through these endpoints (the mobile app still writes response_feedback
@@ -16672,7 +16733,8 @@ async def admin_ncert_content_list(_: None = Depends(verify_admin)):
             return {"error": "Could not load NCERT content."}
         rows = resp.json()
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN NCERT CONTENT LIST ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
 
     chapters = {}
     order = []
@@ -16750,7 +16812,8 @@ async def admin_ncert_content_get_chapter(
             return {"error": "Could not load this chapter."}
         rows = resp.json()
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN NCERT CONTENT GET CHAPTER ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
     if not rows:
         return {"error": "No such chapter."}
     return {"class": class_, "subject": subject, "chapter": chapter, "sections": rows}
@@ -16850,7 +16913,8 @@ async def admin_ncert_content_verify(request: Request, _: None = Depends(verify_
             return {"error": "Could not load this chapter."}
         sections = resp.json()
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN NCERT CONTENT VERIFY ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
     if not sections:
         return {"error": "No such chapter."}
 
@@ -16858,7 +16922,8 @@ async def admin_ncert_content_verify(request: Request, _: None = Depends(verify_
     try:
         verify = await loop.run_in_executor(None, ncert_verify_mod.verify_text_coverage, pdf_bytes, sections)
     except Exception as e:
-        return {"error": f"Could not extract this PDF: {e}"}
+        print(f"ADMIN NCERT CONTENT VERIFY ERROR: {e}", flush=True)
+        return {"error": "Could not extract this PDF."}
     decided_keys = await _ncert_verify_decided_keys(cls, subject, chapter)
     _apply_verify_decisions(verify, decided_keys)
 
@@ -16926,7 +16991,8 @@ async def admin_ncert_content_verify_mark_ok(request: Request, _: None = Depends
         if resp.status_code >= 400:
             return {"error": "Could not save this decision."}
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN NCERT CONTENT VERIFY MARK OK ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
     return {"ok": True}
 
 @app.post("/admin/ncert-content/preview")
@@ -16956,7 +17022,8 @@ async def admin_ncert_content_preview(request: Request, _: None = Depends(verify
     try:
         result = await loop.run_in_executor(None, ncert_ingest_core_mod.process_chapter_pdf_bytes, pdf_bytes)
     except Exception as e:
-        return {"error": f"Could not extract this PDF: {e}"}
+        print(f"ADMIN NCERT CONTENT PREVIEW ERROR: {e}", flush=True)
+        return {"error": "Could not extract this PDF."}
 
     chapter_title = result["chapter_title"]
     exists = await _ncert_content_chapter_exists(cls, subject, chapter_title) if chapter_title else False
@@ -16971,8 +17038,9 @@ async def admin_ncert_content_preview(request: Request, _: None = Depends(verify
             decided_keys = await _ncert_verify_decided_keys(cls, subject, chapter_title) if chapter_title else set()
             _apply_verify_decisions(verify, decided_keys)
         except Exception as e:
+            print(f"ADMIN NCERT CONTENT PREVIEW ERROR: {e}", flush=True)
             verify = {
-                "status": "FAIL", "summary": f"Could not run the text cross-check: {e}",
+                "status": "FAIL", "summary": "Could not run the text cross-check.",
                 "total_words": 0, "kept_words": 0, "coverage_pct": 0.0, "word_diff": 0, "word_diff_pct": 0.0,
                 "dropped_lines_count": 0, "differences": [], "counts": {"real": 0, "harmless": 0, "by_type": {}},
             }
@@ -17123,7 +17191,8 @@ async def admin_ncert_content_generate_keywords(request: Request, _: None = Depe
             return {"error": "Could not load this chapter."}
         sections = resp.json()
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN NCERT CONTENT GENERATE KEYWORDS ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
     if not sections:
         return {"error": "No such chapter."}
 
@@ -17295,7 +17364,8 @@ async def admin_ncert_content_preview_reverify(request: Request, _: None = Depen
             _sections_for_verify(preview["sections"]), bool(preview.get("edited")),
         )
     except Exception as e:
-        return {"error": f"Could not run the text cross-check: {e}"}
+        print(f"ADMIN NCERT CONTENT PREVIEW REVERIFY ERROR: {e}", flush=True)
+        return {"error": "Could not run the text cross-check."}
     decided_keys = await _ncert_verify_decided_keys(preview["class"], preview["subject"], preview["chapter_title"]) if preview["chapter_title"] else set()
     _apply_verify_decisions(verify, decided_keys)
     preview["verify"] = verify
@@ -17339,8 +17409,9 @@ async def admin_ncert_content_preview_edit(request: Request, _: None = Depends(v
             None, ncert_verify_mod.verify_text_coverage, preview["pdf_bytes"], _sections_for_verify(new_sections), True,
         )
     except Exception as e:
+        print(f"ADMIN NCERT CONTENT PREVIEW EDIT ERROR: {e}", flush=True)
         verify = {
-            "status": "FAIL", "summary": f"Could not run the text cross-check: {e}",
+            "status": "FAIL", "summary": "Could not run the text cross-check.",
             "total_words": 0, "kept_words": 0, "coverage_pct": 0.0, "word_diff": 0, "word_diff_pct": 0.0,
             "dropped_lines_count": 0, "differences": [], "counts": {"real": 0, "harmless": 0, "informational": 0, "by_type": {}},
         }
@@ -17397,7 +17468,8 @@ async def admin_ncert_content_chapter_edit(request: Request, _: None = Depends(v
             return {"error": "Could not load this chapter."}
         sections = resp.json()
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN NCERT CONTENT CHAPTER EDIT ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
     if not sections:
         return {"error": "No such chapter."}
 
@@ -17436,7 +17508,8 @@ async def _write_chapter_sections_safely(cls: str, subject: str, chapter: str, s
             return {"error": f"Could not save these changes: {insert_resp.text}"}
         inserted = insert_resp.json()
     except Exception as e:
-        return {"error": f"Could not save these changes: {e}"}
+        print(f"WRITE CHAPTER SECTIONS SAFELY ERROR: {e}", flush=True)
+        return {"error": "Could not save these changes."}
 
     if len(inserted) != len(rows):
         try:
@@ -17456,7 +17529,8 @@ async def _write_chapter_sections_safely(cls: str, subject: str, chapter: str, s
         if del_resp.status_code >= 400:
             return {"error": f"Wrote the edited sections but could not remove the old ones: {del_resp.text}. Contact an engineer before retrying."}
     except Exception as e:
-        return {"error": f"Wrote the edited sections but could not remove the old ones: {e}. Contact an engineer before retrying."}
+        print(f"WRITE CHAPTER SECTIONS SAFELY ERROR: {e}", flush=True)
+        return {"error": "Wrote the edited sections but could not remove the old ones. Contact an engineer before retrying."}
     try:
         rename_resp = await async_client.patch(
             f"{SUPABASE_URL}/rest/v1/ncert_sections", headers={**ADMIN_HEADERS, "Content-Type": "application/json"},
@@ -17466,7 +17540,8 @@ async def _write_chapter_sections_safely(cls: str, subject: str, chapter: str, s
         if rename_resp.status_code >= 400:
             return {"error": f"Wrote the edited sections but could not finalize the chapter name: {rename_resp.text}. Contact an engineer before retrying."}
     except Exception as e:
-        return {"error": f"Wrote the edited sections but could not finalize the chapter name: {e}. Contact an engineer before retrying."}
+        print(f"WRITE CHAPTER SECTIONS SAFELY ERROR: {e}", flush=True)
+        return {"error": "Wrote the edited sections but could not finalize the chapter name. Contact an engineer before retrying."}
 
     _invalidate_ncert_content_sections_cache()
     await _log_ncert_chapter_event(
@@ -17522,7 +17597,8 @@ async def admin_ncert_content_chapter_save_all(request: Request, _: None = Depen
             return {"error": "Could not load this chapter."}
         sections = resp.json()
     except Exception as e:
-        return {"error": str(e)}
+        print(f"ADMIN NCERT CONTENT CHAPTER SAVE ALL ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
     if not sections:
         return {"error": "No such chapter."}
 
@@ -17598,7 +17674,8 @@ async def admin_ncert_content_chapter_rename(request: Request, _: None = Depends
             return {"error": f"Could not rename this chapter: {resp.text}"}
         rows = resp.json()
     except Exception as e:
-        return {"error": f"Could not rename this chapter: {e}"}
+        print(f"ADMIN NCERT CONTENT CHAPTER RENAME ERROR: {e}", flush=True)
+        return {"error": "Could not rename this chapter."}
 
     result = rows[0] if isinstance(rows, list) and rows else {}
     if not (result.get("sections_updated") or 0):
@@ -17664,7 +17741,8 @@ async def admin_ncert_content_apply(request: Request, _: None = Depends(verify_a
             return {"error": f"Could not write the new sections: {insert_resp.text}"}
         inserted = insert_resp.json()
     except Exception as e:
-        return {"error": f"Could not write the new sections: {e}"}
+        print(f"ADMIN NCERT CONTENT APPLY ERROR: {e}", flush=True)
+        return {"error": "Could not write the new sections."}
 
     if len(inserted) != len(rows):
         try:
@@ -17685,7 +17763,8 @@ async def admin_ncert_content_apply(request: Request, _: None = Depends(verify_a
             if del_resp.status_code >= 400:
                 return {"error": f"Wrote the new sections but could not remove the old chapter: {del_resp.text}. Contact an engineer before retrying."}
         except Exception as e:
-            return {"error": f"Wrote the new sections but could not remove the old chapter: {e}. Contact an engineer before retrying."}
+            print(f"ADMIN NCERT CONTENT APPLY ERROR: {e}", flush=True)
+            return {"error": "Wrote the new sections but could not remove the old chapter. Contact an engineer before retrying."}
         try:
             rename_resp = await async_client.patch(
                 f"{SUPABASE_URL}/rest/v1/ncert_sections", headers={**ADMIN_HEADERS, "Content-Type": "application/json"},
@@ -17695,7 +17774,8 @@ async def admin_ncert_content_apply(request: Request, _: None = Depends(verify_a
             if rename_resp.status_code >= 400:
                 return {"error": f"Wrote the new sections but could not finalize the chapter name: {rename_resp.text}. Contact an engineer before retrying."}
         except Exception as e:
-            return {"error": f"Wrote the new sections but could not finalize the chapter name: {e}. Contact an engineer before retrying."}
+            print(f"ADMIN NCERT CONTENT APPLY ERROR: {e}", flush=True)
+            return {"error": "Wrote the new sections but could not finalize the chapter name. Contact an engineer before retrying."}
 
     is_peak = _is_deepseek_peak_hour()
     attempted, kw_cost = await _ncert_content_generate_keywords_concurrent(inserted, NCERT_CONTENT_APPLY_COST_CAP, is_peak)
@@ -17796,7 +17876,8 @@ async def admin_ncert_content_section(request: Request, _: None = Depends(verify
             return {"error": f"Could not save this section: {resp.text}"}
         written = resp.json()
     except Exception as e:
-        return {"error": f"Could not save this section: {e}"}
+        print(f"ADMIN NCERT CONTENT SECTION ERROR: {e}", flush=True)
+        return {"error": "Could not save this section."}
 
     _invalidate_ncert_content_sections_cache()
 
@@ -17824,7 +17905,8 @@ async def admin_ncert_content_delete_chapter(
             return {"error": f"Could not delete this chapter: {resp.text}"}
         deleted = resp.json()
     except Exception as e:
-        return {"error": f"Could not delete this chapter: {e}"}
+        print(f"ADMIN NCERT CONTENT DELETE CHAPTER ERROR: {e}", flush=True)
+        return {"error": "Could not delete this chapter."}
     if not deleted:
         return {"error": "No such chapter."}
     _invalidate_ncert_content_sections_cache()

@@ -22,6 +22,8 @@ import server
 from fastapi import Depends
 from fastapi.testclient import TestClient
 
+server.ADMIN_PASSWORD = "test-admin-key"  # pragma: allowlist secret -- ADMIN_PASSWORD has no hardcoded default anymore
+
 _passed = []
 _failed = []
 
