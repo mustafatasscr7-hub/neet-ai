@@ -148,5 +148,31 @@ test('5 quotes from one section show the source exactly once through every rende
   assert.strictEqual(versionSwitchCard, reloadCard, 'version-switch and reload renders must be identical');
 });
 
+test('8 quotes from one section: expanded, the source line still appears exactly once (not again after the Show-more split)', () => {
+  const quotes = Array.from({ length: 8 }, (_, i) => ({
+    quote: `Quote number ${i + 1} of eight total`,
+    citation: 'Biological Classification - 2.2.5 Protozoans'
+  }));
+  const out = mod.renderNcertSectionsCardHtml(quotes);
+  assert.strictEqual(countOccurrences(out, 'ncert-sections-card-citation'), 1,
+    'a single section spanning the 5-quote visible/hidden split must still print its source line only once: ' + out);
+  assert(out.includes('Show 3 more'), 'expected a toggle for the remaining 3 quotes: ' + out);
+  assert.strictEqual(countOccurrences(out, 'ncert-sections-card-quote'), 8, 'all 8 quotes should render: ' + out);
+});
+
+test('quotes from two sections (split by the 5-quote cut): two source lines total, collapsed and expanded', () => {
+  const quotes = [
+    ...Array.from({ length: 3 }, (_, i) => ({ quote: `Section A quote ${i + 1}`, citation: 'Section A' })),
+    ...Array.from({ length: 4 }, (_, i) => ({ quote: `Section B quote ${i + 1}`, citation: 'Section B' }))
+  ];
+  const out = mod.renderNcertSectionsCardHtml(quotes);
+  // The toggle only flips style.display on the already-rendered "rest" block -- nothing
+  // re-renders -- so this one HTML string covers both the collapsed and expanded view.
+  assert.strictEqual(countOccurrences(out, 'ncert-sections-card-citation'), 2,
+    'exactly two source lines total; section B\'s header must not repeat when its tail quotes fall past the cut: ' + out);
+  assert(out.includes('Show 2 more'), 'expected a toggle for the remaining 2 quotes: ' + out);
+  assert.strictEqual(countOccurrences(out, 'ncert-sections-card-quote'), 7, 'all 7 quotes should render: ' + out);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);

@@ -3690,29 +3690,44 @@ let selectedImages = [];
     function renderNcertSectionsCardHtml(quotes) {
       if (!quotes || !quotes.length) return '';
       const quoteHtml = q => `<div class="ncert-sections-card-quote">&ldquo;${escapeHtml(q.quote || '')}&rdquo;</div>`;
+      const citationHtml = c => `<div class="ncert-sections-card-citation">${escapeHtml(c)}</div>`;
       // Groups consecutive quotes sharing the same citation so the source shows once above the
       // group instead of repeating after every quote. A run-based group (rather than a full
-      // group-by) is enough since the quotes already arrive ordered by section.
-      const groupsHtml = list => {
-        const groups = [];
-        for (const q of list) {
-          const citation = q.citation || '';
-          const last = groups[groups.length - 1];
-          if (last && last.citation === citation) last.quotes.push(q);
-          else groups.push({ citation, quotes: [q] });
+      // group-by) is enough since the quotes already arrive ordered by section. Grouping runs
+      // over the FULL list before the NCERT_CARD_VISIBLE cut is applied below, so a group that
+      // straddles the visible/hidden boundary still prints its source line exactly once -- in
+      // the visible half -- instead of a second time when "Show N more" reveals the rest of
+      // that same section.
+      const groups = [];
+      for (const q of quotes) {
+        const citation = q.citation || '';
+        const last = groups[groups.length - 1];
+        if (last && last.citation === citation) last.quotes.push(q);
+        else groups.push({ citation, quotes: [q] });
+      }
+      let remainingVisible = NCERT_CARD_VISIBLE;
+      let visibleHtml = '';
+      let restHtml = '';
+      let restCount = 0;
+      for (const g of groups) {
+        const visibleQuotes = g.quotes.slice(0, remainingVisible);
+        const hiddenQuotes = g.quotes.slice(remainingVisible);
+        remainingVisible -= visibleQuotes.length;
+        if (visibleQuotes.length) {
+          visibleHtml += citationHtml(g.citation) + visibleQuotes.map(quoteHtml).join('');
         }
-        return groups.map(g =>
-          `<div class="ncert-sections-card-citation">${escapeHtml(g.citation)}</div>${g.quotes.map(quoteHtml).join('')}`
-        ).join('');
-      };
-      const visibleHtml = groupsHtml(quotes.slice(0, NCERT_CARD_VISIBLE));
-      const rest = quotes.slice(NCERT_CARD_VISIBLE);
-      if (!rest.length) {
+        if (hiddenQuotes.length) {
+          restCount += hiddenQuotes.length;
+          // The citation already printed above (in visibleHtml) for this group -- only repeat
+          // it here if the whole group landed past the cut and never showed it there.
+          restHtml += (visibleQuotes.length ? '' : citationHtml(g.citation)) + hiddenQuotes.map(quoteHtml).join('');
+        }
+      }
+      if (!restCount) {
         return `<div class="ncert-sections-card"><div class="ncert-sections-card-title">From NCERT</div>${visibleHtml}</div>`;
       }
       const restId = `ncert-sections-rest-${++_ncertCardSeq}`;
-      const restHtml = groupsHtml(rest);
-      const toggleHtml = `<div class="ncert-sections-card-toggle" onclick="var r=document.getElementById('${restId}');var h=r.style.display==='none';r.style.display=h?'':'none';this.textContent=h?'Show less':'Show ${rest.length} more';">Show ${rest.length} more</div>`;
+      const toggleHtml = `<div class="ncert-sections-card-toggle" onclick="var r=document.getElementById('${restId}');var h=r.style.display==='none';r.style.display=h?'':'none';this.textContent=h?'Show less':'Show ${restCount} more';">Show ${restCount} more</div>`;
       return `<div class="ncert-sections-card"><div class="ncert-sections-card-title">From NCERT</div>${visibleHtml}<div class="ncert-sections-card-rest" id="${restId}" style="display:none">${restHtml}</div>${toggleHtml}</div>`;
     }
 
