@@ -1067,6 +1067,25 @@ function formatUsageDuration(totalSeconds) {
   return `${localizeNum(h)} ${hUnit} ${localizeNum(m)} ${mUnit}`;
 }
 
+const USAGE_RESET_WEEKDAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+// A "Resets ..." sub-line: once the reset is a full day or more away, an absolute weekday+time
+// reads better than a countdown ("4 d 0 hr" looks like almost no time left); under that, the
+// existing hours/minutes countdown. The absolute time comes from Date's local getters, so it
+// already reflects the viewer's own timezone.
+function formatResetText(totalSeconds) {
+  if (totalSeconds >= 86400) {
+    const target = new Date(Date.now() + totalSeconds * 1000);
+    let hour = target.getHours();
+    const ampm = hour >= 12 ? 'PM' : 'AM';
+    hour = hour % 12 || 12;
+    const minute = String(target.getMinutes()).padStart(2, '0');
+    const datetime = `${USAGE_RESET_WEEKDAY_SHORT[target.getDay()]} ${localizeNum(hour)}:${localizeNum(minute)} ${ampm}`;
+    return t('chat', 'usageResetsAt').replace('{datetime}', datetime);
+  }
+  return t('chat', 'usageResetsIn').replace('{duration}', formatUsageDuration(totalSeconds));
+}
+
 function usageBarColor(percent) {
   if (percent >= 90) return '#ef4444';
   if (percent >= 75) return '#f59e0b';
@@ -1142,7 +1161,7 @@ async function renderUsageSection(isManualRefresh) {
           <div class="usage-bar-fill" style="width:${todayData.unlimited ? 100 : todayPercent}%;background:${todayGradient};"></div>
         </div>
         <div class="usage-section-sub">
-          ${todayData.unlimited ? t('chat', 'usageNoDailyLimit') : t('chat', 'usageResetsIn').replace('{duration}', formatUsageDuration(todayData.reset_in_seconds))}
+          ${todayData.unlimited ? t('chat', 'usageNoDailyLimit') : formatResetText(todayData.reset_in_seconds)}
         </div>
       </div>
 
@@ -1154,7 +1173,7 @@ async function renderUsageSection(isManualRefresh) {
         <div class="usage-bar-track">
           <div class="usage-bar-fill" style="width:${w.unlimited ? 100 : weekPercent}%;background:${weekGradient};"></div>
         </div>
-        <div class="usage-section-sub">${t('chat', 'usageDoubtsInWeek').replace('{n}', localizeNum(w.total_doubts))} &middot; ${t('chat', 'usageResetsIn').replace('{duration}', formatUsageDuration(w.reset_in_seconds))}</div>
+        <div class="usage-section-sub">${formatResetText(w.reset_in_seconds)}</div>
       </div>
     `;
 
