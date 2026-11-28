@@ -180,6 +180,7 @@
     .q-status.rejected { background: #ef444420; color: #ef4444; }
     .q-upload-meta { color: #555; }
     .q-uploader-tag { color: #555; font-style: italic; }
+    .q-manual-mock-tag { color: #4f8ef7; font-weight: 600; }
     .q-warn { font-size: 11px; padding: 3px 9px; border-radius: 20px; font-weight: 600; background: #f59e0b1c; color: #f5b445; text-decoration: none; }
     a.q-warn:hover { text-decoration: underline; }
 
@@ -567,6 +568,9 @@
           <option value="">All batches</option>
         </select>
         <input type="date" id="filterUploadedDate" onchange="onFilterChange()" title="Uploaded on (India time)" hidden/>
+        <select id="filterMock" onchange="onFilterChange()" title="Mock exam -- sorts the list by position">
+          <option value="">All mocks</option>
+        </select>
       </span>
       <label class="check-label"><input type="checkbox" id="filterDiagram" onchange="onFilterChange()"/> Only with uploaded diagram</label>
       <select id="reviewSortOrder" onchange="onFilterChange()" style="display:none">
@@ -656,6 +660,7 @@
   </div>
 
   <script src="./confirm-modal.js"></script>
+  <script src="./mock-question-add.js"></script>
   <script>
     const API_BASE = 'https://neet-ai-production.up.railway.app';
     let adminKey = sessionStorage.getItem('admin_key') || '';
@@ -1342,6 +1347,14 @@
       params.set('page', currentPage);
       params.set('sort_by', 'created_at');
       params.set('sort_dir', reviewMode ? document.getElementById('reviewSortOrder').value : 'desc');
+      // One mock selected -- show it top to bottom the way the paper itself reads, same ordering
+      // contractor-pdf-review.html's own mock filter already sorts its needs-fix/rejected lists by.
+      const mockName = document.getElementById('filterMock').value;
+      if (mockName) {
+        params.set('mock_name', mockName);
+        params.set('sort_by', 'mock_position');
+        params.set('sort_dir', 'asc');
+      }
       params.set('full', 'true');
       params.set('warnings', 'true');
 
@@ -2212,6 +2225,35 @@
       </table></div>`;
     }
 
+    // "Add question above/below" on a mock question's card (mock-question-add.js) -- the button
+    // itself carries mock_name/position as data attributes (not inlined into the onclick string)
+    // so a mock_name with a quote or apostrophe in it can't break the handler, same reasoning as
+    // publishMock/unpublishMock's own tr.dataset.mockName just below.
+    function openMockAddAbove(btn) {
+      MockQuestionAdd.open({
+        mockName: btn.dataset.mockName, neighborPosition: parseInt(btn.dataset.position, 10), direction: 'above',
+        addEndpoint: '/admin/mock-question-add', onSaved: () => loadResults()
+      });
+    }
+    function openMockAddBelow(btn) {
+      MockQuestionAdd.open({
+        mockName: btn.dataset.mockName, neighborPosition: parseInt(btn.dataset.position, 10), direction: 'below',
+        addEndpoint: '/admin/mock-question-add', onSaved: () => loadResults()
+      });
+    }
+
+    // Main review queue's "Mock" filter -- narrows to one mock_name and sorts by position (see
+    // loadResults), so the queue reads top to bottom the way the paper itself does. Populated from
+    // mocksData (already fetched for the Mocks panel above), not a separate call.
+    function populateMockFilter() {
+      const sel = document.getElementById('filterMock');
+      if (!sel) return;
+      const prevValue = sel.value;
+      const names = mocksData.map(m => m.mock_name);
+      sel.innerHTML = '<option value="">All mocks</option>' + names.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('');
+      sel.value = names.includes(prevValue) ? prevValue : '';
+    }
+
     async function loadMocks() {
       const body = document.getElementById('mocksBody');
       const headerSummary = document.getElementById('mocksHeaderSummary');
@@ -2227,6 +2269,7 @@
           headerSummary.textContent = mocksData.length ? `${publishedCount} published, ${readyCount} ready, ${mocksData.length} total` : 'none found';
         }
         renderMocksBody();
+        populateMockFilter();
       } catch (e) {
         body.textContent = 'Could not reach server.';
         if (headerSummary) headerSummary.textContent = 'unavailable';
@@ -2357,6 +2400,13 @@
         parts.push(`<span class="q-upload-meta">${q.uploaded_by === 'contractor' ? 'Contractor' : 'Admin'}${when ? ' · ' + escapeHtml(when) : ''}</span>`);
       }
       if (q.uploader_name) parts.push(`<span class="q-uploader-tag">${escapeHtml(q.uploader_name)}</span>`);
+      if (q.source === 'mock' && q.mock_position != null) {
+        parts.push(`<span class="q-upload-meta">Mock: ${escapeHtml(q.mock_name || '')} · position ${q.mock_position}</span>`);
+        // No source_pdf_filename -- this row came from "Add question above/below", not a PDF
+        // scan. Combined with the Contractor/Admin badge above, this is the "added by contractor"
+        // tag the admin review needs to approve a contractor's manually-added mock question.
+        if (!q.source_pdf_filename) parts.push('<span class="q-manual-mock-tag">Manually added</span>');
+      }
       return parts.join('');
     }
 
@@ -2976,6 +3026,10 @@
           ${reviewNoteHtml(q)}
           <div class="q-admin-bar">
             <span class="q-admin-id">${escapeHtml(q.id)}</span>
+            ${!minimalActions && q.source === 'mock' && q.mock_position != null ? `
+              <button type="button" class="mqa-add-btn" data-mock-name="${escapeHtml(q.mock_name || '')}" data-position="${q.mock_position}" onclick="openMockAddAbove(this)">Add question above</button>
+              <button type="button" class="mqa-add-btn" data-mock-name="${escapeHtml(q.mock_name || '')}" data-position="${q.mock_position}" onclick="openMockAddBelow(this)">Add question below</button>
+            ` : ''}
             ${flags.map(f => `<span class="q-flag">${escapeHtml(f)}</span>`).join('')}
             ${reviewWarningsHtml(q)}
             ${autoReasonChipsHtml(q)}

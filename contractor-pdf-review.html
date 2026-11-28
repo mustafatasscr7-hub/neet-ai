@@ -430,6 +430,7 @@
 </div>
 
 <script src="./confirm-modal.js"></script>
+<script src="./mock-question-add.js"></script>
 <script>
   // Relative, not the real backend's own domain -- proxied via this project's own vercel.json
   // rewrite (/api/:path* -> the real backend), so a contractor opening DevTools' Network tab
@@ -2523,6 +2524,27 @@
     return [...filtered].sort((a, b) => (a.mock_position ?? 9999) - (b.mock_position ?? 9999));
   }
 
+  // "Add question above/below" on a Needs fix card (mock-question-add.js) -- mock_name/position
+  // ride on the button as data attributes, not inlined into the onclick string, so a mock_name
+  // with a quote or apostrophe in it can't break the handler (same reasoning as this page's own
+  // populateMockFilter just above, which reads mock_name back off a <select>, not a template
+  // string). currentUploaderName is this page's existing "Who is uploading?" picker -- the same
+  // attribution label every other save on this page already sends.
+  function openMockAddAbove(btn) {
+    MockQuestionAdd.open({
+      mockName: btn.dataset.mockName, neighborPosition: parseInt(btn.dataset.position, 10), direction: 'above',
+      addEndpoint: '/contractor/mock-question-add', extraFields: { uploader_name: currentUploaderName },
+      onSaved: () => loadFixList()
+    });
+  }
+  function openMockAddBelow(btn) {
+    MockQuestionAdd.open({
+      mockName: btn.dataset.mockName, neighborPosition: parseInt(btn.dataset.position, 10), direction: 'below',
+      addEndpoint: '/contractor/mock-question-add', extraFields: { uploader_name: currentUploaderName },
+      onSaved: () => loadFixList()
+    });
+  }
+
   async function loadFixList() {
     const listEl = document.getElementById('fixList');
     try {
@@ -2687,6 +2709,10 @@
           <div class="fix-images">${FIX_IMAGE_FIELDS.map(([f, label]) => fixImageSlotHtml(r.id, f, label)).join('')}</div></div>
         <div class="q-block-footer">
           <button type="button" class="save-btn" onclick="saveFix('${r.id}', this)">Save fix &amp; send for review</button>
+          ${r.source === 'mock' && r.mock_position != null ? `
+            <button type="button" class="mqa-add-btn" data-mock-name="${escapeHtml(r.mock_name || '')}" data-position="${r.mock_position}" onclick="openMockAddAbove(this)">Add question above</button>
+            <button type="button" class="mqa-add-btn" data-mock-name="${escapeHtml(r.mock_name || '')}" data-position="${r.mock_position}" onclick="openMockAddBelow(this)">Add question below</button>
+          ` : ''}
           <div class="q-dup-warning" id="fix-msg-${r.id}"></div>
         </div>
       </div>`;

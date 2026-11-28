@@ -10173,7 +10173,7 @@ def health():
 
 # ---------- Admin: PYQ data management (admin-dashboard.html only, not linked from any student page) ----------
 
-ADMIN_SORT_COLUMNS = {"id", "subject", "chapter", "question", "correct_answer", "is_active", "year", "created_at", "uploaded_at"}
+ADMIN_SORT_COLUMNS = {"id", "subject", "chapter", "question", "correct_answer", "is_active", "year", "created_at", "uploaded_at", "mock_position"}
 
 def _admin_count(params):
     resp = http_requests.get(
@@ -10464,6 +10464,7 @@ async def admin_pyq_search(
     batch_id: str = None,
     uploaded_date: str = None,
     source_pdf_filename: str = None,
+    mock_name: str = None,
     warnings: bool = False,
     auto_pass: str = None,
     language: str = None,
@@ -10489,7 +10490,10 @@ async def admin_pyq_search(
             "option_b_diagram_url,option_c_diagram_url,option_d_diagram_url,reviewed,created_at,"
             "question_type,difficulty,"
             "review_status,review_note,uploaded_by,uploaded_at,batch_id,reviewed_at,reviewed_by,uploader_name,"
-            "reject_reason,rejected_at"
+            "reject_reason,rejected_at,"
+            # Mock exam mode (mock_exam_columns.sql) -- lets the review queue show "Mock: name ·
+            # position N" on a mock row's card and offer Add question above/below there.
+            "source,mock_name,mock_position"
             if full else
             "id,subject,language,chapter,question,correct_answer,is_active,year"
         )
@@ -10544,6 +10548,11 @@ async def admin_pyq_search(
         # saved row as source_pdf_filename.
         if source_pdf_filename:
             params["source_pdf_filename"] = f"eq.{source_pdf_filename}"
+        # Mocks filter dropdown (admin-pyq-preview.html) -- lets the main review queue narrow to
+        # one mock_name, normally combined with sort_by=mock_position so it reads top to bottom
+        # the way the paper itself does.
+        if mock_name:
+            params["mock_name"] = f"eq.{mock_name}"
         # One India-time calendar day of uploads, as a plain and-group so it combines with the
         # or-groups below instead of overwriting them.
         and_parts = []
@@ -14705,6 +14714,144 @@ async def admin_mock_exams_unpublish(body: MockExamUnpublishRequest, _: None = D
     except Exception as e:
         print(f"MOCK EXAMS UNPUBLISH ERROR: {type(e).__name__}", flush=True)
         return {"error": "Something went wrong. Please try again."}
+
+# ---------- Mock exam: add one question above/below an existing position ----------
+# admin-pyq-preview.html's main review queue and contractor-pdf-review.html's Needs fix queue
+# both show individual mock questions in position order -- this lets a human sitting on one of
+# those cards add the question the PDF scan missed, right next to it, without re-scanning
+# anything. No model call: just the same fields every other mock row already has. Two write
+# endpoints, same split as every other admin/contractor pair in this file (verify_admin vs
+# verify_contractor_pdf_review, never verify_admin_or_contractor_pdf -- the contractor key must
+# never reach the admin one), sharing _mock_question_add_row below. The read-only positions
+# endpoint IS shared (verify_admin_or_contractor_pdf) since it only ever hands back numbers, the
+# same shape admin-pyq-preview.html's Mocks panel already exposes in aggregate.
+
+class MockQuestionAddRequest(BaseModel):
+    mock_name: str
+    mock_position: int
+    question: str
+    option_a: str
+    option_b: str
+    option_c: str
+    option_d: str
+    correct_answer: str
+    diagram_url: Optional[str] = None
+    # Contractor tool's "Who is uploading?" picker (currentUploaderName) -- same free-text
+    # attribution label admin_pyq_bulk_create already accepts from either role. Validated the same
+    # way below; admin-pyq-preview.html never sends one, so admin-added rows keep uploader_name
+    # unset (same as every other admin-pdf-review.html upload).
+    uploader_name: Optional[str] = None
+
+def _mock_subject_for_position(position: int) -> str:
+    """Physics 1-45, Chemistry 46-90, Biology 91-180 -- the fixed layout mock exams use
+    everywhere else in this file (_sample_random_mock_questions, MOCK_EXAM_SUBJECT_TARGETS)."""
+    if position <= 45:
+        return "Physics"
+    if position <= 90:
+        return "Chemistry"
+    return "Biology"
+
+def _occupied_mock_positions(rows: list) -> set:
+    """A position counts as taken only while a live (non-rejected) row sits there. A rejected row
+    keeps its mock_position forever (kept as proof of what was submitted, never deleted), but
+    _mock_exam_stats' own gaps/duplicate_positions math is already approved-only, treating that
+    slot as needing a replacement -- so a new question must be allowed to take a rejected row's
+    old spot instead of being told the position is "already used"."""
+    return {r["mock_position"] for r in rows if r.get("review_status") != "rejected" and r.get("mock_position") is not None}
+
+def _free_mock_positions(taken: set) -> list:
+    return sorted(set(range(1, 181)) - taken)
+
+async def _mock_question_add_row(body: MockQuestionAddRequest, uploaded_by: str, default_uploader_name: Optional[str]):
+    """Shared by both endpoints below. uploaded_by ("admin"/"contractor") always comes from which
+    key authenticated the request, never the body -- same rule admin_pyq_bulk_create's role
+    follows. Returns a plain {"error": "..."} string on any rejection, never a raw dict/validation
+    object, so the two review pages can show it directly without an [object Object]."""
+    name = (body.mock_name or "").strip()
+    if not (1 <= len(name) <= 120):
+        return {"error": "mock_name is required"}
+    if not (1 <= body.mock_position <= 180):
+        return {"error": "Position must be between 1 and 180"}
+    question = (body.question or "").strip()
+    if not question:
+        return {"error": "Question text is required"}
+    options = {l: (getattr(body, f"option_{l}") or "").strip() for l in "abcd"}
+    if any(not v for v in options.values()):
+        return {"error": "All four options are required"}
+    if len(set(options.values())) < 4:
+        return {"error": "Options must be different from each other"}
+    answer = (body.correct_answer or "").strip().upper()
+    if answer not in ("A", "B", "C", "D"):
+        return {"error": "Correct answer must be A, B, C or D"}
+    uploader_name = default_uploader_name
+    if body.uploader_name is not None:
+        if body.uploader_name not in PYQ_UPLOADER_NAMES:
+            return {"error": "Invalid uploader name"}
+        uploader_name = body.uploader_name
+    try:
+        existing = await _pyq_mock_rows(name)
+    except RuntimeError as e:
+        return {"error": str(e)}
+    if body.mock_position in _occupied_mock_positions(existing):
+        return {"error": f'Position {body.mock_position} is already used in "{name}". Choose a free position.'}
+    item = {
+        "subject": _mock_subject_for_position(body.mock_position),
+        "question": question,
+        "option_a": options["a"], "option_b": options["b"], "option_c": options["c"], "option_d": options["d"],
+        "correct_answer": answer,
+        "source": "mock",
+        "mock_name": name,
+        "mock_position": body.mock_position,
+        "is_active": True,
+        "review_status": "pending",
+        "uploaded_by": uploaded_by,
+    }
+    if uploader_name:
+        item["uploader_name"] = uploader_name
+    if body.diagram_url:
+        item["diagram_url"] = body.diagram_url
+        item["has_diagram"] = True
+    try:
+        resp = await async_client.post(
+            f"{SUPABASE_URL}/rest/v1/pyq",
+            headers={**ADMIN_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
+            json=item
+        )
+        if resp.status_code >= 400:
+            return {"error": resp.text}
+        created = resp.json()[0]
+        asyncio.create_task(_embed_pyq_row_background(
+            created["id"], created.get("question"), created.get("chapter"),
+            created.get("option_a"), created.get("option_b"), created.get("option_c"), created.get("option_d")
+        ))
+        # Same condition admin_pyq_bulk_create uses -- the permanent "Uploaded so far" total is
+        # keyed off the saved uploader_name, regardless of which endpoint or role wrote the row.
+        if created.get("uploader_name") == CONTRACTOR_UPLOADER_NAME:
+            asyncio.create_task(_log_pyq_upload(created["id"], CONTRACTOR_UPLOADER_NAME, _pyq_row_has_diagram(created)))
+        return {"created": created}
+    except Exception as e:
+        print(f"MOCK QUESTION ADD ERROR: {e}", flush=True)
+        return {"error": "Something went wrong"}
+
+@app.get("/admin/mock-question-positions")
+async def admin_mock_question_positions(mock_name: str, _: None = Depends(verify_admin_or_contractor_pdf)):
+    name = (mock_name or "").strip()
+    if not (1 <= len(name) <= 120):
+        return {"error": "mock_name is required"}
+    try:
+        rows = await _pyq_mock_rows(name)
+    except RuntimeError as e:
+        return {"error": str(e)}
+    taken = _occupied_mock_positions(rows)
+    return {"mock_name": name, "positions_used": sorted(taken), "positions_free": _free_mock_positions(taken)}
+
+@app.post("/admin/mock-question-add")
+async def admin_mock_question_add(body: MockQuestionAddRequest, _: None = Depends(verify_admin)):
+    return await _mock_question_add_row(body, uploaded_by="admin", default_uploader_name=None)
+
+@app.post("/contractor/mock-question-add")
+async def contractor_mock_question_add(body: MockQuestionAddRequest, _: None = Depends(verify_contractor_pdf_review)):
+    return await _mock_question_add_row(body, uploaded_by="contractor", default_uploader_name=CONTRACTOR_UPLOADER_NAME)
 
 @app.post("/admin/pdf-mark-processed")
 def admin_pdf_mark_processed(req: PdfMarkProcessedRequest, _: None = Depends(verify_admin_or_contractor_pdf)):
